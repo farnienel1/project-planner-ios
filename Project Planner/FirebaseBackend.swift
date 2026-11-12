@@ -7701,17 +7701,17 @@ class FirebaseBackend: ObservableObject {
         let stampedCreate = WriteMetadata.stamped(bookingData, userId: uid)
         try await FirestoreWriteAck.run(timeoutSeconds: ackTimeoutSeconds, pendingKey: ref.path) { try await ref.setData(stampedCreate, merge: true) }
 
-        print("🔥🔥🔥 DEBUG: Booking saved successfully to Firebase")
-    }
-    
-    /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov, "Replace existing booking"): the new labour or manager schedule
-    /// booking and, in the SAME batch, each replaced booking's delete with its tombstone (`bookingReplaceWrites`). Online
-    /// only (`booking.replace`): nothing is queued, and a refusal changes nothing (the batch is all or none). Exactly one
-    /// of `labour` / `manager` is the booking being created.
+    /// RULEBOOK 1.41.0 §5 (`CanonicalBusinessEngine.bookingReplaceWrites`): the new booking and each replaced
+    /// booking's delete with its tombstone, in ONE Firestore transaction that first re-reads every replaced booking and
+    /// its tombstone (review 1.41 #3): one gone or tombstoned refuses with `BookingReplaceMessages.alreadyGone`, one
+    /// whose `bookingDeleteFingerprint` differs from the copy the person was shown with `BookingReplaceMessages.changed`.
+    /// The transaction waits at most `FirestoreWriteAck.defaultTimeoutSeconds` (review 1.41 #4): a transaction is never
+    /// queued for a later replay, and one that did not confirm in time says `BookingReplaceMessages.notConfirmed`.
+    /// Nothing is written when it throws.
     func createBookingReplacing(
         labour: Booking? = nil,
         manager: ManagerSiteBooking? = nil,
-        replaces: [RulebookBookingReplaceRef],
+        replacing targets: [BookingReplaceTarget],
         organizationId: String
     ) async throws {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
@@ -7740,26 +7740,109 @@ class FirebaseBackend: ObservableObject {
             organizationId: orgId,
             bookingCollection: collection,
             bookingId: documentKey,
-            replaced: replaces,
+            replaced: targets.map(\.ref),
             deletedBy: uid
         ) else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "This booking could not replace the existing one. Nothing was saved."]
-            )
+            throw Self.bookingReplaceError(BookingReplaceMessages.notSaved)
         }
-        let batch = db.batch()
-        // A plain create (never a merge onto an existing document, RULEBOOK 1.20.2).
-        batch.setData(WriteMetadata.stamped(data, userId: uid), forDocument: db.document(plan.bookingPath))
+        let expected = Dictionary(
+            targets.map { ("\($0.ref.collection)/\($0.ref.bookingId.lowercased())", $0.fingerprint) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var rows: [ReplaceDeleteRow] = []
         for row in plan.deletes {
+            guard let fingerprint = expected["\(row.collection)/\(row.bookingId.lowercased())"] else {
+                throw Self.bookingReplaceError(BookingReplaceMessages.notSaved)
+            }
             var tombstone = row.tombstone
             tombstone["deletedAt"] = FieldValue.serverTimestamp()
-            batch.deleteDocument(db.document(row.path))
-            batch.setData(tombstone, forDocument: db.document(row.tombstonePath))
+            rows.append(ReplaceDeleteRow(
+                collection: row.collection,
+                ref: db.document(row.path),
+                tombstoneRef: db.document(row.tombstonePath),
+                tombstone: RulebookJSONBox(object: tombstone),
+                expected: fingerprint
+            ))
         }
-        NSLog("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld", collection, documentKey, plan.deletes.count)
-        try await batch.commit()
+        // A plain create (never a merge onto an existing document, RULEBOOK 1.20.2).
+        let create = RulebookJSONBox(object: WriteMetadata.stamped(data, userId: uid))
+        let createRef = db.document(plan.bookingPath)
+        let database = db
+        let outcome = ReplaceOutcomeBox()
+        NSLog("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld", collection, documentKey, rows.count)
+        do {
+            try await FirestoreWriteAck.run(timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds) {
+                outcome.value = try await Self.runReplaceTransaction(db: database, deletes: rows, createRef: createRef, create: create)
+            }
+        } catch let error as NSError where error.domain == "BookingReplace" {
+            throw error
+        } catch is FirestoreWriteAck.TimedOut {
+            NSLog("BOOKING_REPLACE_NOT_CONFIRMED id=%@", documentKey)
+            throw Self.bookingReplaceError(BookingReplaceMessages.notConfirmed)
+        } catch {
+            switch BookingWritePatch.firestoreErrorCode(error) {
+            case 7: throw Self.bookingReplaceError(BookingReplaceMessages.refused)
+            case 5: throw Self.bookingReplaceError(BookingReplaceMessages.alreadyGone)
+            default:
+                NSLog("BOOKING_REPLACE_FAILED id=%@ error=%@", documentKey, error.localizedDescription)
+                throw Self.bookingReplaceError(BookingReplaceMessages.notConfirmed)
+            }
+        }
+        switch outcome.value {
+        case "apply": return
+        case "alreadyGone": throw Self.bookingReplaceError(BookingReplaceMessages.alreadyGone)
+        default: throw Self.bookingReplaceError(BookingReplaceMessages.changed)
+        }
+    }
+
+    nonisolated static func bookingReplaceError(_ message: String) -> NSError {
+        NSError(domain: "BookingReplace", code: 409, userInfo: [NSLocalizedDescriptionKey: message])
+    }
+
+    /// One replaced booking for `runReplaceTransaction`: its refs, tombstone and the fingerprint the person was shown.
+    nonisolated struct ReplaceDeleteRow: @unchecked Sendable {
+        let collection: String
+        let ref: DocumentReference
+        let tombstoneRef: DocumentReference
+        let tombstone: RulebookJSONBox
+        let expected: String
+    }
+
+    nonisolated final class ReplaceOutcomeBox: @unchecked Sendable {
+        var value = "apply"
+    }
+
+    /// The Replace transaction: every read first (each replaced booking and its tombstone), then — only when every one
+    /// is still there and unchanged — the create and each delete with its tombstone. Returns `apply`, `alreadyGone` or
+    /// `changed` (nothing written for the last two). `nonisolated` so the block never runs on the main actor.
+    nonisolated private static func runReplaceTransaction(
+        db: Firestore,
+        deletes: [ReplaceDeleteRow],
+        createRef: DocumentReference,
+        create: RulebookJSONBox
+    ) async throws -> String {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            for row in deletes {
+                let live: DocumentSnapshot
+                let tombstone: DocumentSnapshot
+                do {
+                    live = try transaction.getDocument(row.ref)
+                    tombstone = try transaction.getDocument(row.tombstoneRef)
+                } catch {
+                    errorPointer?.pointee = error as NSError
+                    return nil
+                }
+                guard live.exists, !tombstone.exists, let data = live.data() else { return "alreadyGone" as NSString }
+                if BookingWritePatch.stored(data, collection: row.collection) != row.expected { return "changed" as NSString }
+            }
+            transaction.setData(create.object, forDocument: createRef)
+            for row in deletes {
+                transaction.deleteDocument(row.ref)
+                transaction.setData(row.tombstone.object, forDocument: row.tombstoneRef)
+            }
+            return "apply" as NSString
+        }
+        return (answer as? String) ?? "apply"
     }
 
     /// 1.33.1: `getDocument(source: .server)` that gives up after `FirestoreWriteAck.defaultTimeoutSeconds` with

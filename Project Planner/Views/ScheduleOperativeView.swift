@@ -1802,8 +1802,8 @@ struct ScheduleOperativeView: View {
                     guard let person = bookablePeople.first(where: { $0.operativeId == operative.id }),
                           let rows = personConflictSummary(person)?.rows else { continue }
                     for row in rows where replacedConflictIds.contains(row.id) {
-                        guard let ref = row.replaceRef else { continue }
-                        refsByOperativeDay[operativeOverrideKey(operative.id, row.date), default: []].append(ref)
+                        guard let refs = row.replaceRefs, !refs.isEmpty else { continue }
+                        refsByOperativeDay[operativeOverrideKey(operative.id, row.date), default: []].append(contentsOf: refs)
                     }
                 }
             }
@@ -1890,8 +1890,22 @@ struct ScheduleOperativeView: View {
                 }
             }
 
-            for entry in replacing {
-                if let problem = await bookingStore.addBookingReplacing(entry.booking, replaces: entry.refs) {
+            // Review 1.41 #10: an overnight booking can overlap two selected days. It is replaced once, on the first
+            // day (in date order); a later day whose bookings were all replaced already is a plain create.
+            var alreadyReplaced = Set<String>()
+            for entry in replacing.sorted(by: { $0.booking.date < $1.booking.date }) {
+                let refs = entry.refs.filter { ref in
+                    alreadyReplaced.insert("\(ref.collection)/\(ref.bookingId.lowercased())").inserted
+                }
+                guard !refs.isEmpty else {
+                    newBookings.append(entry.booking)
+                    continue
+                }
+                if let problem = await bookingStore.addBookingReplacing(
+                    entry.booking,
+                    replaces: refs,
+                    managerBookings: managerScheduleStore.managerSiteBookings
+                ) {
                     saveResults.append(.refused(problem))
                 } else {
                     saveResults.append(.saved)

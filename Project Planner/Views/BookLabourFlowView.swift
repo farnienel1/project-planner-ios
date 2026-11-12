@@ -1703,7 +1703,9 @@ struct BookLabourFlowView: View {
                     // RULEBOOK 1.41.0 §5: Replace when the viewer may delete every overlapping booking.
                     replace: CanonicalBusinessEngine.bookingReplaceOffer(
                         labour: [],
-                        manager: managerOverlappingBookings(userId: person.user.id, newSlot: slot, workStart: workStart, workEnd: workEnd)
+                        manager: replaceCandidates(
+                            operativeId: nil, userId: person.user.id, slot: slot.rawValue, workStart: workStart, workEnd: workEnd
+                        ).manager
                     )
                 ))
             }
@@ -1728,10 +1730,9 @@ struct BookLabourFlowView: View {
                     personName: person.displayName,
                     detail: (["Already booked"] + lines).joined(separator: " · "),
                     replace: CanonicalBusinessEngine.bookingReplaceOffer(
-                        labour: operativeOverlappingBookings(
-                            operativeId: op.id, projectId: project.id, slot: operativeSlot,
-                            workStart: workStart, workEnd: workEnd, breakRemoved: breakRemoved
-                        ),
+                        labour: replaceCandidates(
+                            operativeId: op.id, userId: nil, slot: operativeSlot.rawValue, workStart: workStart, workEnd: workEnd
+                        ).labour,
                         manager: []
                     )
                 ))
@@ -1833,7 +1834,7 @@ struct BookLabourFlowView: View {
                             otMultiplierOverride: storedRate
                         )
                         booking.updatedAt = Date()
-                        if let problem = await bookingStore.addBookingReplacing(booking, replaces: refs) {
+                        if let problem = await bookingStore.addBookingReplacing(booking, replaces: refs, managerBookings: managerScheduleStore.managerSiteBookings) {
                             if firstError == nil { firstError = problem }
                             continue
                         }
@@ -1883,7 +1884,7 @@ struct BookLabourFlowView: View {
                         otMultiplierOverride: storedRate
                     )
                     if let refs = replacedByUserId[person.user.id], !refs.isEmpty {
-                        if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: refs), firstError == nil {
+                        if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: refs, labourBookings: bookingStore.bookings), firstError == nil {
                             firstError = problem
                         }
                     } else {
@@ -1968,10 +1969,9 @@ struct BookLabourFlowView: View {
                 detail: (["Already booked"] + clashLines).joined(separator: " · "),
                 // RULEBOOK 1.41.0 §5: Replace when the viewer may delete every overlapping booking.
                 replace: CanonicalBusinessEngine.bookingReplaceOffer(
-                    labour: operativeOverlappingBookings(
-                        operativeId: operative.id, projectId: project.id, slot: slot,
-                        workStart: workStart, workEnd: workEnd, breakRemoved: breakRemoved
-                    ),
+                    labour: replaceCandidates(
+                        operativeId: operative.id, userId: nil, slot: slot.rawValue, workStart: workStart, workEnd: workEnd
+                    ).labour,
                     manager: []
                 )
             ))
@@ -1992,7 +1992,7 @@ struct BookLabourFlowView: View {
                     otMultiplierOverride: otMultiplierOverride
                 )
                 booking.updatedAt = Date()
-                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces) {
+                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) {
                     await MainActor.run {
                         isSaving = false
                         errorBanner = problem
@@ -2026,55 +2026,36 @@ struct BookLabourFlowView: View {
         }
     }
 
-    /// RULEBOOK 1.41.0 §5: the person's labour bookings that day the booking being made overlaps (the orange row's
-    /// bookings, for Replace).
-    private func operativeOverlappingBookings(
-        operativeId: UUID,
-        projectId: UUID,
-        slot: TimeSlot,
-        workStart: String?,
-        workEnd: String?,
-        breakRemoved: Bool
-    ) -> [Booking] {
-        let personIds = samePersonIds(operativeId)
-        let existing = bookingStore.bookings.filter {
-            personIds.contains($0.operativeId) &&
-                calendar.isDate($0.date, inSameDayAs: day) &&
-                $0.occupiesDay
-        }
-        guard !existing.isEmpty else { return [] }
-        let probe = Booking(
-            operativeId: operativeId,
-            projectId: projectId,
-            date: day,
-            timeSlot: slot,
-            bookedBy: "",
-            workStartTime: workStart,
-            workEndTime: workEnd,
-            isBreakRemoved: breakRemoved
-        )
-        return existing.filter { OperativeBookingInterval.bookingsOverlap(probe, $0, policy: payrollTimePolicy) }
-    }
-
-    /// RULEBOOK 1.41.0 §5: the person's manager schedule bookings that day the booking being made overlaps.
-    private func managerOverlappingBookings(
-        userId: String,
-        newSlot: ManagerTimeSlot,
+    /// RULEBOOK 1.41.0 §5 Replace (review 1.41 #8, #9): the person's bookings the booking being made overlaps, from
+    /// `CanonicalBusinessEngine.bookingReplaceCandidates` (`bookingRequestClashIds` under the booked day's working
+    /// hours) over their bookings that day and the day before, so an overnight booking reaching this morning is
+    /// replaced too. Labour bookings under every id of the person (`samePersonIds`), manager schedule bookings under
+    /// `userId`. Fails closed: when the script does not answer, nothing is offered.
+    private func replaceCandidates(
+        operativeId: UUID?,
+        userId: String?,
+        slot: String,
         workStart: String?,
         workEnd: String?
-    ) -> [ManagerSiteBooking] {
-        let existing = managerScheduleStore.bookings(for: userId, on: day)
-        guard !existing.isEmpty else { return [] }
-        let probe = ManagerSiteBooking(
-            userId: userId,
-            date: day,
-            timeSlot: newSlot,
-            locationType: .office,
-            locationId: nil,
-            workStartTime: workStart,
-            workEndTime: workEnd
+    ) -> (labour: [Booking], manager: [ManagerSiteBooking]) {
+        let dayKey = OrganizationRulebookContext.dayKey(day)
+        let dayBeforeKey = OrganizationRulebookContext.dayKey(day.addingTimeInterval(-12 * 3600))
+        let keys: Set<String> = [dayKey, dayBeforeKey]
+        let personIds = operativeId.map(samePersonIds) ?? []
+        let labour = personIds.isEmpty ? [] : bookingStore.bookings.filter {
+            personIds.contains($0.operativeId) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
+        let manager: [ManagerSiteBooking] = userId.map { id in
+            managerScheduleStore.managerSiteBookings.filter {
+                $0.userId.lowercased() == id.lowercased() && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+            }
+        } ?? []
+        let request = RulebookClashBooking(
+            id: "request", dayKey: dayKey, timeSlot: slot, workStartTime: workStart, workEndTime: workEnd
         )
-        return existing.filter { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: payrollTimePolicy) }
+        return CanonicalBusinessEngine.bookingReplaceCandidates(
+            request: request, labour: labour, manager: manager, policy: payrollTimePolicy
+        )
     }
 
     private func operativeClashDetailLines(

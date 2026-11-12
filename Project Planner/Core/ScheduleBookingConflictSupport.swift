@@ -180,9 +180,10 @@ struct ScheduleConflictRow: Identifiable, Hashable {
     /// The line under the person and day in the shared conflict row (`BookingConflictRowView`): "Annual leave booked ·
     /// AM" for leave (`bookingLeaveConflicts`), "Already booked · time · job" for a double booking.
     var conflictDetail: String? = nil
-    /// RULEBOOK 1.41.0 §5: the existing booking this double-booking row is about, set only when the viewer may delete
-    /// it (`bookingReplaceOffer`), so the row offers Replace.
-    var replaceRef: RulebookBookingReplaceRef? = nil
+    /// RULEBOOK 1.41.0 §5: every existing booking this person-day's double-booking row overlaps, set only when the
+    /// viewer may delete all of them (`bookingReplaceOffer`) and the script answered which ones overlap, so the row
+    /// offers Replace and Replace removes them all (review 1.41 #7, #9).
+    var replaceRefs: [RulebookBookingReplaceRef]? = nil
 
     static func rowId(operativeId: UUID, date: Date, kind: ScheduleConflictKind, suffix: String = "") -> String {
         let day = OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970
@@ -393,62 +394,56 @@ enum ScheduleBookingConflictEngine {
                         (calendar.isDate(booking.date, inSameDayAs: day) || calendar.isDate(booking.date, inSameDayAs: previousDay))
                 }
             } ?? []
-            let clashIds = Set((CanonicalBusinessEngine.bookingRequestClashIds(
+            let answered = CanonicalBusinessEngine.bookingRequestClashIds(
                 request: probe.rulebookClashBooking,
                 existing: candidateProjectBookings.map(\.rulebookClashBooking)
                     + candidateManagerBookings.map(\.rulebookClashBooking),
                 day: CanonicalBusinessEngine.bookingDayInput(policy: policy)
-            ) ?? (candidateProjectBookings.map(\.id.uuidString) + candidateManagerBookings.map(\.id.uuidString))).map { $0.lowercased() })
-            for existing in candidateProjectBookings {
-                guard clashIds.contains(existing.id.uuidString.lowercased()) else { continue }
+            )
+            // The warning still shows when the script does not answer (every candidate counts); Replace does not.
+            let clashIds = Set((answered ?? (candidateProjectBookings.map(\.id.uuidString) + candidateManagerBookings.map(\.id.uuidString))).map { $0.lowercased() })
+            let labourHits = candidateProjectBookings.filter { clashIds.contains($0.id.uuidString.lowercased()) }
+            let managerHits = candidateManagerBookings.filter { clashIds.contains($0.id.uuidString.lowercased()) }
+            guard !labourHits.isEmpty || !managerHits.isEmpty else { continue }
+
+            // Review 1.41 #7 (as web): ONE double-booking row per person-day listing every overlapping booking.
+            var parts: [(time: String, place: String)] = []
+            var kind: ScheduleConflictKind?
+            for existing in labourHits {
                 let existingProject = projectStore.projects.first(where: { $0.id == existing.projectId })
                     ?? projectStore.smallWorks.first(where: { $0.id == existing.projectId })
                 let jobLabel: String = {
                     guard let p = existingProject else { return "Another booking" }
                     return "\(p.jobNumber) \(p.siteName)"
                 }()
-                let kind: ScheduleConflictKind = {
-                    if let p = existingProject, p.isSmallWorksDocument { return .smallWorksBooking }
-                    return .projectBooking
-                }()
-                let timeLabel = existing.scheduleLabel(policy: policy)
-                rows.append(
-                    ScheduleConflictRow(
-                        id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: kind, suffix: existing.id.uuidString),
-                        operativeId: person.operativeId,
-                        date: day,
-                        kind: kind,
-                        title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
-                        detail: jobLabel,
-                        requiresAcknowledgement: true,
-                        conflictDetail: "Already booked · \(timeLabel) · \(jobLabel)",
-                        replaceRef: CanonicalBusinessEngine.bookingReplaceOffer(labour: [existing], manager: [])?.first
-                    )
+                if kind == nil { kind = existingProject?.isSmallWorksDocument == true ? .smallWorksBooking : .projectBooking }
+                parts.append((existing.scheduleLabel(policy: policy), jobLabel))
+            }
+            for msb in managerHits {
+                let location = myScheduleLocationLabel(msb, projectStore: projectStore)
+                let timeLabel = msb.workStartTime.flatMap { s in
+                    msb.workEndTime.map { e in "\(s)–\(e)" }
+                } ?? msb.timeSlot.displayName
+                if kind == nil { kind = .myScheduleItem }
+                parts.append((timeLabel, location))
+            }
+            let rowKind = kind ?? .projectBooking
+            let times = parts.map(\.time).joined(separator: ", ")
+            rows.append(
+                ScheduleConflictRow(
+                    id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: rowKind, suffix: "clash"),
+                    operativeId: person.operativeId,
+                    date: day,
+                    kind: rowKind,
+                    title: "\(ScheduleConflictRow.dayTitle(day)) — \(times)",
+                    detail: parts.map(\.place).joined(separator: ", "),
+                    requiresAcknowledgement: true,
+                    conflictDetail: "Already booked · " + parts.map { "\($0.time) · \($0.place)" }.joined(separator: " · "),
+                    replaceRefs: answered == nil
+                        ? nil
+                        : CanonicalBusinessEngine.bookingReplaceOffer(labour: labourHits, manager: managerHits)
                 )
-            }
-
-            do {
-                for msb in candidateManagerBookings {
-                    guard clashIds.contains(msb.id.uuidString.lowercased()) else { continue }
-                    let location = myScheduleLocationLabel(msb, projectStore: projectStore)
-                    let timeLabel = msb.workStartTime.flatMap { s in
-                        msb.workEndTime.map { e in "\(s)–\(e)" }
-                    } ?? msb.timeSlot.displayName
-                    rows.append(
-                        ScheduleConflictRow(
-                            id: ScheduleConflictRow.rowId(operativeId: person.operativeId, date: day, kind: .myScheduleItem, suffix: msb.id.uuidString),
-                            operativeId: person.operativeId,
-                            date: day,
-                            kind: .myScheduleItem,
-                            title: "\(ScheduleConflictRow.dayTitle(day)) — \(timeLabel)",
-                            detail: location,
-                            requiresAcknowledgement: true,
-                            conflictDetail: "Already booked · \(timeLabel) · \(location)",
-                            replaceRef: CanonicalBusinessEngine.bookingReplaceOffer(labour: [], manager: [msb])?.first
-                        )
-                    )
-                }
-            }
+            )
         }
         return rows
     }

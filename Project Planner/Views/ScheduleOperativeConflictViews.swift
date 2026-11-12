@@ -32,7 +32,7 @@ struct ScheduleConflictRowView: View {
             dayLabel: BookingConflictItem.dayLabel(dayKey),
             detail: row.conflictDetail ?? row.detail,
             pending: row.kind == .pendingAnnualLeave,
-            replace: !isLeave && onReplace != nil ? row.replaceRef.map { [$0] } : nil
+            replace: !isLeave && onReplace != nil ? row.replaceRefs : nil
         )
     }
 

@@ -965,7 +965,19 @@ struct ProjectDetailView: View {
                     "Operatives & managers",
                     count: staffRows.isEmpty ? nil : "\(staffRows.count) \(staffRows.count == 1 ? "person" : "people")"
                 )
-                if staffRows.isEmpty {
+                if staffRows.isEmpty && schedulingRosterStillLoading {
+                    // Review 1.41 #5: a booking whose person the phone cannot name yet is left off the grid, so while
+                    // the roster loads the week says so rather than flashing "No operatives or managers booked".
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Loading people…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                } else if staffRows.isEmpty {
                     schedulingEmptyRow("No operatives or managers booked this week")
                 } else {
                     ForEach(staffRows) { row in
@@ -1075,6 +1087,14 @@ struct ProjectDetailView: View {
                 }
             }.count
         }
+    }
+
+    /// The week has bookings but the roster that names their people is still loading (or not loaded yet).
+    private var schedulingRosterStillLoading: Bool {
+        let hasBookings = weekDays.contains { !bookingsForDate($0).isEmpty || !managerBookingsForDate($0).isEmpty }
+        guard hasBookings else { return false }
+        return userStore.isLoading || operativeStore.isLoading
+            || (userStore.organizationUsers.isEmpty && operativeStore.allOperatives.isEmpty)
     }
 
     private var schedulingOpsAndManagersRows: [SchedulingGridPersonRow] {
@@ -1580,15 +1600,47 @@ struct ProjectDetailView: View {
             managerBookings: managerScheduleStore.managerSiteBookings,
             policy: policy
         )
-        guard !hits.labour.isEmpty || !hits.manager.isEmpty else { return [] }
+        let replace = quickAddReplaceCandidates(request, draft: draft, policy: policy)
+        guard !hits.labour.isEmpty || !hits.manager.isEmpty || !replace.labour.isEmpty || !replace.manager.isEmpty else { return [] }
         let person = BookingLeaveConflictItems.person(operativeIds: request.person.operativeIds, userIds: request.person.userIds)
         return [.doubleBooking(
             personKey: person.id,
             dayKey: OrganizationRulebookContext.dayKey(request.day),
             personName: request.person.name,
             detail: "Already booked · " + ScheduleWeekGrid.overlapRowDetail,
-            replace: CanonicalBusinessEngine.bookingReplaceOffer(labour: hits.labour, manager: hits.manager)
+            // Review 1.41 #8, #9: the bookings Replace removes come from the rulebook (`bookingReplaceCandidates`) over
+            // that day and the day before, so a night booking reaching this morning is replaced too; none when the
+            // script does not answer.
+            replace: CanonicalBusinessEngine.bookingReplaceOffer(labour: replace.labour, manager: replace.manager)
         )]
+    }
+
+    /// `CanonicalBusinessEngine.bookingReplaceCandidates` for a Quick Add: the person's bookings that day and the day
+    /// before (labour under every id of the row, manager schedule under its user ids).
+    private func quickAddReplaceCandidates(
+        _ request: QuickAddRequest,
+        draft: ScheduleQuickAddDraft,
+        policy: OrgPayrollTimePolicy
+    ) -> (labour: [Booking], manager: [ManagerSiteBooking]) {
+        let dayKey = OrganizationRulebookContext.dayKey(request.day)
+        let keys: Set<String> = [dayKey, OrganizationRulebookContext.dayKey(request.day.addingTimeInterval(-12 * 3600))]
+        let operativeIds = Set(request.person.operativeIds)
+        let userIds = Set(request.person.userIds.map { $0.lowercased() })
+        let labour = bookingStore.bookings.filter {
+            operativeIds.contains($0.operativeId) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
+        let manager = managerScheduleStore.managerSiteBookings.filter {
+            userIds.contains($0.userId.lowercased()) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
+        return CanonicalBusinessEngine.bookingReplaceCandidates(
+            request: RulebookClashBooking(
+                id: "request", dayKey: dayKey, timeSlot: draft.timeSlot.rawValue,
+                workStartTime: draft.workStart, workEndTime: draft.workEnd
+            ),
+            labour: labour,
+            manager: manager,
+            policy: policy
+        )
     }
 
     private func commitQuickAdd(
@@ -1638,7 +1690,7 @@ struct ProjectDetailView: View {
                     workEndTime: draft.workEnd
                 )
                 booking.updatedAt = Date()
-                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces) { return problem }
+                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) { return problem }
             }
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             // 1.33.1: the notice follows on its own task, so "Saving…" ends when the booking is saved, not when every
@@ -1669,7 +1721,7 @@ struct ProjectDetailView: View {
             )
             if replaces.isEmpty {
                 await managerScheduleStore.saveBooking(booking)
-            } else if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: replaces) {
+            } else if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: replaces, labourBookings: bookingStore.bookings) {
                 return problem
             }
         }

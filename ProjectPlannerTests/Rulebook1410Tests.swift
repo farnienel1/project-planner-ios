@@ -163,17 +163,96 @@ final class Rulebook1410Tests: XCTestCase {
         XCTAssertNotNil(gate.pending?.rows.first?.replace)
     }
 
-    func testEveryOwnerFlowSavesAReplaceInOneBatch() throws {
+    func testEveryOwnerFlowSavesAReplaceInOneCheckedTransaction() throws {
         let backend = try source("Project Planner/FirebaseBackend.swift")
         XCTAssertTrue(backend.contains("CanonicalBusinessEngine.bookingReplaceWrites("))
-        XCTAssertTrue(backend.contains("let batch = db.batch()"))
+        // Review 1.41 #3, #4: one transaction that re-reads each replaced booking and its tombstone and compares the
+        // fingerprint the person was shown, bounded by the write wait (never queued for a later replay).
+        XCTAssertTrue(backend.contains("try await FirestoreWriteAck.run(timeoutSeconds: FirestoreWriteAck.defaultTimeoutSeconds) {"))
+        XCTAssertTrue(backend.contains("live = try transaction.getDocument(row.ref)"))
+        XCTAssertTrue(backend.contains("tombstone = try transaction.getDocument(row.tombstoneRef)"))
+        XCTAssertTrue(backend.contains("if BookingWritePatch.stored(data, collection: row.collection) != row.expected { return \"changed\" as NSString }"))
+        XCTAssertTrue(backend.contains("throw Self.bookingReplaceError(BookingReplaceMessages.notConfirmed)"))
+        XCTAssertFalse(backend.contains("BOOKING_REPLACE collection=%@ id=%@ replaces=%ld\", collection, documentKey, plan.deletes.count)\n        try await batch.commit()"))
         let detail = try source("Project Planner/Views/ProjectDetailView.swift")
-        XCTAssertTrue(detail.contains("bookingStore.addBookingReplacing(booking, replaces: replaces)"), "Quick Add")
+        XCTAssertTrue(
+            detail.contains("bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings)"),
+            "Quick Add"
+        )
         XCTAssertFalse(detail.contains("if let message = ScheduleWeekGrid.overlapMessage("), "Quick Add lists the overlap as an orange row")
         let labour = try source("Project Planner/Views/BookLabourFlowView.swift")
         XCTAssertTrue(labour.contains("leaveGate.runChoices(rows: clashRows + leaveRows)"), "Book labour (party)")
         XCTAssertTrue(labour.contains("leaveGate.runSingleReplacing(rows: clashRows + leaveRows)"), "Book labour (one operative)")
+        XCTAssertFalse(labour.contains("OverlappingBookings("), "Replace sets come from bookingReplaceCandidates (review #8, #9)")
         let wizard = try source("Project Planner/Views/ScheduleOperativeView.swift")
-        XCTAssertTrue(wizard.contains("bookingStore.addBookingReplacing(entry.booking, replaces: entry.refs)"), "Scheduling wizard")
+        XCTAssertTrue(wizard.contains("bookingStore.addBookingReplacing(\n                    entry.booking,\n                    replaces: refs,"), "Scheduling wizard")
+        XCTAssertTrue(wizard.contains("alreadyReplaced.insert("), "a booking overlapping two days is replaced once (review #10)")
+    }
+
+    func testAReplaceSendsTheDeleteFollowUps() throws {
+        // Review 1.41 #1, #2: the signed-timesheet warning before, the overtime reopen notice after, on both stores.
+        for path in ["Project Planner/Core/BookingStore.swift", "Project Planner/Core/ManagerScheduleStore.swift"] {
+            let store = try source(path)
+            XCTAssertTrue(store.contains("await BookingReplaceNotices.warnIfOnSignedTimesheet(targets,"), path)
+            XCTAssertTrue(store.contains("BookingReplaceNotices.reopenOvertime(targets, organizationId:"), path)
+        }
+        let notices = try source("Project Planner/Core/Rulebook+BookingReplace.swift")
+        XCTAssertTrue(notices.contains("OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: organizationId)"))
+        XCTAssertTrue(notices.contains("OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: organizationId)"))
+        XCTAssertTrue(notices.contains("CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning("))
+    }
+
+    func testAReplacedBookingNoLongerOnThisPhoneReplacesNothing() throws {
+        let day = try XCTUnwrap(OrganizationRulebookContext.calendar.date(from: DateComponents(year: 2026, month: 11, day: 17)))
+        let shown = Booking(operativeId: UUID(), projectId: UUID(), date: day, timeSlot: .fullDay, bookedBy: "x")
+        let ref = RulebookBookingReplaceRef(collection: "bookings", bookingId: shown.documentKey)
+        let targets = try XCTUnwrap(BookingReplaceTarget.resolve([ref], bookings: [shown], managerBookings: []))
+        XCTAssertEqual(targets.first?.fingerprint, BookingWritePatch.deleteFingerprint(shown))
+        XCTAssertNil(BookingReplaceTarget.resolve([ref], bookings: [], managerBookings: []), "gone from this phone: nothing is replaced")
+        XCTAssertNil(BookingReplaceTarget.resolve(
+            [ref, RulebookBookingReplaceRef(collection: "managerSiteBookings", bookingId: "MISSING")],
+            bookings: [shown], managerBookings: []
+        ), "one missing booking stops the whole Replace")
+    }
+
+    func testReplaceCandidatesIncludeTheOvernightBookingFromTheNightBefore() throws {
+        let calendar = OrganizationRulebookContext.calendar
+        let day = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: 17)))
+        let dayBefore = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: day))
+        let operative = UUID()
+        let night = Booking(
+            operativeId: operative, projectId: UUID(), date: dayBefore, timeSlot: .customHours, bookedBy: "x",
+            workStartTime: "22:00", workEndTime: "06:00"
+        )
+        let evening = Booking(
+            operativeId: operative, projectId: UUID(), date: day, timeSlot: .customHours, bookedBy: "x",
+            workStartTime: "18:00", workEndTime: "20:00"
+        )
+        let hits = CanonicalBusinessEngine.bookingReplaceCandidates(
+            request: RulebookClashBooking(
+                id: "request", dayKey: OrganizationRulebookContext.dayKey(day), timeSlot: "CUSTOM_HOURS",
+                workStartTime: "05:00", workEndTime: "09:00"
+            ),
+            labour: [night, evening],
+            manager: [],
+            policy: .default
+        )
+        XCTAssertEqual(hits.labour.map(\.id), [night.id], "the night shift reaching 06:00 is replaced; 18:00 does not overlap")
+        XCTAssertTrue(hits.manager.isEmpty)
+    }
+
+    func testTheWizardListsOneRowPerPersonDayAndReplaceRemovesEveryOverlap() throws {
+        // Review 1.41 #7: one double-booking row per person-day, Replace with every overlapping booking or none.
+        let support = try source("Project Planner/Core/ScheduleBookingConflictSupport.swift")
+        XCTAssertTrue(support.contains("kind: rowKind, suffix: \"clash\")"))
+        XCTAssertTrue(support.contains(": CanonicalBusinessEngine.bookingReplaceOffer(labour: labourHits, manager: managerHits)"))
+        XCTAssertTrue(support.contains("replaceRefs: answered == nil"), "Replace fails closed when the script does not answer (#9)")
+    }
+
+    func testTheGridShowsLoadingWhileItsPeopleLoad() throws {
+        // Review 1.41 #5: never an empty grid while the roster that names its bookings loads.
+        let detail = try source("Project Planner/Views/ProjectDetailView.swift")
+        XCTAssertTrue(detail.contains("if staffRows.isEmpty && schedulingRosterStillLoading {"))
+        XCTAssertTrue(detail.contains("Text(\"Loading people…\")"))
     }
 }
