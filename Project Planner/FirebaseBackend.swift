@@ -274,6 +274,10 @@ class FirebaseBackend: ObservableObject {
     /// plan changes (`jobReadPlanDidChange`) so the listeners follow the visible jobs.
     var bookingsLiveRequest: (@MainActor () -> Void)?
     var managerScheduleLiveRequest: (@MainActor () -> Void)?
+    /// RULEBOOK 1.38.0 §27 (data check): the `startingOn` of the last booking / manager schedule listener request, so
+    /// the server count runs exactly the listener's query (`bookingReadSources`). `.some(nil)` = every date.
+    private(set) var dataParityBookingsListenStart: Date??
+    private(set) var dataParityManagerScheduleListenStart: Date??
     var jobReadPlanObserver: NSObjectProtocol?
     /// Every other organisation-scoped live listener (`OrgLiveListeners.swift`). Emptied with the schedule
     /// listeners on an organisation switch and on sign-out.
@@ -367,7 +371,31 @@ class FirebaseBackend: ObservableObject {
         stopScheduleLiveListeners()
     }
 
+    /// RULEBOOK 1.38.0 §27 self-heal: removes the booking (or manager schedule) listener and asks for it again, so its
+    /// first snapshot is a fresh read. False when no listener was requested.
+    @discardableResult
+    func reattachScheduleListenerForDataCheck(collection: String) -> Bool {
+        if collection == "bookings" {
+            guard let request = bookingsLiveRequest else { return false }
+            bookingsLiveListener?.remove()
+            bookingsLiveListener = nil
+            bookingsLiveListenerTarget = nil
+            request()
+            return true
+        }
+        guard let request = managerScheduleLiveRequest else { return false }
+        managerScheduleLiveListener?.remove()
+        managerScheduleLiveListener = nil
+        managerScheduleLiveListenerTarget = nil
+        request()
+        return true
+    }
+
     func stopScheduleLiveListeners() {
+        dataParityBookingsListenStart = nil
+        dataParityManagerScheduleListenStart = nil
+        DataParityListenerLedger.shared.end(key: "bookings")
+        DataParityListenerLedger.shared.end(key: "managerSiteBookings")
         bookingsLiveListener?.remove()
         bookingsLiveListener = nil
         bookingsLiveListenerTarget = nil
@@ -377,6 +405,7 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListenerTarget = nil
         managerScheduleLiveRequest = nil
         liveListeners.removeAll()
+        DataParityListenerLedger.shared.removeAll()
         JobAccessContext.resetForOrganizationSwitch()
     }
 
@@ -8187,6 +8216,7 @@ class FirebaseBackend: ObservableObject {
         let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
         let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
         bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        dataParityBookingsListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: bookingsLiveListenerTarget,
             requestedTarget: target
@@ -8204,7 +8234,8 @@ class FirebaseBackend: ObservableObject {
                 // lets the next re-plan replace it (removing it cancels the pending retry, so never two listeners).
                 guard let self, self.bookingsLiveListenerTarget == target else { return }
                 self.bookingsLiveListenerTarget = nil
-            }
+            },
+            parity: (key: "bookings", organizationId: orgId)
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8414,6 +8445,7 @@ class FirebaseBackend: ObservableObject {
         let plan = bookingReadSources(organizationId: orgId, collection: "managerSiteBookings", startingOn: start)
         let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
         managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        dataParityManagerScheduleListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: managerScheduleLiveListenerTarget,
             requestedTarget: target
@@ -8430,7 +8462,8 @@ class FirebaseBackend: ObservableObject {
                 // Same as bookings: keep retrying, and let the next re-plan replace it.
                 guard let self, self.managerScheduleLiveListenerTarget == target else { return }
                 self.managerScheduleLiveListenerTarget = nil
-            }
+            },
+            parity: (key: "managerSiteBookings", organizationId: orgId)
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId

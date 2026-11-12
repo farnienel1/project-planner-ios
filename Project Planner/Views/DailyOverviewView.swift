@@ -340,12 +340,13 @@ struct DailyOverviewView: View {
             breakHours += multiplied?.breakHours ?? 0
             if result.outsideHours > 0 { multipliers.insert(result.outsideMultiplier) }
         }
-        if breakHours > 0.0001, clock > 0.0001, multipliers.count <= 1 {
-            return CanonicalBusinessEngine.multipliedHoursText(
-                clockHours: clock, multiplier: dayJobSiteOvertimeMultiplier, breakHours: breakHours
-            )
-        }
-        return overviewFormatHours(clock)
+        guard clock > 0.0001 else { return "0h OT" }
+        // RULEBOOK 1.39.0 (owner answer 11 Nov) `overtimeTotalText`: "12h OT × 1.5 = 18h". Several rates on one day
+        // keep the clock hours only (no single rate to show), as web.
+        guard multipliers.count <= 1 else { return "\(overviewFormatHours(clock))h OT" }
+        return CanonicalBusinessEngine.overtimeTotalText(
+            clockHours: clock, multiplier: dayJobSiteOvertimeMultiplier, breakHours: breakHours
+        ) ?? "\(overviewFormatHours(clock))h OT"
     }
 
     /// Hours worked outside the standard window (`workedHoursSplit.outsideWorkedHours`).
@@ -588,8 +589,6 @@ struct DailyOverviewView: View {
     /// Day at a glance on the navy header (Home overview style) — display only, not tappable.
     private var todayAtAGlanceHeroCard: some View {
         let unbooked = glanceUnbookedCount
-        let mult = dayJobSiteOvertimeMultiplier
-        let multLabel = abs(mult - mult.rounded()) < 0.05 ? String(format: "%.0f", mult) : String(format: "%.1f", mult)
         let jobsCount = displayedProjectIds.count
         let people = glanceHeadlinePeopleCount
         let bar = teamLocationBarFractions
@@ -622,7 +621,7 @@ struct DailyOverviewView: View {
             HStack(alignment: .top, spacing: 12) {
                 PPStat(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
                 PPStatDivider()
-                PPStat(value: dayJobSiteOvertimeText, label: "OT \(multLabel)×")
+                PPStat(value: dayJobSiteOvertimeText, label: "Overtime")
                 PPStatDivider()
                 PPStat(value: "\(jobsCount)", label: jobsCount == 1 ? "Job active" : "Jobs active")
             }
@@ -1729,19 +1728,46 @@ struct ProjectBookingCard: View {
         return t
     }
 
+    /// The overtime rates of this card's bookings (`payrollHoursResult.outsideMultiplier` where hours are at a rate).
+    private var cardOvertimeMultiplier: Double? {
+        let p = payrollTimePolicy
+        var results = sortedBookings.map { $0.payrollHoursResult(policy: p) }
+        results += managerBookingsThisProjectDay.map { $0.payrollHoursResult(policy: p) }
+        results += subcontractorBookingsThisProjectDay.map { $0.payrollMirrorBooking().payrollHoursResult(policy: p) }
+        let rates = Set(results.filter { $0.outsideHours > 0 }.map(\.outsideMultiplier))
+        return rates.count == 1 ? rates.first : nil
+    }
+
+    private var cardBookedText: String {
+        let booked = cardBookedHours
+        let overtime = cardOvertimeHours > 0.05 ? cardOvertimeHours : 0
+        return CanonicalBusinessEngine.bookedWithOvertimeText(
+            bookedHours: booked, clockHours: overtime, multiplier: cardOvertimeMultiplier
+        ) ?? "\(ScheduleCoverageFormat.hours(booked))h booked"
+    }
+
+    /// Clock hours at the multiplier on this card (`CanonicalBusinessEngine` `payrollMultipliedHours.clockHours`, as web `bookedWithOvertimeText`
+    /// and the day tile), never `workedHoursSplit` (review 11 Nov).
     private var cardOvertimeHours: Double {
         let p = payrollTimePolicy
-        // Hours worked outside the standard window (`workedHoursSplit`), as the day headline.
-        var t = sortedBookings.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        t += managerBookingsThisProjectDay.reduce(0.0) { $0 + ($1.workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        t += subcontractorBookingsThisProjectDay.reduce(0.0) { $0 + ($1.payrollMirrorBooking().workedHoursSplit(policy: p)?.outsideWorkedHours ?? 0) }
-        return t
+        var results = sortedBookings.map { $0.payrollHoursResult(policy: p) }
+        results += managerBookingsThisProjectDay.map { $0.payrollHoursResult(policy: p) }
+        results += subcontractorBookingsThisProjectDay.map { $0.payrollMirrorBooking().payrollHoursResult(policy: p) }
+        return results.reduce(0.0) { $0 + ($1.multipliedHours?.clockHours ?? 0) }
     }
 
     /// Per-person pill: the pay rule's hours for that day (`payrollHoursResult`), never the clock duration —
     /// "8h" for a Saturday window counting 8h, "13h (6.5h × 2)" for Sunday every hour ×2.
+    /// RULEBOOK 1.39.0 (owner answer 11 Nov): the pill is the hours only ("17.5h"); the sum behind it ("8.5h + 6h ×
+    /// 1.5 = 9h") is shown when the booking is opened. The figure is `payrollHoursResult.totalPaidHours`.
     private static func paidHoursPill(_ result: PayrollHoursResult) -> String {
-        result.paidHoursLabel
+        ScheduleCoverageFormat.hours(result.totalPaidHours) + "h"
+    }
+
+    /// RULEBOOK 1.39.0: the row's subtitle is the booking's times only ("Custom 07:00–22:00"); the hours are the pill.
+    private static func timesOnlySubtitle(_ booking: Booking, fallback: String) -> String {
+        guard let s = booking.workStartTime, let e = booking.workEndTime, !s.isEmpty, !e.isEmpty else { return fallback }
+        return booking.timeSlot == .customHours ? "Custom \(s)–\(e)" : fallback
     }
 
     private var mergedPersonRows: [ProjectDayPersonRow] {
@@ -1757,7 +1783,7 @@ struct ProjectBookingCard: View {
             let row = ProjectDayPersonRow(
                 id: "op-\(b.id.uuidString)",
                 name: personName,
-                subtitle: sub.text,
+                subtitle: Self.timesOnlySubtitle(b, fallback: sub.text),
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
@@ -1774,7 +1800,7 @@ struct ProjectBookingCard: View {
             let row = ProjectDayPersonRow(
                 id: "mgr-\(b.id.uuidString)",
                 name: managerName(userId: b.userId),
-                subtitle: sub.text,
+                subtitle: Self.timesOnlySubtitle(b.operativePayrollProbe(), fallback: sub.text),
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
@@ -1796,7 +1822,7 @@ struct ProjectBookingCard: View {
                 id: "sub-\(b.id.uuidString)",
                 name: baseName,
                 bookedOperativeNames: b.bookedOperativeNames(subcontractor: firm),
-                subtitle: sub.text,
+                subtitle: Self.timesOnlySubtitle(mirror, fallback: sub.text),
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(mirror.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
@@ -1845,14 +1871,11 @@ struct ProjectBookingCard: View {
                         Spacer(minLength: 0)
                     }
                     HStack(spacing: 4) {
-                        Text("\(cardPeopleCount) \(cardPeopleCount == 1 ? "person" : "people") · \(ScheduleCoverageFormat.hours(cardBookedHours))h booked")
+                        // RULEBOOK 1.39.0 `bookedWithOvertimeText`: "60.5h booked (incl. 12h OT × 1.5)" — the overtime is
+                        // part of the booked hours (was "· +12h OT").
+                        Text("\(cardPeopleCount) \(cardPeopleCount == 1 ? "person" : "people") · \(cardBookedText)")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
-                        if cardOvertimeHours > 0.05 {
-                            Text("· +\(ScheduleCoverageFormat.hours(cardOvertimeHours))h OT")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
-                        }
                     }
                 }
             }

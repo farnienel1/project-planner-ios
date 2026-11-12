@@ -499,6 +499,7 @@ struct BookLabourFlowView: View {
                                     .contentShape(Rectangle())
                                 }
                                 .accessibilityIdentifier("bookLabourFlow.row.\(person.id)")
+                                .accessibilityAddTraits(isMultiSelectMode && selectedPersonIds.contains(person.id) ? .isSelected : [])
                                 .buttonStyle(.plain)
                                 if idx < candidates.count - 1 {
                                     Divider().overlay(ProjectWorksRevampColors.border)
@@ -977,10 +978,29 @@ struct BookLabourFlowView: View {
             let existingPaidHours = existingPaidHoursForOperative(op.id)
             let newPaidHours = paidHours(startMinutes: draft.startMinutes, endMinutes: draft.endMinutes, breakRemoved: draft.breakRemoved)
             let combinedPaidHours = existingPaidHours + newPaidHours
-            let remainingHours = max(0, max(CanonicalBusinessEngine.weekdayPaidHours(dayPayrollPolicy), 0) - combinedPaidHours)
+            // RULEBOOK 1.39.0 `bookingShortfall`: how far the day is from ITS full day ("Short of a full Saturday (8h)"),
+            // none on a day paid every hour at a multiplier. Replaces "Missing to standard day".
+            // Review (11 Nov): by coverage of the working day (lunch window excluded), never paid hours.
+            let shortfall = CanonicalBusinessEngine.bookingShortfall(
+                on: day,
+                bookings: existingCoverageRowsForOperative(op.id) + [[
+                    "timeSlot": TimeSlot.customHours.rawValue,
+                    "workStartTime": timeText(from: draft.startMinutes),
+                    "workEndTime": timeText(from: draft.endMinutes),
+                ]],
+                fallbackPolicy: dayPayrollPolicy
+            )
+            // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the new booking's hours.
+            let weekdaySections = CanonicalBusinessEngine.weekdayExplanationSections(
+                on: [day],
+                start: timeText(from: draft.startMinutes),
+                end: timeText(from: draft.endMinutes),
+                isBreakRemoved: draft.breakRemoved,
+                fallbackPolicy: dayPayrollPolicy
+            )
             // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the new booking as the pay rule
-            // prices it that day (memoised by input in the wrapper); empty on a weekday.
-            let weekendLines = CanonicalBusinessEngine.collapsedBreakdownLines(
+            // prices it that day (memoised by input in the wrapper); empty on a weekday. 1.39.0: with its explanation.
+            let weekendLines = CanonicalBusinessEngine.collapsedBreakdownSections(
                 CanonicalBusinessEngine.weekendBookingBreakdown(
                     on: [day],
                     start: timeText(from: draft.startMinutes),
@@ -1091,19 +1111,15 @@ struct BookLabourFlowView: View {
                             Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.ink)
+                            BookingBreakdownSectionsView(sections: weekdaySections)
                         } else {
-                            ForEach(weekendLines, id: \.self) { line in
-                                Text(line)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .monospacedDigit()
-                                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                                    .accessibilityIdentifier("booking.weekendBreakdownRow")
-                            }
+                            BookingBreakdownSectionsView(sections: weekendLines, lineColor: ProjectWorksRevampColors.activeGreen)
                         }
-                        if weekendLines.isEmpty, remainingHours > 0.05 {
-                            Text("Missing to standard day: \(ScheduleCoverageFormat.hours(remainingHours))h")
+                        if let shortfall {
+                            Text("\(shortfall.label): \(shortfall.value)")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                                .accessibilityIdentifier("booking.shortfall")
                         }
                     }
                     .padding(10)
@@ -1314,6 +1330,15 @@ struct BookLabourFlowView: View {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+    }
+
+    /// RULEBOOK 1.39.0 `bookingShortfall`: the same existing bookings as `existingPaidHoursForOperative`, as the
+    /// coverage rule reads them. A mapping only.
+    private func existingCoverageRowsForOperative(_ operativeId: UUID) -> [[String: Any]] {
+        let personIds = samePersonIds(operativeId)
+        return bookingStore.bookings
+            .filter { personIds.contains($0.operativeId) && calendar.isDate($0.date, inSameDayAs: day) && $0.occupiesDay }
+            .map(CanonicalBusinessEngine.shortfallRow)
     }
 
     private func existingPaidHoursForOperative(_ operativeId: UUID) -> Double {

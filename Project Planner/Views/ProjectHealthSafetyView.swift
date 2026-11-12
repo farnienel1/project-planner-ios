@@ -2026,6 +2026,7 @@ private struct HSIssueTalkSheet: View {
                                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     }
                                     .accessibilityIdentifier("hsIssueTalk.row.\(user.id)")
+                                    .accessibilityAddTraits(isSelected ? .isSelected : [])
                                     .buttonStyle(.plain)
                                 }
                             }
@@ -2405,8 +2406,11 @@ private struct HSScheduledTalkDetailView: View {
                             Image(systemName: selected ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(selected ? HS.teal : HS.slate2)
                         }
+                        // 1.39.0 (owner request 11 Nov, UI only): the whole row, gaps included, selects.
+                        .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("hsScheduledTalkDetail.row.\(user.id)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
                     .buttonStyle(.plain)
                 }
                 Button("Add Selected Recipients") {
@@ -2536,6 +2540,7 @@ private struct HSAddRecipientsSheet: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                             }
                             .accessibilityIdentifier("hsAddRecipients.row.\(user.id)")
+                            .accessibilityAddTraits(isSelected ? .isSelected : [])
                             .buttonStyle(.plain)
                         }
                     }

@@ -26,6 +26,11 @@ final class WarningResolutionStore: ObservableObject {
     @Published private(set) var dismissedResolutionKeys: Set<String> = []
     /// `acceptedBookingClashes` rows (`id`, `bookingAId`, `bookingBId`), from web or this phone.
     @Published private(set) var acceptedClashes: [[String: Any]] = []
+    /// RULEBOOK 1.39.0 §10: both live listeners have answered for the open organisation since it was adopted. Until
+    /// then the My Schedule clash marker reads no clash as approved (`clashMarkerDecisions` is nil).
+    @Published private(set) var clashApprovalsLoaded = false
+    private var resolutionsLoaded = false
+    private var acceptedClashesLoaded = false
 
     private let defaults: UserDefaults
     private let legacyApprovedKey = "warning_resolution_approved_v1"
@@ -97,6 +102,9 @@ final class WarningResolutionStore: ObservableObject {
         approvedResolutionKeys = Set((defaults.stringArray(forKey: approvedKey) ?? []).map(Self.migratedResolutionKey))
         dismissedResolutionKeys = Set((defaults.stringArray(forKey: dismissedKey) ?? []).map(Self.migratedResolutionKey))
         acceptedClashes = []
+        resolutionsLoaded = false
+        acceptedClashesLoaded = false
+        clashApprovalsLoaded = false
         loadUnsyncedLegacyKeys(for: organizationId)
         legacyKeysByResolutionKey = [:]
         legacyWarnings = [:]
@@ -168,6 +176,8 @@ final class WarningResolutionStore: ObservableObject {
             Task { @MainActor in
                 guard let self, self.organizationId == organizationId else { return }
                 self.acceptedClashes = rows.map { row in row.reduce(into: [String: Any]()) { $0[$1.key] = $1.value } }
+                self.acceptedClashesLoaded = true
+                self.clashApprovalsLoaded = self.resolutionsLoaded && self.acceptedClashesLoaded
                 self.invalidateDecisions()
                 WarningsService.shared.reapplyResolutions()
             }
@@ -178,6 +188,8 @@ final class WarningResolutionStore: ObservableObject {
     private func applyResolutionRows(_ rows: [[String: String]], fromCache: Bool, organizationId: String) {
         guard self.organizationId == organizationId else { return }
         storedResolutionRows = rows
+        resolutionsLoaded = true
+        clashApprovalsLoaded = resolutionsLoaded && acceptedClashesLoaded
         var approved = Set<String>()
         var dismissed = Set<String>()
         for row in rows {
@@ -248,6 +260,12 @@ final class WarningResolutionStore: ObservableObject {
         )
         cachedApprovalDecisions = built
         return built
+    }
+
+    /// RULEBOOK 1.39.0 §10: the approvals the My Schedule clash marker reads (`CanonicalBusinessEngine.warningDecisions` over `approvedWarningKeys` and the accepted
+    /// clashes, the Warnings shape), or nil while either live listener has not answered — never a wrong grey marker.
+    func clashMarkerDecisions() -> [String: Any]? {
+        clashApprovalsLoaded ? approvalDecisions() : nil
     }
 
     func isApproved(_ resolutionKey: String) -> Bool {

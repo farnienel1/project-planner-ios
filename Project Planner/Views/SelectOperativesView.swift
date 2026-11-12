@@ -282,54 +282,59 @@ private struct SchedulePersonSelectionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
+                // Owner request 11 Nov (1.39.0, UI only): the whole tile selects / deselects — the circle, the name and
+                // the space beside them are one button; the conflicts chevron stays its own button.
                 Button(action: onToggleSelect) {
-                    ZStack {
-                        Circle()
-                            .stroke(isSelected ? Color.theme.primary : Color.gray.opacity(0.3), lineWidth: 2)
-                            .frame(width: 24, height: 24)
-                        if isSelected {
+                    HStack(spacing: 10) {
+                        ZStack {
                             Circle()
-                                .fill(Color.theme.primary)
-                                .frame(width: 16, height: 16)
+                                .stroke(isSelected ? Color.theme.primary : Color.gray.opacity(0.3), lineWidth: 2)
+                                .frame(width: 24, height: 24)
+                            if isSelected {
+                                Circle()
+                                    .fill(Color.theme.primary)
+                                    .frame(width: 16, height: 16)
+                            }
                         }
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 6) {
+                                Text(person.name)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Text(person.roleLabel)
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(PPColor.well)
+                                    .clipShape(Capsule())
+                                if let summary, summary.triangle != .none {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(summary.triangle == .red ? .red : .orange)
+                                }
+                            }
+                            Text(person.email)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            if person.tradeLabel != "—" {
+                                Text(person.tradeLabel)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if isSelected, let summary, !summary.droppedApprovedLeaveDates.isEmpty {
+                                Text("Dropped from booking: \(summary.droppedApprovedLeaveDates.map { ScheduleConflictRow.dayTitle($0) }.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        Spacer(minLength: 0)
                     }
+                    .contentShape(Rectangle())
                 }
-                .accessibilityIdentifier("schedulePersonSelection.button")
                 .buttonStyle(.plain)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(person.name)
-                            .font(.headline)
-                            .foregroundStyle(.primary)
-                        Text(person.roleLabel)
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(PPColor.well)
-                            .clipShape(Capsule())
-                        if let summary, summary.triangle != .none {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(summary.triangle == .red ? .red : .orange)
-                        }
-                    }
-                    Text(person.email)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    if person.tradeLabel != "—" {
-                        Text(person.tradeLabel)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    if isSelected, let summary, !summary.droppedApprovedLeaveDates.isEmpty {
-                        Text("Dropped from booking: \(summary.droppedApprovedLeaveDates.map { ScheduleConflictRow.dayTitle($0) }.joined(separator: ", "))")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    }
-                }
-                Spacer(minLength: 0)
+                .accessibilityIdentifier("schedulePersonSelection.button")
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
                 if let summary, !summary.rows.isEmpty {
                     Button(action: onToggleExpand) {
                         Image(systemName: isExpanded ? "chevron.up" : "chevron.down")

@@ -21,6 +21,7 @@ FILES=(
   "docs/RULEBOOK.md|docs/RULEBOOK.md"
   "lib/canonical/parity-fixture.json|ProjectPlannerTests/CanonicalParityFixture.json"
   "lib/canonical/cross-platform-contract.json|ProjectPlannerTests/CrossPlatformContract.json"
+  "lib/canonical/data-parity-fixture.json|ProjectPlannerTests/DataParityFixture.json"
 )
 
 sha256_of() {
@@ -64,6 +65,8 @@ got_rulebook="$(sha256_of "$STAGE/docs/RULEBOOK.md")"
 sha_file="$(tr -d '[:space:]' < "$STAGE/lib/canonical/dist/canonical-business.sha256")"
 want_contract="$(json_string "$MANIFEST" crossPlatformContractSha256)"
 got_contract="$(sha256_of "$STAGE/lib/canonical/cross-platform-contract.json")"
+want_parity_fixture="$(json_string "$MANIFEST" dataParityFixtureSha256)"
+got_parity_fixture="$(sha256_of "$STAGE/lib/canonical/data-parity-fixture.json")"
 rulebook_version="$(sed -n 's/^Version:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$STAGE/docs/RULEBOOK.md" | head -n 1)"
 
 fail=0
@@ -72,6 +75,8 @@ fail=0
 [ "$got_rulebook" = "$want_rulebook" ] || { echo "RULEBOOK.md sha256 $got_rulebook ≠ manifest rulebookSha256 $want_rulebook" >&2; fail=1; }
 [ "$rulebook_version" = "$version" ] || { echo "RULEBOOK.md Version: $rulebook_version ≠ manifest rulebookVersion $version" >&2; fail=1; }
 [ "$got_contract" = "$want_contract" ] || { echo "cross-platform-contract.json sha256 $got_contract ≠ manifest crossPlatformContractSha256 ${want_contract:-(missing)}" >&2; fail=1; }
+# Rulebook 1.38.0 §27: the data-parity fixture is mirrored and checked like the contract.
+[ "$got_parity_fixture" = "$want_parity_fixture" ] || { echo "data-parity-fixture.json sha256 $got_parity_fixture ≠ manifest dataParityFixtureSha256 ${want_parity_fixture:-(missing)}" >&2; fail=1; }
 [ "$fail" = 0 ] || { echo "Web pack is inconsistent; nothing copied. Rebuild it in the web repo (npm run build:canonical)." >&2; exit 1; }
 
 for pair in "${FILES[@]}"; do
@@ -84,4 +89,5 @@ echo "Rulebook $version mirrored from $SOURCE"
 echo "  packed script sha256 $got_bundle"
 echo "  rulebook sha256      $got_rulebook"
 echo "  contract sha256      $got_contract"
-echo "Next: run RulebookParityTests, CanonicalParityFixtureTests and CrossPlatformContractTests (xcodebuild test -scheme ProjectPlannerTests), then follow web docs/ios-handoff/LATEST.md."
+echo "  parity fixture sha256 $got_parity_fixture"
+echo "Next: run RulebookParityTests, CanonicalParityFixtureTests, CrossPlatformContractTests and DataParityFixtureTests (xcodebuild test -scheme ProjectPlannerTests), then follow web docs/ios-handoff/LATEST.md."

@@ -117,6 +117,7 @@ struct SubcontractorBookingEditSheet: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
                 .accessibilityIdentifier("subcontractorBookingEdit.row.\(contact.id).bookedOperativesSection")
+                .accessibilityAddTraits(selectedContactIds.contains(contact.id) ? .isSelected : [])
                 .buttonStyle(.plain)
             }
         }

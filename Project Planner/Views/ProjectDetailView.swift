@@ -85,8 +85,6 @@ struct ProjectDetailView: View {
     /// RULEBOOK 1.37.0: leave is marked on the Scheduling grid only once the region's bank holidays have loaded.
     @State private var scheduleBankHolidaysReady = false
     @State private var showingScheduleOperative = false
-    /// When non-nil, operative schedule opens pre-filled to edit this booking (same project).
-    @State private var scheduleOperativeSeedBooking: Booking? = nil
     @State private var scheduleOperativeGroupId: String? = nil
     @State private var bookingEditTarget: DailyOverviewEditTarget?
     /// 1.33.1: the save Edit booking asked for, run once its sheet has gone, so the leave check (when there is one) is
@@ -221,12 +219,13 @@ struct ProjectDetailView: View {
                 .preference(key: HideBottomMenuKey.self, value: true)
         )
         .sheet(isPresented: $showingScheduleOperative, onDismiss: {
-            scheduleOperativeSeedBooking = nil
             scheduleOperativeGroupId = nil
         }) {
             ScheduleOperativeView(
                 project: project,
-                editingBooking: scheduleOperativeSeedBooking,
+                // 1.39.0: the seed booking state was never set (dead code removed); editing goes through
+                // `scheduleOperativeGroupId` or the booking edit sheet.
+                editingBooking: nil,
                 editingGroupId: scheduleOperativeGroupId
             )
                 .environmentObject(bookingStore)
@@ -313,6 +312,13 @@ struct ProjectDetailView: View {
                     operativeBookings: bookingStore.bookings,
                     managerBookings: managerScheduleStore.managerSiteBookings,
                     policy: policy
+                ),
+                existingCoverageRows: ScheduleWeekGrid.coverageRows(
+                    operativeIds: request.person.operativeIds,
+                    userIds: request.person.userIds,
+                    day: request.day,
+                    operativeBookings: bookingStore.bookings,
+                    managerBookings: managerScheduleStore.managerSiteBookings
                 ),
                 showsNotes: request.person.savesAsOperativeBooking,
                 onSave: { draft, replaces in
@@ -914,7 +920,6 @@ struct ProjectDetailView: View {
         HStack(alignment: .top, spacing: 10) {
             Button(action: {
                 guard mayBookPeople else { return }
-                scheduleOperativeSeedBooking = nil
                 scheduleOperativeGroupId = nil
                 showingScheduleOperative = true
             }) {
@@ -1565,7 +1570,6 @@ struct ProjectDetailView: View {
         guard schedulingTapAction(.scheduleDay(subcontractor: row.role == .subcontractor)) == .openScheduler else { return }
         switch row.personKind {
         case .operative, .manager:
-            scheduleOperativeSeedBooking = nil
             scheduleOperativeGroupId = nil
             showingScheduleOperative = true
         case .subcontractor:
@@ -2122,7 +2126,6 @@ struct ProjectDetailView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button {
                         guard schedulingTapAction(.scheduleDay(subcontractor: false)) == .openScheduler else { return }
-                        scheduleOperativeSeedBooking = nil
                         scheduleOperativeGroupId = groupId
                         showingScheduleOperative = true
                     } label: {
@@ -3201,8 +3204,11 @@ private struct ProjectVisibilitySettingsView: View {
                             Image(systemName: isVisible(user) ? "checkmark.circle.fill" : "circle")
                                 .foregroundStyle(isVisible(user) ? .blue : .gray)
                         }
+                        // 1.39.0 (owner request 11 Nov, UI only): the whole row, gaps included, toggles.
+                        .contentShape(Rectangle())
                     }
                     .accessibilityIdentifier("projectVisibilitySettings.row.\(user.id)")
+                    .accessibilityAddTraits(isVisible(user) ? .isSelected : [])
                     .buttonStyle(.plain)
                 }
             }

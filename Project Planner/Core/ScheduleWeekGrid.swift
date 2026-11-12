@@ -228,6 +228,28 @@ enum ScheduleWeekGrid {
         return total
     }
 
+    /// RULEBOOK 1.39.0 `bookingShortfall`: the person's bookings that day (labour and manager site) as the coverage rule
+    /// reads them — the same bookings `paidHours` sums. A mapping only.
+    static func coverageRows(
+        operativeIds: [UUID],
+        userIds: [String],
+        day: Date,
+        operativeBookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        calendar: Calendar = OrganizationRulebookContext.calendar
+    ) -> [[String: Any]] {
+        let operativeSet = Set(operativeIds)
+        let userSet = Set(userIds)
+        var rows: [[String: Any]] = []
+        for booking in operativeBookings where operativeSet.contains(booking.operativeId) && counts(booking, on: day, calendar: calendar) {
+            rows.append(CanonicalBusinessEngine.shortfallRow(booking))
+        }
+        for booking in managerBookings where userSet.contains(booking.userId) && calendar.isDate(booking.date, inSameDayAs: day) {
+            rows.append(CanonicalBusinessEngine.shortfallRow(booking.operativePayrollProbe()))
+        }
+        return rows
+    }
+
     static func overlapMessage(
         operativeIds: [UUID],
         userIds: [String],
