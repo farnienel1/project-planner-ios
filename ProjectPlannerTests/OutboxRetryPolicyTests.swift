@@ -205,6 +205,41 @@ final class OutboxRetryPolicyTests: XCTestCase {
         XCTAssertTrue(outbox.entries.isEmpty)
     }
 
+    /// The email function says the same request is still being sent (409 `inProgress`): the item stays queued, the
+    /// try is not counted, and it is not shown as "Email not sent".
+    func testStillSendingKeepsTheEmailQueuedWithoutUsingATry() async throws {
+        let storageKey = "offline_outbox_test_\(UUID().uuidString)"
+        let outbox = OfflineOutboxStore(isolatedStorageKey: storageKey)
+        Self.retained.append(outbox)
+        defer {
+            OfflineSyncCoordinator.replayTestSeam = nil
+            UserDefaults.standard.removeObject(forKey: storageKey)
+        }
+        let request = MaterialOrderRequest(
+            projectId: UUID(),
+            projectNumber: "C648",
+            projectName: "Test site",
+            siteAddress: "",
+            materials: [],
+            requestType: .order,
+            sentBy: "Tester",
+            recipientContacts: [],
+            senderName: "Tester",
+            senderEmail: "tester@example.com"
+        )
+        outbox.enqueueSendMaterialRequest(request, sendRecord: nil, organizationId: "TEST-ORG")
+        OfflineSyncCoordinator.replayTestSeam = .init(signedInUserId: "tester-uid") { _, _ in
+            throw MaterialRequestEmailError.stillSending
+        }
+        let backend = FirebaseBackend()
+        Self.retained.append(backend)
+        let result = await OfflineSyncCoordinator.processOutbox(firebaseBackend: backend, outbox: outbox)
+        XCTAssertEqual(result.failed, 0)
+        let entry = try XCTUnwrap(outbox.entries.first)
+        XCTAssertEqual(entry.attemptCount, 0)
+        XCTAssertFalse(entry.lastError?.hasPrefix("Email not sent") ?? false)
+    }
+
     /// Stores are kept alive for the rest of the run (as in WarningInputsReadinessTests).
     private static var retained: [AnyObject] = []
 }

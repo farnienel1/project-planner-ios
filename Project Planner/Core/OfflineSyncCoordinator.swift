@@ -104,8 +104,9 @@ enum OfflineSyncCoordinator {
             // 1.33.1 review fix 3: an entry taken out of the queue since this pass began (a delete through Firestore
             // took that booking's queued save) is never replayed from the stale list.
             guard outbox.entries.contains(where: { $0.id == entry.id }) else { continue }
-            // Another pass running at the same time already holds this entry: never replayed twice (a queued
-            // material email would be sent twice; `sendMaterialRequest` has no server-side dedupe).
+            // Another pass running at the same time already holds this entry: never replayed twice at once. (A queued
+            // material email also carries a fixed `requestId`, so the email function sends it once even if a replay
+            // repeats after a crash or timeout; this claim keeps two passes on one device from racing.)
             guard outbox.claimEntryForReplay(id: entry.id) else { continue }
             defer { outbox.releaseEntryClaim(id: entry.id) }
 
@@ -133,6 +134,13 @@ enum OfflineSyncCoordinator {
                     failed += 1
                 }
             } catch {
+                if (error as? MaterialRequestEmailError) == .stillSending {
+                    // The email function is still sending this request (same `requestId`): not a failure and not a
+                    // try. It stays queued; the next pass gets the first send's answer.
+                    outbox.markFailed(id: entry.id, error: error.localizedDescription, countsAsAttempt: false)
+                    print("🔥🔥🔥 DEBUG: [OfflineSync] \(entry.operation.rawValue) \(entry.entityId) is still being sent; kept queued")
+                    continue
+                }
                 if FirestoreWriteAck.isPendingInSDK(error) {
                     // 1.33.1: the replayed booking write was handed to Firestore but the server did not confirm it in
                     // time. Firestore keeps it and delivers it in order, so it leaves the outbox (never sent twice).

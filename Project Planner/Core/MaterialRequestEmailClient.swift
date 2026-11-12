@@ -49,6 +49,10 @@ enum MaterialRequestEmailError: LocalizedError, Equatable {
     case notConfigured
     case notSignedIn
     case timedOut
+    /// 409 with `inProgress: true`: an earlier call with the same `requestId` is still sending. Not a refusal — the
+    /// queued item stays queued and is checked again later (the function then answers from that send). Different
+    /// from the job-number 409, which has no `inProgress` and stays `.refused`.
+    case stillSending
     /// The function answered with an error status; `reason` is its `error` text.
     case refused(status: Int, reason: String)
 
@@ -61,6 +65,8 @@ enum MaterialRequestEmailError: LocalizedError, Equatable {
         case .timedOut:
             // Same wording as web `sendProjectPlannerEmail` (lib/email/resendClient.ts).
             return "The email service did not answer in time. Check your sent items before sending again."
+        case .stillSending:
+            return "This email is already being sent. It will be checked again shortly."
         case .refused(_, let reason):
             return "Email not sent: \(reason)"
         }
@@ -147,6 +153,17 @@ enum MaterialRequestEmailPayload {
         return id
     }
 
+    /// What the wholesaler email says (recipients and template data, never the request id or the send time): two Send
+    /// presses with the same signature are the same email, so the second reuses the first's `requestId`.
+    static func contentSignature(_ request: MaterialOrderRequest, senderEmail: String) -> String {
+        let shape: [String: Any] = [
+            "to": recipientEmails(contacts: request.recipientContacts, senderEmail: senderEmail),
+            "data": data(for: request, includesDeliveryRequired: true),
+        ]
+        guard let json = try? JSONSerialization.data(withJSONObject: shape, options: [.sortedKeys]) else { return UUID().uuidString }
+        return String(decoding: json, as: UTF8.self)
+    }
+
     /// The request body. `requestId` (top level) makes the function send this request once: a replay with the same
     /// id is answered from the first send (`deduped: true`), never emailed again.
     static func body(
@@ -188,6 +205,9 @@ enum MaterialRequestEmailPayload {
     /// any other status is an error carrying the function's `error` text.
     static func parseResponse(statusCode: Int, data: Data) -> Result<MaterialRequestEmailResult, MaterialRequestEmailError> {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+        if statusCode == 409, json["inProgress"] as? Bool == true {
+            return .failure(.stillSending)
+        }
         guard statusCode == 200 else {
             let raw = (json["error"] as? String) ?? (json["message"] as? String) ?? ""
             let reason = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -233,6 +253,30 @@ enum MaterialRequestEmailPayload {
         formatter.timeZone = TimeZone(identifier: "UTC")
         return formatter.string(from: date)
     }
+}
+
+/// Request ids of material emails that have not been confirmed sent yet (an online timeout, a refusal), by content
+/// signature, for this app session. The next Send press of the same email reuses the id, so the function answers
+/// from the first send instead of emailing the wholesaler again; a changed email gets a new id. Cleared on success.
+@MainActor
+enum MaterialRequestRetryIds {
+    private static var ids: [String: String] = [:]
+
+    /// The id to send: the unconfirmed one for this signature, else `fresh` (remembered until `confirmed`).
+    static func requestId(signature: String, fresh: String) -> String {
+        if let existing = ids[signature] { return existing }
+        ids[signature] = fresh
+        return fresh
+    }
+
+    /// The send went (or is queued, which keeps its own id): forget it.
+    static func confirmed(signature: String) {
+        ids[signature] = nil
+    }
+
+    #if DEBUG
+    static func resetForTests() { ids = [:] }
+    #endif
 }
 
 enum MaterialRequestEmailClient {

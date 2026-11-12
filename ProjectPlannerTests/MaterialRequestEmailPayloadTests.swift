@@ -254,12 +254,49 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         XCTAssertFalse(try MaterialRequestEmailPayload.parseResponse(statusCode: 200, data: first).get().deduped)
     }
 
-    func testStillSendingIsAnErrorTheOutboxRetries() {
-        let body = Data(#"{"sent":false,"error":"This email is already being sent. Wait a minute, then check your sent items.","inProgress":true}"#.utf8)
-        guard case .failure(let error) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: body) else {
+    func testStillSendingIsNotARefusalButTheJobNumber409Is() {
+        let busy = Data(#"{"sent":false,"error":"This email is already being sent. Wait a minute, then check your sent items.","inProgress":true}"#.utf8)
+        guard case .failure(let error) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: busy) else {
             return XCTFail("expected a failure")
         }
-        XCTAssertEqual(error, .refused(status: 409, reason: "This email is already being sent. Wait a minute, then check your sent items."))
+        XCTAssertEqual(error, .stillSending)
+        XCTAssertFalse(error.errorDescription?.hasPrefix("Email not sent") ?? true)
+
+        let jobNumber = Data(#"{"sent":false,"error":"The job number does not match this job. Reopen the job and send again."}"#.utf8)
+        guard case .failure(let refused) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: jobNumber) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertEqual(refused, .refused(status: 409, reason: "The job number does not match this job. Reopen the job and send again."))
+    }
+
+    func testContentSignatureIsTheEmailNotTheIdOrTheTime() {
+        var first = request(type: .order, contacts: [supplier], delivery: Date(timeIntervalSince1970: 1_800_000_000))
+        var second = first
+        first.requestId = "AAAAAAAA-0000-4000-8000-000000000001"
+        second.requestId = "AAAAAAAA-0000-4000-8000-000000000002"
+        second.sentAt = first.sentAt.addingTimeInterval(90)
+        let a = MaterialRequestEmailPayload.contentSignature(first, senderEmail: "sender@example.com")
+        XCTAssertEqual(a, MaterialRequestEmailPayload.contentSignature(second, senderEmail: "sender@example.com"))
+        var changed = first
+        changed.materials = [item("Different board", quantity: 9)]
+        XCTAssertNotEqual(a, MaterialRequestEmailPayload.contentSignature(changed, senderEmail: "sender@example.com"))
+        var otherRecipient = first
+        otherRecipient.recipientContacts = [WholesalerContact(name: "Pat", email: "pat@other.example")]
+        XCTAssertNotEqual(a, MaterialRequestEmailPayload.contentSignature(otherRecipient, senderEmail: "sender@example.com"))
+    }
+
+    func testAnUnconfirmedSendReusesItsRequestIdUntilItGoes() {
+        MaterialRequestRetryIds.resetForTests()
+        defer { MaterialRequestRetryIds.resetForTests() }
+        // First press times out: its id is remembered for that email.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-1"), "ID-PRESS-1")
+        // Second press of the same email: the same id, so the function dedupes it.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-2"), "ID-PRESS-1")
+        // A different email gets its own id.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-B", fresh: "ID-PRESS-3"), "ID-PRESS-3")
+        // Once it went, the next press of that email is a new request.
+        MaterialRequestRetryIds.confirmed(signature: "email-A")
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-4"), "ID-PRESS-4")
     }
 
     func testRequestIdSurvivesTheOutboxCodingAndOlderEntriesDecodeWithout() throws {
