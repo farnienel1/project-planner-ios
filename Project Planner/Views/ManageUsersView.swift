@@ -1564,6 +1564,8 @@ struct EditUserView: View {
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
     /// The live pay-history rows by listener (`rateHistoryListenQueries`), merged by document id when shown.
     @State private var liveRateHistoryRows: [String: LiveDocumentRows] = [:]
+    /// One id per Edit User screen, so two open screens never share (and remove) each other's pay-history listeners.
+    @State private var rateHistoryListenerInstance = UUID().uuidString
     @State private var showingQualificationsEditor = false
     @State private var operativeForQualificationsEditor: Operative?
     @State private var openingQualificationsEditor = false
@@ -2350,7 +2352,7 @@ struct EditUserView: View {
             }
             // RULEBOOK §1 `LIVE_COLLECTIONS` "Pay history listens while open" and 1.26.0 §8 `rateHistoryQueryPlan`: the
             // person's `operativeDayRateHistory` rows stay live while Edit User is open (web `watchOperativeDayRateHistory`).
-            .listensWhileOpen("operativeDayRateHistory", keyPrefix: "operativeDayRateHistory.editUser",
+            .listensWhileOpen("operativeDayRateHistory", keyPrefix: "operativeDayRateHistory.editUser.\(rateHistoryListenerInstance)",
                               firebaseBackend: firebaseBackend, queries: rateHistoryListenQueries) { queryKey, rows in
                 applyLiveRateHistoryRows(queryKey: queryKey, rows: rows)
             }
@@ -3630,6 +3632,9 @@ struct EditUserView: View {
         liveRateHistoryRows[queryKey] = rows
         let current = Set(rateHistoryListenQueries.map(\.key))
         liveRateHistoryRows = liveRateHistoryRows.filter { current.contains($0.key) }
+        // Each query keeps its own latest rows; the list is shown only once every current query has answered, so one
+        // query's first snapshot never replaces the rows the others (and the first load) already gave.
+        guard current.isSubset(of: Set(liveRateHistoryRows.keys)) else { return }
         var seen = Set<String>()
         var merged: LiveDocumentRows = []
         for key in liveRateHistoryRows.keys.sorted() {
