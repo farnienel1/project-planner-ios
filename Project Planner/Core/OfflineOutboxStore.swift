@@ -489,6 +489,27 @@ final class OfflineOutboxStore: ObservableObject {
         inFlightEntityIds.remove(entityId.uppercased())
     }
 
+    /// Outbox entry ids a replay pass has claimed. A second pass that runs at the same time (the 60 s timer, Retry now,
+    /// pull-to-refresh, foreground, sign-out) skips a claimed entry, so a queued material email is never sent twice.
+    private(set) var claimedEntryIds: Set<UUID> = []
+
+    /// Claims `id` for one replay; false when another pass already holds it.
+    func claimEntryForReplay(id: UUID) -> Bool {
+        claimedEntryIds.insert(id).inserted
+    }
+
+    func releaseEntryClaim(id: UUID) {
+        claimedEntryIds.remove(id)
+    }
+
+    /// Entries the sync can still retry on its own for `signedInUserId`: queued by that account (or by an older build
+    /// that did not record the account) and under the attempt limit. Stuck entries wait for Retry or Discard.
+    func autoRetryableCount(signedInUserId: String?) -> Int {
+        entries.filter {
+            $0.mayReplay(signedInUserId: signedInUserId) && !OfflineSyncCoordinator.reachedAttemptLimit($0)
+        }.count
+    }
+
     func isInFlight(bookingId: UUID) -> Bool {
         inFlightEntityIds.contains(bookingId.uuidString.uppercased())
     }
@@ -797,9 +818,11 @@ final class OfflineOutboxStore: ObservableObject {
         persistToDisk()
     }
 
-    func markFailed(id: UUID, error: String) {
+    /// `countsAsAttempt` false (a background timer pass): the error is shown but the try is not counted, so the timer
+    /// never uses up the attempt limit on its own.
+    func markFailed(id: UUID, error: String, countsAsAttempt: Bool = true) {
         guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
-        entries[index].attemptCount += 1
+        if countsAsAttempt { entries[index].attemptCount += 1 }
         entries[index].lastError = error
         persistToDisk()
     }

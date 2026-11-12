@@ -886,9 +886,21 @@ struct SiteAuditCreateFlowView: View {
                 }
             }
                 .sheet(item: $editingItem) { item in
-                    SiteAuditAddItemView(item: item, failedPhotoLoads: $failedPhotoLoads) { updated in
+                    SiteAuditAddItemView(
+                        item: item,
+                        failedPhotoLoads: $failedPhotoLoads,
+                        // An existing audit's photo that finishes downloading while this editor is open is passed
+                        // in, so the editor shows it and saving keeps it.
+                        arrivedImage: items.first(where: { $0.id == item.id })?.image
+                    ) { updated in
                         if let idx = items.firstIndex(where: { $0.id == updated.id }) {
-                            items[idx] = updated
+                            var merged = updated
+                            if merged.image == nil, let arrived = items[idx].image {
+                                // Never wipe a photo that arrived while the editor was open.
+                                merged.image = arrived
+                                merged.capturedAt = items[idx].capturedAt
+                            }
+                            items[idx] = merged
                         } else {
                             items.append(updated)
                         }
@@ -1087,6 +1099,7 @@ struct SiteAuditCreateFlowView: View {
     private func addMultiPhotos(from selection: [PhotosPickerItem]) async {
         let picked = selection
         multiSelection = []
+        // capturedAt (and the watermark time) is the moment the photo was picked.
         let placeholders = picked.map { _ in SiteAuditDraftItem(title: "Photo item", capturedAt: Date()) }
         items.append(contentsOf: placeholders)
         loadingPhotoIds.formUnion(placeholders.map(\.id))
@@ -1690,16 +1703,26 @@ struct SiteAuditAddItemView: View {
     @State private var showingLibrary = false
     /// Multi-add load failures from the flow behind this sheet (an alert there would not show over the sheet).
     @Binding var failedPhotoLoads: Int
+    /// The item's photo as the flow behind this sheet has it now (an existing audit's photo may finish
+    /// downloading after the editor opened). Taken only while the draft has no photo of its own.
+    var arrivedImage: UIImage?
     let onSubmit: (SiteAuditDraftItem) -> Void
 
     init(
         item: SiteAuditDraftItem = SiteAuditDraftItem(),
         failedPhotoLoads: Binding<Int> = .constant(0),
+        arrivedImage: UIImage? = nil,
         onSubmit: @escaping (SiteAuditDraftItem) -> Void
     ) {
         self._draft = State(initialValue: item)
         self._failedPhotoLoads = failedPhotoLoads
+        self.arrivedImage = arrivedImage
         self.onSubmit = onSubmit
+    }
+
+    private func takeArrivedImageIfNeeded() {
+        guard draft.image == nil, let arrivedImage else { return }
+        draft.image = arrivedImage
     }
 
     private var canSave: Bool {
@@ -1774,6 +1797,8 @@ struct SiteAuditAddItemView: View {
             .sheet(isPresented: $showingLibrary) {
                 SiteAuditPhotoLibraryPicker { applyPhoto($0) }
             }
+            .onAppear { takeArrivedImageIfNeeded() }
+            .onChange(of: arrivedImage) { _, _ in takeArrivedImageIfNeeded() }
         }
     }
 

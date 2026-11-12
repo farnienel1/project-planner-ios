@@ -14,19 +14,50 @@ import Network
 import UIKit
 #endif
 
-/// When the offline outbox is retried besides "network came back" (a path change) and app foreground: every
-/// `interval` seconds while anything is still pending. A phone on a weak site signal often never reports the
-/// path going offline, so a queued material order email could wait until airplane mode was toggled.
+/// When queued changes are retried besides "network came back" (a path change), app foreground, Retry now and
+/// pull-to-refresh: on a backing-off timer (1, 2, 5, then every 10 minutes) while anything can still retry on its
+/// own. A phone on a weak site signal often never reports the path going offline, so a queued material order email
+/// could otherwise wait until airplane mode was toggled.
+///
+/// "Can still retry" = outbox entries queued by the signed-in account and under the attempt limit
+/// (`OfflineOutboxStore.autoRetryableCount`), plus queued site audits (`SiteAuditOfflineStore`). Entries stuck at the
+/// limit wait for Retry or Discard and do not keep the timer alive. Timer passes do not count as tries.
 enum OutboxRetryPolicy {
-    nonisolated static let interval: TimeInterval = 60
+    nonisolated static let delays: [TimeInterval] = [60, 120, 300, 600]
 
-    nonisolated static func shouldKeepRetrying(pendingCount: Int) -> Bool {
-        pendingCount > 0
+    /// Wait before timer pass `pass` (0-based); the last delay repeats.
+    nonisolated static func delay(beforePass pass: Int) -> TimeInterval {
+        delays[min(max(pass, 0), delays.count - 1)]
     }
 
-    /// One timer pass: retry only while online, something is pending and no sync is already running.
-    nonisolated static func shouldRetryNow(pendingCount: Int, isOnline: Bool, isSyncing: Bool) -> Bool {
-        shouldKeepRetrying(pendingCount: pendingCount) && isOnline && !isSyncing
+    nonisolated static func shouldKeepRetrying(retryableOutboxCount: Int, pendingSiteAudits: Int) -> Bool {
+        retryableOutboxCount > 0 || pendingSiteAudits > 0
+    }
+
+    /// One timer pass: only online and when no sync is already running (the sync is single-flight anyway).
+    nonisolated static func shouldRetryNow(retryableOutboxCount: Int, pendingSiteAudits: Int, isOnline: Bool, isSyncing: Bool) -> Bool {
+        shouldKeepRetrying(retryableOutboxCount: retryableOutboxCount, pendingSiteAudits: pendingSiteAudits) && isOnline && !isSyncing
+    }
+}
+
+/// Runs one async operation at a time: a caller that arrives while it runs waits for that run instead of starting
+/// another. Used for the offline sync, which every trigger (timer, foreground, Retry now, pull-to-refresh,
+/// reconnect) reaches.
+@MainActor
+final class SingleFlight {
+    private var running: Task<Void, Never>?
+
+    var isRunning: Bool { running != nil }
+
+    func run(_ operation: @escaping @MainActor () async -> Void) async {
+        if let running {
+            await running.value
+            return
+        }
+        let task = Task { @MainActor in await operation() }
+        running = task
+        await task.value
+        running = nil
     }
 }
 
@@ -62,6 +93,8 @@ class SmartCacheService: ObservableObject {
     private var syncTask: Task<Void, Never>?
     /// Runs while the outbox has pending entries (`OutboxRetryPolicy`); stops itself when it is empty.
     private var outboxRetryTask: Task<Void, Never>?
+    /// Every sync trigger goes through this, so two passes never run at once.
+    private let syncFlight = SingleFlight()
 
     // In-memory cache for offline functionality. Values are stored per organisation
     // so a switch cannot satisfy the next company from the previous company's arrays.
@@ -114,6 +147,7 @@ class SmartCacheService: ObservableObject {
 
     func setFirebaseBackend(_ backend: FirebaseBackend) {
         firebaseBackend = backend
+        updateOutboxRetryTimer()
     }
 
     func refreshOutboxCounts() {
@@ -125,27 +159,42 @@ class SmartCacheService: ObservableObject {
         updateOutboxRetryTimer()
     }
 
+    private var retryableWorkCounts: (outbox: Int, siteAudits: Int) {
+        (
+            OfflineOutboxStore.shared.autoRetryableCount(signedInUserId: firebaseBackend?.currentUser?.uid),
+            SiteAuditOfflineStore.shared.pendingCount
+        )
+    }
+
     private func updateOutboxRetryTimer() {
-        guard OutboxRetryPolicy.shouldKeepRetrying(pendingCount: OfflineOutboxStore.shared.pendingCount) else {
+        let counts = retryableWorkCounts
+        guard OutboxRetryPolicy.shouldKeepRetrying(retryableOutboxCount: counts.outbox, pendingSiteAudits: counts.siteAudits) else {
             outboxRetryTask?.cancel()
             outboxRetryTask = nil
             return
         }
         guard outboxRetryTask == nil else { return }
         outboxRetryTask = Task { @MainActor [weak self] in
+            var pass = 0
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(OutboxRetryPolicy.interval * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(OutboxRetryPolicy.delay(beforePass: pass) * 1_000_000_000))
+                pass += 1
                 guard !Task.isCancelled, let self else { return }
-                let pending = OfflineOutboxStore.shared.pendingCount
-                guard OutboxRetryPolicy.shouldKeepRetrying(pendingCount: pending) else {
+                let counts = self.retryableWorkCounts
+                guard OutboxRetryPolicy.shouldKeepRetrying(retryableOutboxCount: counts.outbox, pendingSiteAudits: counts.siteAudits) else {
                     self.outboxRetryTask = nil
                     return
                 }
                 #if canImport(Network)
                 self.isOnline = self.networkMonitor.currentPath.status == .satisfied
                 #endif
-                if OutboxRetryPolicy.shouldRetryNow(pendingCount: pending, isOnline: self.isOnline, isSyncing: self.isSyncing) {
-                    self.syncPendingChanges()
+                if OutboxRetryPolicy.shouldRetryNow(
+                    retryableOutboxCount: counts.outbox,
+                    pendingSiteAudits: counts.siteAudits,
+                    isOnline: self.isOnline,
+                    isSyncing: self.isSyncing
+                ) {
+                    await self.performSync(countsAsAttempt: false)
                 }
             }
         }
@@ -177,7 +226,7 @@ class SmartCacheService: ObservableObject {
             return
         }
 
-        syncTask?.cancel()
+        // No cancel of a running pass: it may be mid-send. `performSync` is single-flight.
         syncTask = Task { @MainActor in
             await performSync()
         }
@@ -198,7 +247,14 @@ class SmartCacheService: ObservableObject {
         }
     }
 
-    private func performSync() async {
+    /// Single-flight: a call while a pass runs waits for that pass (it never starts a second one).
+    private func performSync(countsAsAttempt: Bool = true) async {
+        await syncFlight.run { [weak self] in
+            await self?.performSyncPass(countsAsAttempt: countsAsAttempt)
+        }
+    }
+
+    private func performSyncPass(countsAsAttempt: Bool) async {
         guard let firebaseBackend else {
             NotificationCenter.default.post(name: .syncOfflineChanges, object: nil)
             return
@@ -220,7 +276,11 @@ class SmartCacheService: ObservableObject {
         }
 
         print("🔥🔥🔥 DEBUG: 🔄 Syncing offline outbox (\(OfflineOutboxStore.shared.pendingCount) entries)")
-        let result = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend, outbox: OfflineOutboxStore.shared)
+        let result = await OfflineSyncCoordinator.processOutbox(
+            firebaseBackend: firebaseBackend,
+            outbox: OfflineOutboxStore.shared,
+            countsAsAttempt: countsAsAttempt
+        )
         if result.synced > 0 { markSynced() }
         refreshOutboxCounts()
         await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)

@@ -49,9 +49,12 @@ enum OfflineSyncCoordinator {
         case refused(message: String)
     }
 
+    /// `countsAsAttempt` false for a background timer pass (`OutboxRetryPolicy`): a failure is recorded without
+    /// using up one of the `maxAttempts` tries.
     static func processOutbox(
         firebaseBackend: FirebaseBackend,
-        outbox: OfflineOutboxStore? = nil
+        outbox: OfflineOutboxStore? = nil,
+        countsAsAttempt: Bool = true
     ) async -> (synced: Int, failed: Int) {
         let outbox = outbox ?? OfflineOutboxStore.shared
         guard !outbox.entries.isEmpty else { return (0, 0) }
@@ -86,6 +89,10 @@ enum OfflineSyncCoordinator {
             // 1.33.1 review fix 3: an entry taken out of the queue since this pass began (a delete through Firestore
             // took that booking's queued save) is never replayed from the stale list.
             guard outbox.entries.contains(where: { $0.id == entry.id }) else { continue }
+            // Another pass running at the same time already holds this entry: never replayed twice (a queued
+            // material email would be sent twice; `sendMaterialRequest` has no server-side dedupe).
+            guard outbox.claimEntryForReplay(id: entry.id) else { continue }
+            defer { outbox.releaseEntryClaim(id: entry.id) }
 
             do {
                 // 1.33.1 review fix 3: while this entry replays, a delete of its booking goes through Firestore after
@@ -137,7 +144,7 @@ enum OfflineSyncCoordinator {
                     print("🔥🔥🔥 DEBUG: [OfflineSync] Refused for good \(entry.operation.rawValue) \(entry.entityId)")
                     continue
                 }
-                outbox.markFailed(id: entry.id, error: error.localizedDescription)
+                outbox.markFailed(id: entry.id, error: error.localizedDescription, countsAsAttempt: countsAsAttempt)
                 failed += 1
                 print("🔥🔥🔥 DEBUG: [OfflineSync] Failed \(entry.operation.rawValue): \(error.localizedDescription)")
             }
