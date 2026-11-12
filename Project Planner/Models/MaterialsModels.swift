@@ -535,6 +535,11 @@ struct MaterialOrderRequest: Codable {
     var sendAsPlainText: Bool
     /// Required on orders: the delivery instant from the canonical script. Quotes leave it empty.
     var requiredDeliveryDate: Date?
+    /// Idempotency key for the `sendEmail` function (`requestId`, web functions/email/requestDedupe.js): set once
+    /// when the user presses Send (the send record's id) and kept in the offline outbox, so a replay after a crash or
+    /// a timeout is answered from the first send instead of emailing the wholesaler again. Nil on requests queued by
+    /// builds before it; the replay then uses the outbox entry's id.
+    var requestId: String?
     
     enum RequestType: String, Codable {
         case quote = "Quote"
@@ -557,7 +562,8 @@ struct MaterialOrderRequest: Codable {
         senderCompany: String = "",
         companyLogoURL: String? = nil,
         sendAsPlainText: Bool = false,
-        requiredDeliveryDate: Date? = nil
+        requiredDeliveryDate: Date? = nil,
+        requestId: String? = nil
     ) {
         self.projectId = projectId
         self.projectNumber = projectNumber
@@ -575,12 +581,13 @@ struct MaterialOrderRequest: Codable {
         self.companyLogoURL = companyLogoURL
         self.sendAsPlainText = sendAsPlainText
         self.requiredDeliveryDate = requiredDeliveryDate
+        self.requestId = requestId
     }
 
     enum CodingKeys: String, CodingKey {
         case projectId, projectNumber, projectName, siteAddress, materials, requestType
         case sentBy, sentAt, recipientContacts, senderName, senderEmail, senderPhone
-        case senderCompany, companyLogoURL, sendAsPlainText, requiredDeliveryDate
+        case senderCompany, companyLogoURL, sendAsPlainText, requiredDeliveryDate, requestId
     }
 
     init(from decoder: Decoder) throws {
@@ -601,6 +608,7 @@ struct MaterialOrderRequest: Codable {
         companyLogoURL = try c.decodeIfPresent(String.self, forKey: .companyLogoURL)
         sendAsPlainText = try c.decodeIfPresent(Bool.self, forKey: .sendAsPlainText) ?? false
         requiredDeliveryDate = try c.decodeIfPresent(Date.self, forKey: .requiredDeliveryDate)
+        requestId = try c.decodeIfPresent(String.self, forKey: .requestId)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -621,6 +629,7 @@ struct MaterialOrderRequest: Codable {
         try c.encodeIfPresent(companyLogoURL, forKey: .companyLogoURL)
         try c.encode(sendAsPlainText, forKey: .sendAsPlainText)
         try c.encodeIfPresent(requiredDeliveryDate, forKey: .requiredDeliveryDate)
+        try c.encodeIfPresent(requestId, forKey: .requestId)
     }
 }
 

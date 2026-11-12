@@ -10550,6 +10550,9 @@ extension FirebaseBackend {
             throw error
         }
         print("✅ [materials/send] sendEmail sent \(result.sentCount) · ids \(result.messageIds) · cc \(result.cc)")
+        if result.deduped {
+            print("✅ [materials/send] already sent earlier with this request id; not sent again")
+        }
         if !result.failed.isEmpty {
             print("❌ [materials/send] not sent to \(result.failed)")
         }
