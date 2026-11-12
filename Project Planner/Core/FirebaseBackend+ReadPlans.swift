@@ -90,6 +90,28 @@ nonisolated final class CompositeListenerRegistration: NSObject, ListenerRegistr
 }
 
 extension FirebaseBackend {
+    /// 1.37.1 (`ProjectStore.confirmRemovedJobs`): one job document read from the server, never the device cache,
+    /// through the same reader as every job (`jobs(fromDocuments:)`, `parseJobDocument`). A failed read (offline,
+    /// refused) is `.unknown`, so nothing is concluded from it.
+    func readJobDocumentFromServer(organizationId: String, smallWorks: Bool, documentId: String) async -> ProjectStore.ServerJobRead {
+        let orgId = normalizedOrganizationId(organizationId)
+        let id = documentId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !orgId.isEmpty, !id.isEmpty, !id.contains("/") else { return .unknown }
+        let ref = db.collection("organizations").document(orgId)
+            .collection(smallWorks ? "smallWorks" : "projects").document(documentId)
+        do {
+            let snapshot = try await ref.getDocument(source: .server)
+            guard snapshot.exists, let data = snapshot.data() else { return .gone }
+            guard let job = Self.jobs(fromDocuments: [(id: snapshot.documentID, data: data)], smallWorks: smallWorks).first else {
+                return .unknown
+            }
+            return .exists(job)
+        } catch {
+            NSLog("JOB_SERVER_READ_FAILED id=%@ error=%@", documentId, error.localizedDescription)
+            return .unknown
+        }
+    }
+
     // MARK: Plans → Firestore
 
     /// The job reads for `collection` (`projects` / `smallWorks`): `jobQueryPlan(viewer, { documentIds })`, with the
@@ -252,9 +274,24 @@ extension FirebaseBackend {
         fromDocument: @escaping (DocumentSnapshot) -> Doc?,
         documentId: @escaping (Doc) -> String,
         onRefused: (@MainActor () -> Void)? = nil,
+        parity: (key: String, organizationId: String)? = nil,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
+        // RULEBOOK 1.38.0 §27: what each part received, by stored document id, for the data check.
+        let ledger = DataParityListenerLedger.shared
+        let generation = parity.map { ledger.begin(key: $0.key, organizationId: $0.organizationId, sourceCount: sources.count) }
+        /// Records the snapshot; true when the part's held ids changed. Without a ledger (no `parity`), true: the
+        /// snapshot is always passed on.
+        @discardableResult
+        func ledgerRecord(_ index: Int, _ ids: [String], _ fromCache: Bool, _ pending: Bool) -> Bool {
+            guard let parity, let generation else { return true }
+            return ledger.record(key: parity.key, generation: generation, source: index, ids: ids, fromCache: fromCache, hasPendingWrites: pending)
+        }
+        func ledgerFailed(_ index: Int) {
+            guard let parity, let generation else { return }
+            ledger.markFailed(key: parity.key, generation: generation, source: index)
+        }
         guard !sources.isEmpty else {
             Task { @MainActor in onChange([], false) }
             return registration
@@ -265,7 +302,9 @@ extension FirebaseBackend {
             Task { @MainActor in onChange(merged.docs, merged.fromCache) }
         }
         func attach(_ index: Int, _ query: Query, fallback: Query?, attempt: Int = 0) {
-            let listener = query.addSnapshotListener { snapshot, error in
+            // RULEBOOK 1.38.0 §27: metadata changes only tell the ledger the server answered; they never reach the store.
+            let delivered = SnapshotDeliveredFlag()
+            let listener = query.addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
                 if let error {
                     if let fallback, Self.isFailedPrecondition(error) {
                         // The composite index is still building: listen without the date bound.
@@ -273,6 +312,7 @@ extension FirebaseBackend {
                         return
                     }
                     NSLog("PLANNED_LISTENER_FAILED label=%@ source=%d attempt=%d error=%@", label, index, attempt, error.localizedDescription)
+                    ledgerFailed(index)
                     // Counted as answered (from cache), so the other sources can still add their rows.
                     deliver(index, [], true)
                     // RULEBOOK 1.26.0: refused by the rules (a security switch the plan did not know about yet, or a
@@ -294,6 +334,13 @@ extension FirebaseBackend {
                     return
                 }
                 guard let snapshot else { return }
+                let heldIdsChanged = ledgerRecord(index, snapshot.documents.map(\.documentID), snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
+                if DataParityListenerLedger.isMetadataOnly(
+                    documentChangeCount: snapshot.documentChanges.count,
+                    deliveredBefore: delivered.wasDelivered,
+                    heldIdsChanged: heldIdsChanged
+                ) { return }
+                _ = delivered.markDelivered()
                 deliver(index, snapshot.documents.map(fromQueryDocument), snapshot.metadata.isFromCache)
             }
             registration.set(index, listener)
@@ -312,6 +359,7 @@ extension FirebaseBackend {
                         return
                     }
                     guard let snapshot else { return }
+                    ledgerRecord(index, snapshot.exists ? [snapshot.documentID] : [], snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
                     let doc = snapshot.exists ? fromDocument(snapshot) : nil
                     deliver(index, doc.map { [$0] } ?? [], snapshot.metadata.isFromCache)
                 }
@@ -362,7 +410,8 @@ extension FirebaseBackend {
                 // Keep this listener (it retries on backoff) but let the next re-plan replace it — only this one,
                 // never a newer replacement.
                 if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
-            }
+            },
+            parity: (key: key, organizationId: orgId)
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
             onChange(rows, fromCache)

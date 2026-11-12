@@ -19,6 +19,9 @@ extension Notification.Name {
     /// The `ghostAccounts` switch changed for the open organisation (RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b"):
     /// Add user shows or hides the Ghost account toggle.
     static let ghostAccountsSwitchDidChange = Notification.Name("ghostAccountsSwitchDidChange")
+    /// The `dataCheckPanel` switch changed for the open organisation (RULEBOOK 1.38.0 §27, owner change 11 Nov):
+    /// Settings → Data health shows or hides the Data check panel.
+    static let dataCheckPanelSwitchDidChange = Notification.Name("dataCheckPanelSwitchDidChange")
     /// The live roster (`RulebookRosterSnapshot`) changed: the catalogue operatives' pay overlay re-plans (RULEBOOK 1.27.0 §8).
     static let rulebookRosterDidChange = Notification.Name("rulebookRosterDidChange")
 }
@@ -66,17 +69,35 @@ nonisolated enum SecuritySwitchContext {
     /// The open organisation's `ghostAccounts` switch.
     static var ghostAccounts: Bool { ghostAccountsEnabled(organizationId: OrganizationRulebookContext.organizationId) }
 
+    /// RULEBOOK 1.38.0 §27 (owner change 11 Nov): `dataCheckPanelEnabled(platformConfig/app, organizationId)` — whether
+    /// the Data check panel may show. Missing / not read / unanswered is off. The check itself always runs silently.
+    static var dataCheckPanel: Bool {
+        lock.lock()
+        let current = config
+        lock.unlock()
+        return CanonicalBusinessEngine.dataCheckPanelEnabled(
+            config: current,
+            organizationId: OrganizationRulebookContext.organizationId ?? ""
+        ) ?? false
+    }
+
     /// A new read of `platformConfig/app` (plain JSON; nil when the document is missing). When the open organisation's
     /// switches change, the read plans re-plan (`jobReadPlanDidChange`) and pay screens reload
     /// (`securitySwitchesDidChange`).
     static func update(config next: [String: Any]?) {
         let before = current
         let ghostBefore = ghostAccounts
+        let panelBefore = dataCheckPanel
         let nextKey = next.flatMap { CanonicalBusinessEngine.rulebookMemoKey($0) } ?? "none"
         lock.lock()
         config = next
         configKey = nextKey
         lock.unlock()
+        if dataCheckPanel != panelBefore {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .dataCheckPanelSwitchDidChange, object: nil)
+            }
+        }
         if ghostAccounts != ghostBefore {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .ghostAccountsSwitchDidChange, object: nil)

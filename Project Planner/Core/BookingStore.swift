@@ -1176,6 +1176,28 @@ class BookingStore: ObservableObject {
         }
     }
 
+    /// How one listener snapshot replaces the bookings held (`existing`: the bookings inside the launch window).
+    /// A server snapshot is the whole query result and replaces the list (unless it is the same bookings); a cache
+    /// snapshot never empties the list and, when shorter, only adds and updates. The pure part of
+    /// `applyRemoteBookings`, so the data-parity fixture (RULEBOOK 1.38.0 §27, `DataParityFixtureTests`) runs this
+    /// exact code. `changed` false: keep `existing`.
+    static func liveBookingsMerge(existing: [Booking], remote: [Booking], fromCache: Bool) -> (list: [Booking], changed: Bool) {
+        if !fromCache {
+            if BookingStore.sameBookings(remote, existing) { return (existing, false) }
+            return (remote, true)
+        }
+        if remote.isEmpty && !existing.isEmpty { return (existing, false) }
+        if remote.count < existing.count {
+            var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for booking in remote {
+                byId[booking.id] = booking
+            }
+            return (Array(byId.values), true)
+        }
+        if BookingStore.sameBookings(remote, existing) { return (existing, false) }
+        return (remote, true)
+    }
+
     /// A cache snapshot must not delete bookings that are already on screen. A server snapshot is the
     /// whole query result, so it replaces the list: a booking deleted or moved on the web leaves this
     /// device too instead of being merged back in. Rows older than the launch window are not kept.
@@ -1195,43 +1217,23 @@ class BookingStore: ObservableObject {
             listenerFailed = false
             // RULEBOOK §2 read-only offline screens show "Last updated" from this.
             smartCache?.markSynced()
-            if BookingStore.sameBookings(remote, existing) {
-                if bookings.count != existing.count { bookings = existing }
-                return
-            }
-            if remote.count < existing.count {
+            if remote.count < existing.count, !BookingStore.sameBookings(remote, existing) {
                 NSLog("BOOKINGS_SERVER_REPLACED kept=%d removed=%d", remote.count, existing.count - remote.count)
             }
-            bookings = remote
-            smartCache?.cacheBookings(remote)
-            ScheduleChangeNotifier.postBookingStoreDidChange()
-            return
         }
-        if remote.isEmpty && !existing.isEmpty {
-            bookings = existing
-            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT \(existing.count) — refused an empty update fromCache=\(fromCache)")
-            return
-        }
-        if remote.count < existing.count {
-            var byId = Dictionary(existing.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for booking in remote {
-                byId[booking.id] = booking
-            }
-            let merged = Array(byId.values)
-            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT merged \(merged.count) (update had \(remote.count), fromCache=\(fromCache))")
-            bookings = merged
-            smartCache?.cacheBookings(merged)
-            ScheduleChangeNotifier.postBookingStoreDidChange()
-            return
-        }
-        if BookingStore.sameBookings(remote, existing) {
-            if bookings.count != existing.count {
-                bookings = existing
+        let merged = BookingStore.liveBookingsMerge(existing: existing, remote: remote, fromCache: fromCache)
+        guard merged.changed else {
+            if bookings.count != existing.count { bookings = existing }
+            if fromCache && remote.isEmpty && !existing.isEmpty {
+                print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT \(existing.count) — refused an empty update fromCache=\(fromCache)")
             }
             return
         }
-        bookings = remote
-        smartCache?.cacheBookings(remote)
+        if fromCache && remote.count < existing.count {
+            print("🔥🔥🔥 DEBUG: BOOKINGS_KEPT merged \(merged.list.count) (update had \(remote.count), fromCache=\(fromCache))")
+        }
+        bookings = merged.list
+        smartCache?.cacheBookings(merged.list)
         ScheduleChangeNotifier.postBookingStoreDidChange()
     }
     

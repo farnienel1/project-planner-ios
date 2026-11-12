@@ -154,6 +154,12 @@ enum ScheduleWeekGrid {
         }
     }
 
+    /// The Scheduling week grid shows its Subcontractors section only when a subcontractor is booked in the visible
+    /// week (owner 11 Nov); with none, no section and no placeholder row — "Book a sub" stays the way in. Display only.
+    static func showsSubcontractorSection(_ subcontractorRows: [ScheduleWeekPerson]) -> Bool {
+        !subcontractorRows.isEmpty
+    }
+
     /// Roster operative → `bookings`. Everyone else with an account → `managerSiteBookings`.
     static func saveTarget(for person: ScheduleWeekPerson, jobType: JobType) -> ScheduleQuickAddSave? {
         // Nobody to book: an unresolved id is never booked again from the grid.

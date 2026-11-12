@@ -727,6 +727,30 @@ class UserStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: ROSTER_PUBLISHED count=\(published.count) admins=\(admins) managers=\(managers) operatives=\(operatives)")
     }
 
+    /// RULEBOOK 1.38.0 §27 (data check): the users document ids this device holds for the roster query
+    /// (`users` where `organizationId` = the open organisation), before the `rosterPeople` fold and any rulebook
+    /// filter: `organizationUserDocuments` whose stored organisation is the open one. Nil until a roster load of the
+    /// open organisation has finished or while no live roster listener is attached.
+    func dataParityHeldUserIds(organizationId: String) -> [String]? {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty,
+              organizationUsersListenerOrganizationId == orgId,
+              normalizedOrganizationId(organizationUserDocumentsOrganizationId ?? "") == orgId else { return nil }
+        return organizationUserDocuments
+            .filter { normalizedOrganizationId($0.organizationId) == orgId }
+            .map(\.id)
+    }
+
+    /// RULEBOOK 1.38.0 §27 self-heal: attaches the live roster listener again and reloads the roster from the server.
+    func reattachOrganizationUsersForDataCheck(organizationId: String) async {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        stopOrganizationUsersListener()
+        organizationUsersListenerFailedOrganizationId = nil
+        startOrganizationUsersListener(organizationId: orgId)
+        await loadOrganizationUsers(forceRefresh: true)
+    }
+
     private func stopOrganizationUsersListener() {
         organizationUsersListener?.remove()
         organizationUsersListener = nil

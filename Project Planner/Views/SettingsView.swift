@@ -27,6 +27,8 @@ struct SettingsView: View {
     @EnvironmentObject var appLock: AppLockService
     @Environment(\.dismiss) private var dismiss
     
+    /// RULEBOOK 1.38.0 §27: the Data health row shows only while the data check panel switch is on (admins).
+    @ObservedObject private var dataParityMonitor = DataParityMonitor.shared
     @State private var showingDiagnosticReport = false
     @State private var diagnosticReport = ""
     @State private var isDiagnosing = false
@@ -72,6 +74,14 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
                             .padding(.top, 8)
+                    }
+
+                    // RULEBOOK 1.38.0 §27 (owner change 11 Nov): nothing while `platformConfig/app.dataCheckPanel` is off —
+                    // no title, row or gap. With it on, admins see Settings → Data health (web: the Data health page).
+                    if dataParityMonitor.panelVisible(viewerIsAdmin: userStore.hasAdminAccess()),
+                       firebaseBackend.currentOrganization != nil {
+                        settingsHubSectionTitle("Data health")
+                        settingsHubDataHealthGroup
                     }
 
                     settingsHubSectionTitle("Support & legal")
@@ -171,6 +181,25 @@ struct SettingsView: View {
             ))
         }
         return nil
+    }
+
+    private var settingsHubDataHealthGroup: some View {
+        VStack(spacing: 0) {
+            NavigationLink {
+                DataHealthView(viewerIsAdmin: userStore.hasAdminAccess())
+            } label: {
+                settingsHubRow(
+                    icon: "checklist",
+                    family: .trade,
+                    title: "Data health",
+                    subtitle: "Compare this device's lists with the server"
+                )
+            }
+            .accessibilityIdentifier("settings.dataHealth")
+            .buttonStyle(PPMenuRowButtonStyle())
+        }
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
     private func settingsHubSectionTitle(_ text: String) -> some View {
