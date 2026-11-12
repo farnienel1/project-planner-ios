@@ -29,20 +29,45 @@ private struct SignOutConfirmationModifier: ViewModifier {
     let userStore: UserStore
     let idPrefix: String
 
+    /// "Finishing sync…": Sync now or Sign out anyway is waiting for the device's sync (at most
+    /// `finishSyncTimeoutSeconds`). The screen is covered so taps do not stack.
     @State private var isSyncing = false
+
+    /// A Storage upload or save can stall for minutes; a sign-out never waits longer than this.
+    static let finishSyncTimeoutSeconds: Double = 12
 
     func body(content: Content) -> some View {
         // Read when the alert is built, so the count is the one on the device now.
         let pending = PendingSyncCount.current
         return content
+            .overlay {
+                if isSyncing {
+                    ZStack {
+                        Color.black.opacity(0.25).ignoresSafeArea()
+                        VStack(spacing: 10) {
+                            ProgressView()
+                            Text("Finishing sync…")
+                                .font(.subheadline.weight(.semibold))
+                        }
+                        .padding(20)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityAddTraits(.isModal)
+                    .accessibilityIdentifier("\(idPrefix).finishingSync")
+                }
+            }
             .alert(pending > 0 ? "Changes waiting to sync" : "Sign Out", isPresented: $isPresented) {
                 if pending > 0 {
                     Button("Sync now") {
+                        guard !isSyncing else { return }
                         isSyncing = true
+                        SiteAuditOfflineStore.shared.resetAttempts()
+                        // The device's one sync guard: if a background pass is sending now, this waits for it
+                        // (and runs once more after it) instead of a second pass sending the same items.
                         Task { @MainActor in
-                            // The device's one sync guard: if a background pass is sending now, this waits for it
-                            // (and runs once more after it) instead of a second pass sending the same items.
-                            await SingleFlight.offlineSync.run {
+                            // At most `finishSyncTimeoutSeconds`; a stalled upload keeps going in the background.
+                            await SingleFlight.offlineSync.run(timeoutSeconds: Self.finishSyncTimeoutSeconds) {
                                 _ = await OfflineSyncCoordinator.processOutbox(firebaseBackend: firebaseBackend)
                                 await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
                             }
@@ -57,9 +82,12 @@ private struct SignOutConfirmationModifier: ViewModifier {
                     }
                     .accessibilityIdentifier("\(idPrefix).syncNow")
                     Button("Sign out anyway", role: .destructive) {
+                        guard !isSyncing else { return }
+                        isSyncing = true
                         Task { @MainActor in
-                            // Never discard an item while a pass is sending it: wait for that pass first.
-                            await SingleFlight.offlineSync.waitUntilIdle()
+                            // Let a pass that is sending now finish first, but never wait longer than the limit.
+                            await SingleFlight.offlineSync.waitUntilIdle(timeoutSeconds: Self.finishSyncTimeoutSeconds)
+                            isSyncing = false
                             AppSignOut.perform(firebaseBackend: firebaseBackend, userStore: userStore)
                         }
                     }

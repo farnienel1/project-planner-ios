@@ -9,12 +9,14 @@ private final class SendCounter {
 }
 
 @MainActor
+private final class TaskBox {
+    var task: Task<Void, Never>?
+}
+
+@MainActor
 final class OutboxRetryPolicyTests: XCTestCase {
     override func tearDown() async throws {
         OfflineSyncCoordinator.replayTestSeam = nil
-        for id in OfflineOutboxStore.shared.claimedEntryIds {
-            OfflineOutboxStore.shared.releaseEntryClaim(id: id)
-        }
     }
 
     func testTimerBacksOffOneTwoFiveThenTenMinutes() {
@@ -65,14 +67,56 @@ final class OutboxRetryPolicyTests: XCTestCase {
         XCTAssertFalse(flight.isRunning)
     }
 
+    /// A trigger that arrives in the last moment of a pass runs (as the trailing pass); once the pass is over
+    /// nothing is left queued and the guard is free for the next caller.
+    func testATriggerAsAPassEndsIsNeverLostOrRunLate() async {
+        let flight = SingleFlight()
+        let passes = SendCounter()
+        let late = TaskBox()
+        let pass: @MainActor () async -> Void = {
+            passes.value += 1
+            if passes.value == 1 {
+                // Arrives while the first pass is finishing.
+                late.task = Task { await flight.run { passes.value += 1 } }
+                await Task.yield()
+            }
+        }
+        await flight.run(pass)
+        await late.task?.value
+        XCTAssertEqual(passes.value, 2, "the late trigger ran")
+        XCTAssertFalse(flight.isRunning)
+        XCTAssertFalse(flight.hasTrailingPass, "nothing stale left to run later")
+
+        await flight.run { passes.value += 1 }
+        XCTAssertEqual(passes.value, 3, "the next caller starts a new pass")
+    }
+
+    func testRunWithTimeLimitReturnsWhileASlowPassContinues() async {
+        let flight = SingleFlight()
+        let passes = SendCounter()
+        let finished = await flight.run(timeoutSeconds: 0.3) {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            passes.value += 1
+        }
+        XCTAssertFalse(finished, "returned at the time limit")
+        XCTAssertTrue(flight.isRunning, "the pass keeps going")
+        let idleSoon = await flight.waitUntilIdle(timeoutSeconds: 0.2)
+        XCTAssertFalse(idleSoon)
+        let idleLater = await flight.waitUntilIdle(timeoutSeconds: 5)
+        XCTAssertTrue(idleLater)
+        XCTAssertEqual(passes.value, 1)
+    }
+
     /// Two real outbox passes at once (e.g. sign-out's "Sync now" beside the background sync) over one queued
     /// material email: it is sent once and leaves the queue.
     func testTwoConcurrentOutboxPassesSendAQueuedEmailOnce() async {
-        let outbox = OfflineOutboxStore.shared
-        outbox.clearAll()
+        // An isolated store: the device's own queue is never touched.
+        let storageKey = "offline_outbox_test_\(UUID().uuidString)"
+        let outbox = OfflineOutboxStore(isolatedStorageKey: storageKey)
+        Self.retained.append(outbox)
         defer {
             OfflineSyncCoordinator.replayTestSeam = nil
-            outbox.clearAll()
+            UserDefaults.standard.removeObject(forKey: storageKey)
         }
         let request = MaterialOrderRequest(
             projectId: UUID(),

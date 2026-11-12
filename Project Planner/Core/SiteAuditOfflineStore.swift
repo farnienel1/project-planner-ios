@@ -12,12 +12,14 @@ import Combine
 struct PendingSiteAuditRecord: Codable, Identifiable {
     let id: UUID
     let organizationId: String
-    let audit: SiteAudit
+    /// `var`: each photo's remote URL is written back here as soon as its upload succeeds.
+    var audit: SiteAudit
     /// Maps site-audit item id → JPEG filename in the pending folder.
     let localImageNames: [String: String]
     let createdAt: Date
-    /// Failed uploads so far (missing on records saved before this field: 0). At `SiteAuditOfflineStore.maxAutoAttempts`
-    /// the retry timer stops counting this audit; foreground, Retry now and Sync now still try it.
+    /// Failed sync passes that counted as tries (missing on records saved before this field: 0). Background timer
+    /// passes never count. At `SiteAuditOfflineStore.maxAutoAttempts` the retry timer stops counting this audit;
+    /// foreground, reconnect, Retry now and Sync now still try it, and Retry now / Sync now start the count again.
     var attemptCount: Int? = nil
 }
 
@@ -47,7 +49,9 @@ final class SiteAuditOfflineStore: ObservableObject {
     }
 
     /// Audits a sync pass is uploading now. A second pass at the same time (sign-out "Sync now" beside a background
-    /// pass) skips them, so an audit's photos are never uploaded twice.
+    /// pass) skips them. With each uploaded photo's URL saved back to the record as it succeeds, a later pass only
+    /// uploads the photos that have not gone yet (a photo whose upload finished but whose URL was not saved, e.g. the
+    /// app closed at that moment, can still go twice; the copy is unused).
     private(set) var claimedAuditIds: Set<UUID> = []
 
     func claimAuditForSync(id: UUID) -> Bool {
@@ -56,6 +60,20 @@ final class SiteAuditOfflineStore: ObservableObject {
 
     func releaseAuditClaim(id: UUID) {
         claimedAuditIds.remove(id)
+    }
+
+    /// Retry now / Sync now: every queued audit starts its tries again.
+    func resetAttempts() {
+        guard pending.contains(where: { ($0.attemptCount ?? 0) > 0 }) else { return }
+        for index in pending.indices { pending[index].attemptCount = 0 }
+        persistIndex()
+    }
+
+    private func recordUploadedPhoto(auditId: UUID, itemId: UUID, url: String) {
+        guard let index = pending.firstIndex(where: { $0.id == auditId }),
+              let item = pending[index].audit.items.firstIndex(where: { $0.id == itemId }) else { return }
+        pending[index].audit.items[item].imageURL = url
+        persistIndex()
     }
 
     private func recordFailedAttempt(id: UUID) {
@@ -119,12 +137,14 @@ final class SiteAuditOfflineStore: ObservableObject {
         return UIImage(data: data)
     }
 
-    func syncPending(firebaseBackend: FirebaseBackend) async {
+    /// `countsAsAttempt` false for a background timer pass: a failure is not counted as a try.
+    func syncPending(firebaseBackend: FirebaseBackend, countsAsAttempt: Bool = true) async {
         guard !pending.isEmpty else { return }
-        let queue = pending
-        for record in queue {
-            guard pending.contains(where: { $0.id == record.id }), claimAuditForSync(id: record.id) else { continue }
-            defer { releaseAuditClaim(id: record.id) }
+        let queue = pending.map(\.id)
+        for recordId in queue {
+            // The record as it is now (photo URLs saved by an earlier pass included), not a stale copy.
+            guard let record = pending.first(where: { $0.id == recordId }), claimAuditForSync(id: recordId) else { continue }
+            defer { releaseAuditClaim(id: recordId) }
             do {
                 var items: [SiteAuditItem] = []
                 for item in record.audit.items {
@@ -137,6 +157,9 @@ final class SiteAuditOfflineStore: ObservableObject {
                             auditId: record.audit.id,
                             organizationId: record.organizationId
                         )
+                        if let remoteURL {
+                            recordUploadedPhoto(auditId: record.id, itemId: item.id, url: remoteURL)
+                        }
                     }
                     items.append(SiteAuditItem(
                         id: item.id,
@@ -155,7 +178,7 @@ final class SiteAuditOfflineStore: ObservableObject {
                 try await firebaseBackend.saveSiteAudit(audit, organizationId: record.organizationId)
                 remove(id: record.id)
             } catch {
-                recordFailedAttempt(id: record.id)
+                if countsAsAttempt { recordFailedAttempt(id: record.id) }
                 print("🔥🔥🔥 DEBUG: [SiteAuditOffline] Sync failed for \(record.id): \(error.localizedDescription)")
             }
         }

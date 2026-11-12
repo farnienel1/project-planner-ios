@@ -209,7 +209,7 @@ struct OfflineSyncQueueSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Retry now") {
-                        Task { await smartCache.refreshConnectionAndSync() }
+                        Task { await smartCache.refreshConnectionAndSync(userRetry: true) }
                     }
                     .accessibilityIdentifier("offlineSyncQueue.retryNow")
                     .disabled(smartCache.isSyncing)

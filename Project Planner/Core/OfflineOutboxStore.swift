@@ -261,13 +261,22 @@ final class OfflineOutboxStore: ObservableObject {
     }
     var failedCount: Int { entries.filter { ($0.lastError ?? "").isEmpty == false }.count }
 
-    private let storageKey = "offline_outbox_v1"
+    private let storageKey: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     private init() {
+        storageKey = "offline_outbox_v1"
         loadFromDisk()
     }
+
+    #if DEBUG
+    /// Tests only: a separate, empty store saved under its own key, so a test never touches the device's queue.
+    init(isolatedStorageKey: String) {
+        storageKey = isolatedStorageKey
+        UserDefaults.standard.removeObject(forKey: isolatedStorageKey)
+    }
+    #endif
 
     // MARK: - Enqueue helpers
 

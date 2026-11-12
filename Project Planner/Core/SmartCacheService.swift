@@ -51,37 +51,71 @@ enum OutboxRetryPolicy {
 /// caller's operation) and waits until it has finished. Used for the offline sync, which every trigger reaches.
 @MainActor
 final class SingleFlight {
+    typealias Operation = @MainActor () async -> Void
+
     /// The one offline sync of this device: the timer, foreground, Retry now, pull-to-refresh, reconnect and the
     /// sign-out "Sync now" all run through it, whichever `SmartCacheService` instance asked.
     static let offlineSync = SingleFlight()
 
     private var running: Task<Void, Never>?
-    private var trailingOperation: (@MainActor () async -> Void)?
+    private var trailingOperation: Operation?
 
     var isRunning: Bool { running != nil }
+    /// A trigger arrived during the running pass and will run right after it.
+    var hasTrailingPass: Bool { trailingOperation != nil }
 
-    func run(_ operation: @escaping @MainActor () async -> Void) async {
+    func run(_ operation: @escaping Operation) async {
         if let running {
             trailingOperation = operation
             await running.value
             return
         }
+        // The loop, the check for a trailing pass and clearing `running` all happen inside the task, on the main
+        // actor with no await between the last check and the clear: a trigger that arrives as a pass ends either
+        // becomes the trailing pass or (once `running` is nil) starts a new one. Never lost, never run late.
         let task = Task { @MainActor [weak self] in
-            var next: (@MainActor () async -> Void)? = operation
+            var next: Operation? = operation
             while let current = next {
                 await current()
                 next = self?.trailingOperation
                 self?.trailingOperation = nil
             }
+            self?.running = nil
         }
         running = task
         await task.value
-        running = nil
     }
 
-    /// Returns once no pass is running (used before a sign-out discards what is left).
-    func waitUntilIdle() async {
-        if let running { await running.value }
+    /// Runs `operation` through this guard but returns after at most `timeoutSeconds`; the pass keeps going in the
+    /// background if it is slower. True when it finished in time.
+    @discardableResult
+    func run(timeoutSeconds: Double, _ operation: @escaping Operation) async -> Bool {
+        let finished = FinishedFlag()
+        Task { @MainActor in
+            await self.run(operation)
+            finished.done = true
+        }
+        let deadline = Date().addingTimeInterval(max(0, timeoutSeconds))
+        while !finished.done, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return finished.done
+    }
+
+    @MainActor
+    private final class FinishedFlag {
+        var done = false
+    }
+
+    /// Returns once no pass is running, or after `timeoutSeconds` (a Storage upload can stall for minutes; a
+    /// sign-out must not wait for it). True when the sync finished in time.
+    @discardableResult
+    func waitUntilIdle(timeoutSeconds: Double) async -> Bool {
+        let deadline = Date().addingTimeInterval(max(0, timeoutSeconds))
+        while running != nil, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+        return running == nil
     }
 }
 
@@ -277,8 +311,10 @@ class SmartCacheService: ObservableObject {
         await performSync()
     }
 
-    /// Re-check the current network path and push the outbox if we are back online.
-    func refreshConnectionAndSync() async {
+    /// Re-check the current network path and push the outbox if we are back online. `userRetry` (the queue sheet's
+    /// Retry now): queued site audits start their tries again.
+    func refreshConnectionAndSync(userRetry: Bool = false) async {
+        if userRetry { SiteAuditOfflineStore.shared.resetAttempts() }
         #if canImport(Network)
         isOnline = networkMonitor.currentPath.status == .satisfied
         #endif
@@ -308,7 +344,7 @@ class SmartCacheService: ObservableObject {
 
         refreshOutboxCounts()
         guard OfflineOutboxStore.shared.pendingCount > 0 || SiteAuditOfflineStore.shared.pendingCount > 0 else {
-            await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
+            await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend, countsAsAttempt: countsAsAttempt)
             // Nothing was queued, so nothing replayed: no `.syncOfflineChanges`. Foregrounding used to post it
             // here every time and stores re-saved stale in-memory copies over other devices' edits. Live
             // listeners (re-attached on foreground) bring the server copy instead.
@@ -323,7 +359,7 @@ class SmartCacheService: ObservableObject {
         )
         if result.synced > 0 { markSynced() }
         refreshOutboxCounts()
-        await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend)
+        await SiteAuditOfflineStore.shared.syncPending(firebaseBackend: firebaseBackend, countsAsAttempt: countsAsAttempt)
 
         // Stores reload after a sync. Booking stores no longer push in-memory state here (RULEBOOK §1
         // partial writes); queued changes replay only from the outbox.
