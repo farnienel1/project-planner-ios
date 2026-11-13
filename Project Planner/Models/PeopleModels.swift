@@ -416,6 +416,8 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         let email = row.email.trimmingCharacters(in: .whitespacesAndNewlines)
         if !email.isEmpty { return email }
     }
+    // Nobody on this device has this id: read the people lists from the server once (owner report 13 Nov).
+    UnknownBookedPersonRefresh.report()
     return unknownLabourPersonName
 }
 

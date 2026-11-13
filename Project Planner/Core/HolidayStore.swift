@@ -172,6 +172,7 @@ class HolidayStore: ObservableObject {
         fb.listenOrganizationQuery(
             key: "holidayBookings",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("holidayBookings") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }

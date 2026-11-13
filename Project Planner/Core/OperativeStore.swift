@@ -155,6 +155,9 @@ class OperativeStore: ObservableObject {
         self.firebaseBackend = firebaseBackend
     }
     
+    /// This device's connection as the cache service sees it (true when unknown). Read by the stale-cache watchdog.
+    var deviceOnline: Bool { smartCache?.isOnline ?? true }
+
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
         self.isOffline = !smartCache.isOnline
@@ -258,6 +261,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "operatives",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("operatives") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
@@ -279,6 +283,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "managers",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("managers") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
@@ -300,6 +305,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "qualifications",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("qualifications") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }

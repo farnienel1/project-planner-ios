@@ -263,18 +263,11 @@ enum StaffEmailIdentity {
                 found = old.known
             }
             if !found {
-                // Diagnostic (owner report 13 Nov): which stored id names nobody, and what the lookup had to search.
-                let rowOnPhone = input.operatives.contains { $0.id.caseInsensitiveCompare(storedId) == .orderedSame }
-                let accountOnPhone = input.accounts.contains { $0.id.caseInsensitiveCompare(storedId) == .orderedSame }
-                NSLog(
-                    "SCHEDULE_PERSON_UNRESOLVED id=%@ scriptAnswered=%@ accounts=%ld operatives=%ld rowOnPhone=%@ accountOnPhone=%@",
-                    storedId,
-                    resolve(storedId, input) == nil ? "no" : "yes",
-                    input.accounts.count,
-                    input.operatives.count,
-                    rowOnPhone ? "yes" : "no",
-                    accountOnPhone ? "yes" : "no"
-                )
+                // Nobody on this device has this id: read the people lists from the server once (owner report 13 Nov).
+                UnknownBookedPersonRefresh.report()
+                #if DEBUG
+                NSLog("SCHEDULE_PERSON_UNRESOLVED id=%@ accounts=%ld operatives=%ld", storedId, input.accounts.count, input.operatives.count)
+                #endif
             }
             var bucket = byKey[key] ?? SchedulePersonBucket(key: key, operativeIds: [], userIds: [], resolvedAccountIds: [], unresolved: true)
             add(&bucket)

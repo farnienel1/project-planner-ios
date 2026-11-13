@@ -487,7 +487,8 @@ struct ContentView: View {
             operativeStore: operativeStore,
             subcontractorStore: subcontractorStore,
             taskStore: taskStore,
-            holidayStore: holidayStore
+            holidayStore: holidayStore,
+            userStore: userStore
         )
         // A level change (or new claims) reads the roster and the Operatives list again from the server, never the
         // copy loaded under the previous level (`UserStore.rosterNeedsFreshLoad`). On its own task, after the booking

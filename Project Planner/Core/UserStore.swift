@@ -777,12 +777,45 @@ class UserStore: ObservableObject {
                 print("🔥🔥🔥 DEBUG: ROSTER_LISTENER failed org=\(orgId): \(error.localizedDescription) — using one-off loads")
                 self.stopOrganizationUsersListener()
                 self.organizationUsersListenerFailedOrganizationId = orgId
+                // RULEBOOK §1: a cached roster never stands alone for the session (owner report 13 Nov). Before, one
+                // failure stopped the roster listener until the app was relaunched.
+                let failures = LiveListenerClock.shared.markFailed(key: "users", organizationId: orgId)
+                guard let delay = LiveListenerAttachPolicy.retryDelay(
+                    afterFailures: failures,
+                    permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
+                ) else { return }
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard let self, self.organizationUsersListenerFailedOrganizationId == orgId,
+                          normalizedOrganizationId(self.firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "") == orgId
+                    else { return }
+                    self.organizationUsersListenerFailedOrganizationId = nil
+                    await self.loadOrganizationUsers(forceRefresh: true)
+                }
             }
         )
         if organizationUsersListener == nil {
             organizationUsersListenerOrganizationId = nil
             organizationUsersListenerFailedOrganizationId = orgId
         }
+    }
+
+    /// True while the live roster listener is attached for `organizationId`.
+    func organizationUsersListenerAttached(organizationId: String) -> Bool {
+        organizationUsersListener != nil
+            && organizationUsersListenerOrganizationId == normalizedOrganizationId(organizationId)
+    }
+
+    /// RULEBOOK §1: the roster of the open organisation is live, never a cached copy alone. Called on every launch,
+    /// foreground return and organisation switch (`PlannerStoreWiring.startOrgLiveListeners`): when no roster listener
+    /// is attached for the open organisation, the roster is read again from the server, which attaches it. A failure
+    /// left by an earlier attempt is cleared, so the retry starts afresh.
+    func ensureOrganizationUsersLive() {
+        let orgId = normalizedOrganizationId(firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "")
+        guard !orgId.isEmpty, !organizationUsersListenerAttached(organizationId: orgId) else { return }
+        if organizationUsersListenerFailedOrganizationId == orgId { organizationUsersListenerFailedOrganizationId = nil }
+        guard !organizationUsersLoadInProgress else { return }
+        Task { await self.loadOrganizationUsers(forceRefresh: true) }
     }
 
     /// A snapshot from the live roster query, fed through the same pipeline as a load
