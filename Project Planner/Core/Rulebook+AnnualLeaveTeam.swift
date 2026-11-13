@@ -162,6 +162,18 @@ extension CanonicalBusinessEngine {
         return (title, message, row["detail"] as? String)
     }
 
+    /// `leaveDecisionRequester({ userId, operativeId }, roster)` (RULEBOOK 1.40.0, owner decision 13 Nov, item 17): the
+    /// roster person a leave decision is judged against — the users row whose id is the record's userId (else
+    /// operativeId), else `{ id }` with no line manager (admins only). Nil without either id or when the script did
+    /// not answer.
+    nonisolated static func leaveDecisionRequester(userId: String?, operativeId: String?, roster: [[String: Any]]) -> [String: Any]? {
+        var request: [String: Any] = [:]
+        if let userId, !userId.isEmpty { request["userId"] = userId }
+        if let operativeId, !operativeId.isEmpty { request["operativeId"] = operativeId }
+        guard !request.isEmpty else { return nil }
+        return callJSON("leaveDecisionRequester", arguments: [request, roster]) as? [String: Any]
+    }
+
     /// `annualLeaveAdjustmentAuthorName(adjustment, roster)`: who made it, by `createdBy` on the roster ("Someone" when
     /// not found or the script did not answer).
     nonisolated static func annualLeaveAdjustmentAuthorName(createdBy: String, roster: [[String: Any]]) -> String {

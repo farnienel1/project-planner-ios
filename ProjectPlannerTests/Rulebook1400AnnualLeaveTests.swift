@@ -207,9 +207,9 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
         XCTAssertNil(refused)
         let whole = try balance(employment: nil, adjustments: [])
         XCTAssertTrue(whole.hasAllowance)
-        // The stored word stays exact (owner question open): "PAYE" in capitals reads as self-employed, as before.
+        // Owner decision 13 Nov, item 19: "PAYE" in any case counts as PAYE.
         let capitals = try balance(employment: AnnualLeaveEmployment(employmentType: "PAYE"), adjustments: [])
-        XCTAssertFalse(capitals.hasAllowance)
+        XCTAssertTrue(capitals.hasAllowance)
     }
 
     func testBalanceNotesNameTheTypeOnlyForPayViewersAndTheBalanceCarriesTheShownSums() throws {
@@ -221,6 +221,34 @@ final class Rulebook1400AnnualLeaveTests: XCTestCase {
         let selfEmployed = try balance(employment: AnnualLeaveEmployment(employmentType: "self_employed"), adjustments: [])
         XCTAssertEqual(selfEmployed.shownTaken, selfEmployed.taken)
         XCTAssertEqual(selfEmployed.notCountedTaken, 0)
+    }
+
+    func testRowFiledLeaveIsDecidedByAdminsOnlyNeverThroughARowEmail() throws {
+        // Owner decision 13 Nov, item 17.
+        let rows = RulebookPeople.roster(roster)
+        let viaUser = try XCTUnwrap(CanonicalBusinessEngine.leaveDecisionRequester(userId: "test-op-1", operativeId: nil, roster: rows))
+        XCTAssertEqual(viaUser["id"] as? String, "TEST-OP-1")
+        let viaRow = try XCTUnwrap(CanonicalBusinessEngine.leaveDecisionRequester(userId: nil, operativeId: "TEST-ROW-9", roster: rows))
+        XCTAssertEqual(viaRow["id"] as? String, "TEST-ROW-9")
+        XCTAssertNil(viaRow["assignedManagerUserIds"])
+        // The manager of TEST-OP-1 decides leave filed under that users id, never leave filed only under a row.
+        let manager = RulebookPeople.person(roster[1])
+        XCTAssertEqual(CanonicalBusinessEngine.canDecideLeave(viewer: manager, requester: viaUser, roster: rows), true)
+        XCTAssertEqual(CanonicalBusinessEngine.canDecideLeave(viewer: manager, requester: viaRow, roster: rows), false)
+        XCTAssertEqual(CanonicalBusinessEngine.canDecideLeave(viewer: RulebookPeople.person(roster[0]), requester: viaRow, roster: rows), true)
+        XCTAssertNil(CanonicalBusinessEngine.leaveDecisionRequester(userId: nil, operativeId: nil, roster: rows))
+    }
+
+    func testAnImmediateEmploymentTypeChangeCountsFromToday() throws {
+        // Owner decision 13 Nov, item 18: today is stored, the old type kept for earlier days.
+        let now = Date(timeIntervalSince1970: 1_760_000_000)
+        let change = try XCTUnwrap(CanonicalBusinessEngine.applyEmploymentTypeChange(
+            previousType: "self_employed", nextType: "paye", previousTransitionFrom: nil, previousEffectiveAt: nil,
+            effectiveAt: nil, now: now, timeZone: "Europe/London"
+        ))
+        XCTAssertEqual(change.employmentTypeTransitionFrom, "self_employed")
+        XCTAssertNotNil(change.employmentTypeEffectiveAt)
+        XCTAssertEqual(CanonicalBusinessEngine.dayKey(for: change.employmentTypeEffectiveAt ?? .distantPast), CanonicalBusinessEngine.dayKey(for: now))
     }
 
     func testTheAdjustmentAuthorIsNamedFromTheRoster() {
