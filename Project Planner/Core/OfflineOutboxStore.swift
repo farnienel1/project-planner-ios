@@ -105,7 +105,7 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case .deleteManagerSiteBooking: return "Delete schedule booking"
         case .saveMaterialItem: return "Material catalogue / job item"
         case .deleteMaterialItem: return "Remove material item"
-        case .sendMaterialRequest: return "Material order"
+        case .sendMaterialRequest: return "Material email — not sent yet"
         case .saveDeadlines: return "Deadlines"
         case .saveAnnualLeaveRequest: return "Annual leave request"
         case .saveOwnProfileFields: return "My profile"
@@ -196,6 +196,8 @@ final class OfflineOutboxStore: ObservableObject {
     @Published var lastNoticeMessage: String?
 
     var pendingCount: Int { entries.count }
+    /// Material quote / order emails still waiting on this phone (the wholesaler has not received them).
+    var unsentMaterialEmailCount: Int { entries.filter { $0.operation == .sendMaterialRequest }.count }
 
     /// RULEBOOK §2 "Pending sync": the outbox still holds a change for this entity (booking UUID string,
     /// material id, `deadlines_{projectId}`, or the entity id passed to an `enqueue...` call below).

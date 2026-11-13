@@ -24,10 +24,55 @@ final class MaterialsSendConfirmationCopyTests: XCTestCase {
             recipientCount: 2,
             queuedForSync: true
         )
-        XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Order queued")
+        XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Order not sent yet")
         XCTAssertEqual(
             MaterialsSendConfirmationView.detail(state),
             "No signal — it will be emailed to 2 recipients when you're back online · 3 items"
+        )
+    }
+
+    func testQueuedWhileOnlineSaysTheConnectionDroppedNotNoSignal() {
+        let state = MaterialsSendListSheet.SendConfirmationState(
+            requestType: .quote,
+            itemCount: 1,
+            recipientCount: 1,
+            queuedForSync: true,
+            queuedWhileOnline: true
+        )
+        XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Quote not confirmed yet")
+        XCTAssertEqual(
+            MaterialsSendConfirmationView.detail(state),
+            "Not confirmed yet — it will be checked and emailed to 1 recipient automatically · 1 item"
+        )
+    }
+
+    func testQueuedSendShowsTheNotSentYetWarningAndASentOneDoesNot() {
+        let queued = MaterialsSendListSheet.SendConfirmationState(requestType: .order, itemCount: 2, recipientCount: 1, queuedForSync: true)
+        let warning = try? XCTUnwrap(MaterialsSendConfirmationView.queuedWarning(queued))
+        XCTAssertTrue(warning?.contains("has NOT received this order yet") == true)
+        XCTAssertTrue(warning?.contains("Pending sync") == true)
+        let online = MaterialsSendListSheet.SendConfirmationState(
+            requestType: .quote, itemCount: 2, recipientCount: 1, queuedForSync: true, queuedWhileOnline: true
+        )
+        XCTAssertTrue(MaterialsSendConfirmationView.queuedWarning(online)?.contains("may not have received this quote yet") == true)
+        XCTAssertTrue(MaterialsSendConfirmationView.queuedWarning(online)?.contains("never emailed twice") == true)
+        let noId = MaterialsSendListSheet.SendConfirmationState(
+            requestType: .quote, itemCount: 2, recipientCount: 1, queuedForSync: true, queuedWhileOnline: true, hasRequestId: false
+        )
+        XCTAssertFalse(MaterialsSendConfirmationView.queuedWarning(noId)?.contains("never emailed twice") == true)
+        let sent = MaterialsSendListSheet.SendConfirmationState(requestType: .order, itemCount: 2, recipientCount: 1)
+        XCTAssertNil(MaterialsSendConfirmationView.queuedWarning(sent))
+    }
+
+    func testSyncBannerPutsUnsentMaterialEmailsFirst() {
+        XCTAssertEqual(OfflineStatusBanner.withUnsentMaterialEmails("2 changes waiting.", count: 0), "2 changes waiting.")
+        XCTAssertEqual(
+            OfflineStatusBanner.withUnsentMaterialEmails("2 changes waiting.", count: 1),
+            "1 material email has NOT been sent yet. 2 changes waiting."
+        )
+        XCTAssertEqual(
+            OfflineStatusBanner.withUnsentMaterialEmails("x", count: 3),
+            "3 material emails have NOT been sent yet. x"
         )
     }
 }

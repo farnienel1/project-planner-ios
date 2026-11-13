@@ -53,6 +53,10 @@ enum MaterialRequestEmailError: LocalizedError, Equatable {
     /// queued item stays queued and is checked again later (the function then answers from that send). Different
     /// from the job-number 409, which has no `inProgress` and stays `.refused`.
     case stillSending
+    /// 502 with `unconfirmed: true`: the function's call to the email provider failed in a way that may still have
+    /// sent it. Like a timeout: never "not sent"; the same request id is kept for a retry (the function never sends
+    /// one request id twice).
+    case unconfirmed
     /// The function answered with an error status; `reason` is its `error` text.
     case refused(status: Int, reason: String)
 
@@ -67,6 +71,8 @@ enum MaterialRequestEmailError: LocalizedError, Equatable {
             return "The email service did not answer in time. Check your sent items before sending again."
         case .stillSending:
             return "This email is already being sent. It will be checked again shortly."
+        case .unconfirmed:
+            return "The wholesaler may not have received this yet — check your sent items before sending again."
         case .refused(_, let reason):
             return "Email not sent: \(reason)"
         }
@@ -207,6 +213,9 @@ enum MaterialRequestEmailPayload {
         let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         if statusCode == 409, json["inProgress"] as? Bool == true {
             return .failure(.stillSending)
+        }
+        if json["unconfirmed"] as? Bool == true {
+            return .failure(.unconfirmed)
         }
         guard statusCode == 200 else {
             let raw = (json["error"] as? String) ?? (json["message"] as? String) ?? ""

@@ -59,8 +59,13 @@ struct MaterialsSendListSheet: View {
         let requestType: MaterialOrderRequest.RequestType
         let itemCount: Int
         let recipientCount: Int
-        /// No signal: the request waits in the offline outbox and is emailed when the phone is back online.
+        /// Not sent yet: the request waits in the offline outbox and is emailed by the next sync.
         var queuedForSync = false
+        /// Queued while the phone had signal (the connection dropped, or an earlier press is still sending), not
+        /// because it was offline. Changes the wording only.
+        var queuedWhileOnline = false
+        /// The request carries a `requestId`, so the function never emails it twice.
+        var hasRequestId = true
     }
 
     var body: some View {
@@ -711,13 +716,14 @@ struct MaterialsSendListSheet: View {
                 await MainActor.run { isSending = false }
                 return
             }
+            let wasOnline = smartCache.isOnline
             do {
                 let result = try await MaterialOfflineService.sendMaterialRequest(
                     request,
                     sendRecord: sendRecord,
                     organizationId: organizationId,
                     firebaseBackend: firebaseBackend,
-                    isOnline: smartCache.isOnline
+                    isOnline: wasOnline
                 )
                 await MainActor.run {
                     isSending = false
@@ -728,7 +734,9 @@ struct MaterialsSendListSheet: View {
                             requestType: type,
                             itemCount: items.count,
                             recipientCount: contacts.count,
-                            queuedForSync: true
+                            queuedForSync: true,
+                            queuedWhileOnline: wasOnline,
+                            hasRequestId: MaterialRequestEmailPayload.requestIdValue(request.requestId) != nil
                         )
                         NotificationCenter.default.post(
                             name: NSNotification.Name("materialSendHistoryDidChange"),
@@ -1015,7 +1023,10 @@ struct MaterialsSendConfirmationView: View {
 
     static func headline(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String {
         if confirmation.queuedForSync {
-            return confirmation.requestType == .quote ? "Quote queued" : "Order queued"
+            if confirmation.queuedWhileOnline {
+                return confirmation.requestType == .quote ? "Quote not confirmed yet" : "Order not confirmed yet"
+            }
+            return confirmation.requestType == .quote ? "Quote not sent yet" : "Order not sent yet"
         }
         return confirmation.requestType == .quote ? "Quote sent" : "Order placed"
     }
@@ -1024,21 +1035,65 @@ struct MaterialsSendConfirmationView: View {
         let recipients = "\(confirmation.recipientCount) recipient\(confirmation.recipientCount == 1 ? "" : "s")"
         let items = "\(confirmation.itemCount) item\(confirmation.itemCount == 1 ? "" : "s")"
         if confirmation.queuedForSync {
+            if confirmation.queuedWhileOnline {
+                return "Not confirmed yet — it will be checked and emailed to \(recipients) automatically · \(items)"
+            }
             return "No signal — it will be emailed to \(recipients) when you're back online · \(items)"
         }
         return "Sent to \(recipients) · \(items)"
     }
 
+    /// The warning box under a queued send, so "not sent yet" cannot be missed.
+    static func queuedWarning(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String? {
+        guard confirmation.queuedForSync else { return nil }
+        let what = confirmation.requestType == .quote ? "quote" : "order"
+        // Queued with signal (a dropped connection, or an earlier press still sending): it may already have gone.
+        let state = confirmation.queuedWhileOnline
+            ? "The wholesaler may not have received this \(what) yet."
+            : "The wholesaler has NOT received this \(what) yet."
+        let once = confirmation.hasRequestId ? " It is never emailed twice." : ""
+        return "\(state) It is waiting on this phone and shows as \"Pending sync\" at the top of the app until it is confirmed.\(once) Keep the app open with signal, or check the queue there."
+    }
+
     var body: some View {
         VStack(spacing: 16) {
             Spacer(minLength: 0)
-            PPIconTile(symbol: confirmation.queuedForSync ? "clock" : "checkmark", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
+            if confirmation.queuedForSync {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 44, weight: .semibold))
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+            } else {
+                PPIconTile(symbol: "checkmark", family: .sites, size: PPMetrics.quickActionIcon, lifted: true)
+            }
             Text(Self.headline(confirmation))
                 .font(.system(.title2, design: .rounded))
                 .fontWeight(.bold)
+                .foregroundStyle(confirmation.queuedForSync ? Color.orange : Color.primary)
             Text(Self.detail(confirmation))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
+            if let warning = Self.queuedWarning(confirmation) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "icloud.and.arrow.up")
+                        .foregroundStyle(.orange)
+                        .accessibilityHidden(true)
+                    Text(warning)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(14)
+                .background(Color.orange.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.orange, lineWidth: 1.5)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("materialsSendConfirmation.notSentYet")
+            }
             Button("Done", action: onDone)
                 .accessibilityIdentifier("materialsSendConfirmation.done")
                 .buttonStyle(.borderedProminent)
