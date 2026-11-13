@@ -1135,7 +1135,7 @@ struct HolidayView: View {
         }
         if let oid = person.operativeId {
             // `resolveBookingPerson`: the account behind the catalogue row (same email, former or alias ids).
-            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
                 .person(for: oid).user
         }
         return nil

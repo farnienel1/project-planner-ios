@@ -1000,24 +1000,54 @@ class UserStore: ObservableObject {
     /// it has been through `listedRosterUsers` (an invite placeholder whose email claim is gone, a named document
     /// with no email that is not a ghost and never signed up) and healing / tombstones, so a booking stored under one
     /// of those documents read "Unknown person" on iOS. Web Daily Overview names bookings from its whole roster
-    /// (`useOrgUserStore.users`, the `rosterPeople` fold with no `listedRosterUsers` filter). This is the listed
-    /// roster first (it carries the folded same-email ids), then every other users document of the open organisation.
-    /// For naming only: people lists, warnings and pickers keep `organizationUsers`.
+    /// (`useOrgUserStore.users`: the `rosterPeople` fold, folded ids only through `userIdAliases`, no
+    /// `listedRosterUsers` filter). This is the listed roster, then every other users document of the open
+    /// organisation that the email fold did not fold into a listed person. For naming only: people lists, warnings,
+    /// pickers and notifications keep `organizationUsers`.
+    ///
+    /// Until the first full roster load of the open organisation (cold start, the documents are not saved on the
+    /// phone), this is `organizationUsers` alone.
     var bookingNameUsers: [AppUser] {
-        Self.bookingNameRoster(listed: organizationUsers, documents: unfoldedOrganizationUsers)
+        Self.bookingNameRoster(
+            listed: organizationUsers,
+            documents: organizationUserDocuments,
+            documentsOrganizationId: organizationUserDocumentsOrganizationId,
+            openOrganizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId,
+            aliases: organizationUserIdAliases
+        )
     }
 
-    /// `bookingNameUsers` as a pure function (tests): `listed` in order, then each document whose id (without case)
-    /// is not already there.
-    static func bookingNameRoster(listed: [AppUser], documents: [AppUser]) -> [AppUser] {
-        var known = Set(listed.map { $0.id.lowercased() })
+    /// `bookingNameUsers` as a pure function (tests). `listed` in order, then each document that is not already there
+    /// (id without case) and was not folded by email into a listed person: its id is on no listed row's
+    /// `sameEmailUserIds` and is no key of `aliases` (the fold's `userIdAliases`). Former invite ids and leftover
+    /// documents are kept. `documents` are used only when they were read for the open organisation.
+    static func bookingNameRoster(
+        listed: [AppUser],
+        documents: [AppUser],
+        documentsOrganizationId: String?,
+        openOrganizationId: String?,
+        aliases: [String: String]
+    ) -> [AppUser] {
+        let documentsOrg = normalizedOrganizationId(documentsOrganizationId ?? "")
+        guard !documentsOrg.isEmpty, documentsOrg == normalizedOrganizationId(openOrganizationId ?? "") else { return listed }
+        var skip = Set(listed.map { $0.id.lowercased() })
+        for row in listed { skip.formUnion(row.sameEmailUserIds.map { $0.lowercased() }) }
+        skip.formUnion(aliases.keys.map { $0.lowercased() })
         var rows = listed
-        for document in documents where !known.contains(document.id.lowercased()) {
-            known.insert(document.id.lowercased())
+        for document in documents where !skip.contains(document.id.lowercased()) {
+            skip.insert(document.id.lowercased())
             rows.append(document)
         }
         return rows
     }
+
+    #if DEBUG
+    /// Unit tests: the unfolded documents a roster load of `organizationId` would set.
+    func applyRosterDocumentsForTesting(_ documents: [AppUser], organizationId: String) {
+        organizationUserDocuments = documents
+        organizationUserDocumentsOrganizationId = organizationId
+    }
+    #endif
 
     /// `RulebookPeople.roster` over the unfolded documents, with `organizationId` as each document stores it.
     var unfoldedRosterRows: [[String: Any]] {

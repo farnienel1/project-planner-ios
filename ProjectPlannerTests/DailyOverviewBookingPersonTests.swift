@@ -92,6 +92,22 @@ final class DailyOverviewBookingPersonTests: XCTestCase {
         return person
     }
 
+    /// The naming roster for documents read for org-1 with org-1 open.
+    private func namingRoster(listed: [AppUser], documents: [AppUser], aliases: [String: String] = [:]) -> [AppUser] {
+        UserStore.bookingNameRoster(
+            listed: listed, documents: documents, documentsOrganizationId: "org-1", openOrganizationId: "org-1", aliases: aliases
+        )
+    }
+
+    /// The document the #181 fold folded into the placeholder row: same email, the booked uid.
+    private func foldedAdminDocument() -> AppUser {
+        var folded = LogicFixtures.selfEmployedUser(id: bookedUid, email: "test.admin@example.com")
+        folded.firstName = "Stale"
+        folded.surname = "Copy"
+        folded.passwordSet = true
+        return folded
+    }
+
     func testABookingUnderAPersonTheListedRosterLeavesOutIsNamedFromTheOrganisationDocuments() throws {
         let leftover = leftoverInvite()
         let listedAdmin = rosterAfterTypeChange()
@@ -107,23 +123,88 @@ final class DailyOverviewBookingPersonTests: XCTestCase {
             unknownLabourPersonName,
             "the bug: naming against the listed roster"
         )
-        let naming = UserStore.bookingNameRoster(listed: listed, documents: listedAdmin + [leftover])
         XCTAssertEqual(
-            rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: naming),
+            rosterNameForLabourBooking(
+                operativeId: booking.operativeId, operatives: [], users: namingRoster(listed: listed, documents: listedAdmin + [leftover])
+            ),
             "Left Over",
             "web names this booking from the whole roster"
         )
     }
 
-    func testTheNamingRosterKeepsTheListedRowsFirstAndAddsEachDocumentOnce() {
+    func testTheNamingRosterSkipsDocumentsFoldedIntoAListedPerson() {
         let listed = rosterAfterTypeChange()
-        var folded = LogicFixtures.selfEmployedUser(id: bookedUid, email: "test.admin@example.com")
-        folded.firstName = "Test"
-        folded.surname = "Admin"
         let other = leftoverInvite()
-        let naming = UserStore.bookingNameRoster(listed: listed, documents: [listed[0], folded, other, other])
-        XCTAssertEqual(naming.map(\.id), [placeholderId, bookedUid, other.id])
-        XCTAssertEqual(naming.first?.sameEmailUserIds, [bookedUid], "the listed row keeps its folded same-email ids")
+        let documents = [listed[0], foldedAdminDocument(), other, other]
+        // Folded through the listed row's sameEmailUserIds.
+        XCTAssertEqual(namingRoster(listed: listed, documents: documents).map(\.id), [placeholderId, other.id])
+        // Folded through the fold's alias map only (the listed row lost the stamp).
+        var unstamped = listed
+        unstamped[0].sameEmailUserIds = []
+        XCTAssertEqual(
+            namingRoster(listed: unstamped, documents: documents, aliases: [bookedUid.lowercased(): placeholderId]).map(\.id),
+            [placeholderId, other.id]
+        )
+        XCTAssertEqual(namingRoster(listed: listed, documents: documents).first?.sameEmailUserIds, [bookedUid])
+    }
+
+    func testABookingUnderTheFoldedUidNamesTheKeptRowNotTheFoldedDocument() {
+        let listed = rosterAfterTypeChange()
+        let naming = namingRoster(listed: listed, documents: [listed[0], foldedAdminDocument()])
+        let booking = LogicFixtures.booking(
+            on: LogicFixtures.day(2026, 11, 13, hour: 8),
+            operativeId: Booking.internalOperativeId(for: bookedUid)
+        )
+        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: naming), "Test Admin")
+    }
+
+    func testBothIdsOfThePersonGiveOneGroupKey() {
+        // ProjectActiveOperativesView groups by the resolved person: the placeholder id and the folded uid are one row.
+        let listed = rosterAfterTypeChange()
+        let people = LabourBookingPeople(operatives: [], users: namingRoster(listed: listed, documents: [listed[0], foldedAdminDocument()]))
+        let underUid = people.person(for: Booking.internalOperativeId(for: bookedUid)).user?.id
+        let underPlaceholder = people.person(for: Booking.internalOperativeId(for: placeholderId)).user?.id
+        XCTAssertEqual(underUid, placeholderId)
+        XCTAssertEqual(underPlaceholder, placeholderId)
+    }
+
+    func testDocumentsReadForAnotherOrganisationAreNotUsed() {
+        let listed = rosterAfterTypeChange()
+        let other = leftoverInvite()
+        XCTAssertEqual(
+            UserStore.bookingNameRoster(
+                listed: listed, documents: [other], documentsOrganizationId: "org-2", openOrganizationId: "org-1", aliases: [:]
+            ).map(\.id),
+            [placeholderId]
+        )
+        XCTAssertEqual(
+            UserStore.bookingNameRoster(
+                listed: listed, documents: [other], documentsOrganizationId: nil, openOrganizationId: "org-1", aliases: [:]
+            ).map(\.id),
+            [placeholderId]
+        )
+    }
+
+    func testTheStorePropertyIgnoresDocumentsWhenNoOrganisationIsOpen() {
+        // The instance property's guard: documents for org-1 while no organisation is open (no backend) → listed only.
+        let store = UserStore()
+        store.organizationUsers = rosterAfterTypeChange()
+        store.applyRosterDocumentsForTesting([leftoverInvite()], organizationId: "org-1")
+        XCTAssertEqual(store.bookingNameUsers.map(\.id), [placeholderId])
+    }
+
+    func testANonUUIDCatalogueRowInAnotherLetterCaseStillNamesThePerson() {
+        // The row is stored "abcRow7", the booking "ABCROW7": two in-app ids (`internalOperativeId` hashes the text).
+        var row = LogicFixtures.operative(id: Booking.internalOperativeId(for: "abcRow7"), email: "")
+        row.firestoreDocumentId = "abcRow7"
+        row.firstName = "Casey"
+        row.lastName = "Row"
+        let booking = LogicFixtures.booking(
+            on: LogicFixtures.day(2026, 11, 13, hour: 8),
+            operativeId: Booking.internalOperativeId(for: "ABCROW7")
+        )
+        XCTAssertNotEqual(booking.operativeId, row.id)
+        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [row], users: []), "Casey Row")
     }
 
     // MARK: - Row times (RULEBOOK §6, web `bookingTimesText`)

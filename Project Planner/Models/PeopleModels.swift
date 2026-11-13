@@ -402,6 +402,20 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
         if !email.isEmpty { return email }
     }
+    // The catalogue row `resolveBookingPerson` names (ids compared without case, RULEBOOK §1): a non-UUID row id
+    // stored in another letter case gets another in-app id (`Booking.internalOperativeId` hashes the raw text), so the
+    // in-app lookup above misses it. Web finds the row by `normalizeDocumentId`. Bookings store no person name
+    // (`parseBookingDocument`), so there is no stored name to fall back to after this.
+    if let resolved = CanonicalBusinessEngine.resolveBookingPerson(
+        Booking.storedOperativeId(for: operativeId),
+        bookingPersonInput(operatives: operatives, users: users)
+    ), let rowId = resolved.operativeId,
+       let row = operatives.first(where: { $0.documentId.caseInsensitiveCompare(rowId) == .orderedSame }) {
+        let trimmed = row.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        let email = row.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !email.isEmpty { return email }
+    }
     return unknownLabourPersonName
 }
 

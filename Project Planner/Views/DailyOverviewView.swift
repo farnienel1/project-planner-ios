@@ -1773,11 +1773,14 @@ struct ProjectBookingCard: View {
     private var mergedPersonRows: [ProjectDayPersonRow] {
         let p = payrollTimePolicy
         var keyed: [(Int, String, ProjectDayPersonRow)] = []
+        // Read once per pass (RULEBOOK §6: every users document, not only the listed roster).
+        let operatives = operativeStore.allOperatives
+        let nameUsers = userStore.bookingNameUsers
         for b in sortedBookings {
             let personName = rosterNameForLabourBooking(
                 operativeId: b.operativeId,
-                operatives: operativeStore.allOperatives,
-                users: userStore.bookingNameUsers
+                operatives: operatives,
+                users: nameUsers
             )
             let sub = b.scheduleCoverageSubtitle(policy: p)
             let row = ProjectDayPersonRow(
