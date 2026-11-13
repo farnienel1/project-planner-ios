@@ -16,6 +16,18 @@ enum PendingSyncCount {
         OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
     }
 
+    /// Site audit drafts on this phone (owner decision 12 Nov): a sign-out removes them.
+    static var siteAuditDrafts: Int {
+        SiteAuditDraftStore.shared.totalDraftCount()
+    }
+
+    static func draftsLine(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "1 site audit draft on this phone will be deleted."
+            : "\(count) site audit drafts on this phone will be deleted."
+    }
+
     static func message(_ count: Int) -> String {
         count == 1
             ? "You have 1 change waiting to sync. Signing out will discard it."
@@ -39,6 +51,8 @@ private struct SignOutConfirmationModifier: ViewModifier {
     func body(content: Content) -> some View {
         // Read when the alert is built, so the count is the one on the device now.
         let pending = PendingSyncCount.current
+        let draftsLine = PendingSyncCount.draftsLine(PendingSyncCount.siteAuditDrafts)
+        let baseMessage = pending > 0 ? PendingSyncCount.message(pending) : "Are you sure you want to sign out?"
         return content
             .overlay {
                 if isSyncing {
@@ -103,7 +117,7 @@ private struct SignOutConfirmationModifier: ViewModifier {
                     .accessibilityIdentifier("\(idPrefix).signOut")
                 }
             } message: {
-                Text(pending > 0 ? PendingSyncCount.message(pending) : "Are you sure you want to sign out?")
+                Text(draftsLine.map { "\(baseMessage)\n\n\($0)" } ?? baseMessage)
             }
     }
 }

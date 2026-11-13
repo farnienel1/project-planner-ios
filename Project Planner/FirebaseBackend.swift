@@ -974,6 +974,10 @@ class FirebaseBackend: ObservableObject {
         }
         // Captured before sign-out: the token, the account and the open company (same-email copies are found there).
         let target = pushTokenRemovalTarget()
+        // A forced sign-out keeps this person's own site audit drafts (only they ever list them), so an audit they
+        // submitted that had not uploaded yet is offered again when they sign back in. A sign-out they chose was
+        // warned (`SignOutConfirmation`) and removes every draft.
+        let keepDraftsOfUserId = reason == .userRequested ? nil : auth.currentUser?.uid
         await SignOutSequence.run(
             cleanup: { [weak self] in
                 guard let self, let target else { return }
@@ -983,7 +987,7 @@ class FirebaseBackend: ObservableObject {
                 registeredPushToken = nil
                 do {
                     try auth.signOut()
-                    clearDeviceQueuesOnSignOut()
+                    clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: keepDraftsOfUserId)
                 } catch {
                     print("🔥🔥🔥 DEBUG: Sign out error (\(reason.rawValue)): \(error.localizedDescription)")
                 }
@@ -995,10 +999,15 @@ class FirebaseBackend: ObservableObject {
     /// otherwise replay as the next account), every cached timesheet draft, and the SmartCacheService
     /// cache (`clearAllCache`, through `.appDidSignOut`).
     func clearDeviceQueuesOnSignOut() {
+        clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: nil)
+    }
+
+    func clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: String?) {
         OfflineOutboxStore.shared.clearAll()
         SiteAuditOfflineStore.shared.clearAll()
-        // Unfinished site audits (and their photos) kept on the phone: the next account never sees them.
-        SiteAuditDraftStore.shared.deleteAll()
+        // Site audit drafts (and their photos) kept on the phone: the next account never sees them. Saves still
+        // running are refused from here on, so none comes back.
+        SiteAuditDraftStore.shared.deleteAll(keepingUserId: keepingDraftsOfUserId)
         TimesheetDraftStore.clearAll()
         sessionHasNoOrganization = false
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)

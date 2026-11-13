@@ -240,12 +240,32 @@ struct SiteAuditHubView: View {
         return (userId, organizationId)
     }
 
+    /// Read off the main thread (file I/O).
     private func reloadDrafts() {
         guard let owner = draftOwner else { drafts = []; return }
-        drafts = SiteAuditDraftStore.shared.drafts(userId: owner.userId, organizationId: owner.organizationId)
+        Task {
+            let listed = await Task.detached(priority: .userInitiated) {
+                SiteAuditDraftStore.shared.drafts(userId: owner.userId, organizationId: owner.organizationId)
+            }.value
+            // Still the same person and organisation when the read finishes.
+            guard let now = draftOwner, now.userId == owner.userId, now.organizationId == owner.organizationId else { return }
+            drafts = listed
+        }
+    }
+
+    /// A submitted draft is a backup while its audit is in the upload queue: not reopened then (Pending sync shows
+    /// the upload). Once the queue saves the audit the draft is removed; one still here and no longer queued (e.g. a
+    /// forced sign-out cleared the queue) is offered to submit again.
+    private func draftIsUploading(_ draft: SiteAuditDraft) -> Bool {
+        draft.submittedAt != nil && SiteAuditOfflineStore.shared.isQueued(id: draft.id)
     }
 
     private func draftSavedText(_ draft: SiteAuditDraft) -> String {
+        if draft.submittedAt != nil {
+            return draftIsUploading(draft)
+                ? "\(draft.itemCountText) · Submitted — waiting to upload"
+                : "\(draft.itemCountText) · Submitted but not uploaded — open to submit again"
+        }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return "\(draft.itemCountText) · saved \(formatter.localizedString(for: draft.updatedAt, relativeTo: Date()))"
@@ -283,8 +303,14 @@ struct SiteAuditHubView: View {
                                     if index > 0 { PPRowDivider() }
                                     HStack(spacing: 0) {
                                         Button { resumingDraft = draft } label: {
-                                            hubTile(icon: "doc.badge.ellipsis", title: draft.listTitle, subtitle: draftSavedText(draft), family: .plan)
+                                            hubTile(
+                                                icon: draftIsUploading(draft) ? "icloud.and.arrow.up" : "doc.badge.ellipsis",
+                                                title: draft.listTitle,
+                                                subtitle: draftSavedText(draft),
+                                                family: .plan
+                                            )
                                         }
+                                        .disabled(draftIsUploading(draft))
                                         .accessibilityIdentifier("siteAuditHub.draft.\(draft.id.uuidString)")
                                         .buttonStyle(PPMenuRowButtonStyle())
                                         Button(role: .destructive) { draftPendingDelete = draft } label: {
@@ -375,16 +401,22 @@ struct SiteAuditHubView: View {
                 presenting: draftPendingDelete
             ) { draft in
                 Button("Delete draft", role: .destructive) {
-                    SiteAuditDraftStore.shared.delete(draftId: draft.id, userId: draft.userId, organizationId: draft.organizationId)
                     draftPendingDelete = nil
-                    reloadDrafts()
+                    drafts.removeAll { $0.id == draft.id }
+                    Task.detached(priority: .userInitiated) {
+                        SiteAuditDraftStore.shared.delete(draftId: draft.id, userId: draft.userId, organizationId: draft.organizationId)
+                    }
                 }
                 .accessibilityIdentifier("siteAuditHub.confirmDeleteDraft")
-            } message: { _ in
-                Text("Its items and photos are removed from this phone. Nothing was sent, so nothing else changes.")
+            } message: { draft in
+                Text(draft.submittedAt != nil && SiteAuditOfflineStore.shared.isQueued(id: draft.id)
+                     ? "This only removes the backup copy on this phone. The submitted audit still uploads."
+                     : "Its items and photos are removed from this phone. Nothing was sent, so nothing else changes.")
             }
             .task(id: draftOwner.map { "\($0.userId)|\($0.organizationId)" } ?? "") { reloadDrafts() }
             .onAppear(perform: reloadDrafts)
+            // A submitted draft is removed when the queue saves its audit; its row follows the queue.
+            .onReceive(SiteAuditOfflineStore.shared.$pending.dropFirst()) { _ in reloadDrafts() }
             .sheet(isPresented: $showingPersonal) {
                 PersonalSiteAuditsView()
                     .environmentObject(userStore)
@@ -883,7 +915,9 @@ struct SiteAuditCreateFlowView: View {
     /// Items on screen whose Multi-add photo has not loaded yet. Preview and Save wait for these only;
     /// deleting a stuck placeholder lets the person carry on.
     private var photosStillLoading: Int {
-        items.reduce(0) { $0 + (loadingPhotoIds.contains($1.id) ? 1 : 0) }
+        // Multi-add photos and photos still being read back from a resumed draft: submitting before they arrive
+        // would queue the audit without them.
+        items.reduce(0) { $0 + (loadingPhotoIds.contains($1.id) || draftPhotosLoading.contains($1.id) ? 1 : 0) }
     }
 
     private var canGoNext: Bool {
@@ -1258,7 +1292,12 @@ struct SiteAuditCreateFlowView: View {
               let userId = firebaseBackend.currentUser?.uid, !userId.isEmpty,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return }
         if let draft = resumeDraft { draftId = draft.id }
-        draftAutosaver = SiteAuditDraftAutosaver(draftId: draftId, userId: userId, organizationId: organizationId)
+        draftAutosaver = SiteAuditDraftAutosaver(
+            draftId: draftId,
+            userId: userId,
+            organizationId: organizationId,
+            existsOnDisk: resumeDraft != nil
+        )
     }
 
     /// Changes whenever anything the draft keeps changes (drives the autosave).
@@ -1283,13 +1322,12 @@ struct SiteAuditCreateFlowView: View {
         return parts.joined(separator: "\u{1F}")
     }
 
-    /// What the draft keeps now, or nil when there is nothing worth keeping yet (a new audit nobody has started).
+    /// What the draft keeps now, or nil when there is nothing worth keeping yet (no items, no draft on disk).
+    /// A resumed draft that had been submitted is an ordinary draft again (`submittedAt` nil).
     private func draftSnapshot() -> SiteAuditDraftAutosaver.Snapshot? {
         guard let autosaver = draftAutosaver, !autosaver.isStopped else { return nil }
-        let started = step >= 2 || !items.isEmpty
-            || !customTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            || resumeDraft != nil
-        guard started else { return nil }
+        // No draft for an audit with no items yet; once one exists it keeps saving (even if every item is removed).
+        guard !items.isEmpty || autosaver.hasDraftOnDisk else { return nil }
         let project = selectedProject ?? initialProject
         var images: [UUID: UIImage] = [:]
         // Multi-add placeholders still loading from the photo library are left out until their photo arrives;
@@ -1386,6 +1424,10 @@ struct SiteAuditCreateFlowView: View {
             errorMessage = "Please select a project before submitting."
             return
         }
+        guard photosStillLoading == 0 else {
+            errorMessage = "Some photos are still loading. Wait a moment, then try again."
+            return
+        }
         if isEditing && !smartCache.isOnline {
             // Editing a saved audit stays online only, as before.
             errorMessage = "Connect to the internet to update this audit."
@@ -1475,8 +1517,9 @@ struct SiteAuditCreateFlowView: View {
                 errorMessage = "Could not keep this audit on the phone: \(error.localizedDescription). Nothing was sent; your work is still here."
                 return
             }
-            // Queued: from here the audit survives the app closing, so the draft is no longer needed.
-            draftAutosaver?.stop(deleteDraft: true)
+            // Queued: the draft is kept as a backup (marked submitted) until the queue has saved the audit; the
+            // queue then removes it. If the queue is cleared first (a forced sign-out), it is offered again.
+            if let snapshot = draftSnapshot() { draftAutosaver?.finishSubmitted(snapshot) }
             SiteAuditBackgroundUpload.start(smartCache: smartCache)
 
             let pdfURL = await pdfTask.value
@@ -1513,7 +1556,8 @@ private struct SiteAuditSubmitSuccessView: View {
             isUploading: queue.claimedAuditIds.contains(auditId),
             isOnline: smartCache.isOnline,
             attemptCount: queue.attemptCount(id: auditId),
-            maxAutoAttempts: SiteAuditOfflineStore.maxAutoAttempts
+            maxAutoAttempts: SiteAuditOfflineStore.maxAutoAttempts,
+            lastError: queue.lastError(id: auditId)
         )
     }
 
@@ -1566,6 +1610,13 @@ private struct SiteAuditSubmitSuccessView: View {
                         }
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("siteAuditSubmitSuccess.uploadStatus")
+                        if let error = uploadState.errorText {
+                            Text(error)
+                                .font(.footnote)
+                                .foregroundStyle(SiteAuditColors.danger)
+                                .multilineTextAlignment(.center)
+                                .accessibilityIdentifier("siteAuditSubmitSuccess.lastError")
+                        }
                         if let detail = uploadState.detailText {
                             Text(detail)
                                 .font(.footnote)

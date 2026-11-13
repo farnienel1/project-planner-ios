@@ -205,20 +205,81 @@ final class SiteAuditDraftStoreTests: XCTestCase {
         XCTAssertNotEqual(SiteAuditDraftStore.folderKey("a/b"), SiteAuditDraftStore.folderKey("a_b"))
     }
 
+    func testSaveStartedBeforeSignOutIsRefused() throws {
+        let epochBefore = store.currentEpoch
+        store.deleteAll()
+        XCTAssertThrowsError(try store.save(makeDraft(), epoch: epochBefore)) { error in
+            XCTAssertTrue(error is SiteAuditDraftStoreError)
+        }
+        XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
+        // A new editor (opened after the sign-out) saves as normal.
+        let draft = makeDraft()
+        try store.save(draft, epoch: store.currentEpoch)
+        XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").map(\.id), [draft.id])
+    }
+
+    func testForcedSignOutKeepsOnlyThatPersonsDrafts() throws {
+        let mine = makeDraft(userId: "TEST-user-a")
+        try store.save(mine)
+        try store.save(makeDraft(userId: "TEST-user-b"))
+        store.deleteAll(keepingUserId: "TEST-user-a")
+        XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").map(\.id), [mine.id])
+        XCTAssertTrue(store.drafts(userId: "TEST-user-b", organizationId: "TEST-org-1").isEmpty)
+        XCTAssertEqual(store.totalDraftCount(), 1)
+    }
+
+    func testSavedAuditRemovesOnlyItsSubmittedDraft() throws {
+        var submitted = makeDraft()
+        submitted.submittedAt = Date()
+        try store.save(submitted)
+        let reopened = makeDraft(userId: "TEST-user-b") // same audit id would be unusual; a plain draft here
+        try store.save(reopened)
+        store.deleteSubmittedDraft(id: submitted.id)
+        XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
+        // A draft without submittedAt (never submitted, or reopened and changed) is never removed by the queue.
+        store.deleteSubmittedDraft(id: reopened.id)
+        XCTAssertEqual(store.drafts(userId: "TEST-user-b", organizationId: "TEST-org-1").map(\.id), [reopened.id])
+    }
+
+    func testDraftWrittenWithoutNewerFieldsStillOpens() throws {
+        // A draft.json from before `version` / `submittedAt`, with an item missing optional text.
+        let id = UUID()
+        let itemId = UUID()
+        let json = """
+        {"id":"\(id.uuidString)","userId":"TEST-user-a","organizationId":"TEST-org-1",
+         "projectJobNumber":"J-1","projectName":"TEST-Site","typeRawValue":"General","customTitle":"",
+         "authorName":"TEST Person","date":800000000,"visibleToOperatives":true,
+         "items":[{"id":"\(itemId.uuidString)","title":"Item","createdAt":800000000,"hasPhoto":false}],
+         "createdAt":800000000,"updatedAt":800000001}
+        """
+        let folder = store.draftFolder(draftId: id, userId: "TEST-user-a", organizationId: "TEST-org-1")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data(json.utf8).write(to: folder.appendingPathComponent("draft.json"))
+        let restored = try XCTUnwrap(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").first)
+        XCTAssertEqual(restored.version, 1)
+        XCTAssertNil(restored.submittedAt)
+        XCTAssertEqual(restored.items.first?.comments, "")
+        // The next save writes the current version.
+        try store.save(restored)
+        XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").first?.version, SiteAuditDraft.currentVersion)
+    }
+
     // MARK: Background save after Submit (item 5a)
 
     func testUploadStateFollowsTheQueue() {
-        func state(queued: Bool, uploading: Bool = false, online: Bool = true, attempts: Int = 0) -> SiteAuditUploadState {
+        func state(queued: Bool, uploading: Bool = false, online: Bool = true, attempts: Int = 0, error: String? = nil) -> SiteAuditUploadState {
             SiteAuditUploadState.resolve(isQueued: queued, isUploading: uploading, isOnline: online,
-                                         attemptCount: attempts, maxAutoAttempts: 5)
+                                         attemptCount: attempts, maxAutoAttempts: 5, lastError: error)
         }
         XCTAssertEqual(state(queued: false), .saved)
-        XCTAssertEqual(state(queued: false, online: false), .saved)
+        XCTAssertEqual(state(queued: false, online: false, error: "old"), .saved)
         XCTAssertEqual(state(queued: true, uploading: true), .uploading)
         XCTAssertEqual(state(queued: true, online: false), .waitingForConnection)
-        XCTAssertEqual(state(queued: true), .waitingToRetry)
-        XCTAssertEqual(state(queued: true, attempts: 4), .waitingToRetry)
-        XCTAssertEqual(state(queued: true, attempts: 5), .needsRetry)
+        XCTAssertEqual(state(queued: true), .waitingToUpload)
+        // A failure (counted or from a background pass) is never shown as just "waiting".
+        XCTAssertEqual(state(queued: true, error: "denied"), .failedWillRetry(lastError: "denied"))
+        XCTAssertEqual(state(queued: true, attempts: 4, error: "denied"), .failedWillRetry(lastError: "denied"))
+        XCTAssertEqual(state(queued: true, attempts: 5, error: "denied"), .needsRetry(lastError: "denied"))
         // An upload already running wins over the try count.
         XCTAssertEqual(state(queued: true, uploading: true, attempts: 9), .uploading)
         // Offline wins over the try count: it will go when the phone is back online.
@@ -230,8 +291,14 @@ final class SiteAuditDraftStoreTests: XCTestCase {
         XCTAssertEqual(SiteAuditUploadState.waitingForConnection.statusText, "Waiting to upload — will upload when online")
         XCTAssertNil(SiteAuditUploadState.saved.detailText)
         XCTAssertNotNil(SiteAuditUploadState.waitingForConnection.detailText)
-        XCTAssertTrue(SiteAuditUploadState.needsRetry.showsRetryButton)
-        XCTAssertFalse(SiteAuditUploadState.waitingToRetry.showsRetryButton)
+        // An edit refused by the server shows why, as "Update failed: …" used to.
+        XCTAssertEqual(SiteAuditUploadState.needsRetry(lastError: "Missing or insufficient permissions.").errorText,
+                       "Last error: Missing or insufficient permissions.")
+        XCTAssertNil(SiteAuditUploadState.failedWillRetry(lastError: "  ").errorText)
+        XCTAssertTrue(SiteAuditUploadState.needsRetry(lastError: nil).showsRetryButton)
+        XCTAssertTrue(SiteAuditUploadState.failedWillRetry(lastError: "x").showsRetryButton)
+        XCTAssertFalse(SiteAuditUploadState.waitingToUpload.showsRetryButton)
+        XCTAssertFalse(SiteAuditUploadState.failedWillRetry(lastError: nil).statusText.contains("shortly"))
     }
 
     func testSyncPassRemovesOnlyTheCopyItSaved() {
@@ -244,5 +311,38 @@ final class SiteAuditDraftStoreTests: XCTestCase {
         XCTAssertTrue(SiteAuditOfflineStore.shouldRemoveAfterSync(currentRevision: .some(nil), syncedRevision: nil))
         // Already gone: nothing to remove.
         XCTAssertFalse(SiteAuditOfflineStore.shouldRemoveAfterSync(currentRevision: nil, syncedRevision: saved))
+    }
+}
+
+/// Queuing an audit again keeps the photo URLs an older queued copy already uploaded.
+@MainActor
+final class SiteAuditQueueCarryOverTests: XCTestCase {
+    private func item(_ id: UUID, url: String?, capturedAt: Date?) -> SiteAuditItem {
+        SiteAuditItem(id: id, title: "TEST item", location: "", assignee: "", comments: "", annotations: "",
+                      imageURL: url, imageCapturedAt: capturedAt, createdAt: Date(timeIntervalSince1970: 1))
+    }
+
+    private func audit(_ items: [SiteAuditItem]) -> SiteAudit {
+        SiteAudit(id: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!, projectId: UUID(),
+                  projectJobNumber: "J-1", projectName: "TEST-Site", type: .general, customTitle: "",
+                  authorName: "TEST Person", date: Date(timeIntervalSince1970: 1), items: items,
+                  createdAt: Date(timeIntervalSince1970: 1), createdByUserId: "TEST-user", visibleToOperatives: true)
+    }
+
+    func testSamePhotoKeepsItsUploadedURLAndAChangedPhotoDoesNot() {
+        let same = UUID(), replaced = UUID(), added = UUID()
+        let t1 = Date(timeIntervalSince1970: 100), t2 = Date(timeIntervalSince1970: 200)
+        let older = audit([
+            item(same, url: "https://example.test/same.jpg", capturedAt: t1),
+            item(replaced, url: "https://example.test/old.jpg", capturedAt: t1),
+        ])
+        let next = audit([
+            item(same, url: nil, capturedAt: t1),
+            item(replaced, url: nil, capturedAt: t2),
+            item(added, url: nil, capturedAt: t2),
+        ])
+        let merged = SiteAuditOfflineStore.carryingUploadedPhotoURLs(into: next, from: older)
+        XCTAssertEqual(merged.items.map(\.imageURL), ["https://example.test/same.jpg", nil, nil])
+        XCTAssertEqual(SiteAuditOfflineStore.carryingUploadedPhotoURLs(into: next, from: nil), next)
     }
 }

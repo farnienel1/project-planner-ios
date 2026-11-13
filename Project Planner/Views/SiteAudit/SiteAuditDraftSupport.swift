@@ -10,8 +10,8 @@ import SwiftUI
 import UIKit
 
 /// Saves the open site audit as a draft a moment after each change (and at once when the app goes to the background
-/// or the editor closes). Writes run one after another off the main thread; a photo is encoded and written only when
-/// it is new or replaced since the last save.
+/// or the editor closes). Writes run one after another off the main thread; a photo is shrunk, encoded and written
+/// only when it is new or replaced (not when it is already written or being written).
 @MainActor
 final class SiteAuditDraftAutosaver {
     struct Snapshot {
@@ -24,22 +24,35 @@ final class SiteAuditDraftAutosaver {
     let userId: String
     let organizationId: String
     private let store: SiteAuditDraftStore
+    /// The store's sign-out counter when this editor opened: a save after a sign-out is refused by the store.
+    private let epoch: Int
     private var debounceTask: Task<Void, Never>?
     private var writeChain: Task<Void, Never>?
-    /// The photo object last written for each item (compared by identity, so a replaced photo is written again).
-    private var writtenPhotos: [UUID: UIImage] = [:]
+    /// The photo object last written, or being written, for each item (compared by identity, so a replaced photo is
+    /// written again and one already on its way is not encoded twice).
+    private var queuedPhotos: [UUID: UIImage] = [:]
     private(set) var isStopped = false
+    /// A draft file exists for this audit (resumed, or written at least once).
+    private(set) var hasDraftOnDisk: Bool
 
-    init(draftId: UUID, userId: String, organizationId: String, store: SiteAuditDraftStore = .shared) {
+    init(
+        draftId: UUID,
+        userId: String,
+        organizationId: String,
+        existsOnDisk: Bool = false,
+        store: SiteAuditDraftStore = .shared
+    ) {
         self.draftId = draftId
         self.userId = userId
         self.organizationId = organizationId
         self.store = store
+        self.epoch = store.currentEpoch
+        self.hasDraftOnDisk = existsOnDisk
     }
 
     /// A photo read back from the draft on disk is already saved there.
     func markPhotoOnDisk(itemId: UUID, image: UIImage) {
-        writtenPhotos[itemId] = image
+        queuedPhotos[itemId] = image
     }
 
     func schedule(_ snapshot: Snapshot) {
@@ -59,56 +72,55 @@ final class SiteAuditDraftAutosaver {
         write(snapshot)
     }
 
-    /// Submit or delete: no more saves; with `deleteDraft` the draft and its photos are removed (after any write
-    /// still running, so it cannot come back).
-    func stop(deleteDraft: Bool) {
-        isStopped = true
+    /// Submit: the last state is written with `submittedAt` and kept as a backup until the upload queue saves the
+    /// audit (`SiteAuditOfflineStore` then calls `deleteSubmittedDraft`). No more saves after this.
+    func finishSubmitted(_ snapshot: Snapshot) {
+        guard !isStopped else { return }
         debounceTask?.cancel()
         debounceTask = nil
-        guard deleteDraft else { return }
-        let store = self.store
-        let (draftId, userId, organizationId) = (self.draftId, self.userId, self.organizationId)
-        store.delete(draftId: draftId, userId: userId, organizationId: organizationId)
-        let chain = writeChain
-        Task {
-            await chain?.value
-            store.delete(draftId: draftId, userId: userId, organizationId: organizationId)
-        }
+        var submitted = snapshot
+        submitted.draft.submittedAt = Date()
+        write(submitted)
+        isStopped = true
     }
 
     private func write(_ snapshot: Snapshot) {
         guard !isStopped else { return }
         let changed: [(UUID, UIImage)] = snapshot.images.compactMap { id, image in
-            writtenPhotos[id] === image ? nil : (id, image)
+            queuedPhotos[id] === image ? nil : (id, image)
         }
+        for (id, image) in changed { queuedPhotos[id] = image }
+        let current = Set(snapshot.draft.items.map(\.id))
+        queuedPhotos = queuedPhotos.filter { current.contains($0.key) }
+        hasDraftOnDisk = true
+
         let previous = writeChain
         let store = self.store
         let draft = snapshot.draft
+        let epoch = self.epoch
         writeChain = Task { [weak self] in
             await previous?.value
-            guard let self, !self.isStopped else { return }
-            let saved = await Task.detached(priority: .utility) { () -> Bool in
+            let failedPhotoIds = await Task.detached(priority: .utility) { () -> [UUID] in
                 var photos: [UUID: Data] = [:]
                 for (id, image) in changed {
-                    if let data = image.jpegData(compressionQuality: 0.85) { photos[id] = data }
+                    // The same size and quality the upload uses (`preparedForUpload`), not the full camera image.
+                    if let data = SiteAuditMediaProcessor.preparedForUpload(image).jpegData(compressionQuality: 0.82) {
+                        photos[id] = data
+                    }
                 }
                 do {
-                    try store.save(draft, photos: photos)
-                    return true
+                    try store.save(draft, photos: photos, epoch: epoch)
+                    return changed.map(\.0).filter { photos[$0] == nil }
                 } catch {
                     print("🔥🔥🔥 DEBUG: [SiteAuditDraft] save failed: \(error.localizedDescription)")
-                    return false
+                    return changed.map(\.0)
                 }
             }.value
-            if self.isStopped {
-                // Submitted or deleted while this write ran.
-                store.delete(draftId: draft.id, userId: draft.userId, organizationId: draft.organizationId)
-                return
+            // Not written: forget them, so the next save tries again.
+            guard let self else { return }
+            for id in failedPhotoIds where self.queuedPhotos[id] === changed.first(where: { $0.0 == id })?.1 {
+                self.queuedPhotos[id] = nil
             }
-            guard saved else { return }
-            for (id, image) in changed { self.writtenPhotos[id] = image }
-            let current = Set(draft.items.map(\.id))
-            self.writtenPhotos = self.writtenPhotos.filter { current.contains($0.key) }
         }
     }
 }

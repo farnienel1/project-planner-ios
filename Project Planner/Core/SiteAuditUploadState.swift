@@ -16,35 +16,52 @@ nonisolated enum SiteAuditUploadState: Equatable, Sendable {
     case uploading
     /// Queued and the phone is offline.
     case waitingForConnection
-    /// Queued, online, a pass will try again shortly (the retry timer, foreground or reconnect).
-    case waitingToRetry
-    /// Queued, and the automatic tries have run out: the person taps Retry upload.
-    case needsRetry
+    /// Queued, online, nothing has failed yet: the first upload is about to start.
+    case waitingToUpload
+    /// Queued, online, the last try failed (`lastError`); the queue tries again on its own (retry timer, foreground,
+    /// reconnect) and Retry upload tries now.
+    case failedWillRetry(lastError: String?)
+    /// Queued, and the automatic tries have run out: only Retry upload (or Pending sync) tries again.
+    case needsRetry(lastError: String?)
 
     static func resolve(
         isQueued: Bool,
         isUploading: Bool,
         isOnline: Bool,
         attemptCount: Int,
-        maxAutoAttempts: Int
+        maxAutoAttempts: Int,
+        lastError: String? = nil
     ) -> SiteAuditUploadState {
         guard isQueued else { return .saved }
         if isUploading { return .uploading }
         if !isOnline { return .waitingForConnection }
-        if attemptCount >= maxAutoAttempts { return .needsRetry }
-        return .waitingToRetry
+        if attemptCount >= maxAutoAttempts { return .needsRetry(lastError: lastError) }
+        if attemptCount > 0 || lastError != nil { return .failedWillRetry(lastError: lastError) }
+        return .waitingToUpload
     }
 
     var isSaved: Bool { self == .saved }
 
-    /// The short line under the PDF card.
+    /// The short line under the headline.
     var statusText: String {
         switch self {
         case .saved: return "Saved"
         case .uploading: return "Uploading photos…"
         case .waitingForConnection: return "Waiting to upload — will upload when online"
-        case .waitingToRetry: return "Waiting to upload — will try again shortly"
-        case .needsRetry: return "Not uploaded yet — tap Retry upload"
+        case .waitingToUpload: return "Waiting to upload"
+        case .failedWillRetry: return "Not uploaded yet — it will try again automatically"
+        case .needsRetry: return "Not uploaded — tap Retry upload"
+        }
+    }
+
+    /// Why it did not upload (the last error), for an edit refused by the server as much as for a new audit.
+    var errorText: String? {
+        switch self {
+        case .failedWillRetry(let message), .needsRetry(let message):
+            guard let message, !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return "Last error: \(message)"
+        default:
+            return nil
         }
     }
 
@@ -59,5 +76,10 @@ nonisolated enum SiteAuditUploadState: Equatable, Sendable {
         }
     }
 
-    var showsRetryButton: Bool { self == .needsRetry }
+    var showsRetryButton: Bool {
+        switch self {
+        case .failedWillRetry, .needsRetry: return true
+        default: return false
+        }
+    }
 }

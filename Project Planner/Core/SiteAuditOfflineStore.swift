@@ -25,6 +25,8 @@ struct PendingSiteAuditRecord: Codable, Identifiable {
     /// older copy leaves a newer one queued, and never writes an older pass's photo URL onto a newer copy.
     /// Missing on records saved before this field.
     var revision: UUID? = nil
+    /// The last upload or save error, shown after "Submit & generate PDF" ("Not uploaded yet …").
+    var lastError: String? = nil
 }
 
 @MainActor
@@ -71,6 +73,27 @@ final class SiteAuditOfflineStore: ObservableObject {
         pending.first { $0.id == id }?.attemptCount ?? 0
     }
 
+    func lastError(id: UUID) -> String? {
+        pending.first { $0.id == id }?.lastError
+    }
+
+    /// Queuing an audit again (an edit, or a draft submitted twice) while an older copy is still queued: an item
+    /// whose photo is the same one (same item, same capture time) keeps the URL the older copy already uploaded, so
+    /// that photo is not uploaded again.
+    static func carryingUploadedPhotoURLs(into audit: SiteAudit, from older: SiteAudit?) -> SiteAudit {
+        guard let older else { return audit }
+        let uploaded = Dictionary(older.items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var next = audit
+        for index in next.items.indices where next.items[index].imageURL == nil {
+            let item = next.items[index]
+            guard let previous = uploaded[item.id],
+                  let url = previous.imageURL, !url.isEmpty,
+                  previous.imageCapturedAt == item.imageCapturedAt else { continue }
+            next.items[index].imageURL = url
+        }
+        return next
+    }
+
     /// After a pass saved the copy it read: remove it only if nobody queued a newer copy meanwhile.
     nonisolated static func shouldRemoveAfterSync(currentRevision: UUID??, syncedRevision: UUID?) -> Bool {
         guard let currentRevision else { return false } // already removed
@@ -100,9 +123,12 @@ final class SiteAuditOfflineStore: ObservableObject {
         persistIndex()
     }
 
-    private func recordFailedAttempt(id: UUID) {
+    private func recordFailure(id: UUID, message: String, countsAsAttempt: Bool) {
         guard let index = pending.firstIndex(where: { $0.id == id }) else { return }
-        pending[index].attemptCount = (pending[index].attemptCount ?? 0) + 1
+        if countsAsAttempt {
+            pending[index].attemptCount = (pending[index].attemptCount ?? 0) + 1
+        }
+        pending[index].lastError = message
         persistIndex()
     }
 
@@ -117,37 +143,49 @@ final class SiteAuditOfflineStore: ObservableObject {
     ) async throws {
         enqueuingAuditIds.insert(audit.id)
         defer { enqueuingAuditIds.remove(audit.id) }
-        let folder = try pendingFolder(for: audit.id)
-        let needsUpload = Set(audit.items.filter { $0.imageURL == nil }.map(\.id))
+        let queued = Self.carryingUploadedPhotoURLs(into: audit, from: pending.first { $0.id == audit.id }?.audit)
+        let revision = UUID()
+        // Each copy writes its photos into its own sub-folder, so a copy that fails half way never leaves files
+        // mixed with an older copy's, and its own files are removed.
+        let folder = try pendingFolder(for: queued.id).appendingPathComponent(revision.uuidString, isDirectory: true)
+        let needsUpload = Set(queued.items.filter { $0.imageURL == nil }.map(\.id))
         let photos: [(UUID, UIImage)] = draftItems.compactMap { draft in
             guard needsUpload.contains(draft.id), let image = draft.image else { return nil }
             return (draft.id, image)
         }
-        let imageNames = try await Task.detached(priority: .userInitiated) {
-            try Self.writeJPEGs(photos, to: folder)
-        }.value
-        pending.removeAll { $0.id == audit.id }
+        let imageNames: [String: String]
+        do {
+            imageNames = try await Task.detached(priority: .userInitiated) {
+                try Self.writeJPEGs(photos, to: folder, prefix: revision.uuidString)
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
+        pending.removeAll { $0.id == queued.id }
         pending.append(
             PendingSiteAuditRecord(
-                id: audit.id,
+                id: queued.id,
                 organizationId: organizationId,
-                audit: audit,
+                audit: queued,
                 localImageNames: imageNames,
                 createdAt: Date(),
                 attemptCount: 0,
-                revision: UUID()
+                revision: revision
             )
         )
         persistIndex()
     }
 
-    nonisolated private static func writeJPEGs(_ photos: [(UUID, UIImage)], to folder: URL) throws -> [String: String] {
+    /// File names are relative to the audit's pending folder (`<revision>/<item>.jpg`).
+    nonisolated private static func writeJPEGs(_ photos: [(UUID, UIImage)], to folder: URL, prefix: String) throws -> [String: String] {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var imageNames: [String: String] = [:]
         for (itemId, image) in photos {
             guard let data = SiteAuditMediaProcessor.preparedForUpload(image).jpegData(compressionQuality: 0.82) else { continue }
             let fileName = "\(itemId.uuidString).jpg"
             try data.write(to: folder.appendingPathComponent(fileName), options: .atomic)
-            imageNames[itemId.uuidString] = fileName
+            imageNames[itemId.uuidString] = "\(prefix)/\(fileName)"
         }
         return imageNames
     }
@@ -224,10 +262,20 @@ final class SiteAuditOfflineStore: ObservableObject {
                     currentRevision: pending.first(where: { $0.id == record.id }).map(\.revision),
                     syncedRevision: record.revision
                 ) {
-                    remove(id: record.id)
+                    // Saved: the draft kept as a backup since Submit is no longer needed (owner decision 12 Nov).
+                    // Removed first, so the Drafts list never shows it as "not uploaded" in between.
+                    let savedId = record.id
+                    await Task.detached(priority: .utility) { SiteAuditDraftStore.shared.deleteSubmittedDraft(id: savedId) }.value
+                    // Checked again: a new copy may have been queued while the draft was being removed.
+                    if !enqueuingAuditIds.contains(record.id), Self.shouldRemoveAfterSync(
+                        currentRevision: pending.first(where: { $0.id == record.id }).map(\.revision),
+                        syncedRevision: record.revision
+                    ) {
+                        remove(id: record.id)
+                    }
                 }
             } catch {
-                if countsAsAttempt { recordFailedAttempt(id: record.id) }
+                recordFailure(id: record.id, message: error.localizedDescription, countsAsAttempt: countsAsAttempt)
                 print("🔥🔥🔥 DEBUG: [SiteAuditOffline] Sync failed for \(record.id): \(error.localizedDescription)")
             }
         }
