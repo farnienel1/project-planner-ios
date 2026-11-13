@@ -60,7 +60,7 @@ struct ProjectActiveOperativesView: View {
         }
         // One row per person (`resolveBookingPerson`): a re-added person's bookings under an old and a new id share a row,
         // and a booking with no catalogue row is still listed.
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
         let grouped = Dictionary(grouping: projectBookings) { booking -> UUID in
             let person = people.person(for: booking.operativeId)
             return person.operative?.id ?? person.user.map { Booking.internalOperativeId(for: $0.id) } ?? booking.operativeId
@@ -69,7 +69,7 @@ struct ProjectActiveOperativesView: View {
             let name = rosterNameForLabourBooking(
                 operativeId: operativeId,
                 operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
+                users: userStore.bookingNameUsers
             )
             let sorted = bookings.sorted { $0.date < $1.date }
             let hours = bookings.reduce(0.0) { $0 + $1.paidBookedHours(policy: dayPolicy($1.date)) }

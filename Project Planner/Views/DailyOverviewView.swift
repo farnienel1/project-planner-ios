@@ -980,7 +980,7 @@ struct DailyOverviewView: View {
                     let name = rosterNameForLabourBooking(
                         operativeId: booking.operativeId,
                         operatives: operativeStore.allOperatives,
-                        users: userStore.organizationUsers
+                        users: userStore.bookingNameUsers
                     )
                     bookingEditTarget = .operative(
                         booking: booking,
@@ -1421,7 +1421,7 @@ private extension DailyOverviewView {
             personName: rosterNameForLabourBooking(
                 operativeId: booking.operativeId,
                 operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
+                users: userStore.bookingNameUsers
             ),
             holidays: holidayStore.bookings,
             operatives: operativeStore.allOperatives,
@@ -1777,7 +1777,7 @@ struct ProjectBookingCard: View {
             let personName = rosterNameForLabourBooking(
                 operativeId: b.operativeId,
                 operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
+                users: userStore.bookingNameUsers
             )
             let sub = b.scheduleCoverageSubtitle(policy: p)
             let row = ProjectDayPersonRow(

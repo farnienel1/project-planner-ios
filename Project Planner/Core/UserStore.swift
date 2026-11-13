@@ -995,6 +995,30 @@ class UserStore: ObservableObject {
         return organizationUsers
     }
 
+    /// RULEBOOK §6 / §11 (platform guardrail 1): the people a labour booking's person id is resolved against for its
+    /// name (`rosterNameForLabourBooking`, `resolveBookingPerson`). `organizationUsers` is the people-list roster:
+    /// it has been through `listedRosterUsers` (an invite placeholder whose email claim is gone, a named document
+    /// with no email that is not a ghost and never signed up) and healing / tombstones, so a booking stored under one
+    /// of those documents read "Unknown person" on iOS. Web Daily Overview names bookings from its whole roster
+    /// (`useOrgUserStore.users`, the `rosterPeople` fold with no `listedRosterUsers` filter). This is the listed
+    /// roster first (it carries the folded same-email ids), then every other users document of the open organisation.
+    /// For naming only: people lists, warnings and pickers keep `organizationUsers`.
+    var bookingNameUsers: [AppUser] {
+        Self.bookingNameRoster(listed: organizationUsers, documents: unfoldedOrganizationUsers)
+    }
+
+    /// `bookingNameUsers` as a pure function (tests): `listed` in order, then each document whose id (without case)
+    /// is not already there.
+    static func bookingNameRoster(listed: [AppUser], documents: [AppUser]) -> [AppUser] {
+        var known = Set(listed.map { $0.id.lowercased() })
+        var rows = listed
+        for document in documents where !known.contains(document.id.lowercased()) {
+            known.insert(document.id.lowercased())
+            rows.append(document)
+        }
+        return rows
+    }
+
     /// `RulebookPeople.roster` over the unfolded documents, with `organizationId` as each document stores it.
     var unfoldedRosterRows: [[String: Any]] {
         unfoldedOrganizationUsers.map { user in

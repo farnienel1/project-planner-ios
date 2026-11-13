@@ -241,7 +241,7 @@ struct OrgSitesMapView: View {
                     let name = rosterNameForLabourBooking(
                         operativeId: booking.operativeId,
                         operatives: operativeStore.allOperatives,
-                        users: userStore.organizationUsers
+                        users: userStore.bookingNameUsers
                     )
                     return "\(booking.timeSlot.displayName) - \(name)"
                 }

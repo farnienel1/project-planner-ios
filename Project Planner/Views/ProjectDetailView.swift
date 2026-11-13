@@ -1992,7 +1992,7 @@ struct ProjectDetailView: View {
                         let name = rosterNameForLabourBooking(
                             operativeId: booking.operativeId,
                             operatives: operativeStore.allOperatives,
-                            users: userStore.organizationUsers
+                            users: userStore.bookingNameUsers
                         )
                         bookingEditTarget = .operative(
                             booking: booking,
@@ -2013,7 +2013,7 @@ struct ProjectDetailView: View {
         let name = rosterNameForLabourBooking(
             operativeId: booking.operativeId,
             operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
+            users: userStore.bookingNameUsers
         )
         bookingEditTarget = .operative(booking: updated, project: project, personName: name)
     }
@@ -2022,7 +2022,7 @@ struct ProjectDetailView: View {
         let name = rosterNameForLabourBooking(
             operativeId: booking.operativeId,
             operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
+            users: userStore.bookingNameUsers
         )
         let initials = PlannerUIInitials.from(name)
         let p = firebaseBackend.payrollPolicy(for: booking.date)

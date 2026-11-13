@@ -77,6 +77,55 @@ final class DailyOverviewBookingPersonTests: XCTestCase {
         )
     }
 
+    // MARK: - People the people lists leave out (owner report 13 Nov)
+
+    /// An invite placeholder whose `userEmails` claim is gone is not listed (`listedRosterUsers`), so it is not in
+    /// `organizationUsers`. Web Daily Overview names bookings from its whole roster (no `listedRosterUsers` filter),
+    /// so a booking stored under that document read a name on web and "Unknown person" on iOS.
+    private func leftoverInvite() -> AppUser {
+        var person = LogicFixtures.selfEmployedUser(id: "B7C1D2E3-F4A5-4B6C-8D7E-9F0A1B2C3D4E", email: "left.over@example.com")
+        person.firstName = "Left"
+        person.surname = "Over"
+        person.role = .operative
+        person.passwordSet = false
+        person.isActive = true
+        return person
+    }
+
+    func testABookingUnderAPersonTheListedRosterLeavesOutIsNamedFromTheOrganisationDocuments() throws {
+        let leftover = leftoverInvite()
+        let listedAdmin = rosterAfterTypeChange()
+        let listed = try XCTUnwrap(GhostRulebook.listed(listedAdmin + [leftover], claimedEmails: ["test.admin@example.com"]))
+        XCTAssertFalse(listed.contains { $0.id == leftover.id }, "precondition: the people lists leave the leftover invite out")
+
+        let booking = LogicFixtures.booking(
+            on: LogicFixtures.day(2026, 11, 13, hour: 8),
+            operativeId: Booking.internalOperativeId(for: leftover.id)
+        )
+        XCTAssertEqual(
+            rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: listed),
+            unknownLabourPersonName,
+            "the bug: naming against the listed roster"
+        )
+        let naming = UserStore.bookingNameRoster(listed: listed, documents: listedAdmin + [leftover])
+        XCTAssertEqual(
+            rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: naming),
+            "Left Over",
+            "web names this booking from the whole roster"
+        )
+    }
+
+    func testTheNamingRosterKeepsTheListedRowsFirstAndAddsEachDocumentOnce() {
+        let listed = rosterAfterTypeChange()
+        var folded = LogicFixtures.selfEmployedUser(id: bookedUid, email: "test.admin@example.com")
+        folded.firstName = "Test"
+        folded.surname = "Admin"
+        let other = leftoverInvite()
+        let naming = UserStore.bookingNameRoster(listed: listed, documents: [listed[0], folded, other, other])
+        XCTAssertEqual(naming.map(\.id), [placeholderId, bookedUid, other.id])
+        XCTAssertEqual(naming.first?.sameEmailUserIds, [bookedUid], "the listed row keeps its folded same-email ids")
+    }
+
     // MARK: - Row times (RULEBOOK §6, web `bookingTimesText`)
 
     func testCustomHoursCoveringTheStandardDayShowCustomTimes() {
