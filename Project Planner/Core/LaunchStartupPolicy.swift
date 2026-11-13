@@ -166,17 +166,6 @@ enum LaunchStartupPolicy {
 
     static let pushTokenStoredLimit = 8
 
-    static func isTerminalPushTokenFailure(_ message: String) -> Bool {
-        let text = message.lowercased()
-        if text.contains("invalid apns credential") { return true }
-        if text.contains("registration-token-not-registered") { return true }
-        if text.contains("invalid registration token") { return true }
-        if text.contains("not a valid fcm registration token") { return true }
-        if text.contains("unregistered") { return true }
-        if text.contains("invalid token") { return true }
-        return false
-    }
-
     /// Keeps the current device token, drops tokens that just failed, and stops the list
     /// growing without a bound. Tokens that have not failed stay until the cap trims the oldest.
     static func nextStoredPushTokens(

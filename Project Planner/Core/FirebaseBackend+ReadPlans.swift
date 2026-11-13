@@ -350,9 +350,15 @@ extension FirebaseBackend {
             case let .query(query, withoutDateBound):
                 attach(index, query, fallback: withoutDateBound)
             case let .document(ref):
-                let listener = ref.addSnapshotListener { snapshot, error in
+                // Metadata changes are on only so the ledger learns when the server answered (as the query parts);
+                // a snapshot whose data did not change stops at the ledger (`DocumentSnapshotDeduper`).
+                let deduper = DocumentSnapshotDeduper()
+                let listener = ref.addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
                     if let error {
                         NSLog("PLANNED_DOCUMENT_LISTENER_FAILED path=%@ error=%@", ref.path, error.localizedDescription)
+                        // Answered (refused): the ledger counts it, so the data check and the stale-cache watchdog
+                        // never wait on it.
+                        ledgerFailed(index)
                         deliver(index, [], false)
                         // A job the operative may not read (or that is gone) is simply not listed; not a refusal of
                         // the plan, so it is not re-attached.
@@ -360,6 +366,8 @@ extension FirebaseBackend {
                     }
                     guard let snapshot else { return }
                     ledgerRecord(index, snapshot.exists ? [snapshot.documentID] : [], snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
+                    let data = snapshot.exists ? snapshot.data() : nil
+                    guard deduper.shouldDeliver(data) else { return }
                     let doc = snapshot.exists ? fromDocument(snapshot) : nil
                     deliver(index, doc.map { [$0] } ?? [], snapshot.metadata.isFromCache)
                 }

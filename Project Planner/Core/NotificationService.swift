@@ -525,7 +525,9 @@ class NotificationService: ObservableObject {
         type: AppNotification.NotificationType,
         title: String,
         message: String,
+        detail: String? = nil,
         relatedId: UUID?,
+        relatedKey: String? = nil,
         dedupeKey: String
     ) async {
         guard let firebaseBackend = firebaseBackend,
@@ -539,7 +541,7 @@ class NotificationService: ObservableObject {
             roster: recipientRoster
         ) else { return }
         for recipientId in recipientIds {
-            let notification = AppNotification(
+            var notification = AppNotification(
                 id: syntheticNotificationId(from: "\(dedupeKey)|\(recipientId)"),
                 organizationId: organizationId,
                 type: type,
@@ -547,10 +549,29 @@ class NotificationService: ObservableObject {
                 message: message,
                 userId: recipientId,
                 relatedId: relatedId,
+                relatedKey: relatedKey,
                 requiresPermission: nil
             )
+            notification.detail = detail
             await saveNotification(notification)
         }
+    }
+
+    /// RULEBOOK 1.40.0 §4.4, §13: a manual annual-leave adjustment tells every admin (`annual_leave_adjusted`,
+    /// `annualLeaveAdjustedRecipients` = `companyActivityRecipients`, never the person who made it). `relatedId` is the
+    /// person; tapping opens their annual leave page (`annualLeavePerson`). Copy from `annualLeaveAdjustedNoticeText`.
+    func notifyAnnualLeaveAdjusted(personUserId: String, personName: String, actorName: String, days: Double, reason: String, adjustmentId: String) async {
+        let text = CanonicalBusinessEngine.annualLeaveAdjustedNoticeText(personName: personName, actorName: actorName, days: days, reason: reason)
+        await saveCompanyActivityNotice(
+            type: .annualLeaveAdjusted,
+            title: text.title,
+            message: text.message,
+            // Review r306 #10: the reason is the inbox row's detail, never in the pushed message.
+            detail: text.detail,
+            relatedId: nil,
+            relatedKey: personUserId,
+            dedupeKey: "annualLeaveAdjusted|\(adjustmentId)"
+        )
     }
 
     func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {
@@ -1516,35 +1537,54 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// Settings "send a test notification" (rulebook 1.4.0 §13): one `push_test` row to `pushTestRecipients(actor)`
-    /// — the signed-in user — with `actorUserId` set (`saveNotification` stamps it). The push function delivers it to
-    /// its sender (`notificationPushesToActor`), so this checks notification write → Cloud Function → APNs/FCM.
+    /// Settings → My notifications → Notifications check → "Send test notification" (rulebook 1.4.0 §13 `push_test`):
+    /// one row to `pushTestRecipients(actor)` — the signed-in user — written through `notificationCreateFields`
+    /// (`FirebaseBackend.saveNotification`) with `actorUserId` = the signed-in uid. The push function delivers it to its
+    /// sender (`notificationPushesToActor`), so this checks the whole chain: token saved → row written → Cloud Function →
+    /// APNs. Returns plain words for the screen; a failed write says why instead of claiming success.
     func sendTemporaryPushDiagnosticToCurrentUser() async -> String {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return "❌ Push diagnostic failed: no active organization."
+            return "Not sent: no organisation is open."
         }
-        guard let currentUser = userStore?.currentUser else {
-            return "❌ Push diagnostic failed: no signed-in app user."
+        guard let profileId = userStore?.currentUser?.id,
+              let authUid = Auth.auth().currentUser?.uid, !authUid.isEmpty else {
+            return "Not sent: you are not signed in."
         }
-        guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: actorPerson)?.first else {
-            return "❌ Push diagnostic failed: the rulebook gave no recipient."
+        // The row goes to the signed-in Auth account: that is the users document this phone saves its token on
+        // (`writePushTokens`) and the one the push function reads. A loaded profile under another id (an old invite id
+        // or a same-email copy) would put the row where no token is, so say so instead of claiming it was sent.
+        if profileId != authUid {
+            return "Account mismatch: you are signed in as \(authUid) but the app loaded profile \(profileId). The phone's token is saved on \(authUid). Send this screen to your administrator."
+        }
+        guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: authUid)?.first, targetId == authUid else {
+            return "Not sent: the app's rules could not load. Try again."
         }
 
-        let refreshResult = await firebaseBackend.forceRefreshAndRegisterPushToken()
-        let tokenCount = await pushTokenCount(for: targetId)
+        // Make sure this phone's token is on the account before the push function looks for it.
+        await firebaseBackend.reregisterPushTokenIfAvailable()
         let notification = AppNotification(
             organizationId: organizationId,
             type: .pushTest,
             title: "Test notification",
-            message: "Test notification for \(currentUser.fullName).",
+            message: "If you can read this on your phone, notifications are working.",
             userId: targetId,
             // `push_test` carries no relatedId (`NOTIFICATION_RELATED_ID`); never a random id.
             relatedId: nil,
             requiresPermission: nil
         )
-        await saveNotification(notification)
-        return "✅ Test notification created.\n\(refreshResult)\nTarget userId: \(targetId)\nNotification id: \(notification.id.uuidString)\nKnown tokens on target doc: \(tokenCount)"
+        do {
+            try await firebaseBackend.saveNotification(
+                notification,
+                organizationId: organizationId,
+                actorUserId: Auth.auth().currentUser?.uid
+            )
+            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] push_test row \(notification.id.uuidString) written for \(targetId)")
+            return "Sent — check your phone in a minute."
+        } catch {
+            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] push_test write failed: \(error.localizedDescription)")
+            return "Not sent: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Notification Management
@@ -2121,28 +2161,6 @@ class NotificationService: ObservableObject {
 
     private func notificationDedupKey(for notification: AppNotification) -> String {
         LocalNotificationBannerPolicy.dedupeKey(for: localBannerEvent(for: notification))
-    }
-
-    private func pushTokenCount(for userId: String) async -> Int {
-        do {
-            let snap = try await Firestore.firestore().collection("users").document(userId).getDocument(source: .server)
-            guard let data = snap.data() else { return 0 }
-            var tokens = Set<String>()
-            if let single = data["pushToken"] as? String {
-                let t = single.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !t.isEmpty { tokens.insert(t) }
-            }
-            if let many = data["pushTokens"] as? [String] {
-                for raw in many {
-                    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !t.isEmpty { tokens.insert(t) }
-                }
-            }
-            return tokens.count
-        } catch {
-            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] token lookup failed for \(userId): \(error.localizedDescription)")
-            return 0
-        }
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {

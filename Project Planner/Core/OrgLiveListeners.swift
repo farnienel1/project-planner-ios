@@ -39,6 +39,22 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
 
     private var entries: [String: Entry] = [:]
     private let lock = NSLock()
+    /// Explicit stops per key (`remove(key:)` without a token) and of everything (`removeAll`). A delayed retry
+    /// compares the mark it took when it attached: a screen that stopped its listener meanwhile is not re-listened.
+    private var stops: [String: Int] = [:]
+    private var stopAllCount = 0
+
+    /// Changes whenever `key`'s listener is stopped on purpose (a screen closed it, an organisation switch, sign-out);
+    /// never when a failed listener drops itself (`remove(key:token:)`).
+    nonisolated struct StopMark: Equatable, Sendable {
+        let all: Int
+        let key: Int
+    }
+
+    func stopMark(key: String) -> StopMark {
+        lock.lock(); defer { lock.unlock() }
+        return StopMark(all: stopAllCount, key: stops[key] ?? 0)
+    }
 
     init() {}
 
@@ -75,6 +91,7 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
     /// next foreground can attach it again, without removing a newer replacement).
     func remove(key: String, token: UUID? = nil) {
         lock.lock()
+        if token == nil { stops[key, default: 0] += 1 }
         let entry = entries[key]
         if let entry, token == nil || entry.token == token {
             entries[key] = nil
@@ -89,6 +106,7 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
     /// Organisation switch and sign-out.
     func removeAll() {
         lock.lock()
+        stopAllCount += 1
         let all = Array(entries.values)
         entries.removeAll()
         lock.unlock()
@@ -308,13 +326,16 @@ extension FirebaseBackend {
     }
 
     /// One snapshot listener on a query under `organizations/{orgId}`, registered as `key`. Calling it again for
-    /// the same key and target does nothing (foreground re-attach is free); a failed listener removes itself.
+    /// the same key and target does nothing (foreground re-attach is free). A failed listener removes itself and is
+    /// attached again after `LiveListenerAttachPolicy.retryDelay` while the same organisation is open (before 13 Nov
+    /// it waited for the next foreground return, so a cached list could stand alone for the whole session).
     /// `onChange` runs on the main actor with the documents as `(id, data)` rows for the rulebook reader.
     func listenOrganizationQuery(
         key: String,
         organizationId: String,
         targetSuffix: String = "",
-        query makeQuery: (DocumentReference) -> Query,
+        retryOnFailure: Bool = false,
+        query makeQuery: @escaping (DocumentReference) -> Query,
         onChange: @escaping @MainActor (_ rows: LiveDocumentRows, _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -334,13 +355,33 @@ extension FirebaseBackend {
                 if let error {
                     NSLog("LIVE_LISTENER_FAILED key=%@ org=%@ error=%@", key, orgId, error.localizedDescription)
                     ledger.markFailed(key: key, generation: generation, source: 0)
-                    Task { @MainActor in
+                    let failures = LiveListenerClock.shared.markFailed(key: key, organizationId: orgId)
+                    // Only organisation-wide listeners retry on their own; a screen's listener is attached again when
+                    // the screen appears or the app returns to the foreground (it may have closed meanwhile).
+                    let delay = retryOnFailure ? LiveListenerAttachPolicy.retryDelay(
+                        afterFailures: failures,
+                        permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
+                    ) : nil
+                    Task { @MainActor [weak self] in
                         if let value = token.value { registry.remove(key: key, token: value) }
+                        guard let delay else { return }
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        guard let self, self.isAuthenticated,
+                              organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                        self.listenOrganizationQuery(
+                            key: key,
+                            organizationId: orgId,
+                            targetSuffix: targetSuffix,
+                            retryOnFailure: true,
+                            query: makeQuery,
+                            onChange: onChange
+                        )
                     }
                     return
                 }
                 guard let snapshot else { return }
                 let fromCache = snapshot.metadata.isFromCache
+                if !fromCache { LiveListenerClock.shared.markServerSnapshot(key: key, organizationId: orgId) }
                 let heldIdsChanged = ledger.record(
                     key: key,
                     generation: generation,
@@ -362,14 +403,21 @@ extension FirebaseBackend {
                 }
             }
         token.value = registry.set(key: key, target: target, remove: { registration.remove() })
+        LiveListenerClock.shared.markAttached(key: key, organizationId: orgId)
     }
 
     /// One snapshot listener on a single document under `organizations/{orgId}`. `data` is nil when the
-    /// document does not exist. `hasPendingWrites` is true for this device's own unsent write.
+    /// document does not exist. `hasPendingWrites` is true for this device's own unsent write. With `retryOnFailure`
+    /// (organisation-wide documents only), a failed listener is attached again after
+    /// `LiveListenerAttachPolicy.retryDelay` while the same organisation is open and someone is signed in; a screen's
+    /// document listener is attached again when the screen appears (it may have closed meanwhile).
+    /// Metadata changes are on only so `LiveListenerClock` learns when the server answered; `DocumentSnapshotDeduper`
+    /// passes on only snapshots whose data changed, as before.
     func listenOrganizationDocument(
         key: String,
         organizationId: String,
-        document makeRef: (DocumentReference) -> DocumentReference,
+        retryOnFailure: Bool = false,
+        document makeRef: @escaping (DocumentReference) -> DocumentReference,
         onChange: @escaping @MainActor (_ data: [String: Any]?, _ fromCache: Bool, _ hasPendingWrites: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -379,24 +427,52 @@ extension FirebaseBackend {
         let registry = liveListeners
         guard registry.needsAttach(key: key, target: target) else { return }
         let token = LiveListenerToken()
-        let registration = ref.addSnapshotListener { [weak self] snapshot, error in
+        let deduper = DocumentSnapshotDeduper()
+        // Taken before attaching: a stop after this point (the screen closed, a switch) cancels a pending retry.
+        let stopMark = registry.stopMark(key: key)
+        let registration = ref.addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
             if let error {
                 NSLog("LIVE_LISTENER_FAILED key=%@ path=%@ error=%@", key, ref.path, error.localizedDescription)
-                Task { @MainActor in
+                let failures = LiveListenerClock.shared.markFailed(key: key, organizationId: orgId)
+                let delay = retryOnFailure ? LiveListenerAttachPolicy.retryDelay(
+                    afterFailures: failures,
+                    permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
+                ) : nil
+                Task { @MainActor [weak self] in
                     if let value = token.value { registry.remove(key: key, token: value) }
+                    guard let delay else { return }
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    // Never over a newer listener for the key (another document, attached by its screen meanwhile).
+                    guard let self, registry.stopMark(key: key) == stopMark, !registry.isAttached(key: key),
+                          LiveListenerAttachPolicy.mayRetryAttach(
+                            listenerOrganizationId: orgId,
+                            currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
+                            isAuthenticated: self.isAuthenticated
+                          ) else { return }
+                    // A no-op when the screen or a foreground return attached it again meanwhile (`needsAttach`).
+                    self.listenOrganizationDocument(
+                        key: key,
+                        organizationId: orgId,
+                        retryOnFailure: true,
+                        document: makeRef,
+                        onChange: onChange
+                    )
                 }
                 return
             }
             guard let snapshot else { return }
             let fromCache = snapshot.metadata.isFromCache
+            if !fromCache { LiveListenerClock.shared.markServerSnapshot(key: key, organizationId: orgId) }
             let pending = snapshot.metadata.hasPendingWrites
             let data = snapshot.exists ? snapshot.data() : nil
+            guard deduper.shouldDeliver(data) else { return }
             Task { @MainActor in
                 guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
                 onChange(data, fromCache, pending)
             }
         }
         token.value = registry.set(key: key, target: target, remove: { registration.remove() })
+        LiveListenerClock.shared.markAttached(key: key, organizationId: orgId)
     }
 
     /// Stops one keyed listener (a screen that listened while open has closed).
@@ -487,6 +563,8 @@ nonisolated enum IOSLiveListenerCoverage {
         "priceWorkItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "expenseItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "personalSiteAudits": "PersonalSiteAuditsView / PersonalSiteAuditPickerSheet (FirebaseBackend.listenPersonalSiteAudits, ownerUserId ==)",
+        // RULEBOOK 1.40.0 §4.4: manual annual-leave adjustments.
+        "annualLeaveAdjustments": "HolidayView / OperativeAnnualLeaveCalendarView / EditUserView / MyProfileFiguresCard (AnnualLeaveAdjustmentsModel → FirebaseBackend.listenAnnualLeaveAdjustments, one userId == query per person)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

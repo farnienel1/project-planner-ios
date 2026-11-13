@@ -127,6 +127,15 @@ struct NotificationRowView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .lineLimit(isMessageExpanded ? nil : 6)
 
+                // RULEBOOK 1.40.0 §13: inbox-only detail (never pushed), e.g. the reason for a leave adjustment.
+                if let detail = notification.detail, !detail.isEmpty {
+                    Text(detail)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 if messageExceedsPreview {
                     Button(isMessageExpanded ? "Show less" : "Show more") {
                         withAnimation(.easeInOut(duration: 0.2)) {
@@ -156,6 +165,7 @@ struct NotificationRowView: View {
         case .operativeCreated: return "person.badge.plus"
         case .operativeDeleted: return "person.badge.minus"
         case .jobManagerRemoved: return "person.crop.circle.badge.xmark"
+        case .annualLeaveAdjusted: return "sun.max"
         case .managerCreated: return "person.badge.key"
         case .clientCreated: return "person.2.badge.plus"
         case .projectCreated: return "folder.badge.plus"
@@ -193,6 +203,7 @@ struct NotificationRowView: View {
         case .bookingCreated: return .plan
         case .operativeCreated: return .people
         case .operativeDeleted, .jobManagerRemoved: return .people
+        case .annualLeaveAdjusted: return .people
         case .managerCreated: return .people
         case .clientCreated: return .people
         case .projectCreated: return .sites

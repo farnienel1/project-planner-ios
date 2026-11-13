@@ -66,6 +66,14 @@ struct HolidayView: View {
     @State private var teamTradeFilter: String?
     @State private var teamSearch = ""
     @State private var isManagingTeamLeave = false
+    /// RULEBOOK 1.40.0 §4.4: manual adjustments of the signed-in person and their Team list (live while open).
+    @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): each person's employment type from their pay record.
+    @StateObject private var employmentModel = AnnualLeaveEmploymentModel()
+    /// Answers for the Team page kept while their inputs are unchanged (the calendar asks for every day cell).
+    @State private var teamCache = HolidayTeamCache()
+    /// A notification (`annualLeavePerson`) opens one person's page.
+    @State private var deepLinkedTeamPerson: AnnualLeavePerson?
 
     enum HolidaySection: String, CaseIterable {
         case calendar = "Book"
@@ -78,9 +86,14 @@ struct HolidayView: View {
         case team
     }
 
+    /// RULEBOOK 1.40.0 `annualLeaveTeamTabVisible`: admins, and anyone who line-manages at least one current person —
+    /// the Operatives toggle plays no part.
     private var showsTeamTab: Bool {
-        if userStore.isOperativeMode() { return false }
-        return userStore.canAccessOperativeAnnualLeaveDirectory() || canApproveRequests
+        AnnualLeavePersonBuilder.teamTabVisible(
+            viewer: holidayProfileUser,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives
+        )
     }
 
     /// Leave days are organisation business days (§1): organisation zone, Monday-first.
@@ -93,6 +106,10 @@ struct HolidayView: View {
 
     private var annualLeaveSummary: AnnualLeaveUsageSummary? {
         guard let u = holidayProfileUser else { return nil }
+        // Review r306 #2 / #9: no figure until the pay record and the adjustments have loaded.
+        let ownerIds = RulebookPeople.ownerIds(for: u, users: userStore.organizationUsers)
+        let employment = employmentModel.employment(for: u, backend: firebaseBackend)
+        guard employment.ready, adjustmentsModel.isLoaded(for: ownerIds) else { return nil }
         let oid = currentOperative?.id
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         return AnnualLeavePolicy.usageSummary(
@@ -109,7 +126,11 @@ struct HolidayView: View {
             orgEndMonth: org.endMonth,
             yearAllowance: u.annualLeaveYearAllowance,
             yearAllowanceKey: u.annualLeaveYearAllowanceKey,
-            employmentStartDayKey: u.employmentStartDate
+            employmentStartDayKey: u.employmentStartDate,
+            // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days (the type from the pay record); this year's
+            // adjustments on top.
+            employment: employment.employment,
+            adjustments: adjustmentsModel.rows(for: ownerIds)
         )
     }
 
@@ -308,8 +329,18 @@ struct HolidayView: View {
         .task(id: teamDisplayedMonth) {
             await reloadBankHolidays(referenceDate: teamDisplayedMonth)
         }
+        .task(id: adjustmentUserIds.joined(separator: "|")) {
+            // RULEBOOK 1.40.0 §4.4: the adjustments of the people this page shows (each under their users id).
+            adjustmentsModel.listen(backend: firebaseBackend, userIds: adjustmentUserIds)
+        }
         .onAppear {
             if showRequests, showsTeamTab { leavePage = .team }
+            // RULEBOOK 1.40.0: `annual_leave_adjusted` opens that person's page on Team.
+            if let personUserId = AnnualLeaveDeepLinkContext.takePendingPersonUserId(),
+               let target = teamPeople.first(where: { $0.userId == personUserId }) {
+                leavePage = .team
+                deepLinkedTeamPerson = target
+            }
             // Segmented control hidden for this mode — stay on Book so we never drive a Picker with a stale selection.
             if !(isRequestMode || canApproveRequests), activeSection != .calendar {
                 activeSection = .calendar
@@ -570,8 +601,25 @@ struct HolidayView: View {
 
     private var myLeavePage: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let summary = annualLeaveSummary {
+            if let me = holidayProfileUser,
+               adjustmentsModel.failed(for: RulebookPeople.ownerIds(for: me, users: userStore.organizationUsers)) {
+                // Review r306 #9: a refused read is an error, never a balance without the adjustments.
+                Text(AnnualLeaveAdjustmentsModel.readError)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(AnnualLeavePalette.red)
+                    .accessibilityIdentifier("leave.adjustmentsError")
+            } else if let summary = annualLeaveSummary {
+                // The person's own balance: they may see their own employment type.
                 AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Yours awaiting")
+                // RULEBOOK 1.40.0 §4.4: the person sees their adjustments (amount, reason, date), not who made them.
+                if let me = holidayProfileUser {
+                    AnnualLeaveAdjustmentsCard(
+                        adjustments: adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: me, users: userStore.organizationUsers)),
+                        yearKey: summary.yearKey,
+                        showAuthor: false,
+                        hasAllowance: summary.hasAllowance
+                    )
+                }
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("Book time off")
@@ -605,6 +653,14 @@ struct HolidayView: View {
             teamAwayCalendarSection
             teamPeopleSection
         }
+        .navigationDestination(item: $deepLinkedTeamPerson) { person in
+            OperativeAnnualLeaveCalendarView(person: person)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(operativeStore)
+                .environmentObject(userStore)
+        }
     }
 
     private var teamHero: some View {
@@ -615,7 +671,7 @@ struct HolidayView: View {
         let soon = teamAwaySoonCount
         let ring = people > 0 ? min(1, Double(away) / Double(people)) : 0
         return VStack(alignment: .leading, spacing: 12) {
-            Text("TEAM · \(annualLeaveSummary?.leaveYearLabel ?? "This leave year")")
+            Text("TEAM · \(teamLeaveYearLabel)")
                 .font(.caption.weight(.semibold))
                 .tracking(0.8)
                 .foregroundStyle(.white)
@@ -947,7 +1003,7 @@ struct HolidayView: View {
                 }
             }
             if filteredTeamPeople.isEmpty {
-                Text("No one on the team matches those filters. People who book their own leave are not listed here.")
+                Text(teamPeople.isEmpty ? teamEmptyMessage : "No one on the team matches those filters. Clear the trade or search to see your team.")
                     .font(.subheadline)
                     .foregroundStyle(AnnualLeavePalette.ink3)
                     .padding(18)
@@ -1016,10 +1072,44 @@ struct HolidayView: View {
     }
 
     private var teamPeople: [AnnualLeavePerson] {
-        AnnualLeavePersonBuilder.build(
+        // RULEBOOK 1.40.0 `annualLeaveTeamPeople`: admins every current person (self-bookers included, never
+        // themselves), anyone else the people they line-manage; never deleted, inactive or pending people.
+        var hasher = Hasher()
+        hasher.combine(holidayProfileUser)
+        hasher.combine(userStore.organizationUsers)
+        for op in operativeStore.allOperatives {
+            hasher.combine(op.documentId)
+            hasher.combine(op.email)
+            hasher.combine(op.isActive)
+        }
+        let key = hasher.finalize()
+        if let cached = teamCache.people, teamCache.peopleKey == key { return cached }
+        let people = AnnualLeavePersonBuilder.teamPeople(
+            viewer: holidayProfileUser,
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
+        teamCache.peopleKey = key
+        teamCache.people = people
+        return people
+    }
+
+    /// RULEBOOK 1.40.0 `annualLeaveTeamEmptyMessage`.
+    private var teamEmptyMessage: String {
+        guard let viewer = holidayProfileUser else { return "Nobody reports to you yet. People you line-manage appear here." }
+        return CanonicalBusinessEngine.annualLeaveTeamEmptyMessage(viewer: RulebookPeople.person(viewer))
+            ?? "Nobody reports to you yet. People you line-manage appear here."
+    }
+
+    /// RULEBOOK 1.40.0 §9: the Team header names the organisation's leave year, never the viewer's own.
+    private var teamLeaveYearLabel: String {
+        let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
+        return AnnualLeavePolicy.organizationLeaveYearLabel(startMonth: org.startMonth, endMonth: org.endMonth) ?? "This leave year"
+    }
+
+    /// The users ids whose adjustments this page reads: the signed-in person and every listed person.
+    private var adjustmentUserIds: [String] {
+        ([holidayProfileUser?.id] + teamPeople.map(\.userId)).compactMap { $0 }
     }
 
     private var teamTradeChoices: [String] {
@@ -1079,18 +1169,48 @@ struct HolidayView: View {
         }
     }
 
+    /// RULEBOOK 1.40.0: away on a day is `leaveDayKind` over each listed person's records (every id they go by) —
+    /// approved leave, half days included; a pending cancellation still counts; weekends and bank holidays inside a
+    /// multi-day record are not leave days.
     private func teamAway(on day: Date) -> [AnnualLeavePerson] {
-        let dayStart = calendar.startOfDay(for: day)
-        var seen = Set<String>()
-        var people: [AnnualLeavePerson] = []
-        for booking in holidayStore.bookings where booking.status == .approved && booking.cancellationRequestedAt == nil {
-            let start = calendar.startOfDay(for: booking.startDate)
-            let end = calendar.startOfDay(for: booking.endDate)
-            guard dayStart >= start && dayStart <= end else { continue }
-            guard let person = teamPerson(for: booking), seen.insert(person.id).inserted else { continue }
-            people.append(person)
+        let key = OrganizationRulebookContext.dayKey(day)
+        let byPerson = teamLeaveRecords
+        return teamPeople.filter { person in
+            let records = byPerson[person.id] ?? []
+            let kind = CanonicalBusinessEngine.leaveDayKind(
+                records: records,
+                dayKey: key,
+                nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+            ) ?? RulebookLeaveDayKind.none
+            return kind == .approvedFull || kind == .approvedHalf
         }
-        return people
+    }
+
+    /// Every listed person's leave records (`teamPersonBookings`), worked out once per change of the leave or the list.
+    private var teamLeaveRecords: [String: [RulebookLeaveReportRecord]] {
+        let people = teamPeople
+        var hasher = Hasher()
+        hasher.combine(holidayStore.bookings)
+        hasher.combine(people)
+        let key = hasher.finalize()
+        if let cached = teamCache.records, teamCache.recordsKey == key { return cached }
+        var map: [String: [RulebookLeaveReportRecord]] = [:]
+        for person in people {
+            map[person.id] = teamPersonBookings(person).map(\.rulebookLeaveRecord)
+        }
+        teamCache.recordsKey = key
+        teamCache.records = map
+        return map
+    }
+
+    /// One listed person's leave records under every id they go by (`leaveRecordsForAccount`).
+    private func teamPersonBookings(_ person: AnnualLeavePerson) -> [HolidayBooking] {
+        holidayStore.myBookings(
+            account: teamUser(for: person),
+            operatives: operativeStore.allOperatives,
+            operativeId: person.operativeId,
+            userId: person.userId
+        )
     }
 
     /// The team row a leave record belongs to: the requester account the rulebook resolves (`resolveBookingPerson`
@@ -1109,6 +1229,10 @@ struct HolidayView: View {
 
     private func teamBalance(for person: AnnualLeavePerson) -> (remaining: Double?, allowance: Double, taken: Double, hasAllowance: Bool, used: Double)? {
         guard let user = teamUser(for: person) else { return nil }
+        // Review r306 #2 / #9: no figure until this person's pay record and adjustments have loaded.
+        let ownerIds = RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers)
+        let employment = employmentModel.employment(for: user, backend: firebaseBackend)
+        guard employment.ready, adjustmentsModel.isLoaded(for: ownerIds), !adjustmentsModel.failed(for: ownerIds) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let summary = AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.myBookings(account: user, operatives: operativeStore.allOperatives, operativeId: person.operativeId),
@@ -1124,7 +1248,10 @@ struct HolidayView: View {
             orgEndMonth: org.endMonth,
             yearAllowance: user.annualLeaveYearAllowance,
             yearAllowanceKey: user.annualLeaveYearAllowanceKey,
-            employmentStartDayKey: user.employmentStartDate
+            employmentStartDayKey: user.employmentStartDate,
+            // RULEBOOK 1.40.0 §4.4: PAYE days only (the type from the pay record), with this year's adjustments.
+            employment: employment.employment,
+            adjustments: adjustmentsModel.rows(for: ownerIds)
         )
         return (summary.remainingDays, summary.entitlementDays, summary.takenDays, summary.hasAllowance, summary.usedThisYear)
     }
@@ -1135,7 +1262,7 @@ struct HolidayView: View {
         }
         if let oid = person.operativeId {
             // `resolveBookingPerson`: the account behind the catalogue row (same email, former or alias ids).
-            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+            return LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
                 .person(for: oid).user
         }
         return nil
@@ -1144,9 +1271,10 @@ struct HolidayView: View {
     private func remainingAfterNote(for request: HolidayBooking, person: AnnualLeavePerson?) -> String? {
         guard let person, let balance = teamBalance(for: person), balance.hasAllowance else { return nil }
         let days = AnnualLeaveDateFormat.leaveDays(request)
-        let after = request.cancellationRequestedAt != nil
-            ? balance.allowance - balance.taken + days
-            : balance.allowance - balance.taken - days
+        // RULEBOOK 1.40.0: from `annualLeaveBalance.remaining`, which already takes pending requests off — approving a
+        // pending request leaves it unchanged; accepting a cancellation gives the days back.
+        guard let remaining = balance.remaining else { return nil }
+        let after = request.cancellationRequestedAt != nil ? remaining + days : remaining
         return "Remaining after: \(AnnualLeavePolicy.formatAllowanceDays(after)) of \(AnnualLeavePolicy.formatAllowanceDays(balance.allowance))"
     }
 
@@ -2239,4 +2367,13 @@ struct HolidayRequestRowView: View {
         .environmentObject(FirebaseBackend())
         .environmentObject(NotificationService())
         .environmentObject(AppSettingsStore())
+}
+
+/// Team-page answers kept between redraws while their inputs (the hash of the roster, the viewer, the operatives and
+/// the leave records) are unchanged. Holds script answers only; decides nothing.
+final class HolidayTeamCache {
+    var peopleKey = 0
+    var people: [AnnualLeavePerson]?
+    var recordsKey = 0
+    var records: [String: [RulebookLeaveReportRecord]]?
 }

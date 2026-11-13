@@ -553,6 +553,7 @@ class ProjectStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "clients",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("clients") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
@@ -573,6 +574,7 @@ class ProjectStore: ObservableObject {
         firebaseBackend.listenOrganizationDocument(
             key: "jobTypes",
             organizationId: organizationId,
+            retryOnFailure: true,
             document: { $0.collection("settings").document("jobTypes") }
         ) { [weak self] data, fromCache, _ in
             guard let self, let data, !fromCache else { return }

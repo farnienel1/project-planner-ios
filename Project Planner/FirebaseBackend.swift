@@ -264,6 +264,8 @@ class FirebaseBackend: ObservableObject {
     private var lastOrganizationDidLoadBroadcastAt: Date?
     private var organizationDocumentListener: ListenerRegistration?
     private var organizationDocumentListenerTarget: String?
+    /// Which attach of the settings listener is current, so a late failure of a replaced one changes nothing.
+    private var organizationDocumentListenerGeneration = UUID()
     private var bookingsLiveListener: ListenerRegistration?
     private var bookingsLiveListenerTarget: String?
     /// Counts from the last booking read: how many documents the shared parser kept or refused.
@@ -287,8 +289,6 @@ class FirebaseBackend: ObservableObject {
     private var scheduleHistoryIsFull = false
     /// Inbox ids already accepted for an only-if-missing write. A token refresh must not write the same row twice.
     private var acceptedMissingNotificationIds = Set<String>()
-    /// Push tokens a send has already reported as dead. The full token is never logged.
-    private var failedPushTokens = Set<String>()
     /// The FCM token this device last wrote to the signed-in account, so sign-out can remove it (RULEBOOK §13).
     private var registeredPushToken: String?
     /// `userEmails` documents confirmed missing. A second launch lookup does not retry them.
@@ -405,6 +405,8 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListenerTarget = nil
         managerScheduleLiveRequest = nil
         liveListeners.removeAll()
+        // Organisation switch and sign-out: no attach time, server time or failure count carries over.
+        LiveListenerClock.shared.reset()
         DataParityListenerLedger.shared.removeAll()
         JobAccessContext.resetForOrganizationSwitch()
     }
@@ -425,19 +427,64 @@ class FirebaseBackend: ObservableObject {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
         let target = "org:\(orgId)"
-        guard LaunchStartupPolicy.shouldAttachListener(
+        // RULEBOOK §1: a failed settings listener is attached again on its own (before 13 Nov its target stayed set
+        // after the failure, so neither a retry nor a foreground return ever attached it again that session).
+        switch LiveListenerAttachPolicy.organizationDocumentAttach(
             activeTarget: organizationDocumentListenerTarget,
-            requestedTarget: target
-        ) else { return }
-        stopOrganizationDocumentListener()
+            requestedTarget: target,
+            hasRegistration: organizationDocumentListener != nil
+        ) {
+        case .keep:
+            return
+        case .reattachSameOrganization:
+            break
+        case .replace:
+            stopOrganizationDocumentListener()
+        }
         organizationDocumentListenerTarget = target
+        attachOrganizationDocumentListener(orgId: orgId)
+    }
+
+    /// The stale-cache watchdog: the settings listener has had no server snapshot, so it is attached afresh (its
+    /// first snapshot is a new read). Only the settings listener; every other listener stays.
+    func reattachOrganizationDocumentListenerIfCurrent(organizationId: String) {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard LiveListenerAttachPolicy.mayRetryAttach(
+            listenerOrganizationId: orgId,
+            currentOrganizationId: currentOrganization?.firestoreDocumentId,
+            isAuthenticated: isAuthenticated
+        ), organizationDocumentListenerTarget == "org:\(orgId)" else { return }
+        organizationDocumentListener?.remove()
+        organizationDocumentListener = nil
+        attachOrganizationDocumentListener(orgId: orgId)
+    }
+
+    private func attachOrganizationDocumentListener(orgId: String) {
+        let generation = UUID()
+        organizationDocumentListenerGeneration = generation
+        let deduper = DocumentSnapshotDeduper()
+        // Metadata changes are on only so `LiveListenerClock` learns when the server answered; the settings are
+        // applied only when the document's data changed (`DocumentSnapshotDeduper`), as before.
         organizationDocumentListener = db.collection("organizations").document(orgId)
-            .addSnapshotListener { [weak self] snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
                 if let error {
-                    print("🔥🔥🔥 DEBUG: organization listener error: \(error.localizedDescription)")
+                    NSLog("LIVE_LISTENER_FAILED key=organization org=%@ error=%@", orgId, error.localizedDescription)
+                    let permissionDenied = LiveListenerAttachPolicy.isPermissionDenied(error)
+                    Task { @MainActor [weak self] in
+                        self?.organizationDocumentListenerFailed(
+                            orgId: orgId,
+                            generation: generation,
+                            permissionDenied: permissionDenied
+                        )
+                    }
                     return
                 }
-                guard let self, let snapshot, snapshot.exists, let data = snapshot.data() else { return }
+                guard let snapshot else { return }
+                if !snapshot.metadata.isFromCache {
+                    LiveListenerClock.shared.markServerSnapshot(key: "organization", organizationId: orgId)
+                }
+                guard snapshot.exists, let data = snapshot.data(), deduper.shouldDeliver(data) else { return }
+                guard let self else { return }
                 Task { @MainActor in
                     // A snapshot for a company the user has since left is ignored.
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
@@ -453,6 +500,33 @@ class FirebaseBackend: ObservableObject {
                     self.organizationMembersSnapshot = (organizationId: orgId, members: members)
                 }
             }
+        LiveListenerClock.shared.markAttached(key: "organization", organizationId: orgId)
+    }
+
+    /// A failed settings listener drops its registration (keeping its target, so an organisation switch is still a
+    /// switch) and is attached again after `LiveListenerAttachPolicy.retryDelay` while the same organisation is open
+    /// and someone is signed in. A foreground return (`broadcastOrganizationDidLoadIfNeeded`) attaches it sooner.
+    private func organizationDocumentListenerFailed(orgId: String, generation: UUID, permissionDenied: Bool) {
+        guard LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(
+            failedGeneration: generation,
+            currentGeneration: organizationDocumentListenerGeneration,
+            failedTarget: "org:\(orgId)",
+            activeTarget: organizationDocumentListenerTarget
+        ) else { return }
+        organizationDocumentListener?.remove()
+        organizationDocumentListener = nil
+        let failures = LiveListenerClock.shared.markFailed(key: "organization", organizationId: orgId)
+        guard let delay = LiveListenerAttachPolicy.retryDelay(afterFailures: failures, permissionDenied: permissionDenied) else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, LiveListenerAttachPolicy.mayRetryAttach(
+                listenerOrganizationId: orgId,
+                currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
+                isAuthenticated: self.isAuthenticated
+            ) else { return }
+            // `.keep` when it was attached again meanwhile; never a second listener.
+            self.startOrganizationDocumentListener(organizationId: orgId)
+        }
     }
 
     /// Every snapshot of `organizations/{orgId}` re-parses ALL settings (working hours incl. prior and
@@ -985,9 +1059,12 @@ class FirebaseBackend: ObservableObject {
             },
             signOut: {
                 registeredPushToken = nil
+                PushRegistrationStatus.shared.resetForSignOut()
                 do {
                     try auth.signOut()
                     clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: keepDraftsOfUserId)
+                    LiveListenerClock.shared.reset()
+                    UnknownBookedPersonRefresh.shared.reset()
                 } catch {
                     print("🔥🔥🔥 DEBUG: Sign out error (\(reason.rawValue)): \(error.localizedDescription)")
                 }
@@ -4693,14 +4770,20 @@ class FirebaseBackend: ObservableObject {
     ) -> ListenerRegistration? {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return nil }
+        // Metadata changes on only so a server confirmation of the cached roster is recorded
+        // (`LiveListenerClock`, the stale-cache watchdog); a snapshot with no document change stops there.
         return db.collection("users")
             .whereField("organizationId", isEqualTo: orgId)
-            .addSnapshotListener { snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
                 if let error {
                     Task { @MainActor in onError(error) }
                     return
                 }
                 guard let snapshot else { return }
+                if !snapshot.metadata.isFromCache {
+                    LiveListenerClock.shared.markServerSnapshot(key: "users", organizationId: orgId)
+                }
+                guard !snapshot.documentChanges.isEmpty else { return }
                 var changed: [AppUser] = []
                 var removed: [String] = []
                 for change in snapshot.documentChanges {
@@ -6683,16 +6766,64 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK §13: a device push token belongs to the signed-in account only. It is written to
     /// `users/{uid}.pushTokens` of that account and never copied to other `users` documents on the same email.
     func registerPushToken(_ token: String) async {
-        guard let authUser = currentUser else { return }
-        let uid = authUser.uid
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Kept even before sign-in: `reregisterPushTokenIfAvailable` saves it once an account is signed in.
+        PushRegistrationStatus.shared.recordFCMToken(trimmed)
+        guard let authUser = currentUser ?? auth.currentUser else {
+            print("🔥🔥🔥 DEBUG: [PUSH] FCM token held until sign-in \(PushRegistrationStatus.tokenSuffix(trimmed))")
+            return
+        }
+        let uid = authUser.uid
         do {
             try await writePushTokens(userId: uid, currentDeviceToken: trimmed)
             registeredPushToken = trimmed
-            print("🔥🔥🔥 DEBUG: Registered push token for user \(uid)")
+            PushRegistrationStatus.shared.recordSaved()
+            print("🔥🔥🔥 DEBUG: [PUSH] Saved push token \(PushRegistrationStatus.tokenSuffix(trimmed)) on own users document")
         } catch {
-            print("🔥🔥🔥 DEBUG: Failed to register push token: \(error.localizedDescription)")
+            PushRegistrationStatus.shared.recordSaveFailure(error.localizedDescription)
+            print("🔥🔥🔥 DEBUG: [PUSH] Failed to save push token: \(error.localizedDescription)")
+            NSLog("PUSH_TOKEN_SAVE_FAILED %@", error.localizedDescription as NSString)
+        }
+    }
+
+    /// RULEBOOK §1 / §13: this device's token is a field the device owns, so it is (re)written on sign-in and when the
+    /// user or organisation loads — not only when Firebase happens to call back with a new token (that callback can
+    /// fire at launch before anyone is signed in, and was then lost). A write that changes nothing is skipped by
+    /// `writePushTokens`.
+    func reregisterPushTokenIfAvailable() async {
+        guard (currentUser ?? auth.currentUser) != nil else { return }
+        var token = PushRegistrationStatus.shared.latestFCMToken ?? ""
+#if canImport(FirebaseMessaging)
+        if token.isEmpty {
+            token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+#endif
+        guard !token.isEmpty else {
+            print("🔥🔥🔥 DEBUG: [PUSH] No FCM token on this device yet; nothing to save")
+            return
+        }
+        await registerPushToken(token)
+    }
+
+    /// Whether this device's FCM token is in `pushTokens` on the signed-in account's own users document, read from
+    /// the server. Nil when it cannot be told (not signed in, no token, offline or the read failed).
+    func pushTokenSavedOnOwnAccount() async -> Bool? {
+        guard let uid = auth.currentUser?.uid, !uid.isEmpty else { return nil }
+        var token = PushRegistrationStatus.shared.latestFCMToken ?? ""
+#if canImport(FirebaseMessaging)
+        if token.isEmpty {
+            token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+#endif
+        guard !token.isEmpty else { return nil }
+        do {
+            let snap = try await db.collection("users").document(uid).getDocument(source: .server)
+            let stored = (snap.data()?["pushTokens"] as? [String]) ?? []
+            return stored.contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == token }
+        } catch {
+            print("🔥🔥🔥 DEBUG: [PUSH] Could not read own users document: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -6744,20 +6875,6 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Removed this device's push token from \(docIds.count) users document(s) before sign-out")
     }
 
-    /// Drops one token after FCM/APNs reports it dead. Does not clear tokens that have not failed.
-    func recordPushTokenFailure(token: String, message: String) async {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, LaunchStartupPolicy.isTerminalPushTokenFailure(message) else { return }
-        guard let uid = currentUser?.uid, !uid.isEmpty else { return }
-        failedPushTokens.insert(trimmed)
-        do {
-            try await writePushTokens(userId: uid, currentDeviceToken: "")
-            print("🔥🔥🔥 DEBUG: Removed a dead push token. stored failures=\(failedPushTokens.count)")
-        } catch {
-            print("🔥🔥🔥 DEBUG: Failed to remove a dead push token: \(error.localizedDescription)")
-        }
-    }
-
     private func writePushTokens(userId: String, currentDeviceToken: String) async throws {
         // RULEBOOK 1.17.0 §13 (`pushTokenOwnerWrites`): `pushTokens` is written only to the signed-in Auth uid's users
         // document — never a same-email copy, an invite placeholder (`isPushTokenPlaceholderUserId`) or another company's.
@@ -6769,7 +6886,8 @@ class FirebaseBackend: ObservableObject {
         let next = LaunchStartupPolicy.nextStoredPushTokens(
             existing: existing,
             currentDeviceToken: currentDeviceToken,
-            failedTokens: failedPushTokens
+            // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
+            failedTokens: []
         )
         guard next != existing else { return }
         try await ref.setData([
@@ -6836,6 +6954,7 @@ class FirebaseBackend: ObservableObject {
             type: notification.typeText,
             title: notification.title,
             message: notification.message,
+            detail: notification.detail,
             userId: notification.userId,
             actorUserId: actorUserId,
             relatedId: Self.notificationRelatedId(for: notification),
@@ -6951,6 +7070,7 @@ class FirebaseBackend: ObservableObject {
             catalogue: row.optionalText("catalogue")
         )
         notification.storedType = storedType
+        notification.detail = row.optionalText("detail")
         return notification
     }
 
