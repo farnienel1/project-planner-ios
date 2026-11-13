@@ -30,7 +30,9 @@ final class UserProfileCanonicalTests: XCTestCase {
         XCTAssertEqual(EmploymentType.fromCanonical("selfEmployed"), .selfEmployed)
     }
 
-    func testImmediateEmploymentChangeClearsTheTransition() {
+    /// RULEBOOK 1.40.0 (owner decision 13 Nov, item 18): an immediate change stores today (organisation midnight) as the
+    /// effective date with the old type, so earlier days keep the old type. Before 1.40.0 it cleared the transition.
+    func testImmediateEmploymentChangeStoresTodayAndKeepsTheOldTypeBefore() {
         let now = iso("2026-10-09T12:00:00Z")
         let change = CanonicalBusinessEngine.applyEmploymentTypeChange(
             previousType: "self_employed",
@@ -38,11 +40,13 @@ final class UserProfileCanonicalTests: XCTestCase {
             previousTransitionFrom: nil,
             previousEffectiveAt: nil,
             effectiveAt: nil,
-            now: now
+            now: now,
+            timeZone: "Europe/London"
         )
         XCTAssertEqual(change?.employmentType, "paye")
-        XCTAssertNil(change?.employmentTypeTransitionFrom)
-        XCTAssertNil(change?.employmentTypeEffectiveAt)
+        XCTAssertEqual(change?.employmentTypeTransitionFrom, "self_employed")
+        // 9 Oct 2026 00:00 in London (BST) is 8 Oct 23:00 UTC.
+        XCTAssertEqual(change?.employmentTypeEffectiveAt, iso("2026-10-08T23:00:00Z"))
     }
 
     func testPayeFromTomorrowKeepsSelfEmployedOnEarlierDays() {

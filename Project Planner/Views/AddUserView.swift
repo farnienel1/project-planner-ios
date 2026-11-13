@@ -1033,24 +1033,9 @@ struct AddUserView: View {
     }
 
     private var inviteRemainingOverride: CanonicalBusinessEngine.CanonicalRemainingOverride? {
-        guard annualLeaveEnabledInvite else { return nil }
-        let days = parseAnnualLeaveDaysForInvite()
-        let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let raw = Double(t), raw >= 0 else { return nil }
-        let remaining = CanonicalBusinessEngine.snapLeaveDays(raw)
-        guard abs(remaining - days) > 0.001 else { return nil }
-        let yearKey = CanonicalBusinessEngine.leaveYearBounds(
-            startMonth: annualLeaveStartMonth,
-            endMonth: annualLeaveEndMonth,
-            onDayKey: CanonicalBusinessEngine.dayKey(for: Date())
-        )?.yearKey ?? ""
-        guard !yearKey.isEmpty else { return nil }
-        return CanonicalBusinessEngine.applyRemainingOverride(
-            remaining: remaining,
-            taken: 0,
-            pending: 0,
-            yearKey: yearKey
-        )
+        // RULEBOOK 1.40.0 (owner decision 11 Nov H35): Add User no longer sets a remaining figure. A joiner is pro
+        // rata from their start date; extra days are an adjustment with a reason on their annual leave page.
+        nil
     }
 
     private var annualLeaveAllowanceCopy: CanonicalBusinessEngine.CanonicalAnnualLeaveAllowanceCopy {
@@ -1095,27 +1080,6 @@ struct AddUserView: View {
                         isEnabled: true,
                         style: .card
                     )
-                    Divider()
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(annualLeaveAllowanceCopy.remainingTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .fixedSize(horizontal: false, vertical: true)
-                        HStack(spacing: 6) {
-                            TextField("Remaining", text: $remainingLeaveText)
-                                .keyboardType(.decimalPad)
-                                .monospacedDigit()
-                                .accessibilityIdentifier("addUser.remainingLeave")
-                            Text("days left")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .accessibilityHidden(true)
-                        }
-                        .ppFormField()
-                        Text(annualLeaveAllowanceCopy.remainingNote)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
             }
             .ppFormCard()

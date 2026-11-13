@@ -16,6 +16,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
         /// RULEBOOK 1.31.0 §11: a person stopped being a manager and was taken off their jobs
         /// (`JOB_MANAGER_REMOVED_NOTICE_TYPE`, company activity).
         case jobManagerRemoved = "job_manager_removed"
+        /// RULEBOOK 1.40.0 §4.4, §13: an admin or line manager adjusted someone's annual leave (company activity,
+        /// `annualLeaveAdjustedRecipients`); `relatedId` is the person.
+        case annualLeaveAdjusted = "annual_leave_adjusted"
         case managerCreated = "manager_created"
         case clientCreated = "client_created"
         case projectCreated = "project_created"
@@ -96,6 +99,9 @@ struct AppNotification: Identifiable, Codable, Hashable {
     var type: NotificationType
     var title: String
     var message: String
+    /// RULEBOOK 1.40.0 §13 (review r306 #10): inbox-only text under the message, never pushed (e.g. the reason for an
+    /// annual-leave adjustment). Nil when the row has none.
+    var detail: String? = nil
     var userId: String? // Target user ID (nil means all users with permission)
     /// RULEBOOK 1.8.0 §13: `relatedId` as stored, any shape (a UUID, a day key, a Firebase uid, a job id).
     var relatedKey: String?
@@ -157,7 +163,7 @@ struct AppNotification: Identifiable, Codable, Hashable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, organizationId, type, title, message, userId
+        case id, organizationId, type, title, message, detail, userId
         // Older caches encoded the UUID under `relatedId`; it decodes as its string.
         case relatedKey = "relatedId"
         case storedType, isRead, createdAt, requiresPermission, deepLinkUserId, deepLinkWeekStart, dayKey, catalogue

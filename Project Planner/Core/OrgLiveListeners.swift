@@ -511,6 +511,8 @@ nonisolated enum IOSLiveListenerCoverage {
         "priceWorkItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "expenseItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "personalSiteAudits": "PersonalSiteAuditsView / PersonalSiteAuditPickerSheet (FirebaseBackend.listenPersonalSiteAudits, ownerUserId ==)",
+        // RULEBOOK 1.40.0 §4.4: manual annual-leave adjustments.
+        "annualLeaveAdjustments": "HolidayView / OperativeAnnualLeaveCalendarView / EditUserView / MyProfileFiguresCard (AnnualLeaveAdjustmentsModel → FirebaseBackend.listenAnnualLeaveAdjustments, one userId == query per person)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

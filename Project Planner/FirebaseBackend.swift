@@ -6835,6 +6835,7 @@ class FirebaseBackend: ObservableObject {
             type: notification.typeText,
             title: notification.title,
             message: notification.message,
+            detail: notification.detail,
             userId: notification.userId,
             actorUserId: actorUserId,
             relatedId: Self.notificationRelatedId(for: notification),
@@ -6950,6 +6951,7 @@ class FirebaseBackend: ObservableObject {
             catalogue: row.optionalText("catalogue")
         )
         notification.storedType = storedType
+        notification.detail = row.optionalText("detail")
         return notification
     }
 

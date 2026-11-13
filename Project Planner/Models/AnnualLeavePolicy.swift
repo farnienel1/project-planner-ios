@@ -19,6 +19,12 @@ nonisolated struct AnnualLeaveUsageSummary: Equatable, Sendable {
     var hasAllowance: Bool
     var usedThisYear: Double
     var yearKey: String
+    /// RULEBOOK 1.40.0: this year's manual adjustments (already in `entitlementDays`); 0 with no allowance.
+    var adjustmentDays: Double = 0
+    /// RULEBOOK 1.40.0: leave taken this year on self-employed days, which does not come out of the allowance.
+    var notCountedTakenDays: Double = 0
+    /// RULEBOOK 1.40.0: the allowance is pro rata (start date, or the day PAYE began).
+    var proRata: Bool = false
 }
 
 nonisolated enum AnnualLeavePolicy {
@@ -85,7 +91,9 @@ nonisolated enum AnnualLeavePolicy {
         yearAllowanceKey: String? = nil,
         nonWorkingDayKeys: [String]? = nil,
         employmentStartDayKey: String? = nil,
-        maxCarryOverDays: Double? = OrganizationRulebookContext.annualLeaveDefaults?.maxCarryOverDays
+        maxCarryOverDays: Double? = OrganizationRulebookContext.annualLeaveDefaults?.maxCarryOverDays,
+        employment: AnnualLeaveEmployment? = nil,
+        adjustments: [AnnualLeaveAdjustmentRecord] = []
     ) -> AnnualLeaveUsageSummary {
         _ = calendar
         let records: [CanonicalBusinessEngine.CanonicalLeaveBooking] = bookings.map { booking in
@@ -98,7 +106,9 @@ nonisolated enum AnnualLeavePolicy {
         }
         // Bank holidays inside a multi-day record are not taken from the allowance (§9).
         // RULEBOOK 1.13.0 §4.4: pro rata in the year joined (`employmentStartDayKey`) and the carry-over cap.
-        let detail = CanonicalBusinessEngine.annualLeaveBalanceDetail(
+        // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days (`employment`), with this leave year's manual
+        // adjustments on top (`adjustments`).
+        let balance = CanonicalBusinessEngine.annualLeaveBalanceFull(
             annualLeaveEnabled: annualLeaveEnabled,
             daysPerYear: daysPerYear,
             startMonth: startMonth,
@@ -113,9 +123,11 @@ nonisolated enum AnnualLeavePolicy {
             onDayKey: CanonicalBusinessEngine.dayKey(for: referenceDate),
             nonWorkingDayKeys: nonWorkingDayKeys ?? OrganizationBankHolidays.dayKeys,
             employmentStartDayKey: employmentStartDayKey,
-            maxCarryOverDays: maxCarryOverDays
+            maxCarryOverDays: maxCarryOverDays,
+            employment: employment,
+            adjustments: adjustments
         )
-        guard let detail else {
+        guard let balance else {
             return AnnualLeaveUsageSummary(
                 leaveYearLabel: "—",
                 entitlementDays: 0,
@@ -128,20 +140,33 @@ nonisolated enum AnnualLeavePolicy {
                 yearKey: ""
             )
         }
-        let balance = detail.balance
         let label = formattedLeaveYearLabel(startDayKey: balance.startDayKey, endDayKey: balance.endDayKey)
-        let entitlement = balance.yearAllowance ?? (detail.yearEntitlement + balance.carriedForward)
         return AnnualLeaveUsageSummary(
             leaveYearLabel: label,
-            entitlementDays: entitlement,
+            entitlementDays: balance.hasAllowance ? balance.allowanceBeforeAdjustments + balance.adjustmentDays : 0,
             carryOverDays: balance.carriedForward,
-            takenDays: balance.taken,
-            pendingDays: balance.pending,
+            // With an allowance, the leave that comes out of it (PAYE days only); otherwise every day.
+            takenDays: balance.shownTaken,
+            pendingDays: balance.shownPending,
             remainingDays: balance.remaining,
             hasAllowance: balance.hasAllowance,
             usedThisYear: balance.usedThisYear,
-            yearKey: balance.yearKey
+            yearKey: balance.yearKey,
+            adjustmentDays: balance.adjustmentDays,
+            notCountedTakenDays: balance.notCountedTaken,
+            proRata: balance.proRata
         )
+    }
+
+    /// RULEBOOK 1.40.0 §9: the organisation's leave year containing `date` as a label ("Jan 2026 – Dec 2026") — the
+    /// Team header, never the viewer's own leave year. Nil when the script did not answer.
+    static func organizationLeaveYearLabel(startMonth: Int, endMonth: Int, on date: Date = Date()) -> String? {
+        guard let bounds = CanonicalBusinessEngine.leaveYearBounds(
+            startMonth: startMonth,
+            endMonth: endMonth,
+            onDayKey: CanonicalBusinessEngine.dayKey(for: date)
+        ) else { return nil }
+        return formattedLeaveYearLabel(startDayKey: bounds.startDayKey, endDayKey: bounds.endDayKey)
     }
 
     // MARK: - Allowance caps (book / request)
