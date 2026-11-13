@@ -389,11 +389,17 @@ extension FirebaseBackend {
     }
 
     /// One snapshot listener on a single document under `organizations/{orgId}`. `data` is nil when the
-    /// document does not exist. `hasPendingWrites` is true for this device's own unsent write.
+    /// document does not exist. `hasPendingWrites` is true for this device's own unsent write. With `retryOnFailure`
+    /// (organisation-wide documents only), a failed listener is attached again after
+    /// `LiveListenerAttachPolicy.retryDelay` while the same organisation is open and someone is signed in; a screen's
+    /// document listener is attached again when the screen appears (it may have closed meanwhile).
+    /// Metadata changes are on only so `LiveListenerClock` learns when the server answered; `DocumentSnapshotDeduper`
+    /// passes on only snapshots whose data changed, as before.
     func listenOrganizationDocument(
         key: String,
         organizationId: String,
-        document makeRef: (DocumentReference) -> DocumentReference,
+        retryOnFailure: Bool = false,
+        document makeRef: @escaping (DocumentReference) -> DocumentReference,
         onChange: @escaping @MainActor (_ data: [String: Any]?, _ fromCache: Bool, _ hasPendingWrites: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -403,24 +409,48 @@ extension FirebaseBackend {
         let registry = liveListeners
         guard registry.needsAttach(key: key, target: target) else { return }
         let token = LiveListenerToken()
-        let registration = ref.addSnapshotListener { [weak self] snapshot, error in
+        let deduper = DocumentSnapshotDeduper()
+        let registration = ref.addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
             if let error {
                 NSLog("LIVE_LISTENER_FAILED key=%@ path=%@ error=%@", key, ref.path, error.localizedDescription)
-                Task { @MainActor in
+                let failures = LiveListenerClock.shared.markFailed(key: key, organizationId: orgId)
+                let delay = retryOnFailure ? LiveListenerAttachPolicy.retryDelay(
+                    afterFailures: failures,
+                    permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
+                ) : nil
+                Task { @MainActor [weak self] in
                     if let value = token.value { registry.remove(key: key, token: value) }
+                    guard let delay else { return }
+                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                    guard let self, LiveListenerAttachPolicy.mayRetryAttach(
+                        listenerOrganizationId: orgId,
+                        currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
+                        isAuthenticated: self.isAuthenticated
+                    ) else { return }
+                    // A no-op when the screen or a foreground return attached it again meanwhile (`needsAttach`).
+                    self.listenOrganizationDocument(
+                        key: key,
+                        organizationId: orgId,
+                        retryOnFailure: true,
+                        document: makeRef,
+                        onChange: onChange
+                    )
                 }
                 return
             }
             guard let snapshot else { return }
             let fromCache = snapshot.metadata.isFromCache
+            if !fromCache { LiveListenerClock.shared.markServerSnapshot(key: key, organizationId: orgId) }
             let pending = snapshot.metadata.hasPendingWrites
             let data = snapshot.exists ? snapshot.data() : nil
+            guard deduper.shouldDeliver(data) else { return }
             Task { @MainActor in
                 guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
                 onChange(data, fromCache, pending)
             }
         }
         token.value = registry.set(key: key, target: target, remove: { registration.remove() })
+        LiveListenerClock.shared.markAttached(key: key, organizationId: orgId)
     }
 
     /// Stops one keyed listener (a screen that listened while open has closed).

@@ -417,6 +417,8 @@ extension FirebaseBackend {
             onChange(rows, fromCache)
         }
         tokenBox.value = registry.set(key: key, target: target, remove: { registration.remove() })
+        // The stale-cache watchdog's grace runs from here (`LiveListenerAttachPolicy.plannedListenerNeedsReattach`).
+        LiveListenerClock.shared.markAttached(key: key, organizationId: orgId)
     }
 }
 

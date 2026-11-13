@@ -124,7 +124,9 @@ enum PlannerStoreWiring {
         scheduleStaleCacheWatchdog(
             organizationId: organizationId,
             firebaseBackend: firebaseBackend,
+            projectStore: projectStore,
             operativeStore: operativeStore,
+            subcontractorStore: subcontractorStore,
             userStore: userStore
         )
     }
@@ -137,7 +139,9 @@ enum PlannerStoreWiring {
     private static func scheduleStaleCacheWatchdog(
         organizationId: String,
         firebaseBackend: FirebaseBackend,
+        projectStore: ProjectStore,
         operativeStore: OperativeStore,
+        subcontractorStore: SubcontractorStore,
         userStore: UserStore?
     ) {
         let grace: TimeInterval = 20
@@ -174,6 +178,43 @@ enum PlannerStoreWiring {
                     Task { await userStore.loadOrganizationUsers(forceRefresh: true) }
                 } else {
                     userStore.ensureOrganizationUsersLive()
+                }
+            }
+            // The organisation settings document (working hours, warning settings, payment runs, …).
+            if LiveListenerAttachPolicy.needsServerRead(
+                attachedAt: clock.attachedAt(key: "organization", organizationId: organizationId),
+                lastServerSnapshotAt: clock.lastServerSnapshotAt(key: "organization", organizationId: organizationId),
+                online: online,
+                now: now,
+                grace: grace
+            ) {
+                NSLog("STALE_CACHE_SERVER_READ collection=organization org=%@", organizationId)
+                firebaseBackend.reattachOrganizationDocumentListenerIfCurrent(organizationId: organizationId)
+            }
+            // Planned listeners retry their own failed parts; this only catches one that is missing, or that has stood
+            // on the cache alone for the whole grace. Re-attaching replaces it (never two listeners for one key).
+            for key in LiveListenerAttachPolicy.plannedWatchdogKeys {
+                let recorded = DataParityListenerLedger.shared.snapshot(key: key, organizationId: organizationId)
+                guard LiveListenerAttachPolicy.plannedListenerNeedsReattach(
+                    listenerRecorded: recorded != nil,
+                    serverAnswered: recorded?.serverSnapshot ?? false,
+                    attachedAt: clock.attachedAt(key: key, organizationId: organizationId),
+                    online: online,
+                    now: now,
+                    grace: grace
+                ) else { continue }
+                NSLog("STALE_CACHE_SERVER_READ collection=%@ org=%@ listener=%@", key, organizationId, recorded == nil ? "missing" : "cache only")
+                switch key {
+                case "projects", "smallWorks":
+                    if recorded != nil { firebaseBackend.stopLiveListener(key: key) }
+                    projectStore.startLiveUpdates(organizationId: organizationId)
+                case "subcontractorBookings":
+                    if recorded != nil { firebaseBackend.stopLiveListener(key: key) }
+                    subcontractorStore.startLiveUpdates(organizationId: organizationId)
+                default:
+                    // Bookings and manager site bookings: their stores asked for them; with no request yet there is
+                    // nothing to re-attach here (the store attaches it when it loads).
+                    firebaseBackend.reattachScheduleListenerForDataCheck(collection: key)
                 }
             }
         }
