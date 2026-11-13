@@ -64,6 +64,8 @@ struct MaterialsSendListSheet: View {
         /// Queued while the phone had signal (the connection dropped, or an earlier press is still sending), not
         /// because it was offline. Changes the wording only.
         var queuedWhileOnline = false
+        /// The request carries a `requestId`, so the function never emails it twice.
+        var hasRequestId = true
     }
 
     var body: some View {
@@ -733,7 +735,8 @@ struct MaterialsSendListSheet: View {
                             itemCount: items.count,
                             recipientCount: contacts.count,
                             queuedForSync: true,
-                            queuedWhileOnline: wasOnline
+                            queuedWhileOnline: wasOnline,
+                            hasRequestId: MaterialRequestEmailPayload.requestIdValue(request.requestId) != nil
                         )
                         NotificationCenter.default.post(
                             name: NSNotification.Name("materialSendHistoryDidChange"),
@@ -1020,6 +1023,9 @@ struct MaterialsSendConfirmationView: View {
 
     static func headline(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String {
         if confirmation.queuedForSync {
+            if confirmation.queuedWhileOnline {
+                return confirmation.requestType == .quote ? "Quote not confirmed yet" : "Order not confirmed yet"
+            }
             return confirmation.requestType == .quote ? "Quote not sent yet" : "Order not sent yet"
         }
         return confirmation.requestType == .quote ? "Quote sent" : "Order placed"
@@ -1045,7 +1051,8 @@ struct MaterialsSendConfirmationView: View {
         let state = confirmation.queuedWhileOnline
             ? "The wholesaler may not have received this \(what) yet."
             : "The wholesaler has NOT received this \(what) yet."
-        return "\(state) It is waiting on this phone and shows as \"Pending sync\" at the top of the app until it is confirmed. It is never emailed twice. Keep the app open with signal, or check the queue there."
+        let once = confirmation.hasRequestId ? " It is never emailed twice." : ""
+        return "\(state) It is waiting on this phone and shows as \"Pending sync\" at the top of the app until it is confirmed.\(once) Keep the app open with signal, or check the queue there."
     }
 
     var body: some View {

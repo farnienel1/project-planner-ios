@@ -113,4 +113,13 @@ final class MaterialRequestSendRetryTests: XCTestCase {
         XCTAssertEqual(outcome, .queue)
         XCTAssertEqual(calls, 1)
     }
+
+    func testUnconfirmedIsParsedAndTreatedLikeATimeout() {
+        let body = Data(#"{"sent":false,"unconfirmed":true,"error":"The email service did not confirm the send.","failed":["a@x.example"]}"#.utf8)
+        let parsed = MaterialRequestEmailPayload.parseResponse(statusCode: 502, data: body)
+        XCTAssertEqual(parsed, .failure(.unconfirmed))
+        XCTAssertTrue(MaterialRequestEmailError.unconfirmed.errorDescription?.contains("may not have received this yet") == true)
+        XCTAssertEqual(MaterialRequestSendRetry.action(after: MaterialRequestEmailError.unconfirmed, isOnline: true, retriesSoFar: 0), .retry(after: 0.5))
+        XCTAssertEqual(MaterialRequestSendRetry.action(after: MaterialRequestEmailError.unconfirmed, isOnline: true, retriesSoFar: 1), .fail)
+    }
 }

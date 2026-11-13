@@ -39,7 +39,7 @@ final class MaterialsSendConfirmationCopyTests: XCTestCase {
             queuedForSync: true,
             queuedWhileOnline: true
         )
-        XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Quote not sent yet")
+        XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Quote not confirmed yet")
         XCTAssertEqual(
             MaterialsSendConfirmationView.detail(state),
             "Not confirmed yet — it will be checked and emailed to 1 recipient automatically · 1 item"
@@ -55,6 +55,11 @@ final class MaterialsSendConfirmationCopyTests: XCTestCase {
             requestType: .quote, itemCount: 2, recipientCount: 1, queuedForSync: true, queuedWhileOnline: true
         )
         XCTAssertTrue(MaterialsSendConfirmationView.queuedWarning(online)?.contains("may not have received this quote yet") == true)
+        XCTAssertTrue(MaterialsSendConfirmationView.queuedWarning(online)?.contains("never emailed twice") == true)
+        let noId = MaterialsSendListSheet.SendConfirmationState(
+            requestType: .quote, itemCount: 2, recipientCount: 1, queuedForSync: true, queuedWhileOnline: true, hasRequestId: false
+        )
+        XCTAssertFalse(MaterialsSendConfirmationView.queuedWarning(noId)?.contains("never emailed twice") == true)
         let sent = MaterialsSendListSheet.SendConfirmationState(requestType: .order, itemCount: 2, recipientCount: 1)
         XCTAssertNil(MaterialsSendConfirmationView.queuedWarning(sent))
     }

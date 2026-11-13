@@ -169,7 +169,8 @@ enum MaterialRequestSendRetry {
     ]
 
     static func isTimeout(_ error: Error) -> Bool {
-        if (error as? MaterialRequestEmailError) == .timedOut { return true }
+        // The function's own "not confirmed" (502 `unconfirmed`) is answered like a timeout: it may have gone.
+        if let emailError = error as? MaterialRequestEmailError, emailError == .timedOut || emailError == .unconfirmed { return true }
         if let urlError = error as? URLError, urlError.code == .timedOut { return true }
         return false
     }
