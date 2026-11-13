@@ -82,16 +82,9 @@ nonisolated final class SiteAuditDraftStore: @unchecked Sendable {
 
     let rootURL: URL
     private let lock = NSLock()
-    private let encoder: JSONEncoder = {
-        let e = JSONEncoder()
-        e.dateEncodingStrategy = .millisecondsSince1970
-        return e
-    }()
-    private let decoder: JSONDecoder = {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .millisecondsSince1970
-        return d
-    }()
+    // The default date encoding keeps every date exactly (milliseconds would round sub-millisecond times).
+    private let encoder = JSONEncoder()
+    private let decoder = JSONDecoder()
 
     init(rootURL: URL) {
         self.rootURL = rootURL
