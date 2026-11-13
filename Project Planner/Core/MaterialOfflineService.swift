@@ -108,7 +108,10 @@ enum MaterialOfflineService {
                 }
             }
             return .syncedImmediately
-        } catch where OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
+        } catch where OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline)
+            || (error as? MaterialRequestEmailError) == .stillSending {
+            // Offline, or an earlier press of this same email (same `requestId`) is still sending: queue it with its
+            // request id; the replay is answered from that send, never emailed twice.
             OfflineOutboxStore.shared.enqueueSendMaterialRequest(
                 request,
                 sendRecord: sendRecord,

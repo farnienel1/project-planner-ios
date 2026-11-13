@@ -54,7 +54,7 @@ enum SchedulingV2CellKind: Equatable {
 enum SchedulingV2CellKindBuilder {
     /// RULEBOOK 1.37.0 §21 `scheduleCellKind`: maps existing booking hours / slot into a display cell — the rule both
     /// apps call (no Swift thresholds). `paidHours` is `payrollHoursResult.totalPaidHours` and `overtimeHours` the paid
-    /// hours of its multiplied segments (`PayrollHoursResult.paidOvertimeHours`, the script's `scheduleCellHours`), so a
+    /// hours of its multiplied segments (the script's `scheduleCellHours`, `CanonicalBusinessEngine.scheduleCellHours`), so a
     /// cell shows the pay rule's hours for the day, never the clock duration. A 0h booking is a Standard 0h chip, never
     /// the empty one. Display only — does not change booking logic.
     static func fromBooking(

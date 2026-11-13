@@ -462,7 +462,7 @@ nonisolated enum IOSLiveListenerCoverage {
         "managers": "OperativeStore.startLiveUpdates (key managers)",
         "clients": "ProjectStore.startLiveUpdates (key clients)",
         "subcontractors": "SubcontractorStore.startLiveUpdates (key subcontractors)",
-        "operativeDayRateHistory": "InvoicingView timesheet screens (listensWhileOpen)",
+        "operativeDayRateHistory": "InvoicingView timesheet screens and ManageUsersView Edit User (listensWhileOpen)",
         "warningResolutions": "WarningResolutionStore resolutionListener",
         "acceptedBookingClashes": "WarningResolutionStore acceptedClashListener",
         "dismissedWarnings": "FirebaseBackend.startDismissedWarningsListener",

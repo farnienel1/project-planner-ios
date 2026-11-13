@@ -49,9 +49,23 @@ enum OfflineSyncCoordinator {
         case refused(message: String)
     }
 
+    #if DEBUG
+    /// Tests only (not in release builds): the signed-in account and the material email sender, so two real passes
+    /// can be run over one queued email without Firebase. Nil in the app.
+    struct ReplayTestSeam {
+        var signedInUserId: String
+        var sendMaterialRequest: @MainActor (MaterialOrderRequest, String) async throws -> Void
+    }
+
+    static var replayTestSeam: ReplayTestSeam?
+    #endif
+
+    /// `countsAsAttempt` false for a background timer pass (`OutboxRetryPolicy`): a failure is recorded without
+    /// using up one of the `maxAttempts` tries.
     static func processOutbox(
         firebaseBackend: FirebaseBackend,
-        outbox: OfflineOutboxStore? = nil
+        outbox: OfflineOutboxStore? = nil,
+        countsAsAttempt: Bool = true
     ) async -> (synced: Int, failed: Int) {
         let outbox = outbox ?? OfflineOutboxStore.shared
         guard !outbox.entries.isEmpty else { return (0, 0) }
@@ -62,7 +76,11 @@ enum OfflineSyncCoordinator {
 
         print("🔥🔥🔥 DEBUG: [OfflineSync] Processing \(pending.count) outbox entries…")
 
+        #if DEBUG
+        let signedInUserId = replayTestSeam?.signedInUserId ?? firebaseBackend.currentUser?.uid
+        #else
         let signedInUserId = firebaseBackend.currentUser?.uid
+        #endif
 
         for entry in pending {
             if (signedInUserId ?? "").isEmpty {
@@ -86,6 +104,11 @@ enum OfflineSyncCoordinator {
             // 1.33.1 review fix 3: an entry taken out of the queue since this pass began (a delete through Firestore
             // took that booking's queued save) is never replayed from the stale list.
             guard outbox.entries.contains(where: { $0.id == entry.id }) else { continue }
+            // Another pass running at the same time already holds this entry: never replayed twice at once. (A queued
+            // material email also carries a fixed `requestId`, so the email function sends it once even if a replay
+            // repeats after a crash or timeout; this claim keeps two passes on one device from racing.)
+            guard outbox.claimEntryForReplay(id: entry.id) else { continue }
+            defer { outbox.releaseEntryClaim(id: entry.id) }
 
             do {
                 // 1.33.1 review fix 3: while this entry replays, a delete of its booking goes through Firestore after
@@ -111,6 +134,13 @@ enum OfflineSyncCoordinator {
                     failed += 1
                 }
             } catch {
+                if (error as? MaterialRequestEmailError) == .stillSending {
+                    // The email function is still sending this request (same `requestId`): not a failure and not a
+                    // try. It stays queued; the next pass gets the first send's answer.
+                    outbox.markFailed(id: entry.id, error: error.localizedDescription, countsAsAttempt: false)
+                    print("🔥🔥🔥 DEBUG: [OfflineSync] \(entry.operation.rawValue) \(entry.entityId) is still being sent; kept queued")
+                    continue
+                }
                 if FirestoreWriteAck.isPendingInSDK(error) {
                     // 1.33.1: the replayed booking write was handed to Firestore but the server did not confirm it in
                     // time. Firestore keeps it and delivers it in order, so it leaves the outbox (never sent twice).
@@ -137,7 +167,7 @@ enum OfflineSyncCoordinator {
                     print("🔥🔥🔥 DEBUG: [OfflineSync] Refused for good \(entry.operation.rawValue) \(entry.entityId)")
                     continue
                 }
-                outbox.markFailed(id: entry.id, error: error.localizedDescription)
+                outbox.markFailed(id: entry.id, error: error.localizedDescription, countsAsAttempt: countsAsAttempt)
                 failed += 1
                 print("🔥🔥🔥 DEBUG: [OfflineSync] Failed \(entry.operation.rawValue): \(error.localizedDescription)")
             }
@@ -270,7 +300,21 @@ enum OfflineSyncCoordinator {
 
         case .sendMaterialRequest:
             let payload = try decoder.decode(OfflineSendMaterialRequestPayload.self, from: entry.payload)
-            try await firebaseBackend.sendMaterialRequest(payload.request, organizationId: entry.organizationId)
+            // Every replay sends the same `requestId` (the function sends it once). An entry queued by an older build
+            // has none: its entry id is stable across replays, so it stands in.
+            var request = payload.request
+            if MaterialRequestEmailPayload.requestIdValue(request.requestId) == nil {
+                request.requestId = entry.entityId
+            }
+            #if DEBUG
+            if let seam = replayTestSeam {
+                try await seam.sendMaterialRequest(request, entry.organizationId)
+            } else {
+                try await firebaseBackend.sendMaterialRequest(request, organizationId: entry.organizationId)
+            }
+            #else
+            try await firebaseBackend.sendMaterialRequest(request, organizationId: entry.organizationId)
+            #endif
             if let record = payload.sendRecord {
                 do {
                     try await firebaseBackend.saveMaterialSendRecord(record, organizationId: entry.organizationId)

@@ -32,7 +32,7 @@ final class RulebookBypassGuardTests: XCTestCase {
     ]
 
     /// Second calculators deleted in the rulebook-bypass sweep. Each has a rulebook function instead.
-    private static let bannedSymbols = #"\b(BookLabourCandidateSelection|LabourDayCoverage|purgeInvalidWeekendBookingsIfNeeded|workingDaysBetween|isAssignedManager|isAssignedOrBookedOnto|notifyBookingClash|hoursInsideStandardClockWindow|segmentHoursForManager|segmentHoursForOperative|holidayUserMatches|consumedDays|OperativeProfileView)\b"#
+    private static let bannedSymbols = #"\b(BookLabourCandidateSelection|LabourDayCoverage|purgeInvalidWeekendBookingsIfNeeded|workingDaysBetween|isAssignedManager|isAssignedOrBookedOnto|notifyBookingClash|hoursInsideStandardClockWindow|segmentHoursForManager|segmentHoursForOperative|holidayUserMatches|consumedDays|OperativeProfileView|paidOvertimeHours)\b"#
 
     /// Files the ratchet does not count, with the reason.
     private static let allowList: [String: String] = [
@@ -97,7 +97,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/OrganisationWorkingHoursView.swift": 2,
             "Views/ProjectDetailView.swift": 6,
             "Views/ProjectsView.swift": 1,
-            "Views/SendToWholesalerView.swift": 1,
             "Views/WarningsDetailView.swift": 3,
             "Views/WholesalersRevampViews.swift": 1,
             "Views/WorksDashboardCard.swift": 2,

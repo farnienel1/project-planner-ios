@@ -194,41 +194,117 @@ struct SiteAuditToolbarPill: View {
 
     var body: some View {
         Button(action: action) {
-            if onNavy {
-                Text(title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 7)
-                    .background {
-                        if filled {
-                            Capsule().fill(disabled ? PPColor.onNavyFill : PPColor.brand)
-                        } else {
-                            Capsule()
-                                .fill(PPColor.onNavyFill)
-                                .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
-                        }
-                    }
-            } else {
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
-                    .padding(.horizontal, filled ? 14 : 12)
-                    .padding(.vertical, 6)
-                    .background {
-                        if filled {
-                            Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
-                        } else {
-                            Capsule()
-                                .fill(SiteAuditColors.card)
-                                .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
-                        }
-                    }
-            }
+            label
+                // The visible capsule is about 30pt tall; a plain-style button only answers taps on what it
+                // draws, so taps just above or below it missed (Preview "needs several taps"). The tap target
+                // is now at least 44×44 pt (Apple's minimum); the look is unchanged.
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .accessibilityIdentifier("siteAuditToolbarPill.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
         .disabled(disabled)
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if onNavy {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background {
+                    if filled {
+                        Capsule().fill(disabled ? PPColor.onNavyFill : PPColor.brand)
+                    } else {
+                        Capsule()
+                            .fill(PPColor.onNavyFill)
+                            .overlay(Capsule().strokeBorder(PPColor.onNavyStroke, lineWidth: 0.5))
+                    }
+                }
+        } else {
+            Text(title)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
+                .padding(.horizontal, filled ? 14 : 12)
+                .padding(.vertical, 6)
+                .background {
+                    if filled {
+                        Capsule().fill(disabled ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
+                    } else {
+                        Capsule()
+                            .fill(SiteAuditColors.card)
+                            .overlay(Capsule().strokeBorder(SiteAuditColors.borderStrong, lineWidth: 0.5))
+                    }
+                }
+        }
+    }
+}
+
+/// "N photos could not be loaded" from Multi-add, with a dismiss ✕ (sets the count back to 0). Shown in the
+/// items step and in the item editor, so it is seen even while the editor sheet is open. UI only.
+struct SiteAuditPhotoLoadFailureBanner: View {
+    @Binding var count: Int
+
+    var body: some View {
+        if count > 0 {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(SiteAuditColors.warn)
+                Text("\(count) photo\(count == 1 ? "" : "s") could not be loaded. Check your connection (photos stored in iCloud download first) and add \(count == 1 ? "it" : "them") again.")
+                    .font(.footnote)
+                    .foregroundStyle(SiteAuditColors.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button { count = 0 } label: {
+                    Image(systemName: "xmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Dismiss photo loading message")
+                .accessibilityIdentifier("siteAuditPhotoLoadFailure.dismiss")
+            }
+            .padding(.leading, 12)
+            .background(SiteAuditColors.warnTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .accessibilityIdentifier("siteAuditPhotoLoadFailure")
+        }
+    }
+}
+
+/// A small ✕ inside a text field that empties it in one tap; shown only while the field has text. UI only.
+struct SiteAuditClearTextButton: View {
+    @Binding var text: String
+    /// Spoken by VoiceOver, e.g. "Clear title".
+    var accessibilityName: String
+    var identifier: String
+
+    var body: some View {
+        if !text.isEmpty {
+            Button { text = "" } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(SiteAuditColors.textDisabled)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(accessibilityName)
+            .accessibilityIdentifier(identifier)
+        }
+    }
+}
+
+extension View {
+    /// Puts a `SiteAuditClearTextButton` at the end of a text field.
+    func siteAuditClearButton(_ text: Binding<String>, label: String, identifier: String, alignment: VerticalAlignment = .center) -> some View {
+        HStack(alignment: alignment, spacing: 0) {
+            self
+            SiteAuditClearTextButton(text: text, accessibilityName: label, identifier: identifier)
+        }
     }
 }
 

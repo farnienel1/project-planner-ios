@@ -217,6 +217,100 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         XCTAssertEqual(emptyError.errorDescription, "Email not sent: the email service answered 502")
     }
 
+    // MARK: - requestId (web functions/email/requestDedupe.js): one send per request, however often it is replayed
+
+    func testBodyCarriesTheRequestIdAtTopLevelOnlyWhenValid() throws {
+        var withId = request(type: .order, contacts: [supplier])
+        withId.requestId = "6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8"
+        let body = MaterialRequestEmailPayload.body(
+            organizationId: "org-test",
+            request: withId,
+            senderEmail: "sender@example.com",
+            includesDeliveryRequired: true
+        )
+        XCTAssertEqual(body["requestId"] as? String, "6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8")
+        let data = try XCTUnwrap(body["data"] as? [String: Any])
+        XCTAssertNil(data["requestId"], "requestId is top level, not template data")
+
+        for bad in [nil, "", "short", "has space inside", "../../x", String(repeating: "a", count: 129)] as [String?] {
+            var other = request(type: .order, contacts: [supplier])
+            other.requestId = bad
+            let otherBody = MaterialRequestEmailPayload.body(
+                organizationId: "org-test",
+                request: other,
+                senderEmail: "sender@example.com",
+                includesDeliveryRequired: true
+            )
+            XCTAssertNil(otherBody["requestId"], String(describing: bad))
+        }
+    }
+
+    func testARepeatedRequestIsASuccessMarkedDeduped() throws {
+        let body = Data(#"{"sent":true,"sentCount":1,"failed":[],"results":[{"to":"sam@wholesale.example","id":"re_1","cc":["sender@example.com"]}],"ccSupported":true,"deduped":true}"#.utf8)
+        let result = try MaterialRequestEmailPayload.parseResponse(statusCode: 200, data: body).get()
+        XCTAssertTrue(result.deduped)
+        XCTAssertEqual(result.messageIds, ["re_1"])
+        let first = Data(#"{"sent":true,"sentCount":1,"failed":[],"results":[{"to":"a@b.example","id":"re_2"}]}"#.utf8)
+        XCTAssertFalse(try MaterialRequestEmailPayload.parseResponse(statusCode: 200, data: first).get().deduped)
+    }
+
+    func testStillSendingIsNotARefusalButTheJobNumber409Is() {
+        let busy = Data(#"{"sent":false,"error":"This email is already being sent. Wait a minute, then check your sent items.","inProgress":true}"#.utf8)
+        guard case .failure(let error) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: busy) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertEqual(error, .stillSending)
+        XCTAssertFalse(error.errorDescription?.hasPrefix("Email not sent") ?? true)
+
+        let jobNumber = Data(#"{"sent":false,"error":"The job number does not match this job. Reopen the job and send again."}"#.utf8)
+        guard case .failure(let refused) = MaterialRequestEmailPayload.parseResponse(statusCode: 409, data: jobNumber) else {
+            return XCTFail("expected a failure")
+        }
+        XCTAssertEqual(refused, .refused(status: 409, reason: "The job number does not match this job. Reopen the job and send again."))
+    }
+
+    func testContentSignatureIsTheEmailNotTheIdOrTheTime() {
+        var first = request(type: .order, contacts: [supplier], delivery: Date(timeIntervalSince1970: 1_800_000_000))
+        var second = first
+        first.requestId = "AAAAAAAA-0000-4000-8000-000000000001"
+        second.requestId = "AAAAAAAA-0000-4000-8000-000000000002"
+        second.sentAt = first.sentAt.addingTimeInterval(90)
+        let a = MaterialRequestEmailPayload.contentSignature(first, senderEmail: "sender@example.com")
+        XCTAssertEqual(a, MaterialRequestEmailPayload.contentSignature(second, senderEmail: "sender@example.com"))
+        var changed = first
+        changed.materials = [item("Different board", quantity: 9)]
+        XCTAssertNotEqual(a, MaterialRequestEmailPayload.contentSignature(changed, senderEmail: "sender@example.com"))
+        var otherRecipient = first
+        otherRecipient.recipientContacts = [WholesalerContact(name: "Pat", email: "pat@other.example")]
+        XCTAssertNotEqual(a, MaterialRequestEmailPayload.contentSignature(otherRecipient, senderEmail: "sender@example.com"))
+    }
+
+    func testAnUnconfirmedSendReusesItsRequestIdUntilItGoes() {
+        MaterialRequestRetryIds.resetForTests()
+        defer { MaterialRequestRetryIds.resetForTests() }
+        // First press times out: its id is remembered for that email.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-1"), "ID-PRESS-1")
+        // Second press of the same email: the same id, so the function dedupes it.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-2"), "ID-PRESS-1")
+        // A different email gets its own id.
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-B", fresh: "ID-PRESS-3"), "ID-PRESS-3")
+        // Once it went, the next press of that email is a new request.
+        MaterialRequestRetryIds.confirmed(signature: "email-A")
+        XCTAssertEqual(MaterialRequestRetryIds.requestId(signature: "email-A", fresh: "ID-PRESS-4"), "ID-PRESS-4")
+    }
+
+    func testRequestIdSurvivesTheOutboxCodingAndOlderEntriesDecodeWithout() throws {
+        var queued = request(type: .quote, contacts: [supplier])
+        queued.requestId = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE"
+        let decoded = try JSONDecoder().decode(MaterialOrderRequest.self, from: JSONEncoder().encode(queued))
+        XCTAssertEqual(decoded.requestId, queued.requestId)
+
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(queued)) as? [String: Any])
+        json.removeValue(forKey: "requestId")
+        let older = try JSONDecoder().decode(MaterialOrderRequest.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(older.requestId)
+    }
+
     func testOfflineTransportErrorIsRethrownSoTheSendIsQueued() async throws {
         let url = try XCTUnwrap(URL(string: "https://example.invalid/sendEmail"))
         do {

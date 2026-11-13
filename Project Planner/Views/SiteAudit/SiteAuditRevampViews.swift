@@ -416,7 +416,10 @@ struct SiteAuditItemsStepView: View {
     let authorName: String
     @Binding var items: [SiteAuditDraftItem]
     @Binding var multiSelection: [PhotosPickerItem]
-    var isProcessingPhotos = false
+    /// Multi-add photos still loading (their items are already listed with a spinner).
+    var photosStillLoading = 0
+    var loadingItemIds: Set<UUID> = []
+    @Binding var failedPhotoLoads: Int
     let onAddItem: () -> Void
     let onEditItem: (SiteAuditDraftItem) -> Void
     let onDelete: (IndexSet) -> Void
@@ -434,7 +437,7 @@ struct SiteAuditItemsStepView: View {
                                 Text("\(auditType.rawValue) · \(project.jobNumber) \(project.siteName)")
                                     .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
-                                Text(items.isEmpty ? "Started today by \(authorName)" : "\(items.count) item\(items.count == 1 ? "" : "s") · Auto-saved")
+                                Text(items.isEmpty ? "Started today by \(authorName)" : "\(items.count) item\(items.count == 1 ? "" : "s") · Not saved until you submit")
                                     .font(.footnote)
                                     .foregroundStyle(SiteAuditColors.textSecondary)
                             }
@@ -446,16 +449,15 @@ struct SiteAuditItemsStepView: View {
 
                     HStack(spacing: 10) {
                         SiteAuditPrimaryButton(title: "Add item", systemImage: "plus", action: onAddItem)
-                            .disabled(isProcessingPhotos)
                         PhotosPicker(selection: $multiSelection, maxSelectionCount: 20, matching: .images) {
                             HStack(spacing: 5) {
                                 Image(systemName: "photo.on.rectangle.angled")
-                                Text(isProcessingPhotos ? "Processing…" : "Multi-add")
+                                Text("Multi-add")
                             }
                             .font(.subheadline.weight(.semibold))
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 13)
-                            .foregroundStyle(isProcessingPhotos ? SiteAuditColors.textDisabled : SiteAuditColors.primary)
+                            .foregroundStyle(SiteAuditColors.primary)
                             .background(PPColor.card)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             .overlay(
@@ -464,13 +466,14 @@ struct SiteAuditItemsStepView: View {
                             )
                         }
                         .accessibilityIdentifier("siteAuditItemsStep.photoOnRectangleAngled")
-                        .disabled(isProcessingPhotos)
                     }
 
-                    if isProcessingPhotos {
+                    SiteAuditPhotoLoadFailureBanner(count: $failedPhotoLoads)
+
+                    if photosStillLoading > 0 {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text("Preparing photos — this may take a moment for large batches.")
+                            Text("Loading \(photosStillLoading) photo\(photosStillLoading == 1 ? "" : "s") — you can edit the others meanwhile. Photos stored in iCloud download first.")
                                 .font(.footnote)
                                 .foregroundStyle(SiteAuditColors.textSecondary)
                         }
@@ -485,6 +488,7 @@ struct SiteAuditItemsStepView: View {
                                 SiteAuditDraftItemCard(
                                     index: index + 1,
                                     item: item,
+                                    isLoadingPhoto: loadingItemIds.contains(item.id),
                                     onDelete: {
                                         if let i = items.firstIndex(where: { $0.id == item.id }) {
                                             items.remove(at: i)
@@ -494,6 +498,9 @@ struct SiteAuditItemsStepView: View {
                             }
                             .accessibilityIdentifier("siteAuditItemsStep.row.\(item.id)")
                             .buttonStyle(.plain)
+                            // A row still loading its photo cannot be opened yet: not announced as a button.
+                            .accessibilityRemoveTraits(loadingItemIds.contains(item.id) ? .isButton : [])
+                            .accessibilityValue(loadingItemIds.contains(item.id) ? "Photo loading" : "")
                             .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                                 Button(role: .destructive) {
                                     if let i = items.firstIndex(where: { $0.id == item.id }) {
@@ -561,6 +568,8 @@ struct SiteAuditItemsStepView: View {
 struct SiteAuditDraftItemCard: View {
     let index: Int
     let item: SiteAuditDraftItem
+    /// A Multi-add placeholder whose photo is still loading.
+    var isLoadingPhoto = false
     var onDelete: (() -> Void)? = nil
 
     var body: some View {
@@ -577,6 +586,9 @@ struct SiteAuditDraftItemCard: View {
                         )
                         .frame(width: 56, height: 56)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay {
+                            if isLoadingPhoto { ProgressView() }
+                        }
                     }
                 }
 
@@ -596,7 +608,9 @@ struct SiteAuditDraftItemCard: View {
                             .foregroundStyle(SiteAuditColors.textSecondary)
                             .lineLimit(2)
                     }
-                    if !item.assignee.isEmpty {
+                    if isLoadingPhoto {
+                        SiteAuditPill(text: "Loading photo…", style: .grey)
+                    } else if !item.assignee.isEmpty {
                         Label(item.assignee, systemImage: "person.fill")
                             .font(.caption)
                             .foregroundStyle(SiteAuditColors.textSecondary)

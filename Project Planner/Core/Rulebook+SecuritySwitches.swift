@@ -308,6 +308,38 @@ extension FirebaseBackend {
         { $0.collection("operativeDayRateHistory").whereField("operativeId", isEqualTo: operativeId).whereField("userId", isEqualTo: "") }
     }
 
+    /// RULEBOOK §1 `LIVE_COLLECTIONS` ("Pay history `operativeDayRateHistory` listens while open") and 1.26.0 / 1.27.0 §8
+    /// `rateHistoryQueryPlan`: the listeners one person's pay-history screen (Edit User) holds, mirroring web
+    /// `watchOperativeDayRateHistory`. Plan `all`: the whole collection (one listener). Plan `people`: one `userId ==`
+    /// listener per id the person goes by that the plan lists (the plan's stored id, matched without case), and one
+    /// `operativeId ==` + `userId == ''` listener per `operatives` row of the person that the plan lists as a catalogue
+    /// operative. A person whose pay this viewer may not see gets none (nothing is read). Keys are stable per query, so a
+    /// plan change re-attaches only what changed.
+    nonisolated static func rateHistoryPersonListenQueries(
+        plan: RulebookRateHistoryPlan,
+        userIds: [String],
+        operativeRowIds: [String]
+    ) -> [(key: String, query: (DocumentReference) -> Query)] {
+        switch plan {
+        case .all:
+            return [(key: "all", query: { $0.collection("operativeDayRateHistory") })]
+        case .people(let planUserIds, let planOperativeIds):
+            func planIds(_ wanted: [String], in listed: [String]) -> [String] {
+                let keys = Set(wanted.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+                var seen = Set<String>()
+                return listed.filter { keys.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) && seen.insert($0).inserted }
+            }
+            var out: [(key: String, query: (DocumentReference) -> Query)] = []
+            for id in planIds(userIds, in: planUserIds) {
+                out.append((key: "u:\(id)", query: { $0.collection("operativeDayRateHistory").whereField("userId", isEqualTo: id) }))
+            }
+            for id in planIds(operativeRowIds, in: planOperativeIds) {
+                out.append((key: "o:\(id)", query: catalogueRateHistoryQuery(operativeId: id)))
+            }
+            return out
+        }
+    }
+
     /// The target suffix that makes a pay screen's history listener re-attach when the plan changes.
     var rateHistoryListenSuffix: String {
         switch rateHistoryPlan {
