@@ -168,6 +168,34 @@ final class DailyOverviewBookingPersonTests: XCTestCase {
         XCTAssertEqual(underPlaceholder, placeholderId)
     }
 
+    func testASurvivingFormerPlaceholderOnAnotherEmailDoesNotTakeThePersonsBookings() {
+        // The live person lists the old invite placeholder in formerUserIds; the placeholder document survived on a
+        // different email. `resolveBookingPerson` matches an exact id before former ids, so the placeholder must not be
+        // on the naming roster, or it would take the booking (a second row, its stale rate on the weekly report).
+        let formerId = "0D9E8F7A-6B5C-4D3E-8F1A-2B3C4D5E6F70"
+        var live = rosterAfterTypeChange()
+        live[0].formerUserIds = [formerId]
+        var placeholder = LogicFixtures.selfEmployedUser(id: formerId, email: "old.invite@example.com", dayRate: 999)
+        placeholder.firstName = "Old"
+        placeholder.surname = "Invite"
+        placeholder.passwordSet = false
+        let naming = namingRoster(listed: live, documents: [live[0], placeholder])
+        XCTAssertEqual(naming.map(\.id), [placeholderId], "the former placeholder is the live person's own id")
+
+        let booking = LogicFixtures.booking(
+            on: LogicFixtures.day(2026, 11, 13, hour: 8),
+            operativeId: Booking.internalOperativeId(for: formerId)
+        )
+        XCTAssertEqual(rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: [], users: naming), "Test Admin")
+        let people = LabourBookingPeople(operatives: [], users: naming)
+        XCTAssertEqual(people.person(for: booking.operativeId).user?.id, placeholderId)
+        XCTAssertEqual(
+            people.person(for: Booking.internalOperativeId(for: placeholderId)).user?.id,
+            placeholderId,
+            "one group key for both ids"
+        )
+    }
+
     func testDocumentsReadForAnotherOrganisationAreNotUsed() {
         let listed = rosterAfterTypeChange()
         let other = leftoverInvite()

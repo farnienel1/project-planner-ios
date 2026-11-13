@@ -159,9 +159,22 @@ enum PlannerStoreWiring {
                 operativeStore.loadData()
                 operativeStore.startLiveUpdates(organizationId: organizationId)
             }
-            if let userStore, online, !userStore.organizationUsersListenerAttached(organizationId: organizationId) {
+            // The roster: no listener, or a listener that never had a server snapshot (cache only).
+            if let userStore, LiveListenerAttachPolicy.needsServerRead(
+                attachedAt: userStore.organizationUsersListenerAttached(organizationId: organizationId)
+                    ? clock.attachedAt(key: "users", organizationId: organizationId) ?? now.addingTimeInterval(-grace)
+                    : nil,
+                lastServerSnapshotAt: clock.lastServerSnapshotAt(key: "users", organizationId: organizationId),
+                online: online,
+                now: now,
+                grace: grace
+            ) {
                 NSLog("STALE_CACHE_SERVER_READ collection=users org=%@", organizationId)
-                userStore.ensureOrganizationUsersLive()
+                if userStore.organizationUsersListenerAttached(organizationId: organizationId) {
+                    Task { await userStore.loadOrganizationUsers(forceRefresh: true) }
+                } else {
+                    userStore.ensureOrganizationUsersLive()
+                }
             }
         }
     }

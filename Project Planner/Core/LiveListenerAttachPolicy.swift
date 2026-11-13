@@ -47,6 +47,13 @@ nonisolated enum LiveListenerAttachPolicy {
         return !alreadyRefreshed.contains(orgId)
     }
 
+    /// Both people lists have finished a load for the open organisation (ids without case).
+    static func peopleListsLoaded(organizationId: String, operativesLoadedFor: String?, rosterLoadedFor: String?) -> Bool {
+        func key(_ id: String?) -> String { (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let org = key(organizationId)
+        return !org.isEmpty && key(operativesLoadedFor) == org && key(rosterLoadedFor) == org
+    }
+
     /// Firestore's permission-denied code (`FirestoreErrorCode.permissionDenied`).
     static func isPermissionDenied(_ error: Error) -> Bool {
         let ns = error as NSError
@@ -72,10 +79,6 @@ nonisolated final class LiveListenerClock: @unchecked Sendable {
 
     func markAttached(key: String, organizationId: String, at date: Date = Date()) {
         lock.lock(); attached[Self.slot(key, organizationId)] = date; lock.unlock()
-    }
-
-    func markDetached(key: String, organizationId: String) {
-        lock.lock(); attached[Self.slot(key, organizationId)] = nil; lock.unlock()
     }
 
     /// A server (not cache) snapshot arrived: the listener works, so its failure count resets.
@@ -139,9 +142,21 @@ final class UnknownBookedPersonRefresh {
         Task { @MainActor in shared.request() }
     }
 
+    /// Sign-out: the next session may refresh again.
+    func reset() {
+        refreshedOrganizationIds = []
+    }
+
     func request() {
         guard let firebaseBackend, firebaseBackend.isAuthenticated,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        // Not while the people lists are still loading for this organisation (a cold-start cache would spend the one
+        // refresh before the first server read has even landed).
+        guard LiveListenerAttachPolicy.peopleListsLoaded(
+            organizationId: orgId,
+            operativesLoadedFor: operativeStore?.finishedLoadOrganizationId,
+            rosterLoadedFor: userStore?.organizationUsersFinishedLoadOrganizationId
+        ) else { return }
         guard LiveListenerAttachPolicy.shouldRefreshForUnknownPerson(
             organizationId: orgId,
             alreadyRefreshed: refreshedOrganizationIds

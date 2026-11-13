@@ -779,24 +779,42 @@ class UserStore: ObservableObject {
                 self.organizationUsersListenerFailedOrganizationId = orgId
                 // RULEBOOK §1: a cached roster never stands alone for the session (owner report 13 Nov). Before, one
                 // failure stopped the roster listener until the app was relaunched.
-                let failures = LiveListenerClock.shared.markFailed(key: "users", organizationId: orgId)
-                guard let delay = LiveListenerAttachPolicy.retryDelay(
-                    afterFailures: failures,
+                self.scheduleRosterListenerRetry(
+                    organizationId: orgId,
                     permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
-                ) else { return }
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    guard let self, self.organizationUsersListenerFailedOrganizationId == orgId,
-                          normalizedOrganizationId(self.firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "") == orgId
-                    else { return }
-                    self.organizationUsersListenerFailedOrganizationId = nil
-                    await self.loadOrganizationUsers(forceRefresh: true)
-                }
+                )
             }
         )
+        if organizationUsersListener != nil {
+            LiveListenerClock.shared.markAttached(key: "users", organizationId: orgId)
+        }
         if organizationUsersListener == nil {
             organizationUsersListenerOrganizationId = nil
             organizationUsersListenerFailedOrganizationId = orgId
+        }
+    }
+
+    /// One more roster listener failure: after `LiveListenerAttachPolicy.retryDelay` the roster is read again from the
+    /// server (which attaches the listener). When that read did not attach it either — the load failed or the
+    /// listener was refused again — the failure is counted and the next, longer delay scheduled, until the policy
+    /// stops (then the next launch, foreground return or organisation switch starts afresh).
+    private func scheduleRosterListenerRetry(organizationId orgId: String, permissionDenied: Bool) {
+        let failures = LiveListenerClock.shared.markFailed(key: "users", organizationId: orgId)
+        guard let delay = LiveListenerAttachPolicy.retryDelay(afterFailures: failures, permissionDenied: permissionDenied) else {
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self,
+                  normalizedOrganizationId(self.firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "") == orgId,
+                  !self.organizationUsersListenerAttached(organizationId: orgId) else { return }
+            self.organizationUsersListenerFailedOrganizationId = nil
+            await self.loadOrganizationUsers(forceRefresh: true)
+            // A listener that fails again reports through its own `onError`, which schedules the next retry.
+            guard !self.organizationUsersListenerAttached(organizationId: orgId),
+                  self.organizationUsersListenerFailedOrganizationId != orgId else { return }
+            // The load itself failed (it never reached the listener): count it and wait longer.
+            self.scheduleRosterListenerRetry(organizationId: orgId, permissionDenied: false)
         }
     }
 
@@ -1051,9 +1069,9 @@ class UserStore: ObservableObject {
     }
 
     /// `bookingNameUsers` as a pure function (tests). `listed` in order, then each document that is not already there
-    /// (id without case) and was not folded by email into a listed person: its id is on no listed row's
-    /// `sameEmailUserIds` and is no key of `aliases` (the fold's `userIdAliases`). Former invite ids and leftover
-    /// documents are kept. `documents` are used only when they were read for the open organisation.
+    /// (id without case) and is not one of a listed person's other ids: its id is on no listed row's
+    /// `sameEmailUserIds` or `formerUserIds` and is no key of `aliases` (the fold's `userIdAliases`). Leftover
+    /// documents of nobody listed are kept. `documents` are used only when they were read for the open organisation.
     static func bookingNameRoster(
         listed: [AppUser],
         documents: [AppUser],
@@ -1064,7 +1082,13 @@ class UserStore: ObservableObject {
         let documentsOrg = normalizedOrganizationId(documentsOrganizationId ?? "")
         guard !documentsOrg.isEmpty, documentsOrg == normalizedOrganizationId(openOrganizationId ?? "") else { return listed }
         var skip = Set(listed.map { $0.id.lowercased() })
-        for row in listed { skip.formUnion(row.sameEmailUserIds.map { $0.lowercased() }) }
+        // A listed person's own other ids: a same-email document, or a former invite placeholder that survived
+        // (possibly on another email). `resolveBookingPerson` matches an exact id before former ids, so such a
+        // document would otherwise take that person's bookings (split rows, the placeholder's stale rate).
+        for row in listed {
+            skip.formUnion(row.sameEmailUserIds.map { $0.lowercased() })
+            skip.formUnion(row.formerUserIds.map { $0.lowercased() })
+        }
         skip.formUnion(aliases.keys.map { $0.lowercased() })
         var rows = listed
         for document in documents where !skip.contains(document.id.lowercased()) {

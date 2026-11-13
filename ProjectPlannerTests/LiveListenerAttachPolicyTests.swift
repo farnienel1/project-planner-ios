@@ -68,6 +68,12 @@ final class LiveListenerAttachPolicyTests: XCTestCase {
         XCTAssertFalse(LiveListenerAttachPolicy.shouldRefreshForUnknownPerson(organizationId: " ", alreadyRefreshed: []))
     }
 
+    func testTheUnknownPersonRefreshWaitsForBothPeopleListsToLoadForTheOpenOrganisation() {
+        XCTAssertFalse(LiveListenerAttachPolicy.peopleListsLoaded(organizationId: "ORG", operativesLoadedFor: nil, rosterLoadedFor: "org"))
+        XCTAssertFalse(LiveListenerAttachPolicy.peopleListsLoaded(organizationId: "ORG", operativesLoadedFor: "org", rosterLoadedFor: "other"))
+        XCTAssertTrue(LiveListenerAttachPolicy.peopleListsLoaded(organizationId: "ORG", operativesLoadedFor: "org ", rosterLoadedFor: "Org"))
+    }
+
     // MARK: clock
 
     func testTheClockRecordsAttachServerSnapshotsAndFailures() {
