@@ -32,6 +32,7 @@ class ProjectTaskStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "tasks",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("tasks") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }

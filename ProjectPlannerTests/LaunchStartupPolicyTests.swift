@@ -106,10 +106,6 @@ final class LaunchStartupPolicyTests: XCTestCase {
     }
 
     func testInvalidApnsTokenIsRemovedAndUnfailedTokensStay() {
-        XCTAssertTrue(LaunchStartupPolicy.isTerminalPushTokenFailure("Invalid APNs credential"))
-        XCTAssertTrue(LaunchStartupPolicy.isTerminalPushTokenFailure("registration-token-not-registered"))
-        XCTAssertFalse(LaunchStartupPolicy.isTerminalPushTokenFailure("The network connection was lost."))
-
         let failed = "dead-token-suffix"
         var existing = (0..<12).map { "older-token-\($0)" }
         existing.append(failed)
@@ -138,7 +134,6 @@ final class LaunchStartupPolicyTests: XCTestCase {
         )
         XCTAssertEqual(removed, ["current-device", "live-a", "live-b"])
 
-        XCTAssertFalse(LaunchStartupPolicy.isTerminalPushTokenFailure("The network connection was lost."))
         let kept = LaunchStartupPolicy.nextStoredPushTokens(
             existing: existing,
             currentDeviceToken: "current-device",

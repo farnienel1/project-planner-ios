@@ -2194,7 +2194,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .bookingCreated: return .bookingCreated
         case .operativeCreated: return .operativeCreated
         // RULEBOOK 1.31.0: company activity (`companyActivity` toggle, read by the script).
-        case .operativeDeleted, .jobManagerRemoved: return nil
+        case .operativeDeleted, .jobManagerRemoved, .annualLeaveAdjusted: return nil
         case .managerCreated: return .managerCreated
         case .clientCreated: return .clientCreated
         case .projectCreated: return .projectCreated

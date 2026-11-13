@@ -52,6 +52,9 @@ class LocalNotificationService {
         case .jobManagerRemoved:
             content.title = "Manager removed from jobs"
             content.body = details.isEmpty ? "A manager was removed from their jobs." : details
+        case .annualLeaveAdjusted:
+            content.title = "Annual leave adjusted"
+            content.body = details.isEmpty ? "Someone's annual leave was adjusted." : details
         case .managerCreated:
             content.title = "New Manager Created"
             content.body = details.isEmpty ? "Jane Doe has been added as a new manager." : details

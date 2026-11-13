@@ -51,7 +51,9 @@ final class Rulebook1350MyProfileTests: XCTestCase {
     }
 
     func testScriptAnswersAndEveryFigureIsRead() throws {
-        let me = person("TEST-ME", first: "TEST-Sam", last: "Smith", managers: ["TEST-LM1", "TEST-LM2"])
+        var me = person("TEST-ME", first: "TEST-Sam", last: "Smith", managers: ["TEST-LM1", "TEST-LM2"])
+        // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days.
+        me.employmentType = .paye
         let roster = [
             me,
             person("TEST-LM1", first: "TEST-Lee", last: "Line"),
@@ -168,6 +170,8 @@ final class Rulebook1350MyProfileTests: XCTestCase {
         me.annualLeaveEnabled = true
         me.annualLeaveYearStartMonth = 4
         me.annualLeaveYearEndMonth = 3
+        // RULEBOOK 1.40.0: a self-employed person's year is the organisation's; PAYE uses their own.
+        me.employmentType = .paye
         let range = try XCTUnwrap(CanonicalBusinessEngine.myProfileBankHolidayRange([
             "nowMs": wednesdayMs,
             "timeZone": "Europe/London",
@@ -184,6 +188,8 @@ final class Rulebook1350MyProfileTests: XCTestCase {
         let user: [String: Any] = [
             "id": "TEST-ME", "email": "test-me@example.com", "annualLeaveEnabled": true, "annualLeaveDaysPerYear": 25,
             "annualLeaveCarriesOver": true, "annualLeaveYearStartMonth": 4, "annualLeaveYearEndMonth": 3,
+            // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days.
+            "employmentType": "paye",
         ]
         let holidays: [[String: Any]] = [[
             "userId": "TEST-ME", "startDayKey": "2025-04-17", "endDayKey": "2025-04-22", "timeSlot": "FULL DAY", "status": "approved",

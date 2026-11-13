@@ -336,6 +336,18 @@ struct AnnualLeaveDayFace: View {
 struct AnnualLeaveBalanceHero: View {
     let summary: AnnualLeaveUsageSummary
     var pendingCaption: String = "Yours awaiting approval"
+    /// RULEBOOK 1.40.0 (review r306 #2): the notes name the employment type only when the viewer may see the person's
+    /// pay (`canViewPersonPay`: the person, admins, an Operatives manager for an operative).
+    var showsEmploymentType: Bool = true
+
+    private var notes: (proRata: String?, notCounted: String?, noAllowance: String?) {
+        CanonicalBusinessEngine.annualLeaveBalanceNotes(
+            hasAllowance: summary.hasAllowance,
+            proRata: summary.proRata,
+            notCountedTaken: summary.notCountedTakenDays,
+            showsEmploymentType: showsEmploymentType
+        )
+    }
 
     private var remainingIsOver: Bool { summary.hasAllowance && (summary.remainingDays ?? 0) < -0.001 }
 
@@ -386,6 +398,18 @@ struct AnnualLeaveBalanceHero: View {
             }
             if summary.hasAllowance && summary.carryOverDays > 0.001 {
                 Text("Includes \(AnnualLeavePolicy.formatAllowanceDays(summary.carryOverDays)) carried forward")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            // RULEBOOK 1.40.0 §4.4: adjustments, pro rata and leave on self-employed days, said plainly.
+            if summary.hasAllowance && abs(summary.adjustmentDays) > 0.001 {
+                Text("Includes \(CanonicalBusinessEngine.annualLeaveAdjustmentLabel(summary.adjustmentDays)) adjusted this leave year")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.9))
+            }
+            // The note texts are the rulebook's (`annualLeaveBalanceNotes`).
+            ForEach([notes.proRata, notes.notCounted, notes.noAllowance].compactMap { $0 }, id: \.self) { note in
+                Text(note)
                     .font(.footnote)
                     .foregroundStyle(.white.opacity(0.9))
             }

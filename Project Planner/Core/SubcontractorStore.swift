@@ -39,6 +39,7 @@ class SubcontractorStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "subcontractors",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("subcontractors") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }

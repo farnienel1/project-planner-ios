@@ -262,6 +262,13 @@ enum StaffEmailIdentity {
                 key = personKey(email: old.email, fallbackId: legacyKey)
                 found = old.known
             }
+            if !found {
+                // Nobody on this device has this id: read the people lists from the server once (owner report 13 Nov).
+                UnknownBookedPersonRefresh.report()
+                #if DEBUG
+                NSLog("SCHEDULE_PERSON_UNRESOLVED id=%@ accounts=%ld operatives=%ld", storedId, input.accounts.count, input.operatives.count)
+                #endif
+            }
             var bucket = byKey[key] ?? SchedulePersonBucket(key: key, operativeIds: [], userIds: [], resolvedAccountIds: [], unresolved: true)
             add(&bucket)
             if let accountId, !bucket.resolvedAccountIds.contains(accountId) { bucket.resolvedAccountIds.append(accountId) }

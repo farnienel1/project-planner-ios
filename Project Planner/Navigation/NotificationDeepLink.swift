@@ -204,6 +204,14 @@ enum NotificationDeepLink {
                 object: nil,
                 userInfo: ["showRequests": true]
             )
+        // RULEBOOK 1.40.0 §4.4: `annual_leave_adjusted` opens that person's annual leave page (Team → the person).
+        case "annualLeavePerson":
+            AnnualLeaveDeepLinkContext.pendingPersonUserId = destination.userId ?? destination.relatedId
+            NotificationCenter.default.post(
+                name: NSNotification.Name("openHoliday"),
+                object: nil,
+                userInfo: ["showRequests": true]
+            )
         case "projectDetail":
             openJob(destination, isSmallWorks: false, section: nil)
         case "projectsList":
