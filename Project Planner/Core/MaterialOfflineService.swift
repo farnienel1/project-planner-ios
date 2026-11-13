@@ -196,6 +196,9 @@ enum MaterialRequestSendRetry {
             if retriesSoFar < limit {
                 return .retry(after: delays[min(retriesSoFar, delays.count - 1)])
             }
+            // The connection is still failing after the quick retries: queue it (the next sync sends it with the same
+            // request id). A timeout keeps its old answer below ("did not answer in time"): it may have been sent.
+            if !isTimeout(error) { return .queue }
         }
         return OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) ? .queue : .fail
     }
