@@ -420,6 +420,8 @@ struct SiteAuditItemsStepView: View {
     var photosStillLoading = 0
     var loadingItemIds: Set<UUID> = []
     @Binding var failedPhotoLoads: Int
+    /// Under the item count: "Draft saved on this phone" for a new audit (drafts, owner decision 12 Nov).
+    var savedLabel = "Not saved until you submit"
     let onAddItem: () -> Void
     let onEditItem: (SiteAuditDraftItem) -> Void
     let onDelete: (IndexSet) -> Void
@@ -437,7 +439,7 @@ struct SiteAuditItemsStepView: View {
                                 Text("\(auditType.rawValue) · \(project.jobNumber) \(project.siteName)")
                                     .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
-                                Text(items.isEmpty ? "Started today by \(authorName)" : "\(items.count) item\(items.count == 1 ? "" : "s") · Not saved until you submit")
+                                Text(items.isEmpty ? "Started today by \(authorName)" : "\(items.count) item\(items.count == 1 ? "" : "s") · \(savedLabel)")
                                     .font(.footnote)
                                     .foregroundStyle(SiteAuditColors.textSecondary)
                             }

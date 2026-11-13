@@ -229,6 +229,27 @@ struct SiteAuditHubView: View {
     @State private var showingCreate = false
     @State private var worksBrowserKind: SiteAuditWorksBrowserKind?
     @State private var showingPersonal = false
+    /// Unfinished audits saved on this phone for the signed-in person in this organisation (owner decision 12 Nov).
+    @State private var drafts: [SiteAuditDraft] = []
+    @State private var resumingDraft: SiteAuditDraft?
+    @State private var draftPendingDelete: SiteAuditDraft?
+
+    private var draftOwner: (userId: String, organizationId: String)? {
+        guard let userId = firebaseBackend.currentUser?.uid, !userId.isEmpty,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return nil }
+        return (userId, organizationId)
+    }
+
+    private func reloadDrafts() {
+        guard let owner = draftOwner else { drafts = []; return }
+        drafts = SiteAuditDraftStore.shared.drafts(userId: owner.userId, organizationId: owner.organizationId)
+    }
+
+    private func draftSavedText(_ draft: SiteAuditDraft) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "\(draft.itemCountText) · saved \(formatter.localizedString(for: draft.updatedAt, relativeTo: Date()))"
+    }
 
     var body: some View {
         NavigationStack {
@@ -254,6 +275,38 @@ struct SiteAuditHubView: View {
                                 .buttonStyle(PPMenuRowButtonStyle())
                         }
                         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+
+                        if !drafts.isEmpty {
+                            PPGroupLabel(text: "Drafts on this phone")
+                            PPGroupedCard {
+                                ForEach(Array(drafts.enumerated()), id: \.element.id) { index, draft in
+                                    if index > 0 { PPRowDivider() }
+                                    HStack(spacing: 0) {
+                                        Button { resumingDraft = draft } label: {
+                                            hubTile(icon: "doc.badge.ellipsis", title: draft.listTitle, subtitle: draftSavedText(draft), family: .plan)
+                                        }
+                                        .accessibilityIdentifier("siteAuditHub.draft.\(draft.id.uuidString)")
+                                        .buttonStyle(PPMenuRowButtonStyle())
+                                        Button(role: .destructive) { draftPendingDelete = draft } label: {
+                                            Image(systemName: "trash")
+                                                .font(.body.weight(.semibold))
+                                                .foregroundStyle(SiteAuditColors.danger)
+                                                .frame(width: 44, height: 44)
+                                        }
+                                        .accessibilityLabel("Delete draft")
+                                        .accessibilityIdentifier("siteAuditHub.deleteDraft.\(draft.id.uuidString)")
+                                        .buttonStyle(.plain)
+                                        .padding(.trailing, 6)
+                                    }
+                                }
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+                            Text("Kept only on this phone until you submit. Signing out removes them.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, PPMetrics.screenGutter)
+                                .padding(.top, 6)
+                        }
 
                         PPGroupLabel(text: "Browse")
                         PPGroupedCard {
@@ -299,7 +352,7 @@ struct SiteAuditHubView: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.white)
                 .accessibilityIdentifier("siteAuditHub.done") } }
-            .sheet(isPresented: $showingCreate) {
+            .sheet(isPresented: $showingCreate, onDismiss: reloadDrafts) {
                 SiteAuditCreateFlowView()
                     .environmentObject(projectStore)
                     .environmentObject(bookingStore)
@@ -307,6 +360,31 @@ struct SiteAuditHubView: View {
                     .environmentObject(userStore)
                     .environmentObject(firebaseBackend)
             }
+            .sheet(item: $resumingDraft, onDismiss: reloadDrafts) { draft in
+                SiteAuditCreateFlowView(resumeDraft: draft)
+                    .environmentObject(projectStore)
+                    .environmentObject(bookingStore)
+                    .environmentObject(operativeStore)
+                    .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
+            }
+            .confirmationDialog(
+                "Delete this draft?",
+                isPresented: Binding(get: { draftPendingDelete != nil }, set: { if !$0 { draftPendingDelete = nil } }),
+                titleVisibility: .visible,
+                presenting: draftPendingDelete
+            ) { draft in
+                Button("Delete draft", role: .destructive) {
+                    SiteAuditDraftStore.shared.delete(draftId: draft.id, userId: draft.userId, organizationId: draft.organizationId)
+                    draftPendingDelete = nil
+                    reloadDrafts()
+                }
+                .accessibilityIdentifier("siteAuditHub.confirmDeleteDraft")
+            } message: { _ in
+                Text("Its items and photos are removed from this phone. Nothing was sent, so nothing else changes.")
+            }
+            .task(id: draftOwner.map { "\($0.userId)|\($0.organizationId)" } ?? "") { reloadDrafts() }
+            .onAppear(perform: reloadDrafts)
             .sheet(isPresented: $showingPersonal) {
                 PersonalSiteAuditsView()
                     .environmentObject(userStore)
@@ -756,8 +834,11 @@ struct SiteAuditCreateFlowView: View {
     var lockProjectSelection: Bool = false
     /// When set, preloads fields and updates the existing audit on submit.
     var existingAudit: SiteAudit? = nil
+    /// When set, the flow reopens this unfinished audit saved on the phone (owner decision 12 Nov, item 6).
+    var resumeDraft: SiteAuditDraft? = nil
     var onFinished: (() -> Void)? = nil
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var step = 1
     @State private var selectedType: SiteAuditType = .general
     @State private var selectedProject: Project?
@@ -787,8 +868,15 @@ struct SiteAuditCreateFlowView: View {
     /// When true, operatives can see this audit in the app; when false, only admins/managers (not in operative mode).
     @State private var operativeAccessVisibleToOperatives = true
     @State private var didBootstrapExisting = false
-    @State private var savedOffline = false
     @State private var extraVisibleProjectIds: Set<UUID> = []
+    /// The draft's id, and the audit's id once submitted (so a draft submitted twice is one audit).
+    @State private var draftId = UUID()
+    @State private var draftAutosaver: SiteAuditDraftAutosaver?
+    @State private var didBootstrapDraft = false
+    /// Items whose photo is being read back from the draft on disk (kept in the draft while they load).
+    @State private var draftPhotosLoading: Set<UUID> = []
+    /// The audit queued by Submit; the success sheet follows its upload.
+    @State private var submittedAuditId: UUID?
 
     private var isEditing: Bool { existingAudit != nil }
 
@@ -920,7 +1008,9 @@ struct SiteAuditCreateFlowView: View {
                         pdfURL: submitSuccessPDFURL,
                         itemCount: items.count,
                         isUpdate: isEditing,
-                        savedOffline: savedOffline,
+                        auditId: submittedAuditId,
+                        queue: SiteAuditOfflineStore.shared,
+                        smartCache: smartCache,
                         onDone: {
                             showingSubmitSuccess = false
                             submitSuccessPDFURL = nil
@@ -942,13 +1032,18 @@ struct SiteAuditCreateFlowView: View {
                         bootstrapFromExisting(existing)
                         didBootstrapExisting = true
                     }
+                    if let draft = resumeDraft, !didBootstrapDraft {
+                        bootstrapFromDraft(draft)
+                        didBootstrapDraft = true
+                    }
+                    startDraftAutosaverIfNeeded()
                     if authorName.isEmpty {
                         authorName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
                     }
-                    if let p = initialProject {
+                    if let p = initialProject, resumeDraft == nil || selectedProject == nil {
                         selectedProject = p
                     }
-                    if existingAudit == nil {
+                    if existingAudit == nil, resumeDraft == nil {
                         operativeAccessVisibleToOperatives = true
                     }
                 }
@@ -974,7 +1069,15 @@ struct SiteAuditCreateFlowView: View {
         }
         // On the NavigationStack, not the step Group: modifiers on a Group apply to each step view, so they
         // would fire on every step change. This fires only when the whole flow closes.
+        .onChange(of: draftSignature) { _, _ in
+            if let snapshot = draftSnapshot() { draftAutosaver?.schedule(snapshot) }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Leaving the app: save the draft now, not after the pause.
+            if phase != .active, let snapshot = draftSnapshot() { draftAutosaver?.saveNow(snapshot) }
+        }
         .onDisappear {
+            if let snapshot = draftSnapshot() { draftAutosaver?.saveNow(snapshot) }
             multiAddTasks.values.forEach { $0.cancel() }
             multiAddTasks = [:]
             hydrateTask?.cancel()
@@ -1009,9 +1112,11 @@ struct SiteAuditCreateFlowView: View {
                 photosStillLoading: photosStillLoading,
                 loadingItemIds: loadingPhotoIds,
                 failedPhotoLoads: $failedPhotoLoads,
+                // Drafts (owner decision 12 Nov): a new audit is kept on the phone as the person works.
+                savedLabel: isEditing ? "Not saved until you submit" : "Draft saved on this phone",
                 onAddItem: { editingItem = SiteAuditDraftItem(assignee: authorName) },
                 onEditItem: { item in
-                    guard !loadingPhotoIds.contains(item.id) else { return }
+                    guard !loadingPhotoIds.contains(item.id), !draftPhotosLoading.contains(item.id) else { return }
                     editingItem = item
                 },
                 onDelete: { items.remove(atOffsets: $0) }
@@ -1145,303 +1250,244 @@ struct SiteAuditCreateFlowView: View {
         }.value
     }
 
+    // MARK: Drafts (owner decision 12 Nov, item 6)
+
+    /// A new audit only: an edit of a saved audit is not a draft.
+    private func startDraftAutosaverIfNeeded() {
+        guard !isEditing, draftAutosaver == nil,
+              let userId = firebaseBackend.currentUser?.uid, !userId.isEmpty,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return }
+        if let draft = resumeDraft { draftId = draft.id }
+        draftAutosaver = SiteAuditDraftAutosaver(draftId: draftId, userId: userId, organizationId: organizationId)
+    }
+
+    /// Changes whenever anything the draft keeps changes (drives the autosave).
+    private var draftSignature: String {
+        var parts: [String] = [
+            selectedType.rawValue,
+            selectedProject?.id.uuidString ?? "",
+            customTitle,
+            authorName,
+            String(selectedDate.timeIntervalSince1970),
+            String(operativeAccessVisibleToOperatives),
+            String(step),
+        ]
+        for item in items where !loadingPhotoIds.contains(item.id) {
+            parts.append(contentsOf: [
+                item.id.uuidString, item.title, item.location, item.assignee, item.comments, item.annotations,
+                item.image.map { String(describing: ObjectIdentifier($0)) } ?? "-",
+                item.capturedAt.map { String($0.timeIntervalSince1970) } ?? "-",
+                draftPhotosLoading.contains(item.id) ? "loading" : "",
+            ])
+        }
+        return parts.joined(separator: "\u{1F}")
+    }
+
+    /// What the draft keeps now, or nil when there is nothing worth keeping yet (a new audit nobody has started).
+    private func draftSnapshot() -> SiteAuditDraftAutosaver.Snapshot? {
+        guard let autosaver = draftAutosaver, !autosaver.isStopped else { return nil }
+        let started = step >= 2 || !items.isEmpty
+            || !customTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || resumeDraft != nil
+        guard started else { return nil }
+        let project = selectedProject ?? initialProject
+        var images: [UUID: UIImage] = [:]
+        // Multi-add placeholders still loading from the photo library are left out until their photo arrives;
+        // a photo still being read back from the draft keeps its file.
+        let records: [SiteAuditDraftItemRecord] = items.compactMap { item in
+            guard !loadingPhotoIds.contains(item.id) else { return nil }
+            if let image = item.image { images[item.id] = image }
+            return SiteAuditDraftItemRecord(
+                id: item.id,
+                title: item.title,
+                location: item.location,
+                assignee: item.assignee,
+                comments: item.comments,
+                annotations: item.annotations,
+                capturedAt: item.capturedAt,
+                createdAt: item.createdAt,
+                hasPhoto: item.image != nil || draftPhotosLoading.contains(item.id)
+            )
+        }
+        let draft = SiteAuditDraft(
+            id: autosaver.draftId,
+            userId: autosaver.userId,
+            organizationId: autosaver.organizationId,
+            projectId: project?.id,
+            projectJobNumber: project?.jobNumber ?? resumeDraft?.projectJobNumber ?? "",
+            projectName: project?.siteName ?? resumeDraft?.projectName ?? "",
+            typeRawValue: selectedType.rawValue,
+            customTitle: customTitle,
+            authorName: authorName,
+            date: selectedDate,
+            visibleToOperatives: operativeAccessVisibleToOperatives,
+            items: records,
+            createdAt: resumeDraft?.createdAt ?? items.map(\.createdAt).min() ?? Date(),
+            updatedAt: Date()
+        )
+        return .init(draft: draft, images: images)
+    }
+
+    private func bootstrapFromDraft(_ draft: SiteAuditDraft) {
+        draftId = draft.id
+        selectedType = SiteAuditType(rawValue: draft.typeRawValue) ?? .general
+        customTitle = draft.customTitle
+        if !draft.authorName.isEmpty { authorName = draft.authorName }
+        selectedDate = draft.date
+        operativeAccessVisibleToOperatives = draft.visibleToOperatives
+        // A job the person can no longer see is picked again on the details step.
+        if let projectId = draft.projectId,
+           let project = visibleProjectsForPicker.first(where: { $0.id == projectId }) ?? resolveProject(id: projectId) {
+            selectedProject = project
+        }
+        items = draft.items.map { record in
+            SiteAuditDraftItem(
+                id: record.id,
+                title: record.title,
+                location: record.location,
+                assignee: record.assignee,
+                comments: record.comments,
+                annotations: record.annotations,
+                image: nil,
+                capturedAt: record.capturedAt,
+                createdAt: record.createdAt
+            )
+        }
+        let withPhotos = draft.items.filter(\.hasPhoto).map(\.id)
+        draftPhotosLoading = Set(withPhotos)
+        step = (selectedProject != nil && !items.isEmpty) ? 2 : 1
+        hydrateTask = Task { await loadDraftPhotos(draft: draft, itemIds: withPhotos) }
+    }
+
+    private func loadDraftPhotos(draft: SiteAuditDraft, itemIds: [UUID]) async {
+        let store = SiteAuditDraftStore.shared
+        for itemId in itemIds {
+            if Task.isCancelled { return }
+            let image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
+                guard let data = store.photoData(draftId: draft.id, itemId: itemId, userId: draft.userId, organizationId: draft.organizationId) else { return nil }
+                return UIImage(data: data)
+            }.value
+            if let image, let idx = items.firstIndex(where: { $0.id == itemId }), items[idx].image == nil {
+                draftAutosaver?.markPhotoOnDisk(itemId: itemId, image: image)
+                items[idx].image = image
+            }
+            draftPhotosLoading.remove(itemId)
+        }
+    }
+
+    // MARK: Submit (owner decision 12 Nov, item 5a)
+
+    /// "Submit & generate PDF" / "Update & generate PDF": the audit is queued on the phone (photos written as JPEGs)
+    /// and the PDF is built from the photos on the phone, both at once; the PDF shows as soon as both are done. The
+    /// upload and the Firestore save then run in the background through `SiteAuditOfflineStore` (the same queue,
+    /// claims and retry timer as an audit made offline), and the success sheet says whether it is saved yet.
     private func submitAudit() {
         guard let selectedProject else {
             errorMessage = "Please select a project before submitting."
             return
         }
+        if isEditing && !smartCache.isOnline {
+            // Editing a saved audit stays online only, as before.
+            errorMessage = "Connect to the internet to update this audit."
+            return
+        }
 
         isSubmitting = true
-        let auditId = existingAudit?.id ?? UUID()
+        submitStatusMessage = "Preparing PDF…"
+        let auditId = existingAudit?.id ?? draftId
         let createdAt = existingAudit?.createdAt ?? Date()
         let createdByUserId = existingAudit?.createdByUserId ?? firebaseBackend.currentUser?.uid ?? "unknown"
         let project = selectedProject
         let drafts = items
-        let type = selectedType
-        let author = authorName
-        let date = selectedDate
-        let title = customTitle
-        let visibilityChoice = operativeAccessVisibleToOperatives
         let existingItemsById = Dictionary((existingAudit?.items ?? []).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-
-        Task {
-            let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-            let orgId: String?
-            if smartCache.isOnline {
-                orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: cachedOrgId)
-                    ?? cachedOrgId
-            } else {
-                orgId = cachedOrgId
-            }
-            guard let orgId, !orgId.isEmpty else {
-                await MainActor.run {
-                    isSubmitting = false
-                    submitStatusMessage = ""
-                    errorMessage = "Could not resolve your organization. Open Settings, tap Force Reload Data, wait until projects load, then try again."
-                }
-                return
-            }
-
-            if !smartCache.isOnline && !isEditing {
-                await finishOfflineSubmit(
-                    auditId: auditId,
-                    organizationId: orgId,
-                    project: project,
-                    drafts: drafts,
-                    type: type,
-                    author: author,
-                    date: date,
-                    title: title,
-                    visibilityChoice: visibilityChoice,
-                    createdAt: createdAt,
-                    createdByUserId: createdByUserId
-                )
-                return
-            }
-
-            var savedItems: [SiteAuditItem] = []
-            var uploadFailures = 0
-            var uploadFailureDetail: String?
-            let uploadCount = drafts.filter { draft in
-                guard draft.image != nil else { return false }
-                if isEditing,
-                   let priorURL = existingItemsById[draft.id]?.imageURL,
-                   !priorURL.isEmpty,
-                   draft.capturedAt == existingItemsById[draft.id]?.imageCapturedAt {
-                    return false
-                }
-                return true
-            }.count
-            var uploadIndex = 0
-            for draft in drafts {
-                var remoteURL: String?
-                if let image = draft.image {
-                    let priorURL = existingItemsById[draft.id]?.imageURL
-                    let priorCapturedAt = existingItemsById[draft.id]?.imageCapturedAt
-                    let imageUnchanged = isEditing
-                        && priorURL != nil
-                        && draft.capturedAt == priorCapturedAt
-                    if imageUnchanged {
-                        remoteURL = priorURL
-                    } else {
-                        uploadIndex += 1
-                        let currentUpload = uploadIndex
-                        await MainActor.run {
-                            submitStatusMessage = uploadCount > 0
-                                ? "Uploading photo \(currentUpload) of \(uploadCount)…"
-                                : "Uploading photos…"
-                        }
-                        do {
-                            remoteURL = try await firebaseBackend.uploadSiteAuditImage(
-                                image,
-                                auditId: auditId,
-                                organizationId: orgId
-                            )
-                        } catch {
-                            uploadFailures += 1
-                            remoteURL = priorURL
-                            if uploadFailureDetail == nil {
-                                uploadFailureDetail = error.localizedDescription
-                            }
-                        }
-                    }
-                } else {
-                    remoteURL = existingItemsById[draft.id]?.imageURL
-                }
-                savedItems.append(SiteAuditItem(
+        let visibilityToOperatives: Bool = {
+            if userStore.isOperativeMode() { return true }
+            if userStore.canManageSiteAuditOperativeVisibility() { return operativeAccessVisibleToOperatives }
+            return true
+        }()
+        let audit = SiteAudit(
+            id: auditId,
+            projectId: project.id,
+            projectJobNumber: project.jobNumber,
+            projectName: project.siteName,
+            type: selectedType,
+            customTitle: customTitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            authorName: authorName,
+            date: selectedDate,
+            items: drafts.map { draft in
+                // An edit keeps the stored URL of every photo it did not change (and of a photo still downloading);
+                // a new or replaced photo has no URL yet and is uploaded from the queue.
+                let prior = existingItemsById[draft.id]
+                let priorURL = (prior?.imageURL?.isEmpty == false) ? prior?.imageURL : nil
+                let keepsPrior = isEditing && priorURL != nil
+                    && (draft.image == nil || draft.capturedAt == prior?.imageCapturedAt)
+                return SiteAuditItem(
                     id: draft.id,
                     title: draft.title,
                     location: draft.location,
                     assignee: draft.assignee,
                     comments: draft.comments,
                     annotations: draft.annotations,
-                    imageURL: remoteURL,
+                    imageURL: keepsPrior ? priorURL : (draft.image == nil ? priorURL : nil),
                     imageCapturedAt: draft.capturedAt,
                     createdAt: draft.createdAt
-                ))
-            }
-
-            let visibilityToOperatives: Bool = {
-                if userStore.isOperativeMode() { return true }
-                if userStore.canManageSiteAuditOperativeVisibility() { return visibilityChoice }
-                return true
-            }()
-            let audit = SiteAudit(
-                id: auditId,
-                projectId: project.id,
-                projectJobNumber: project.jobNumber,
-                projectName: project.siteName,
-                type: type,
-                customTitle: title.trimmingCharacters(in: .whitespacesAndNewlines),
-                authorName: author,
-                date: date,
-                items: savedItems,
-                createdAt: createdAt,
-                createdByUserId: createdByUserId,
-                visibleToOperatives: visibilityToOperatives
-            )
-
-            do {
-                await MainActor.run { submitStatusMessage = "Saving audit…" }
-                try await firebaseBackend.saveSiteAudit(audit, organizationId: orgId)
-                await MainActor.run { submitStatusMessage = "Generating PDF…" }
-                let logoImage = await loadOrganizationLogoImage()
-                let orgName = await MainActor.run { firebaseBackend.currentOrganization?.name }
-                let orgAbbrev = await MainActor.run { firebaseBackend.currentOrganization?.documentAbbreviation }
-                let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
-                    audit: audit,
-                    localItems: drafts,
-                    organizationName: orgName,
-                    organizationAbbreviation: orgAbbrev,
-                    logoImage: logoImage,
-                    clientName: project.client.name,
-                    siteAddress: project.siteAddress
                 )
-                await MainActor.run {
-                    isSubmitting = false
-                    submitStatusMessage = ""
-                    if let pdfURL {
-                        submitSuccessPDFURL = pdfURL
-                        showingSubmitSuccess = true
-                        if uploadFailures > 0 {
-                            let detail = uploadFailureDetail.map { " \($0)" } ?? ""
-                            errorMessage = "Saved successfully. \(uploadFailures) photo\(uploadFailures == 1 ? "" : "s") could not be uploaded to cloud storage, but they are included in this PDF.\(detail)"
-                        } else {
-                            errorMessage = nil
-                        }
-                    } else {
-                        errorMessage = "Audit saved, but PDF generation failed. Try opening the audit again to regenerate the PDF."
-                    }
-                }
-            } catch {
-                if !smartCache.isOnline || isOfflineNetworkError(error) {
-                    if !isEditing {
-                        await finishOfflineSubmit(
-                            auditId: auditId,
-                            organizationId: orgId,
-                            project: project,
-                            drafts: drafts,
-                            type: type,
-                            author: author,
-                            date: date,
-                            title: title,
-                            visibilityChoice: visibilityChoice,
-                            createdAt: createdAt,
-                            createdByUserId: createdByUserId
-                        )
-                        return
-                    }
-                }
-                await MainActor.run {
-                    isSubmitting = false
-                    submitStatusMessage = ""
-                    errorMessage = isEditing
-                        ? "Update failed: \(error.localizedDescription)"
-                        : "Submit failed: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    private func finishOfflineSubmit(
-        auditId: UUID,
-        organizationId: String,
-        project: Project,
-        drafts: [SiteAuditDraftItem],
-        type: SiteAuditType,
-        author: String,
-        date: Date,
-        title: String,
-        visibilityChoice: Bool,
-        createdAt: Date,
-        createdByUserId: String
-    ) async {
-        let visibilityToOperatives: Bool = {
-            if userStore.isOperativeMode() { return true }
-            if userStore.canManageSiteAuditOperativeVisibility() { return visibilityChoice }
-            return true
-        }()
-        let savedItems = drafts.map { draft in
-            SiteAuditItem(
-                id: draft.id,
-                title: draft.title,
-                location: draft.location,
-                assignee: draft.assignee,
-                comments: draft.comments,
-                annotations: draft.annotations,
-                imageURL: nil,
-                imageCapturedAt: draft.capturedAt,
-                createdAt: draft.createdAt
-            )
-        }
-        let audit = SiteAudit(
-            id: auditId,
-            projectId: project.id,
-            projectJobNumber: project.jobNumber,
-            projectName: project.siteName,
-            type: type,
-            customTitle: title.trimmingCharacters(in: .whitespacesAndNewlines),
-            authorName: author,
-            date: date,
-            items: savedItems,
+            },
             createdAt: createdAt,
             createdByUserId: createdByUserId,
             visibleToOperatives: visibilityToOperatives
         )
-        do {
-            try SiteAuditOfflineStore.shared.enqueue(
-                audit: audit,
-                organizationId: organizationId,
-                draftItems: drafts
-            )
-            let pdfURL = await SiteAuditPDFBuilder.makePDFAsync(
-                audit: audit,
-                localItems: drafts,
-                organizationName: firebaseBackend.currentOrganization?.name,
-                organizationAbbreviation: firebaseBackend.currentOrganization?.documentAbbreviation,
-                logoImage: nil,
-                clientName: project.client.name,
-                siteAddress: project.siteAddress
-            )
-            await MainActor.run {
+        let orgName = firebaseBackend.currentOrganization?.name
+        let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
+        let logoURL = firebaseBackend.currentOrganization?.companyLogoURL
+
+        Task {
+            let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+            var orgId = cachedOrgId
+            if (orgId ?? "").isEmpty, smartCache.isOnline {
+                orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: cachedOrgId)
+            }
+            guard let orgId, !orgId.isEmpty else {
                 isSubmitting = false
                 submitStatusMessage = ""
-                savedOffline = true
-                submitSuccessPDFURL = pdfURL
-                showingSubmitSuccess = true
-                errorMessage = nil
+                errorMessage = "Could not resolve your organization. Open Settings, tap Force Reload Data, wait until projects load, then try again."
+                return
             }
-        } catch {
-            await MainActor.run {
+
+            let pdfTask = Task {
+                let logo = await SiteAuditLogoLoader.logo(urlString: logoURL)
+                return await SiteAuditPDFBuilder.makePDFAsync(
+                    audit: audit,
+                    localItems: drafts,
+                    organizationName: orgName,
+                    organizationAbbreviation: orgAbbrev,
+                    logoImage: logo,
+                    clientName: project.client.name,
+                    siteAddress: project.siteAddress
+                )
+            }
+            do {
+                try await SiteAuditOfflineStore.shared.enqueue(audit: audit, organizationId: orgId, draftItems: drafts)
+            } catch {
+                pdfTask.cancel()
                 isSubmitting = false
                 submitStatusMessage = ""
-                errorMessage = "Could not save offline: \(error.localizedDescription)"
+                errorMessage = "Could not keep this audit on the phone: \(error.localizedDescription). Nothing was sent; your work is still here."
+                return
             }
-        }
-    }
+            // Queued: from here the audit survives the app closing, so the draft is no longer needed.
+            draftAutosaver?.stop(deleteDraft: true)
+            SiteAuditBackgroundUpload.start(smartCache: smartCache)
 
-    private func isOfflineNetworkError(_ error: Error) -> Bool {
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorNotConnectedToInternet {
-            return true
-        }
-        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError {
-            return underlying.domain == NSURLErrorDomain && underlying.code == NSURLErrorNotConnectedToInternet
-        }
-        return false
-    }
-
-    private func loadOrganizationLogoImage() async -> UIImage? {
-        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = URL(string: logoURL),
-              url.scheme?.hasPrefix("http") == true else {
-            return nil
-        }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            return UIImage(data: data)
-        } catch {
-            return nil
+            let pdfURL = await pdfTask.value
+            submittedAuditId = auditId
+            isSubmitting = false
+            submitStatusMessage = ""
+            submitSuccessPDFURL = pdfURL
+            showingSubmitSuccess = true
+            errorMessage = pdfURL == nil
+                ? "The audit is kept and will upload, but the PDF could not be made. Open the audit again to share its PDF."
+                : nil
         }
     }
 }
@@ -1452,18 +1498,32 @@ private struct SiteAuditSubmitSuccessView: View {
     let pdfURL: URL?
     let itemCount: Int
     var isUpdate = false
-    var savedOffline = false
+    /// The queued audit this sheet follows (owner decision 12 Nov, item 5a). Nil: shown as saved.
+    var auditId: UUID? = nil
+    @ObservedObject var queue: SiteAuditOfflineStore
+    @ObservedObject var smartCache: SmartCacheService
     let onDone: () -> Void
 
     @State private var showShareSheet = false
 
+    private var uploadState: SiteAuditUploadState {
+        guard let auditId else { return .saved }
+        return SiteAuditUploadState.resolve(
+            isQueued: queue.isQueued(id: auditId),
+            isUploading: queue.claimedAuditIds.contains(auditId),
+            isOnline: smartCache.isOnline,
+            attemptCount: queue.attemptCount(id: auditId),
+            maxAutoAttempts: SiteAuditOfflineStore.maxAutoAttempts
+        )
+    }
+
     private var headline: String {
-        if savedOffline { return "Saved offline" }
+        guard uploadState.isSaved else { return "PDF ready" }
         return isUpdate ? "Audit updated" : "Audit submitted"
     }
     private var subtitle: String {
-        if savedOffline { return "Will sync when you're back online · PDF ready" }
-        return isUpdate ? "Changes saved · PDF ready" : "Saved to cloud · PDF ready"
+        guard uploadState.isSaved else { return uploadState.statusText }
+        return isUpdate ? "Changes saved · PDF ready" : "Saved · PDF ready"
     }
     private var navigationTitle: String { isUpdate ? "Audit updated" : "Audit submitted" }
 
@@ -1490,17 +1550,35 @@ private struct SiteAuditSubmitSuccessView: View {
             ScrollView {
                 VStack(spacing: 0) {
                     VStack(spacing: 10) {
-                        PPIconTile(symbol: "checkmark", family: .sites, size: 78, lifted: true)
+                        PPIconTile(symbol: uploadState.isSaved ? "checkmark" : "icloud.and.arrow.up", family: .sites, size: 78, lifted: true)
                             .padding(.bottom, 6)
 
                         Text(headline)
                             .font(.system(.title2, design: .rounded))
                             .fontWeight(.bold)
                             .multilineTextAlignment(.center)
-                        Text(subtitle)
-                            .font(.subheadline)
-                            .foregroundStyle(SiteAuditColors.textSecondary)
-                            .multilineTextAlignment(.center)
+                        HStack(spacing: 6) {
+                            if uploadState == .uploading { ProgressView().controlSize(.small) }
+                            Text(subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(SiteAuditColors.textSecondary)
+                                .multilineTextAlignment(.center)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("siteAuditSubmitSuccess.uploadStatus")
+                        if let detail = uploadState.detailText {
+                            Text(detail)
+                                .font(.footnote)
+                                .foregroundStyle(SiteAuditColors.textDisabled)
+                                .multilineTextAlignment(.center)
+                        }
+                        if uploadState.showsRetryButton {
+                            Button("Retry upload") {
+                                SiteAuditBackgroundUpload.start(smartCache: smartCache, userRetry: true)
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            .accessibilityIdentifier("siteAuditSubmitSuccess.retryUpload")
+                        }
                     }
                     .padding(.top, 28)
                     .padding(.bottom, 24)

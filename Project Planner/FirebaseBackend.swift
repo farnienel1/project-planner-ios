@@ -997,6 +997,8 @@ class FirebaseBackend: ObservableObject {
     func clearDeviceQueuesOnSignOut() {
         OfflineOutboxStore.shared.clearAll()
         SiteAuditOfflineStore.shared.clearAll()
+        // Unfinished site audits (and their photos) kept on the phone: the next account never sees them.
+        SiteAuditDraftStore.shared.deleteAll()
         TimesheetDraftStore.clearAll()
         sessionHasNoOrganization = false
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
