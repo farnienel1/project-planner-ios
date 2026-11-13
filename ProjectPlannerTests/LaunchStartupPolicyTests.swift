@@ -106,7 +106,10 @@ final class LaunchStartupPolicyTests: XCTestCase {
     }
 
     func testInvalidApnsTokenIsRemovedAndUnfailedTokensStay() {
-        XCTAssertTrue(LaunchStartupPolicy.isTerminalPushTokenFailure("Invalid APNs credential"))
+        // A project-level credential error is never a dead token (it fails every phone the same way).
+        XCTAssertFalse(LaunchStartupPolicy.isTerminalPushTokenFailure("Invalid APNs credential"))
+        XCTAssertFalse(LaunchStartupPolicy.isTerminalPushTokenFailure("messaging/third-party-auth-error"))
+        XCTAssertTrue(LaunchStartupPolicy.isCredentialPushFailure("Invalid APNs credential"))
         XCTAssertTrue(LaunchStartupPolicy.isTerminalPushTokenFailure("registration-token-not-registered"))
         XCTAssertFalse(LaunchStartupPolicy.isTerminalPushTokenFailure("The network connection was lost."))
 

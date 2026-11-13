@@ -287,8 +287,6 @@ class FirebaseBackend: ObservableObject {
     private var scheduleHistoryIsFull = false
     /// Inbox ids already accepted for an only-if-missing write. A token refresh must not write the same row twice.
     private var acceptedMissingNotificationIds = Set<String>()
-    /// Push tokens a send has already reported as dead. The full token is never logged.
-    private var failedPushTokens = Set<String>()
     /// The FCM token this device last wrote to the signed-in account, so sign-out can remove it (RULEBOOK §13).
     private var registeredPushToken: String?
     /// `userEmails` documents confirmed missing. A second launch lookup does not retry them.
@@ -981,6 +979,7 @@ class FirebaseBackend: ObservableObject {
             },
             signOut: {
                 registeredPushToken = nil
+                PushRegistrationStatus.shared.resetForSignOut()
                 do {
                     try auth.signOut()
                     clearDeviceQueuesOnSignOut()
@@ -6672,16 +6671,64 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK §13: a device push token belongs to the signed-in account only. It is written to
     /// `users/{uid}.pushTokens` of that account and never copied to other `users` documents on the same email.
     func registerPushToken(_ token: String) async {
-        guard let authUser = currentUser else { return }
-        let uid = authUser.uid
         let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        // Kept even before sign-in: `reregisterPushTokenIfAvailable` saves it once an account is signed in.
+        PushRegistrationStatus.shared.recordFCMToken(trimmed)
+        guard let authUser = currentUser ?? auth.currentUser else {
+            print("🔥🔥🔥 DEBUG: [PUSH] FCM token held until sign-in \(PushRegistrationStatus.tokenSuffix(trimmed))")
+            return
+        }
+        let uid = authUser.uid
         do {
             try await writePushTokens(userId: uid, currentDeviceToken: trimmed)
             registeredPushToken = trimmed
-            print("🔥🔥🔥 DEBUG: Registered push token for user \(uid)")
+            PushRegistrationStatus.shared.recordSaved()
+            print("🔥🔥🔥 DEBUG: [PUSH] Saved push token \(PushRegistrationStatus.tokenSuffix(trimmed)) on own users document")
         } catch {
-            print("🔥🔥🔥 DEBUG: Failed to register push token: \(error.localizedDescription)")
+            PushRegistrationStatus.shared.recordSaveFailure(error.localizedDescription)
+            print("🔥🔥🔥 DEBUG: [PUSH] Failed to save push token: \(error.localizedDescription)")
+            NSLog("PUSH_TOKEN_SAVE_FAILED %@", error.localizedDescription as NSString)
+        }
+    }
+
+    /// RULEBOOK §1 / §13: this device's token is a field the device owns, so it is (re)written on sign-in and when the
+    /// user or organisation loads — not only when Firebase happens to call back with a new token (that callback can
+    /// fire at launch before anyone is signed in, and was then lost). A write that changes nothing is skipped by
+    /// `writePushTokens`.
+    func reregisterPushTokenIfAvailable() async {
+        guard (currentUser ?? auth.currentUser) != nil else { return }
+        var token = PushRegistrationStatus.shared.latestFCMToken ?? ""
+#if canImport(FirebaseMessaging)
+        if token.isEmpty {
+            token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+#endif
+        guard !token.isEmpty else {
+            print("🔥🔥🔥 DEBUG: [PUSH] No FCM token on this device yet; nothing to save")
+            return
+        }
+        await registerPushToken(token)
+    }
+
+    /// Whether this device's FCM token is in `pushTokens` on the signed-in account's own users document, read from
+    /// the server. Nil when it cannot be told (not signed in, no token, offline or the read failed).
+    func pushTokenSavedOnOwnAccount() async -> Bool? {
+        guard let uid = auth.currentUser?.uid, !uid.isEmpty else { return nil }
+        var token = PushRegistrationStatus.shared.latestFCMToken ?? ""
+#if canImport(FirebaseMessaging)
+        if token.isEmpty {
+            token = Messaging.messaging().fcmToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+#endif
+        guard !token.isEmpty else { return nil }
+        do {
+            let snap = try await db.collection("users").document(uid).getDocument(source: .server)
+            let stored = (snap.data()?["pushTokens"] as? [String]) ?? []
+            return stored.contains { $0.trimmingCharacters(in: .whitespacesAndNewlines) == token }
+        } catch {
+            print("🔥🔥🔥 DEBUG: [PUSH] Could not read own users document: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -6733,20 +6780,6 @@ class FirebaseBackend: ObservableObject {
         print("🔥🔥🔥 DEBUG: Removed this device's push token from \(docIds.count) users document(s) before sign-out")
     }
 
-    /// Drops one token after FCM/APNs reports it dead. Does not clear tokens that have not failed.
-    func recordPushTokenFailure(token: String, message: String) async {
-        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, LaunchStartupPolicy.isTerminalPushTokenFailure(message) else { return }
-        guard let uid = currentUser?.uid, !uid.isEmpty else { return }
-        failedPushTokens.insert(trimmed)
-        do {
-            try await writePushTokens(userId: uid, currentDeviceToken: "")
-            print("🔥🔥🔥 DEBUG: Removed a dead push token. stored failures=\(failedPushTokens.count)")
-        } catch {
-            print("🔥🔥🔥 DEBUG: Failed to remove a dead push token: \(error.localizedDescription)")
-        }
-    }
-
     private func writePushTokens(userId: String, currentDeviceToken: String) async throws {
         // RULEBOOK 1.17.0 §13 (`pushTokenOwnerWrites`): `pushTokens` is written only to the signed-in Auth uid's users
         // document — never a same-email copy, an invite placeholder (`isPushTokenPlaceholderUserId`) or another company's.
@@ -6758,7 +6791,8 @@ class FirebaseBackend: ObservableObject {
         let next = LaunchStartupPolicy.nextStoredPushTokens(
             existing: existing,
             currentDeviceToken: currentDeviceToken,
-            failedTokens: failedPushTokens
+            // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
+            failedTokens: []
         )
         guard next != existing else { return }
         try await ref.setData([

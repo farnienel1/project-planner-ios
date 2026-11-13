@@ -166,15 +166,26 @@ enum LaunchStartupPolicy {
 
     static let pushTokenStoredLimit = 8
 
+    /// A failure that means this one token is dead. A project-level credential failure ("Invalid APNs credential",
+    /// third-party-auth-error, mismatched-credential) is the server's APNs/FCM set-up, fails every token the same way and
+    /// is never a reason to drop a token (web `functions/prunePushTokens.js` follows the same split).
     static func isTerminalPushTokenFailure(_ message: String) -> Bool {
         let text = message.lowercased()
-        if text.contains("invalid apns credential") { return true }
+        if isCredentialPushFailure(text) { return false }
         if text.contains("registration-token-not-registered") { return true }
         if text.contains("invalid registration token") { return true }
         if text.contains("not a valid fcm registration token") { return true }
         if text.contains("unregistered") { return true }
         if text.contains("invalid token") { return true }
         return false
+    }
+
+    static func isCredentialPushFailure(_ message: String) -> Bool {
+        let text = message.lowercased()
+        return text.contains("invalid apns credential")
+            || text.contains("third-party-auth-error")
+            || text.contains("mismatched-credential")
+            || text.contains("auth error from apns")
     }
 
     /// Keeps the current device token, drops tokens that just failed, and stops the list

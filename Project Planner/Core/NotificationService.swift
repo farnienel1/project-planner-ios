@@ -1516,35 +1516,47 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// Settings "send a test notification" (rulebook 1.4.0 §13): one `push_test` row to `pushTestRecipients(actor)`
-    /// — the signed-in user — with `actorUserId` set (`saveNotification` stamps it). The push function delivers it to
-    /// its sender (`notificationPushesToActor`), so this checks notification write → Cloud Function → APNs/FCM.
+    /// Settings → My notifications → Notifications check → "Send test notification" (rulebook 1.4.0 §13 `push_test`):
+    /// one row to `pushTestRecipients(actor)` — the signed-in user — written through `notificationCreateFields`
+    /// (`FirebaseBackend.saveNotification`) with `actorUserId` = the signed-in uid. The push function delivers it to its
+    /// sender (`notificationPushesToActor`), so this checks the whole chain: token saved → row written → Cloud Function →
+    /// APNs. Returns plain words for the screen; a failed write says why instead of claiming success.
     func sendTemporaryPushDiagnosticToCurrentUser() async -> String {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return "❌ Push diagnostic failed: no active organization."
+            return "Not sent: no organisation is open."
         }
-        guard let currentUser = userStore?.currentUser else {
-            return "❌ Push diagnostic failed: no signed-in app user."
+        guard userStore?.currentUser != nil else {
+            return "Not sent: you are not signed in."
         }
         guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: actorPerson)?.first else {
-            return "❌ Push diagnostic failed: the rulebook gave no recipient."
+            return "Not sent: the app's rules could not load. Try again."
         }
 
-        let refreshResult = await firebaseBackend.forceRefreshAndRegisterPushToken()
-        let tokenCount = await pushTokenCount(for: targetId)
+        // Make sure this phone's token is on the account before the push function looks for it.
+        await firebaseBackend.reregisterPushTokenIfAvailable()
         let notification = AppNotification(
             organizationId: organizationId,
             type: .pushTest,
             title: "Test notification",
-            message: "Test notification for \(currentUser.fullName).",
+            message: "If you can read this on your phone, notifications are working.",
             userId: targetId,
             // `push_test` carries no relatedId (`NOTIFICATION_RELATED_ID`); never a random id.
             relatedId: nil,
             requiresPermission: nil
         )
-        await saveNotification(notification)
-        return "✅ Test notification created.\n\(refreshResult)\nTarget userId: \(targetId)\nNotification id: \(notification.id.uuidString)\nKnown tokens on target doc: \(tokenCount)"
+        do {
+            try await firebaseBackend.saveNotification(
+                notification,
+                organizationId: organizationId,
+                actorUserId: Auth.auth().currentUser?.uid
+            )
+            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] push_test row \(notification.id.uuidString) written for \(targetId)")
+            return "Sent — check your phone in a minute."
+        } catch {
+            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] push_test write failed: \(error.localizedDescription)")
+            return "Not sent: \(error.localizedDescription)"
+        }
     }
 
     // MARK: - Notification Management
@@ -2121,28 +2133,6 @@ class NotificationService: ObservableObject {
 
     private func notificationDedupKey(for notification: AppNotification) -> String {
         LocalNotificationBannerPolicy.dedupeKey(for: localBannerEvent(for: notification))
-    }
-
-    private func pushTokenCount(for userId: String) async -> Int {
-        do {
-            let snap = try await Firestore.firestore().collection("users").document(userId).getDocument(source: .server)
-            guard let data = snap.data() else { return 0 }
-            var tokens = Set<String>()
-            if let single = data["pushToken"] as? String {
-                let t = single.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !t.isEmpty { tokens.insert(t) }
-            }
-            if let many = data["pushTokens"] as? [String] {
-                for raw in many {
-                    let t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !t.isEmpty { tokens.insert(t) }
-                }
-            }
-            return tokens.count
-        } catch {
-            print("🔥🔥🔥 DEBUG: [PUSH DIAGNOSTIC] token lookup failed for \(userId): \(error.localizedDescription)")
-            return 0
-        }
     }
 
     private func triggerLocalAlertIfNeeded(for notification: AppNotification) {
