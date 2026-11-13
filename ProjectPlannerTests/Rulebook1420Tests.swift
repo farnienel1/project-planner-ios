@@ -143,4 +143,46 @@ final class Rulebook1420Tests: XCTestCase {
             ProjectManagerPickerSupport.availableManagers(candidates: candidates, catalogue: [one, two], excluding: [one, two]).isEmpty
         )
     }
+
+    // MARK: Multi-tick picker (coordinator request: adding several managers is easy)
+
+    func testTickingSeveralManagersAddsThemAllInListOrder() {
+        let a = managerRow(first), b = managerRow(second), c = managerRow(third)
+        // Create: nobody yet; tick two of three, Done.
+        let created = ProjectAssignedManagersEditor.applyingPicks(selected: [], available: [a, b, c], ticked: [c.id, a.id])
+        XCTAssertEqual(created.map(\.id), [a.id, c.id], "every ticked manager, in list order")
+        // Edit: A on the job; tick B and C too.
+        let added = ProjectAssignedManagersEditor.applyingPicks(selected: [a], available: [b, c], ticked: [a.id, b.id, c.id])
+        XCTAssertEqual(added.map(\.id), [a.id, b.id, c.id], "existing managers keep their place")
+        // Edit: untick A, keep B.
+        let removed = ProjectAssignedManagersEditor.applyingPicks(selected: [a, b], available: [c], ticked: [b.id])
+        XCTAssertEqual(removed.map(\.id), [b.id])
+        // Nothing ticked changes: the list stays as it was.
+        XCTAssertEqual(ProjectAssignedManagersEditor.applyingPicks(selected: [a, b], available: [c], ticked: [a.id, b.id]).map(\.id), [a.id, b.id])
+    }
+
+    func testThePickerListsCurrentManagersFirstThenCandidatesEachOnce() {
+        let a = managerRow(first), b = managerRow(second), c = managerRow(third)
+        XCTAssertEqual(ProjectAssignedManagersEditor.pickerRows(selected: [b], available: [a, b, c]).map(\.id), [b.id, a.id, c.id])
+    }
+
+    // MARK: Change user type uses the rulebook rows for every toggle
+
+    func testEveryChangeUserTypeRowHasRulebookText() throws {
+        let manager = CanonicalBusinessEngine.permissionToggleRows(level: .manager, user: nil, mode: .edit)
+        for field in ["operatives", "annualLeaveSelfBook", "dailyOverview", "subContractors", "qualifications", "projects", "smallWorks"] {
+            let text = try XCTUnwrap(CanonicalBusinessEngine.permissionToggleText(field: field, level: .manager), field)
+            let row = try XCTUnwrap(manager.first { $0.field == field })
+            XCTAssertEqual(text.label, row.label)
+            XCTAssertEqual(text.help, row.help)
+            XCTAssertFalse(text.help.isEmpty, field)
+        }
+        XCTAssertNotNil(CanonicalBusinessEngine.permissionToggleText(field: "annualLeaveSelfBook", level: .admin))
+        for field in ["materials", "siteAudit"] {
+            XCTAssertNotNil(CanonicalBusinessEngine.permissionToggleText(field: field, level: .operative), field)
+        }
+        XCTAssertNil(CanonicalBusinessEngine.permissionToggleText(field: "weeklyReports", level: .manager), "admin-only, never on a manager")
+        XCTAssertEqual(CanonicalBusinessEngine.permissionToggleText(field: "projects", level: .manager)?.label, "Projects — add & edit")
+    }
 }
+
