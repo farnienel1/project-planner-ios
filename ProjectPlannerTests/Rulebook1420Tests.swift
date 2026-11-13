@@ -14,25 +14,39 @@ final class Rulebook1420Tests: XCTestCase {
     // MARK: Toggle text
 
     func testTheProjectsAndSmallWorksRowsReadAsAddAndEdit() throws {
-        XCTAssertEqual(CanonicalBusinessEngine.projectsToggleLabel, "Projects — add & edit")
-        XCTAssertEqual(CanonicalBusinessEngine.smallWorksToggleLabel, "Small Works — add & edit")
+        // Read from the packed script (no Swift copy of the text exists).
+        let projectsLabel = try XCTUnwrap(CanonicalBusinessEngine.constant("PROJECTS_TOGGLE_LABEL", as: String.self))
+        let projectsHelp = try XCTUnwrap(CanonicalBusinessEngine.constant("PROJECTS_TOGGLE_HELP", as: String.self))
+        let smallWorksLabel = try XCTUnwrap(CanonicalBusinessEngine.constant("SMALL_WORKS_TOGGLE_LABEL", as: String.self))
+        let smallWorksHelp = try XCTUnwrap(CanonicalBusinessEngine.constant("SMALL_WORKS_TOGGLE_HELP", as: String.self))
+        XCTAssertEqual(projectsLabel, "Projects — add & edit")
+        XCTAssertEqual(smallWorksLabel, "Small Works — add & edit")
         XCTAssertEqual(
-            CanonicalBusinessEngine.projectsToggleHelp,
+            projectsHelp,
             "Add new projects, edit any project and choose its managers. Without this, a manager still sees every project and can edit the projects they manage."
         )
-        XCTAssertTrue(CanonicalBusinessEngine.smallWorksToggleHelp.hasPrefix("Add new small works"))
+        XCTAssertTrue(smallWorksHelp.hasPrefix("Add new small works"))
 
         for level in [RulebookPermissionLevel.admin, .manager] {
             for mode in [RulebookPermissionToggleMode.add, .edit, .summary] {
                 let rows = CanonicalBusinessEngine.permissionToggleRows(level: level, user: nil, mode: mode)
                 let projects = try XCTUnwrap(rows.first { $0.field == "projects" })
                 let smallWorks = try XCTUnwrap(rows.first { $0.field == "smallWorks" })
-                XCTAssertEqual(projects.label, CanonicalBusinessEngine.projectsToggleLabel, "Add User, its summary and Edit User")
-                XCTAssertEqual(projects.help, CanonicalBusinessEngine.projectsToggleHelp)
-                XCTAssertEqual(smallWorks.label, CanonicalBusinessEngine.smallWorksToggleLabel)
-                XCTAssertEqual(smallWorks.help, CanonicalBusinessEngine.smallWorksToggleHelp)
+                XCTAssertEqual(projects.label, projectsLabel, "Add User, its summary and Edit User")
+                XCTAssertEqual(projects.help, projectsHelp)
+                XCTAssertEqual(smallWorks.label, smallWorksLabel)
+                XCTAssertEqual(smallWorks.help, smallWorksHelp)
                 XCTAssertFalse(projects.help.localizedCaseInsensitiveContains("see only"), "never the pre-1.42 view wording")
             }
+        }
+    }
+
+    func testChangeUserTypeFallbackNamesAreNeverRawKeys() {
+        for field in ["operatives", "annualLeaveSelfBook", "weeklyReports", "dailyOverview", "subContractors", "qualifications",
+                      "projects", "smallWorks", "materials", "siteAudit", "somethingNew"] {
+            let name = EditUserView.permissionFallbackName(field)
+            XCTAssertNotEqual(name, field, field)
+            XCTAssertFalse(name.isEmpty)
         }
     }
 

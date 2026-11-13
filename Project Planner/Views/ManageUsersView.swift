@@ -4152,8 +4152,26 @@ struct EditUserView: View {
 
     /// RULEBOOK 1.42.0 §11: Change user type lists each toggle with the rulebook's row text (`permissionToggleRows`),
     /// never a copy of its own.
+    /// When the script does not answer, the row keeps a plain display name (never a raw field key) and no help.
     private func changeTypeRowLabel(_ field: String, level: RulebookPermissionLevel) -> String {
-        CanonicalBusinessEngine.permissionToggleText(field: field, level: level)?.label ?? field
+        CanonicalBusinessEngine.permissionToggleText(field: field, level: level)?.label ?? Self.permissionFallbackName(field)
+    }
+
+    /// Neutral names for the Change user type rows, used only when `permissionToggleRows` did not answer.
+    static func permissionFallbackName(_ field: String) -> String {
+        switch field {
+        case "operatives": return "Operatives"
+        case "annualLeaveSelfBook": return "Annual Leave Management"
+        case "weeklyReports": return "Weekly Report"
+        case "dailyOverview": return "Daily Overview"
+        case "subContractors": return "Sub Contractors"
+        case "qualifications": return "Manage Qualifications"
+        case "projects": return "Projects"
+        case "smallWorks": return "Small Works"
+        case "materials": return "Materials"
+        case "siteAudit": return "Site audit"
+        default: return "Permission"
+        }
     }
 
     private func changeTypeRowHelp(_ field: String, level: RulebookPermissionLevel) -> String {

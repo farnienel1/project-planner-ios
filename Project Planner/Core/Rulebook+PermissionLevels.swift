@@ -251,28 +251,6 @@ extension CanonicalBusinessEngine {
         return (row.label, row.help)
     }
 
-    /// RULEBOOK 1.42.0 §11 (owner decision 13 Nov, option B): the Projects / Small works toggle row text from
-    /// `PERMISSION_TOGGLE_CATALOGUE` — an add-and-edit permission, never a view permission (every manager sees every
-    /// job). Screens that list a toggle outside `permissionToggleRows` (Change user type) read it here; the fallback is
-    /// the same text, used only when the script did not answer.
-    nonisolated static var projectsToggleLabel: String {
-        constant("PROJECTS_TOGGLE_LABEL", as: String.self) ?? "Projects — add & edit"
-    }
-
-    nonisolated static var projectsToggleHelp: String {
-        constant("PROJECTS_TOGGLE_HELP", as: String.self)
-            ?? "Add new projects, edit any project and choose its managers. Without this, a manager still sees every project and can edit the projects they manage."
-    }
-
-    nonisolated static var smallWorksToggleLabel: String {
-        constant("SMALL_WORKS_TOGGLE_LABEL", as: String.self) ?? "Small Works — add & edit"
-    }
-
-    nonisolated static var smallWorksToggleHelp: String {
-        constant("SMALL_WORKS_TOGGLE_HELP", as: String.self)
-            ?? "Add new small works, edit any small works job and choose its managers. Without this, a manager still sees every small works job and can edit the small works they manage."
-    }
-
     /// `isOrganizationSuperAdmin(viewer, org)` (1.28.0 §8, §16): the organisation's creator, or a profile of that
     /// organisation flagged `isSuperAdmin`. Nil when the script did not answer.
     nonisolated static func isOrganizationSuperAdmin(
