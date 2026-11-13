@@ -125,11 +125,15 @@ struct NotificationsCheckCard: View {
     }
 
     private var savedText: String {
-        if let error = status.lastSaveError, savedOnAccount != true { return "No: \(error)" }
         switch savedOnAccount {
         case .some(true): return "Yes"
-        case .some(false): return "No"
-        case .none: return isChecking ? "Checking…" : "Can't tell (offline?)"
+        case .some(false):
+            if let error = status.lastSaveError { return "No: \(error)" }
+            return "No"
+        case .none:
+            if status.latestFCMToken == nil { return "No phone token yet" }
+            // The server read failed (usually offline): never show a save error as if it were the answer.
+            return isChecking ? "Checking…" : "Can't check while offline"
         }
     }
 

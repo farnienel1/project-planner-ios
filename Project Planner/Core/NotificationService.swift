@@ -1526,10 +1526,17 @@ class NotificationService: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             return "Not sent: no organisation is open."
         }
-        guard userStore?.currentUser != nil else {
+        guard let profileId = userStore?.currentUser?.id,
+              let authUid = Auth.auth().currentUser?.uid, !authUid.isEmpty else {
             return "Not sent: you are not signed in."
         }
-        guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: actorPerson)?.first else {
+        // The row goes to the signed-in Auth account: that is the users document this phone saves its token on
+        // (`writePushTokens`) and the one the push function reads. A loaded profile under another id (an old invite id
+        // or a same-email copy) would put the row where no token is, so say so instead of claiming it was sent.
+        if profileId != authUid {
+            return "Account mismatch: you are signed in as \(authUid) but the app loaded profile \(profileId). The phone's token is saved on \(authUid). Send this screen to your administrator."
+        }
+        guard let targetId = CanonicalBusinessEngine.pushTestRecipients(actor: authUid)?.first, targetId == authUid else {
             return "Not sent: the app's rules could not load. Try again."
         }
 
