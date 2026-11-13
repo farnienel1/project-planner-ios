@@ -163,14 +163,13 @@ class OperativeStore: ObservableObject {
     // MARK: - Computed Properties
     
     var allOperatives: [Operative] {
-        // Filter out the legacy seed rows only ("Initial operative …", "Initial manager …", any "placeholder"), the
-        // same names the load drops. A real person whose name merely contains "initial" is kept (platform guardrail 3:
-        // never hide old data); before 13 Nov their bookings read "Unknown person" on iOS.
+        // Legacy seed rows are dropped by the reader (`parseOperativeDocument` → `isPlaceholder`: "placeholder" in the
+        // name or email, "initial operative", the INITIAL-PLACEHOLDER id), exactly as web drops them. No second name
+        // filter here: before 13 Nov anyone whose name contained "initial" was hidden on iOS only (guardrail 3).
         let nonPlaceholderOperatives = operatives.filter { operative in
             let name = operative.name.lowercased()
             let email = operative.email.lowercased()
-            return !name.contains("placeholder") && !email.contains("placeholder")
-                && !name.contains("initial operative") && !name.contains("initial manager")
+            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial operative")
         }
         return nonPlaceholderOperatives.sorted { operative1, operative2 in
             operative1.name < operative2.name
