@@ -191,29 +191,24 @@ enum PlannerStoreWiring {
                 NSLog("STALE_CACHE_SERVER_READ collection=organization org=%@", organizationId)
                 firebaseBackend.reattachOrganizationDocumentListenerIfCurrent(organizationId: organizationId)
             }
-            // Planned listeners retry their own failed parts; this only catches one that is missing, or that has stood
-            // on the cache alone for the whole grace. Re-attaching replaces it (never two listeners for one key).
+            // Planned listeners retry their own failed parts; this only attaches one that is missing. A recorded
+            // listener, even a slow one, is left alone (never two listeners for one key, no needless re-listen).
             for key in LiveListenerAttachPolicy.plannedWatchdogKeys {
                 let recorded = DataParityListenerLedger.shared.snapshot(key: key, organizationId: organizationId)
                 guard LiveListenerAttachPolicy.plannedListenerNeedsReattach(
                     listenerRecorded: recorded != nil,
-                    serverAnswered: recorded?.serverSnapshot ?? false,
-                    attachedAt: clock.attachedAt(key: key, organizationId: organizationId),
-                    online: online,
-                    now: now,
-                    grace: grace
+                    online: online
                 ) else { continue }
-                NSLog("STALE_CACHE_SERVER_READ collection=%@ org=%@ listener=%@", key, organizationId, recorded == nil ? "missing" : "cache only")
+                NSLog("STALE_CACHE_SERVER_READ collection=%@ org=%@ listener=missing", key, organizationId)
                 switch key {
                 case "projects", "smallWorks":
-                    if recorded != nil { firebaseBackend.stopLiveListener(key: key) }
+                    // A no-op for the slice already attached (`needsAttach`).
                     projectStore.startLiveUpdates(organizationId: organizationId)
                 case "subcontractorBookings":
-                    if recorded != nil { firebaseBackend.stopLiveListener(key: key) }
                     subcontractorStore.startLiveUpdates(organizationId: organizationId)
                 default:
                     // Bookings and manager site bookings: their stores asked for them; with no request yet there is
-                    // nothing to re-attach here (the store attaches it when it loads).
+                    // nothing to attach here (the store attaches it when it loads).
                     firebaseBackend.reattachScheduleListenerForDataCheck(collection: key)
                 }
             }

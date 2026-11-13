@@ -39,6 +39,22 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
 
     private var entries: [String: Entry] = [:]
     private let lock = NSLock()
+    /// Explicit stops per key (`remove(key:)` without a token) and of everything (`removeAll`). A delayed retry
+    /// compares the mark it took when it attached: a screen that stopped its listener meanwhile is not re-listened.
+    private var stops: [String: Int] = [:]
+    private var stopAllCount = 0
+
+    /// Changes whenever `key`'s listener is stopped on purpose (a screen closed it, an organisation switch, sign-out);
+    /// never when a failed listener drops itself (`remove(key:token:)`).
+    nonisolated struct StopMark: Equatable, Sendable {
+        let all: Int
+        let key: Int
+    }
+
+    func stopMark(key: String) -> StopMark {
+        lock.lock(); defer { lock.unlock() }
+        return StopMark(all: stopAllCount, key: stops[key] ?? 0)
+    }
 
     init() {}
 
@@ -75,6 +91,7 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
     /// next foreground can attach it again, without removing a newer replacement).
     func remove(key: String, token: UUID? = nil) {
         lock.lock()
+        if token == nil { stops[key, default: 0] += 1 }
         let entry = entries[key]
         if let entry, token == nil || entry.token == token {
             entries[key] = nil
@@ -89,6 +106,7 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
     /// Organisation switch and sign-out.
     func removeAll() {
         lock.lock()
+        stopAllCount += 1
         let all = Array(entries.values)
         entries.removeAll()
         lock.unlock()
@@ -410,6 +428,8 @@ extension FirebaseBackend {
         guard registry.needsAttach(key: key, target: target) else { return }
         let token = LiveListenerToken()
         let deduper = DocumentSnapshotDeduper()
+        // Taken before attaching: a stop after this point (the screen closed, a switch) cancels a pending retry.
+        let stopMark = registry.stopMark(key: key)
         let registration = ref.addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
             if let error {
                 NSLog("LIVE_LISTENER_FAILED key=%@ path=%@ error=%@", key, ref.path, error.localizedDescription)
@@ -422,11 +442,13 @@ extension FirebaseBackend {
                     if let value = token.value { registry.remove(key: key, token: value) }
                     guard let delay else { return }
                     try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-                    guard let self, LiveListenerAttachPolicy.mayRetryAttach(
-                        listenerOrganizationId: orgId,
-                        currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
-                        isAuthenticated: self.isAuthenticated
-                    ) else { return }
+                    // Never over a newer listener for the key (another document, attached by its screen meanwhile).
+                    guard let self, registry.stopMark(key: key) == stopMark, !registry.isAttached(key: key),
+                          LiveListenerAttachPolicy.mayRetryAttach(
+                            listenerOrganizationId: orgId,
+                            currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
+                            isAuthenticated: self.isAuthenticated
+                          ) else { return }
                     // A no-op when the screen or a foreground return attached it again meanwhile (`needsAttach`).
                     self.listenOrganizationDocument(
                         key: key,

@@ -110,16 +110,56 @@ final class LiveListenerAttachPolicyTests: XCTestCase {
         XCTAssertEqual(LiveListenerAttachPolicy.organizationDocumentAttach(activeTarget: "org:a", requestedTarget: "  ", hasRegistration: false), A.keep)
     }
 
-    func testAPlannedListenerIsReattachedOnlyWhenMissingOrCacheOnlyPastTheGrace() {
-        func needs(_ recorded: Bool, _ server: Bool, _ attached: Date?, online: Bool = true, now: Date) -> Bool {
-            LiveListenerAttachPolicy.plannedListenerNeedsReattach(listenerRecorded: recorded, serverAnswered: server, attachedAt: attached, online: online, now: now, grace: 20)
-        }
-        XCTAssertFalse(needs(false, false, nil, online: false, now: t0), "offline: the cache is all there is")
-        XCTAssertTrue(needs(false, false, nil, now: t0), "no listener at all")
-        XCTAssertFalse(needs(true, true, t0, now: t0.addingTimeInterval(600)), "a server answer arrived")
-        XCTAssertFalse(needs(true, false, t0, now: t0.addingTimeInterval(19)), "still inside the grace")
-        XCTAssertTrue(needs(true, false, t0, now: t0.addingTimeInterval(20)), "cache only for the whole grace")
-        XCTAssertTrue(needs(true, false, nil, now: t0), "recorded but no attach time")
+    func testAPlannedListenerIsAttachedOnlyWhenMissingNeverTornDownWhenSlow() {
+        XCTAssertFalse(LiveListenerAttachPolicy.plannedListenerNeedsReattach(listenerRecorded: false, online: false), "offline: the cache is all there is")
+        XCTAssertTrue(LiveListenerAttachPolicy.plannedListenerNeedsReattach(listenerRecorded: false, online: true), "no listener at all")
+        XCTAssertFalse(LiveListenerAttachPolicy.plannedListenerNeedsReattach(listenerRecorded: true, online: true), "a recorded listener, however slow, is left alone")
+    }
+
+    func testALateFailureOfAReplacedSettingsListenerIsIgnored() {
+        let current = UUID()
+        let replaced = UUID()
+        XCTAssertTrue(LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(failedGeneration: current, currentGeneration: current, failedTarget: "org:a", activeTarget: "org:a"))
+        XCTAssertFalse(LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(failedGeneration: replaced, currentGeneration: current, failedTarget: "org:a", activeTarget: "org:a"), "a watchdog re-attach replaced it")
+        XCTAssertFalse(LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(failedGeneration: current, currentGeneration: current, failedTarget: "org:a", activeTarget: "org:b"), "the organisation was switched")
+        XCTAssertFalse(LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(failedGeneration: current, currentGeneration: current, failedTarget: "org:a", activeTarget: nil), "signed out")
+    }
+
+    func testAStoppedListenerIsNotReattachedByAPendingRetry() {
+        let registry = OrgListenerRegistry()
+        let mark = registry.stopMark(key: "timesheet")
+        let token = registry.set(key: "timesheet", target: "timesheet:a", remove: {})
+        registry.remove(key: "timesheet", token: token)
+        XCTAssertEqual(registry.stopMark(key: "timesheet"), mark, "a failed listener dropping itself is not a stop")
+        registry.remove(key: "timesheet")
+        XCTAssertNotEqual(registry.stopMark(key: "timesheet"), mark, "the screen closed: the retry must not attach it again")
+        let other = registry.stopMark(key: "jobTypes")
+        registry.removeAll()
+        XCTAssertNotEqual(registry.stopMark(key: "jobTypes"), other, "an organisation switch or sign-out stops every key")
+    }
+
+    func testADocumentOnlyPlanCountsAsAnsweredOnceEachDocumentAnsweredOrFailed() {
+        let ledger = DataParityListenerLedger()
+        let generation = ledger.begin(key: "projects", organizationId: "ORG", sourceCount: 2)
+        ledger.record(key: "projects", generation: generation, source: 0, ids: ["J1"], fromCache: true, hasPendingWrites: false)
+        XCTAssertEqual(ledger.snapshot(key: "projects", organizationId: "org")?.serverSnapshot, false, "cache only")
+        // The server confirming the cached copy (a metadata-only snapshot) is recorded, though not delivered.
+        ledger.record(key: "projects", generation: generation, source: 0, ids: ["J1"], fromCache: false, hasPendingWrites: false)
+        XCTAssertEqual(ledger.snapshot(key: "projects", organizationId: "org")?.serverSnapshot, false, "the other document has not answered")
+        // A job the operative may not read: refused, and counted as answered.
+        ledger.markFailed(key: "projects", generation: generation, source: 1)
+        XCTAssertEqual(ledger.snapshot(key: "projects", organizationId: "org")?.serverSnapshot, true)
+        XCTAssertEqual(ledger.snapshot(key: "projects", organizationId: "org")?.ids, ["J1"])
+    }
+
+    func testTheDeduperComparesNullAndNumbersByValue() {
+        let deduper = DocumentSnapshotDeduper()
+        XCTAssertTrue(deduper.shouldDeliver(["a": NSNull(), "n": NSNumber(value: 1)]))
+        XCTAssertFalse(deduper.shouldDeliver(["a": NSNull(), "n": 1]), "NSNull equals NSNull; a bridged 1 equals NSNumber 1")
+        XCTAssertTrue(deduper.shouldDeliver(["a": 0, "n": 1]), "a value replacing null is a change")
+        XCTAssertTrue(deduper.shouldDeliver(["a": 0, "n": 1.5]), "a number change is a change")
+        XCTAssertTrue(deduper.shouldDeliver(["a": 0, "n": 1.5, "list": [NSNull(), "x"] as [Any]]), "a new field is a change")
+        XCTAssertFalse(deduper.shouldDeliver(["a": 0, "n": 1.5, "list": [NSNull(), "x"] as [Any]]))
     }
 
     func testTheWatchdogChecksEveryPlannedCollection() {

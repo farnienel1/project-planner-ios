@@ -509,8 +509,12 @@ class FirebaseBackend: ObservableObject {
     /// switch) and is attached again after `LiveListenerAttachPolicy.retryDelay` while the same organisation is open
     /// and someone is signed in. A foreground return (`broadcastOrganizationDidLoadIfNeeded`) attaches it sooner.
     private func organizationDocumentListenerFailed(orgId: String, generation: UUID, permissionDenied: Bool) {
-        guard organizationDocumentListenerGeneration == generation,
-              organizationDocumentListenerTarget == "org:\(orgId)" else { return }
+        guard LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(
+            failedGeneration: generation,
+            currentGeneration: organizationDocumentListenerGeneration,
+            failedTarget: "org:\(orgId)",
+            activeTarget: organizationDocumentListenerTarget
+        ) else { return }
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
         let failures = LiveListenerClock.shared.markFailed(key: "organization", organizationId: orgId)
@@ -8145,8 +8149,6 @@ class FirebaseBackend: ObservableObject {
         ) else { return }
         bookingsLiveListener?.remove()
         bookingsLiveListenerTarget = target
-        // The stale-cache watchdog's grace runs from here (`LiveListenerAttachPolicy.plannedListenerNeedsReattach`).
-        LiveListenerClock.shared.markAttached(key: "bookings", organizationId: orgId)
         bookingsLiveListener = Self.listenPlannedSources(
             plan.sources,
             label: "bookings",
@@ -8376,8 +8378,6 @@ class FirebaseBackend: ObservableObject {
         ) else { return }
         managerScheduleLiveListener?.remove()
         managerScheduleLiveListenerTarget = target
-        // The stale-cache watchdog's grace runs from here (`LiveListenerAttachPolicy.plannedListenerNeedsReattach`).
-        LiveListenerClock.shared.markAttached(key: "managerSiteBookings", organizationId: orgId)
         managerScheduleLiveListener = Self.listenPlannedSources(
             plan.sources,
             label: "managerSiteBookings",

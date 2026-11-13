@@ -90,22 +90,23 @@ nonisolated enum LiveListenerAttachPolicy {
     }
 
     /// Planned listeners (`listenPlannedSources`: projects, small works, bookings, manager site bookings, subcontractor
-    /// bookings) retry their own failed parts, so the watchdog only steps in when the list stands on the cache alone:
-    /// online, and either no listener is recorded for the key, or one was attached `grace` seconds ago or more and not
-    /// every part has answered from the server yet (`DataParityListenerLedger.Snapshot.serverSnapshot`).
-    static func plannedListenerNeedsReattach(
-        listenerRecorded: Bool,
-        serverAnswered: Bool,
-        attachedAt: Date?,
-        online: Bool,
-        now: Date,
-        grace: TimeInterval = 20
+    /// bookings) retry their own failed query parts (2 s up to 60 s, until the plan is replaced), so the watchdog
+    /// attaches one only when none is recorded for the key (`DataParityListenerLedger.snapshot` is nil) and the device
+    /// is online. A recorded listener that is merely slow is never torn down (review of #228: a 20-second grace
+    /// re-listened healthy plans on every launch and foreground).
+    static func plannedListenerNeedsReattach(listenerRecorded: Bool, online: Bool) -> Bool {
+        online && !listenerRecorded
+    }
+
+    /// A failure of the settings listener counts only when it is the current attach (`generation`) for the same
+    /// target: a replaced or switched-away listener's late error changes nothing.
+    static func acceptsOrganizationDocumentFailure(
+        failedGeneration: UUID,
+        currentGeneration: UUID,
+        failedTarget: String,
+        activeTarget: String?
     ) -> Bool {
-        guard online else { return false }
-        guard listenerRecorded else { return true }
-        guard !serverAnswered else { return false }
-        guard let attachedAt else { return true }
-        return now.timeIntervalSince(attachedAt) >= grace
+        failedGeneration == currentGeneration && activeTarget == failedTarget
     }
 
     /// The planned keys the stale-cache watchdog checks (each re-attached by its own owner).
