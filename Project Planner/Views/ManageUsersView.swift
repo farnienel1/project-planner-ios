@@ -2698,7 +2698,7 @@ struct EditUserView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Choose how this account should behave in the app. Permissions are aligned with the Add user flows so Firestore stays consistent. Approved annual leave is kept. Pending approval requests are removed when the person can book their own leave (manager with self-book, or administrator).")
+                    Text(ManageUsersLeaveCopy.changeUserTypeIntro)
                         .font(.subheadline)
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
 
@@ -2803,7 +2803,7 @@ struct EditUserView: View {
                                 .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                         )
 
-                        Text("If Annual Leave Management is turned on, pending approval requests are cleared.")
+                        Text(ManageUsersLeaveCopy.changeUserTypeLeaveNote)
                             .font(.caption)
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     }

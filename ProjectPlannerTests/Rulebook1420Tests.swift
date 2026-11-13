@@ -198,5 +198,22 @@ final class Rulebook1420Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.permissionToggleText(field: "weeklyReports", level: .manager), "admin-only, never on a manager")
         XCTAssertEqual(CanonicalBusinessEngine.permissionToggleText(field: "projects", level: .manager)?.label, "Projects — add & edit")
     }
-}
 
+    // MARK: Never delete leave (owner decision 4 Nov, rulebook §9) — Change user type wording
+
+    private var repoRoot: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    func testChangeUserTypeSaysExistingLeaveIsKept() throws {
+        for copy in [ManageUsersLeaveCopy.changeUserTypeIntro, ManageUsersLeaveCopy.changeUserTypeLeaveNote] {
+            XCTAssertTrue(copy.localizedCaseInsensitiveContains("is kept"), copy)
+            for word in ["removed", "cleared", "deleted"] {
+                XCTAssertFalse(copy.localizedCaseInsensitiveContains(word), "\(word): \(copy)")
+            }
+        }
+        let source = try String(contentsOf: repoRoot.appendingPathComponent("Project Planner/Views/ManageUsersView.swift"), encoding: .utf8)
+        XCTAssertFalse(source.contains("pending approval requests are cleared"))
+        XCTAssertFalse(source.contains("Pending approval requests are removed"))
+    }
+}
