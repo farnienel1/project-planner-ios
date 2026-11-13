@@ -980,7 +980,7 @@ struct DailyOverviewView: View {
                     let name = rosterNameForLabourBooking(
                         operativeId: booking.operativeId,
                         operatives: operativeStore.allOperatives,
-                        users: userStore.organizationUsers
+                        users: userStore.bookingNameUsers
                     )
                     bookingEditTarget = .operative(
                         booking: booking,
@@ -1421,7 +1421,7 @@ private extension DailyOverviewView {
             personName: rosterNameForLabourBooking(
                 operativeId: booking.operativeId,
                 operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
+                users: userStore.bookingNameUsers
             ),
             holidays: holidayStore.bookings,
             operatives: operativeStore.allOperatives,
@@ -1773,11 +1773,14 @@ struct ProjectBookingCard: View {
     private var mergedPersonRows: [ProjectDayPersonRow] {
         let p = payrollTimePolicy
         var keyed: [(Int, String, ProjectDayPersonRow)] = []
+        // Read once per pass (RULEBOOK §6: every users document, not only the listed roster).
+        let operatives = operativeStore.allOperatives
+        let nameUsers = userStore.bookingNameUsers
         for b in sortedBookings {
             let personName = rosterNameForLabourBooking(
                 operativeId: b.operativeId,
-                operatives: operativeStore.allOperatives,
-                users: userStore.organizationUsers
+                operatives: operatives,
+                users: nameUsers
             )
             let sub = b.scheduleCoverageSubtitle(policy: p)
             let row = ProjectDayPersonRow(

@@ -1113,7 +1113,9 @@ struct ProjectDetailView: View {
             operativeIds: opIds,
             userIds: mgrIds,
             operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
+            // RULEBOOK §6 / §11: rows are named and grouped from every users document (`bookingNameUsers`), as web's
+            // week grid reads its whole roster; the listed roster alone left booked people as "Unknown person".
+            users: userStore.bookingNameUsers
         ).map { person -> (ScheduleWeekPerson, SchedulingGridPersonKind) in
             let kind: SchedulingGridPersonKind = person.role == .operative || (person.role == .unknown && !person.operativeIds.isEmpty)
                 ? .operative(person.saveOperativeId ?? person.operativeIds.first ?? UUID())
@@ -1245,7 +1247,7 @@ struct ProjectDetailView: View {
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
                     let cell = SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: booking.paidBookedHours(policy: p),
-                        overtimeHours: booking.payrollHoursResult(policy: p).paidOvertimeHours,
+                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(booking.payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
                         timeSlot: booking.timeSlot
                     )
                     return SchedulingGridDayCell(
@@ -1279,7 +1281,7 @@ struct ProjectDetailView: View {
                     }()
                     let cell = SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: booking.paidBookedHours(policy: p),
-                        overtimeHours: booking.payrollHoursResult(policy: p).paidOvertimeHours,
+                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(booking.payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
                         timeSlot: mappedSlot
                     )
                     return SchedulingGridDayCell(
@@ -1320,7 +1322,7 @@ struct ProjectDetailView: View {
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
                     let cell = dayCell.map(SchedulingV2CellKindBuilder.fromDayCell) ?? SchedulingV2CellKindBuilder.fromBooking(
                         paidHours: booking.payrollMirrorBooking().paidBookedHours(policy: p),
-                        overtimeHours: booking.payrollMirrorBooking().payrollHoursResult(policy: p).paidOvertimeHours,
+                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(booking.payrollMirrorBooking().payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
                         timeSlot: booking.timeSlot
                     )
                     return SchedulingGridDayCell(
@@ -1375,7 +1377,7 @@ struct ProjectDetailView: View {
                 people: rows,
                 days: weekDays,
                 holidays: holidayStore.bookings,
-                users: userStore.organizationUsers,
+                users: userStore.bookingNameUsers,
                 operatives: operativeStore.allOperatives
             )
             return CanonicalBusinessEngine.jobScheduleLeaveMarks(input)
@@ -2161,7 +2163,7 @@ struct ProjectDetailView: View {
                         let name = rosterNameForLabourBooking(
                             operativeId: booking.operativeId,
                             operatives: operativeStore.allOperatives,
-                            users: userStore.organizationUsers
+                            users: userStore.bookingNameUsers
                         )
                         bookingEditTarget = .operative(
                             booking: booking,
@@ -2182,7 +2184,7 @@ struct ProjectDetailView: View {
         let name = rosterNameForLabourBooking(
             operativeId: booking.operativeId,
             operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
+            users: userStore.bookingNameUsers
         )
         bookingEditTarget = .operative(booking: updated, project: project, personName: name)
     }
@@ -2191,7 +2193,7 @@ struct ProjectDetailView: View {
         let name = rosterNameForLabourBooking(
             operativeId: booking.operativeId,
             operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
+            users: userStore.bookingNameUsers
         )
         let initials = PlannerUIInitials.from(name)
         let p = firebaseBackend.payrollPolicy(for: booking.date)

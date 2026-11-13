@@ -147,6 +147,7 @@ extension CanonicalBusinessEngine {
         type: String,
         title: String,
         message: String,
+        detail: String? = nil,
         userId: String?,
         actorUserId: String?,
         relatedId: String?,
@@ -175,6 +176,8 @@ extension CanonicalBusinessEngine {
             "catalogue": optional(catalogue),
             "createdAt": placeholders.token("createdAt", createdAt),
         ]
+        // RULEBOOK 1.40.0 §13: inbox-only text, written when not blank (never pushed).
+        if let detail { input["detail"] = detail }
         if let deepLinkWeekStart { input["deepLinkWeekStart"] = placeholders.token("deepLinkWeekStart", deepLinkWeekStart) }
         // RULEBOOK 1.16.0 §13: a due-now row carries the server time (`FieldValue.serverTimestamp()`); only a scheduled
         // type (`SCHEDULED_NOTIFICATION_TYPES`) keeps its own `createdAt` (`notificationCreatedAtIsServerTime`).

@@ -121,7 +121,9 @@ struct OperativeAnnualLeaveDirectoryView: View {
     @State private var sortMode: AnnualLeavePersonSort = .firstName
 
     private var people: [AnnualLeavePerson] {
-        AnnualLeavePersonBuilder.build(
+        // RULEBOOK 1.40.0 `annualLeaveTeamPeople`: this viewer's Team list (admins everyone, managers their reports).
+        AnnualLeavePersonBuilder.teamPeople(
+            viewer: userStore.currentUser.flatMap { me in userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me },
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
@@ -242,7 +244,9 @@ private struct OperativeAnnualLeaveApprovedListView: View {
     @State private var bookingPendingRemoval: HolidayBooking?
 
     private var people: [AnnualLeavePerson] {
-        AnnualLeavePersonBuilder.build(
+        // RULEBOOK 1.40.0 `annualLeaveTeamPeople`: this viewer's Team list (admins everyone, managers their reports).
+        AnnualLeavePersonBuilder.teamPeople(
+            viewer: userStore.currentUser.flatMap { me in userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me },
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
@@ -360,7 +364,9 @@ private struct OperativeAnnualLeaveRequestsListView: View {
     @EnvironmentObject var notificationService: NotificationService
 
     private var people: [AnnualLeavePerson] {
-        AnnualLeavePersonBuilder.build(
+        // RULEBOOK 1.40.0 `annualLeaveTeamPeople`: this viewer's Team list (admins everyone, managers their reports).
+        AnnualLeavePersonBuilder.teamPeople(
+            viewer: userStore.currentUser.flatMap { me in userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me },
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives
         )
@@ -555,6 +561,10 @@ struct OperativeAnnualLeaveCalendarView: View {
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
     @State private var bankHolidayCalendarTick = 0
     @State private var bookingPendingRemoval: HolidayBooking?
+    /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments (live while the page is open).
+    @StateObject private var adjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the person's pay record.
+    @StateObject private var employmentModel = AnnualLeaveEmploymentModel()
 
     /// Leave days are organisation business days (§1).
     private var calendar: Calendar { OrganizationRulebookContext.calendar }
@@ -562,6 +572,78 @@ struct OperativeAnnualLeaveCalendarView: View {
     /// `BANK_HOLIDAY_REGIONS` row for the saved region (rulebook §4.4). Nil only when the script did not answer.
     private var bankHolidayRegion: BankHolidayRegion? {
         CanonicalBusinessEngine.resolvedBankHolidayRegion(for: firebaseBackend.currentOrganization)
+    }
+
+    private var signedInViewer: AppUser? {
+        userStore.currentUser.flatMap { me in userStore.organizationUsers.first(where: { $0.id == me.id }) ?? me }
+    }
+
+    /// RULEBOOK 1.40.0 (11 Nov scan F8): "book leave for someone" only when `canDecideLeave` (= `canBookLeaveFor`)
+    /// allows it — the person's line manager or an admin, never another manager — so a save is never refused afterwards.
+    private var canBookForPerson: Bool {
+        guard let viewer = signedInViewer else { return false }
+        let requester: [String: Any]
+        if let subject = leaveProfileUser {
+            requester = RulebookPeople.person(subject)
+        } else if let oid = person.operativeId,
+                  let row = operativeStore.allOperatives.first(where: { $0.id == oid }) {
+            // A catalogue row with no account has no line manager: only admins decide its leave.
+            requester = ["id": row.documentId, "email": row.email]
+        } else {
+            return false
+        }
+        return CanonicalBusinessEngine.canDecideLeave(
+            viewer: RulebookPeople.person(viewer),
+            requester: requester,
+            roster: RulebookPeople.roster(userStore.organizationUsers)
+        ) ?? false
+    }
+
+    /// RULEBOOK 1.40.0 `canAdjustAnnualLeave` / `canViewAnnualLeaveAdjustments` for this person (users accounts only).
+    private var canAdjustLeave: Bool {
+        guard let viewer = signedInViewer, let subject = leaveProfileUser else { return false }
+        return CanonicalBusinessEngine.canAdjustAnnualLeave(
+            viewer: RulebookPeople.person(viewer),
+            subject: RulebookPeople.person(subject),
+            roster: RulebookPeople.roster(userStore.organizationUsers)
+        )
+    }
+
+    private var canViewAdjustments: Bool {
+        guard let viewer = signedInViewer, let subject = leaveProfileUser else { return false }
+        return CanonicalBusinessEngine.canViewAnnualLeaveAdjustments(
+            viewer: RulebookPeople.person(viewer),
+            subject: RulebookPeople.person(subject),
+            roster: RulebookPeople.roster(userStore.organizationUsers)
+        )
+    }
+
+    private var personAdjustments: [AnnualLeaveAdjustmentRecord] {
+        guard let subject = leaveProfileUser else { return [] }
+        return adjustmentsModel.rows(for: RulebookPeople.ownerIds(for: subject, users: userStore.organizationUsers))
+    }
+
+    private func saveAdjustment(days: Double, reason: String, yearKey: String) async throws {
+        guard let subject = leaveProfileUser else {
+            throw AnnualLeaveAdjustmentRefused(message: "Only people with an app account can have their leave adjusted.")
+        }
+        let actorName = signedInViewer.map { $0.fullName.isEmpty ? $0.email : $0.fullName } ?? ""
+        let id = try await firebaseBackend.addAnnualLeaveAdjustment(
+            subject: subject,
+            days: days,
+            reason: reason,
+            yearKey: yearKey
+        )
+        await notificationService.notifyAnnualLeaveAdjusted(
+            personUserId: subject.id,
+            personName: person.displayName,
+            actorName: actorName,
+            days: days,
+            reason: reason,
+            adjustmentId: id
+        )
+        successMessage = "Annual leave adjusted for \(person.displayName)."
+        showSuccess = true
     }
 
     private func reloadBankHolidays(referenceDate: Date = Date(), forceRefresh: Bool = false) async {
@@ -582,8 +664,39 @@ struct OperativeAnnualLeaveCalendarView: View {
                 headerCard
 
                 VStack(alignment: .leading, spacing: 18) {
-                    if let summary = annualLeaveSummary {
-                        AnnualLeaveBalanceHero(summary: summary, pendingCaption: "Awaiting approval")
+                    if canViewAdjustments, let subject = leaveProfileUser,
+                       adjustmentsModel.failed(for: [subject.id]) {
+                        // Review r306 #9: a refused read is an error, never a balance without the adjustments.
+                        Text(AnnualLeaveAdjustmentsModel.readError)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(AnnualLeavePalette.red)
+                            .padding(.horizontal, 16)
+                            .accessibilityIdentifier("operativeAnnualLeave.adjustmentsError")
+                    } else if let summary = annualLeaveSummary {
+                        AnnualLeaveBalanceHero(
+                            summary: summary,
+                            pendingCaption: "Awaiting approval",
+                            showsEmploymentType: leaveProfileUser.map { userStore.canViewPay(of: $0, context: .profile) } ?? true
+                        )
+                        if canAdjustLeave && summary.hasAllowance {
+                            AnnualLeaveAdjustmentForm(
+                                personName: person.displayName,
+                                remaining: summary.remainingDays,
+                                isOnline: smartCache.isOnline,
+                                onSave: { days, reason in
+                                    try await saveAdjustment(days: days, reason: reason, yearKey: summary.yearKey)
+                                }
+                            )
+                        }
+                        if canViewAdjustments {
+                            AnnualLeaveAdjustmentsCard(
+                                adjustments: personAdjustments,
+                                yearKey: summary.yearKey,
+                                showAuthor: true,
+                                hasAllowance: summary.hasAllowance,
+                                roster: userStore.organizationUsers.map(AnnualLeavePersonBuilder.teamCandidate)
+                            )
+                        }
                     }
                     bookedLeaveCard
                     pendingLeaveCard
@@ -692,6 +805,15 @@ struct OperativeAnnualLeaveCalendarView: View {
         .task(id: displayedMonth) {
             await reloadBankHolidays(referenceDate: displayedMonth)
         }
+        .task(id: canViewAdjustments ? (leaveProfileUser?.id ?? "") : "") {
+            // RULEBOOK 1.40.0: the person's adjustments, filed under their users id (the read rule's query).
+            if canViewAdjustments, let subject = leaveProfileUser {
+                adjustmentsModel.listen(backend: firebaseBackend, userIds: [subject.id])
+            } else {
+                adjustmentsModel.stop()
+            }
+        }
+        .onDisappear { adjustmentsModel.stop() }
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
             await holidayStore.loadData()
@@ -727,6 +849,11 @@ struct OperativeAnnualLeaveCalendarView: View {
                 .font(.caption)
                 .foregroundStyle(HolidayChrome.muted)
             slotPicker(selection: $bookSlot)
+            if !canBookForPerson {
+                Text("Only this person's line manager or an admin can book their annual leave.")
+                    .font(.footnote)
+                    .foregroundStyle(HolidayChrome.muted)
+            }
             Button {
                 showBookConfirm = true
             } label: {
@@ -740,7 +867,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             }
             .accessibilityIdentifier("operativeAnnualLeaveCalendar.confirmAnnualLeaveBooking")
             .buttonStyle(.plain)
-            .disabled(isSaving)
+            .disabled(isSaving || !canBookForPerson)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
@@ -904,6 +1031,14 @@ struct OperativeAnnualLeaveCalendarView: View {
     private var annualLeaveSummary: AnnualLeaveUsageSummary? {
         let defaults = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
         let user = leaveProfileUser
+        // Review r306 #2 / #9: no figure until the pay record and (when this viewer reads them) the adjustments load.
+        var employment: AnnualLeaveEmployment? = AnnualLeaveEmployment(employmentType: "self_employed")
+        if let user {
+            let answer = employmentModel.employment(for: user, backend: firebaseBackend)
+            guard answer.ready else { return nil }
+            employment = answer.employment
+            if canViewAdjustments, !adjustmentsModel.isLoaded(for: [user.id]) { return nil }
+        }
         return AnnualLeavePolicy.usageSummary(
             bookings: personHolidayBookings,
             daysPerYear: user?.annualLeaveDaysPerYear ?? defaults.daysPerYear,
@@ -918,7 +1053,10 @@ struct OperativeAnnualLeaveCalendarView: View {
             orgEndMonth: defaults.endMonth,
             yearAllowance: user?.annualLeaveYearAllowance,
             yearAllowanceKey: user?.annualLeaveYearAllowanceKey,
-            employmentStartDayKey: user?.employmentStartDate
+            employmentStartDayKey: user?.employmentStartDate,
+            // RULEBOOK 1.40.0 §4.4: PAYE days only (a catalogue row with no account is self-employed), plus adjustments.
+            employment: employment,
+            adjustments: personAdjustments
         )
     }
 
@@ -1132,12 +1270,9 @@ struct OperativeAnnualLeaveCalendarView: View {
         }
     }
 
+    /// RULEBOOK 1.40.0 (guardrail 1): every id the person goes by (`leaveRecordsForAccount`), never one exact id.
     private var personBookings: [HolidayBooking] {
-        holidayStore.bookings.filter { booking in
-            if let uid = person.userId, booking.userId == uid { return true }
-            if let oid = person.operativeId, booking.operativeId == oid { return true }
-            return false
-        }
+        personHolidayBookings
     }
 
     private var futureApprovedBookings: [HolidayBooking] {
@@ -1381,6 +1516,12 @@ struct OperativeAnnualLeaveCalendarView: View {
             showError = true
             return
         }
+        // RULEBOOK 1.40.0: approved leave for someone else only when `canDecideLeave` allows it.
+        guard canBookForPerson else {
+            errorMessage = "Only this person's line manager or an admin can book their annual leave."
+            showError = true
+            return
+        }
 
         isSaving = true
         defer { isSaving = false }
@@ -1589,28 +1730,60 @@ struct OperativeAnnualLeaveCalendarView: View {
 }
 
 enum AnnualLeavePersonBuilder {
-    static func build(users: [AppUser], operatives: [Operative]) -> [AnnualLeavePerson] {
-        var rows: [AnnualLeavePerson] = []
-        // RULEBOOK 1.34.0 §11 `personDedupeKey`: one row per email, else per id, so every ghost (no email) is listed.
-        var seenKeys = Set<String>()
+    /// RULEBOOK 1.40.0 §9 `annualLeaveTeamPeople`: the viewer's Team list — admins every current person (people who
+    /// book their own leave included, never themselves), anyone else the people they line-manage; never a deleted
+    /// profile, an inactive person or a pending invite. Empty when the script did not answer.
+    static func teamPeople(viewer: AppUser?, users: [AppUser], operatives: [Operative]) -> [AnnualLeavePerson] {
+        guard let viewer else { return [] }
+        let built = candidateRows(users: users, operatives: operatives)
+        guard let ids = CanonicalBusinessEngine.annualLeaveTeamPeopleIds(
+            viewer: RulebookPeople.person(viewer),
+            people: built.candidates,
+            roster: RulebookPeople.roster(users)
+        ) else { return [] }
+        return ids.compactMap { built.rows[$0] }
+    }
 
+    /// RULEBOOK 1.40.0 `annualLeaveTeamTabVisible`: admins, and anyone who line-manages at least one current person
+    /// (the Operatives toggle plays no part).
+    static func teamTabVisible(viewer: AppUser?, users: [AppUser], operatives: [Operative]) -> Bool {
+        guard let viewer else { return false }
+        let built = candidateRows(users: users, operatives: operatives)
+        return CanonicalBusinessEngine.annualLeaveTeamTabVisible(
+            viewer: RulebookPeople.person(viewer),
+            people: built.candidates,
+            roster: RulebookPeople.roster(users)
+        ) ?? false
+    }
+
+    /// Every current person as a Team row (`annualLeaveTeamPersonIsCurrent`), with no viewer: used to look a person up.
+    static func build(users: [AppUser], operatives: [Operative]) -> [AnnualLeavePerson] {
+        let built = candidateRows(users: users, operatives: operatives)
+        var seen = Set<String>()
+        return built.candidates.compactMap { candidate in
+            guard let id = candidate["id"] as? String,
+                  CanonicalBusinessEngine.annualLeaveTeamPersonIsCurrent(candidate) else { return nil }
+            let key = GhostRulebook.dedupeKey(id: id, email: candidate["email"] as? String ?? "")
+            guard !key.isEmpty, seen.insert(key).inserted else { return nil }
+            return built.rows[id]
+        }
+    }
+
+    /// One candidate per users document, then each catalogue `operatives` row with no account (a row on an account's
+    /// email or id is that person's). `rows` maps a candidate id to its shaped row. Decides nothing.
+    static func candidateRows(users: [AppUser], operatives: [Operative]) -> (candidates: [[String: Any]], rows: [String: AnnualLeavePerson]) {
+        var candidates: [[String: Any]] = []
+        var rows: [String: AnnualLeavePerson] = [:]
         let operativesByEmail = Dictionary(
             operatives.filter { !$0.email.isEmpty }.map { ($0.email.lowercased(), $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        func operativeKey(_ op: Operative) -> String {
-            GhostRulebook.dedupeKey(id: op.documentId, email: op.email)
-        }
-
-        for user in users where user.isActive {
-            if AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: user, users: users) { continue }
+        for user in users {
             let email = user.email.lowercased()
-            guard seenKeys.insert(GhostRulebook.dedupeKey(id: user.id, email: user.email)).inserted else { continue }
             // A converted ghost's row keeps the ghost's id and has no email.
             let linkedOp = email.isEmpty
                 ? operatives.first { $0.documentId.caseInsensitiveCompare(user.id) == .orderedSame }
                 : operativesByEmail[email]
-            if let linkedOp { seenKeys.insert(operativeKey(linkedOp)) }
             let trade = tradeLabel(for: user, operative: linkedOp)
             let (first, last) = nameParts(
                 display: user.fullName.isEmpty ? user.email : user.fullName,
@@ -1618,49 +1791,45 @@ enum AnnualLeavePersonBuilder {
             )
             let roleHint: String = {
                 if user.permissions.operativeMode || user.role == .operative { return "Operative" }
-                if user.permissions.adminAccess || user.role == .admin { return "Admin" }
+                if user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin { return "Admin" }
                 if user.permissions.manager { return "Manager" }
                 return "Team member"
             }()
-            rows.append(
-                AnnualLeavePerson(
-                    id: "user-\(user.id)",
-                    displayName: user.fullName.isEmpty ? user.email : user.fullName,
-                    // A ghost has no email: its subtitle carries the "No app login" badge instead (`ghostBadgeLabel`).
-                    subtitle: user.email.isEmpty
-                        ? [roleHint, GhostRulebook.badge(user)].filter { !$0.isEmpty }.joined(separator: " · ")
-                        : "\(roleHint) · \(user.email)",
-                    tradeLabel: trade,
-                    firstNameSort: first,
-                    surnameSort: last,
-                    userId: user.id,
-                    operativeId: linkedOp?.id
-                )
+            candidates.append(teamCandidate(user))
+            rows[user.id] = AnnualLeavePerson(
+                id: "user-\(user.id)",
+                displayName: user.fullName.isEmpty ? user.email : user.fullName,
+                // A ghost has no email: its subtitle carries the "No app login" badge instead (`ghostBadgeLabel`).
+                subtitle: user.email.isEmpty
+                    ? [roleHint, GhostRulebook.badge(user)].filter { !$0.isEmpty }.joined(separator: " · ")
+                    : "\(roleHint) · \(user.email)",
+                tradeLabel: trade,
+                firstNameSort: first,
+                surnameSort: last,
+                userId: user.id,
+                operativeId: linkedOp?.id
             )
         }
-
-        for op in operatives where op.isActive {
+        for op in operatives {
             let email = op.email.lowercased()
-            if let linkedUser = users.first(where: { !email.isEmpty && $0.email.lowercased() == email }),
-               AnnualLeaveSelfBookPolicy.canSelfBookAnnualLeave(for: linkedUser, users: users) {
-                continue
+            let linked = users.contains { user in
+                (!email.isEmpty && user.email.lowercased() == email)
+                    || user.id.caseInsensitiveCompare(op.documentId) == .orderedSame
             }
-            guard seenKeys.insert(operativeKey(op)).inserted else { continue }
-            rows.append(
-                AnnualLeavePerson(
-                    id: "op-\(op.id.uuidString)",
-                    displayName: op.name.isEmpty ? op.email : op.name,
-                    subtitle: "Operative · \(op.email)",
-                    tradeLabel: operativeTradeLabel(op),
-                    firstNameSort: op.firstName,
-                    surnameSort: op.lastName,
-                    userId: nil,
-                    operativeId: op.id
-                )
+            if linked { continue }
+            candidates.append(teamCandidate(op))
+            rows[op.documentId] = AnnualLeavePerson(
+                id: "op-\(op.id.uuidString)",
+                displayName: op.name.isEmpty ? op.email : op.name,
+                subtitle: op.email.isEmpty ? "Operative" : "Operative · \(op.email)",
+                tradeLabel: operativeTradeLabel(op),
+                firstNameSort: op.firstName,
+                surnameSort: op.lastName,
+                userId: nil,
+                operativeId: op.id
             )
         }
-
-        return rows
+        return (candidates, rows)
     }
 
     private static func tradeLabel(for user: AppUser, operative: Operative?) -> String {

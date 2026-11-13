@@ -164,6 +164,8 @@ enum MyProfileSummaryInput {
         if let allowance = user.annualLeaveYearAllowance, allowance.isFinite { row["annualLeaveYearAllowance"] = allowance }
         if let key = user.annualLeaveYearAllowanceKey { row["annualLeaveYearAllowanceKey"] = key }
         if let start = user.employmentStartDate, !start.isEmpty { row["employmentStartDate"] = start }
+        // RULEBOOK 1.40.0 §4.4: the allowance applies only on PAYE days (`employmentTypeOnDay`).
+        for (key, value) in AnnualLeaveEmployment(user).json { row[key] = value }
         return row
     }
 
@@ -194,10 +196,14 @@ enum MyProfileSummaryInput {
         tasks: [ProjectTask],
         bookings: [Booking],
         managerBookings: [ManagerSiteBooking],
+        leaveAdjustments: [AnnualLeaveAdjustmentRecord] = [],
+        /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the pay record (`AnnualLeaveEmploymentModel`);
+        /// `.some(nil)` when unreadable (the whole year counts). Omitted: the users document's fields.
+        leaveEmployment: AnnualLeaveEmployment?? = nil,
         now: Date = Date()
     ) -> [String: Any] {
         func optional(_ value: String?) -> Any { value.map { $0 as Any } ?? NSNull() }
-        return [
+        var input: [String: Any] = [
             // Floored to the minute: every figure depends only on the organisation day, and a whole-minute instant
             // keeps the memo key (the exact input) stable across redraws instead of changing every millisecond.
             "nowMs": nowMsFlooredToMinute(now),
@@ -210,6 +216,8 @@ enum MyProfileSummaryInput {
             "leaveDefaults": leaveDefaultsRow(OrganizationRulebookContext.annualLeaveDefaults),
             "holidays": holidays.map(\.rulebookLeaveRecord.json),
             "nonWorkingDayKeys": OrganizationBankHolidays.dayKeys,
+            // RULEBOOK 1.40.0 §4.4: the person's manual adjustments (this leave year's count).
+            "leaveAdjustments": leaveAdjustments.map(\.balanceRow),
             "tasks": tasks.map { task -> [String: Any] in
                 [
                     "status": task.status.rawValue,
@@ -243,5 +251,7 @@ enum MyProfileSummaryInput {
             },
             "policyState": CanonicalBusinessEngine.openOrganizationPayrollPolicyState ?? [:],
         ]
+        if let leaveEmployment { input["leaveEmployment"] = leaveEmployment.map { $0.json as Any } ?? NSNull() }
+        return input
     }
 }

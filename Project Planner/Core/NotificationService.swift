@@ -525,7 +525,9 @@ class NotificationService: ObservableObject {
         type: AppNotification.NotificationType,
         title: String,
         message: String,
+        detail: String? = nil,
         relatedId: UUID?,
+        relatedKey: String? = nil,
         dedupeKey: String
     ) async {
         guard let firebaseBackend = firebaseBackend,
@@ -539,7 +541,7 @@ class NotificationService: ObservableObject {
             roster: recipientRoster
         ) else { return }
         for recipientId in recipientIds {
-            let notification = AppNotification(
+            var notification = AppNotification(
                 id: syntheticNotificationId(from: "\(dedupeKey)|\(recipientId)"),
                 organizationId: organizationId,
                 type: type,
@@ -547,10 +549,29 @@ class NotificationService: ObservableObject {
                 message: message,
                 userId: recipientId,
                 relatedId: relatedId,
+                relatedKey: relatedKey,
                 requiresPermission: nil
             )
+            notification.detail = detail
             await saveNotification(notification)
         }
+    }
+
+    /// RULEBOOK 1.40.0 §4.4, §13: a manual annual-leave adjustment tells every admin (`annual_leave_adjusted`,
+    /// `annualLeaveAdjustedRecipients` = `companyActivityRecipients`, never the person who made it). `relatedId` is the
+    /// person; tapping opens their annual leave page (`annualLeavePerson`). Copy from `annualLeaveAdjustedNoticeText`.
+    func notifyAnnualLeaveAdjusted(personUserId: String, personName: String, actorName: String, days: Double, reason: String, adjustmentId: String) async {
+        let text = CanonicalBusinessEngine.annualLeaveAdjustedNoticeText(personName: personName, actorName: actorName, days: days, reason: reason)
+        await saveCompanyActivityNotice(
+            type: .annualLeaveAdjusted,
+            title: text.title,
+            message: text.message,
+            // Review r306 #10: the reason is the inbox row's detail, never in the pushed message.
+            detail: text.detail,
+            relatedId: nil,
+            relatedKey: personUserId,
+            dedupeKey: "annualLeaveAdjusted|\(adjustmentId)"
+        )
     }
 
     func notifyOperativeCreated(operativeId: UUID, operativeName: String, createdBy: String) async {

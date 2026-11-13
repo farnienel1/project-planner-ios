@@ -199,6 +199,47 @@ extension CanonicalBusinessEngine {
     }
 }
 
+// MARK: - Tile hours (RULEBOOK 1.37.0 §21, `scheduleCellHours`)
+
+/// The `payrollHoursResult` fields `scheduleCellHours` reads: the total and each segment's kind and paid hours.
+nonisolated struct RulebookScheduleCellHoursInput: Hashable, Sendable {
+    nonisolated struct Segment: Hashable, Sendable {
+        let kind: String
+        let paidHours: Double
+    }
+
+    let totalPaidHours: Double
+    let segments: [Segment]
+}
+
+/// The answer of `scheduleCellHours`: the booking's paid hours and the paid hours of its multiplied segments.
+nonisolated struct RulebookScheduleCellHours: Hashable, Sendable {
+    let paidHours: Double
+    let overtimeHours: Double
+}
+
+extension CanonicalBusinessEngine {
+    nonisolated private static let scheduleCellHoursMemo = RulebookAnswerMemo<RulebookScheduleCellHoursInput, RulebookScheduleCellHours>(limit: 512)
+
+    /// RULEBOOK 1.37.0 §21 `scheduleCellHours(payrollHoursResult)` → `{ paidHours, overtimeHours }`: the hours a
+    /// scheduling tile shows — the pay rule's total and the paid hours of its segments at a multiplier (outside the
+    /// window, or every hour at N×; Sunday 07:30–14:00 every hour ×2 → 13; a weekday 06:30–16:30 → 3). The figures
+    /// `scheduleCellKind` colours. Nil when the script did not answer. Replaces the Swift copy
+    /// `PayrollHoursResult.paidOvertimeHours`.
+    nonisolated static func scheduleCellHours(_ input: RulebookScheduleCellHoursInput) -> RulebookScheduleCellHours? {
+        scheduleCellHoursMemo.value(for: input) {
+            let result: [String: Any] = [
+                "totalPaidHours": input.totalPaidHours.isFinite ? input.totalPaidHours : 0,
+                "segments": input.segments.map { ["kind": $0.kind, "paidHours": $0.paidHours.isFinite ? $0.paidHours : 0] },
+            ]
+            guard let row = callJSON("scheduleCellHours", arguments: [result]) as? [String: Any],
+                  let paid = (row["paidHours"] as? NSNumber)?.doubleValue,
+                  let overtime = (row["overtimeHours"] as? NSNumber)?.doubleValue else { return nil }
+            return RulebookScheduleCellHours(paidHours: paid, overtimeHours: overtime)
+        }
+    }
+}
+
 // MARK: - One tile per person-day (RULEBOOK 1.41.0 §21, `scheduleDayCell`)
 
 /// One booking of a person's day as `scheduleDayCell` adds it up: the pay rule's paid hours, the paid hours at a
@@ -293,7 +334,7 @@ extension RulebookScheduleDayBooking {
         let multiplied = result.multipliedHours
         return RulebookScheduleDayBooking(
             paidHours: result.totalPaidHours,
-            overtimeHours: result.paidOvertimeHours,
+            overtimeHours: CanonicalBusinessEngine.scheduleCellHours(result.scheduleCellHoursInput)?.overtimeHours ?? 0,
             timeSlot: timeSlot,
             overtimeClockHours: multiplied?.clockHours ?? 0,
             overtimeMultiplier: multiplied?.multiplier ?? 1,

@@ -230,6 +230,8 @@ struct OrgSitesMapView: View {
         let allProjects = works.filter { pinByJob[$0.id.uuidString.lowercased()] != nil }
 
         var builtPins: [SiteMapPin] = []
+        let nameOperatives = operativeStore.allOperatives
+        let nameUsers = userStore.bookingNameUsers
         for project in allProjects {
             guard let coordinate = await GeocodingCacheService.shared.coordinate(for: project.siteAddress) else { continue }
             let siteBookings = dayBookings.filter { $0.projectId == project.id }
@@ -240,8 +242,8 @@ struct OrgSitesMapView: View {
                     // Same name the schedule shows; a booking with no catalogue row is not dropped from the pin.
                     let name = rosterNameForLabourBooking(
                         operativeId: booking.operativeId,
-                        operatives: operativeStore.allOperatives,
-                        users: userStore.organizationUsers
+                        operatives: nameOperatives,
+                        users: nameUsers
                     )
                     return "\(booking.timeSlot.displayName) - \(name)"
                 }

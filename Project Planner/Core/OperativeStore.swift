@@ -155,6 +155,9 @@ class OperativeStore: ObservableObject {
         self.firebaseBackend = firebaseBackend
     }
     
+    /// This device's connection as the cache service sees it (true when unknown). Read by the stale-cache watchdog.
+    var deviceOnline: Bool { smartCache?.isOnline ?? true }
+
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
         self.isOffline = !smartCache.isOnline
@@ -163,11 +166,13 @@ class OperativeStore: ObservableObject {
     // MARK: - Computed Properties
     
     var allOperatives: [Operative] {
-        // Filter out any legacy placeholder operatives
+        // Legacy seed rows are dropped by the reader (`parseOperativeDocument` → `isPlaceholder`: "placeholder" in the
+        // name or email, "initial operative", the INITIAL-PLACEHOLDER id), exactly as web drops them. No second name
+        // filter here: before 13 Nov anyone whose name contained "initial" was hidden on iOS only (guardrail 3).
         let nonPlaceholderOperatives = operatives.filter { operative in
             let name = operative.name.lowercased()
             let email = operative.email.lowercased()
-            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial")
+            return !name.contains("placeholder") && !email.contains("placeholder") && !name.contains("initial operative")
         }
         return nonPlaceholderOperatives.sorted { operative1, operative2 in
             operative1.name < operative2.name
@@ -256,6 +261,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "operatives",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("operatives") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
@@ -277,6 +283,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "managers",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("managers") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
@@ -298,6 +305,7 @@ class OperativeStore: ObservableObject {
         firebaseBackend.listenOrganizationQuery(
             key: "qualifications",
             organizationId: organizationId,
+            retryOnFailure: true,
             query: { $0.collection("qualifications") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }

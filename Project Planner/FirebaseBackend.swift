@@ -405,6 +405,8 @@ class FirebaseBackend: ObservableObject {
         managerScheduleLiveListenerTarget = nil
         managerScheduleLiveRequest = nil
         liveListeners.removeAll()
+        // Organisation switch and sign-out: no attach time, server time or failure count carries over.
+        LiveListenerClock.shared.reset()
         DataParityListenerLedger.shared.removeAll()
         JobAccessContext.resetForOrganizationSwitch()
     }
@@ -984,6 +986,8 @@ class FirebaseBackend: ObservableObject {
                 do {
                     try auth.signOut()
                     clearDeviceQueuesOnSignOut()
+                    LiveListenerClock.shared.reset()
+                    UnknownBookedPersonRefresh.shared.reset()
                 } catch {
                     print("🔥🔥🔥 DEBUG: Sign out error (\(reason.rawValue)): \(error.localizedDescription)")
                 }
@@ -4682,14 +4686,20 @@ class FirebaseBackend: ObservableObject {
     ) -> ListenerRegistration? {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return nil }
+        // Metadata changes on only so a server confirmation of the cached roster is recorded
+        // (`LiveListenerClock`, the stale-cache watchdog); a snapshot with no document change stops there.
         return db.collection("users")
             .whereField("organizationId", isEqualTo: orgId)
-            .addSnapshotListener { snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
                 if let error {
                     Task { @MainActor in onError(error) }
                     return
                 }
                 guard let snapshot else { return }
+                if !snapshot.metadata.isFromCache {
+                    LiveListenerClock.shared.markServerSnapshot(key: "users", organizationId: orgId)
+                }
+                guard !snapshot.documentChanges.isEmpty else { return }
                 var changed: [AppUser] = []
                 var removed: [String] = []
                 for change in snapshot.documentChanges {
@@ -6825,6 +6835,7 @@ class FirebaseBackend: ObservableObject {
             type: notification.typeText,
             title: notification.title,
             message: notification.message,
+            detail: notification.detail,
             userId: notification.userId,
             actorUserId: actorUserId,
             relatedId: Self.notificationRelatedId(for: notification),
@@ -6940,6 +6951,7 @@ class FirebaseBackend: ObservableObject {
             catalogue: row.optionalText("catalogue")
         )
         notification.storedType = storedType
+        notification.detail = row.optionalText("detail")
         return notification
     }
 
@@ -10708,6 +10720,9 @@ extension FirebaseBackend {
             throw error
         }
         print("✅ [materials/send] sendEmail sent \(result.sentCount) · ids \(result.messageIds) · cc \(result.cc)")
+        if result.deduped {
+            print("✅ [materials/send] already sent earlier with this request id; not sent again")
+        }
         if !result.failed.isEmpty {
             print("❌ [materials/send] not sent to \(result.failed)")
         }

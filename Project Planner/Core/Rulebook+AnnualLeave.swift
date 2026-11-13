@@ -444,11 +444,17 @@ enum AnnualLeaveApproval {
         // Identity only: same-email documents, former invite ids and the operative row's email are the
         // viewer's own account, which `canDecideLeave` (one id) cannot see.
         if isOwnRequest(booking, viewer: viewer, users: users, operatives: operatives) { return false }
-        let requesterAccount = requester(for: booking, users: users, operatives: operatives)
+        // RULEBOOK 1.40.0 (owner decision 13 Nov, item 17) `leaveDecisionRequester`: judged on the users document the
+        // record's userId (else operativeId) names — never the account an operatives row's email points at, so leave
+        // filed only under a row is admins only (as the security rules).
+        let roster = rosterPayload(users)
+        guard let requester = CanonicalBusinessEngine.leaveDecisionRequester(
+            userId: booking.userId, operativeId: booking.operativeIdRaw, roster: roster
+        ) else { return false }
         return CanonicalBusinessEngine.canDecideLeave(
             viewer: viewerPayload(viewer),
-            requester: requesterPayload(requesterAccount, fallbackUserId: booking.userId),
-            roster: rosterPayload(users)
+            requester: requester,
+            roster: roster
         ) ?? false
     }
 
@@ -465,9 +471,10 @@ enum AnnualLeaveApproval {
         var rows: [[String: Any]] = []
         for (index, booking) in candidates.enumerated() {
             var row: [String: Any] = ["queueIndex": index, "status": booking.status.rawValue]
+            // RULEBOOK 1.40.0 (13 Nov, item 17): the stored ids only (`leaveDecisionQueue` → `leaveDecisionRequester`),
+            // never an account found through an operatives row's email.
             let storedUid = booking.userId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let accountId = requester(for: booking, users: users, operatives: operatives)?.id ?? storedUid
-            if !accountId.isEmpty { row["userId"] = accountId }
+            if !storedUid.isEmpty { row["userId"] = storedUid }
             if let oid = booking.operativeIdRaw, !oid.isEmpty { row["operativeId"] = oid }
             if let at = booking.cancellationRequestedAt { row["cancellationRequestedAt"] = at.timeIntervalSince1970 * 1000 }
             if let by = booking.cancellationRequestedByUserId { row["cancellationRequestedByUserId"] = by }

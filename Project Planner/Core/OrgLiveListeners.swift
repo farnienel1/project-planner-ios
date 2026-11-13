@@ -308,13 +308,16 @@ extension FirebaseBackend {
     }
 
     /// One snapshot listener on a query under `organizations/{orgId}`, registered as `key`. Calling it again for
-    /// the same key and target does nothing (foreground re-attach is free); a failed listener removes itself.
+    /// the same key and target does nothing (foreground re-attach is free). A failed listener removes itself and is
+    /// attached again after `LiveListenerAttachPolicy.retryDelay` while the same organisation is open (before 13 Nov
+    /// it waited for the next foreground return, so a cached list could stand alone for the whole session).
     /// `onChange` runs on the main actor with the documents as `(id, data)` rows for the rulebook reader.
     func listenOrganizationQuery(
         key: String,
         organizationId: String,
         targetSuffix: String = "",
-        query makeQuery: (DocumentReference) -> Query,
+        retryOnFailure: Bool = false,
+        query makeQuery: @escaping (DocumentReference) -> Query,
         onChange: @escaping @MainActor (_ rows: LiveDocumentRows, _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -334,13 +337,33 @@ extension FirebaseBackend {
                 if let error {
                     NSLog("LIVE_LISTENER_FAILED key=%@ org=%@ error=%@", key, orgId, error.localizedDescription)
                     ledger.markFailed(key: key, generation: generation, source: 0)
-                    Task { @MainActor in
+                    let failures = LiveListenerClock.shared.markFailed(key: key, organizationId: orgId)
+                    // Only organisation-wide listeners retry on their own; a screen's listener is attached again when
+                    // the screen appears or the app returns to the foreground (it may have closed meanwhile).
+                    let delay = retryOnFailure ? LiveListenerAttachPolicy.retryDelay(
+                        afterFailures: failures,
+                        permissionDenied: LiveListenerAttachPolicy.isPermissionDenied(error)
+                    ) : nil
+                    Task { @MainActor [weak self] in
                         if let value = token.value { registry.remove(key: key, token: value) }
+                        guard let delay else { return }
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        guard let self, self.isAuthenticated,
+                              organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                        self.listenOrganizationQuery(
+                            key: key,
+                            organizationId: orgId,
+                            targetSuffix: targetSuffix,
+                            retryOnFailure: true,
+                            query: makeQuery,
+                            onChange: onChange
+                        )
                     }
                     return
                 }
                 guard let snapshot else { return }
                 let fromCache = snapshot.metadata.isFromCache
+                if !fromCache { LiveListenerClock.shared.markServerSnapshot(key: key, organizationId: orgId) }
                 let heldIdsChanged = ledger.record(
                     key: key,
                     generation: generation,
@@ -362,6 +385,7 @@ extension FirebaseBackend {
                 }
             }
         token.value = registry.set(key: key, target: target, remove: { registration.remove() })
+        LiveListenerClock.shared.markAttached(key: key, organizationId: orgId)
     }
 
     /// One snapshot listener on a single document under `organizations/{orgId}`. `data` is nil when the
@@ -462,7 +486,7 @@ nonisolated enum IOSLiveListenerCoverage {
         "managers": "OperativeStore.startLiveUpdates (key managers)",
         "clients": "ProjectStore.startLiveUpdates (key clients)",
         "subcontractors": "SubcontractorStore.startLiveUpdates (key subcontractors)",
-        "operativeDayRateHistory": "InvoicingView timesheet screens (listensWhileOpen)",
+        "operativeDayRateHistory": "InvoicingView timesheet screens and ManageUsersView Edit User (listensWhileOpen)",
         "warningResolutions": "WarningResolutionStore resolutionListener",
         "acceptedBookingClashes": "WarningResolutionStore acceptedClashListener",
         "dismissedWarnings": "FirebaseBackend.startDismissedWarningsListener",
@@ -487,6 +511,8 @@ nonisolated enum IOSLiveListenerCoverage {
         "priceWorkItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "expenseItems": "PayeClaimsRangeView (FirebaseBackend.listenPayeClaims, userId ==)",
         "personalSiteAudits": "PersonalSiteAuditsView / PersonalSiteAuditPickerSheet (FirebaseBackend.listenPersonalSiteAudits, ownerUserId ==)",
+        // RULEBOOK 1.40.0 §4.4: manual annual-leave adjustments.
+        "annualLeaveAdjustments": "HolidayView / OperativeAnnualLeaveCalendarView / EditUserView / MyProfileFiguresCard (AnnualLeaveAdjustmentsModel → FirebaseBackend.listenAnnualLeaveAdjustments, one userId == query per person)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

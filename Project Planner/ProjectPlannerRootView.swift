@@ -70,6 +70,13 @@ enum PlannerStoreWiring {
             holidayStore: holidayStore
         )
 
+        // Owner report 13 Nov: an unknown booked person reads the people lists from the server once.
+        UnknownBookedPersonRefresh.shared.connect(
+            firebaseBackend: firebaseBackend,
+            operativeStore: operativeStore,
+            userStore: userStore
+        )
+
         notificationService.setFirebaseBackend(firebaseBackend)
         notificationService.setUserStore(userStore)
         notificationService.setOperativeStore(operativeStore)
@@ -92,7 +99,8 @@ enum PlannerStoreWiring {
         operativeStore: OperativeStore,
         subcontractorStore: SubcontractorStore,
         taskStore: ProjectTaskStore,
-        holidayStore: HolidayStore
+        holidayStore: HolidayStore,
+        userStore: UserStore? = nil
     ) {
         #if DEBUG
         if UITestingMode.shouldSkipNetworkBootstrap { return }
@@ -101,14 +109,74 @@ enum PlannerStoreWiring {
               firebaseBackend.hasBootstrappedOrgDataLoad,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               !organizationId.isEmpty else { return }
+        // A launch, foreground return or organisation switch starts listener retries afresh.
+        LiveListenerClock.shared.resetFailures(organizationId: organizationId)
         holidayStore.startLiveUpdates(organizationId: organizationId)
         projectStore.startLiveUpdates(organizationId: organizationId)
         operativeStore.startLiveUpdates(organizationId: organizationId)
         subcontractorStore.startLiveUpdates(organizationId: organizationId)
         taskStore.startLiveUpdates(organizationId: organizationId)
         firebaseBackend.startDismissedWarningsListener(organizationId: organizationId)
+        // RULEBOOK §1: the roster is live too (before 13 Nov one roster listener failure was never retried).
+        userStore?.ensureOrganizationUsersLive()
         // RULEBOOK 1.38.0 §27: the "open" data check, once these listeners have had time to load.
         DataParityMonitor.shared.listenersAttached()
+        scheduleStaleCacheWatchdog(
+            organizationId: organizationId,
+            firebaseBackend: firebaseBackend,
+            operativeStore: operativeStore,
+            userStore: userStore
+        )
+    }
+
+    /// RULEBOOK §1: "a cache may give the first paint; it is never the only read". Owner report 13 Nov: the people
+    /// lists were a cached copy with no listener delivering, so booked catalogue operatives read "Unknown person" until
+    /// a relaunch. `LiveListenerAttachPolicy.needsServerRead` grace seconds after the listeners are attached, a list
+    /// that has had no server snapshot (or no listener) is read from the server once; the read attaches what is missing.
+    @MainActor
+    private static func scheduleStaleCacheWatchdog(
+        organizationId: String,
+        firebaseBackend: FirebaseBackend,
+        operativeStore: OperativeStore,
+        userStore: UserStore?
+    ) {
+        let grace: TimeInterval = 20
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64((grace + 1) * 1_000_000_000))
+            guard firebaseBackend.isAuthenticated,
+                  organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, organizationId) else { return }
+            let clock = LiveListenerClock.shared
+            let online = operativeStore.deviceOnline
+            let now = Date()
+            if LiveListenerAttachPolicy.needsServerRead(
+                attachedAt: clock.attachedAt(key: "operatives", organizationId: organizationId),
+                lastServerSnapshotAt: clock.lastServerSnapshotAt(key: "operatives", organizationId: organizationId),
+                online: online,
+                now: now,
+                grace: grace
+            ) {
+                NSLog("STALE_CACHE_SERVER_READ collection=operatives org=%@", organizationId)
+                operativeStore.loadData()
+                operativeStore.startLiveUpdates(organizationId: organizationId)
+            }
+            // The roster: no listener, or a listener that never had a server snapshot (cache only).
+            if let userStore, LiveListenerAttachPolicy.needsServerRead(
+                attachedAt: userStore.organizationUsersListenerAttached(organizationId: organizationId)
+                    ? clock.attachedAt(key: "users", organizationId: organizationId) ?? now.addingTimeInterval(-grace)
+                    : nil,
+                lastServerSnapshotAt: clock.lastServerSnapshotAt(key: "users", organizationId: organizationId),
+                online: online,
+                now: now,
+                grace: grace
+            ) {
+                NSLog("STALE_CACHE_SERVER_READ collection=users org=%@", organizationId)
+                if userStore.organizationUsersListenerAttached(organizationId: organizationId) {
+                    Task { await userStore.loadOrganizationUsers(forceRefresh: true) }
+                } else {
+                    userStore.ensureOrganizationUsersLive()
+                }
+            }
+        }
     }
 
     /// Single-flight org data load from the root shell (ContentView must not repeat this on appear).
@@ -208,6 +276,18 @@ enum PlannerStoreWiring {
         await Task.yield()
 
         print("🔥🔥🔥 DEBUG: ✅ Home-critical org bootstrap finished (projects/operatives/bookings/tasks kicked)")
+        // RULEBOOK §1: keep the shared collections live from now on, not only after the deferred holiday and
+        // subcontractor loads below finish (a hang there left every listener unattached). Attaching again later is a
+        // no-op for a listener already attached.
+        startOrgLiveListeners(
+            firebaseBackend: firebaseBackend,
+            projectStore: projectStore,
+            operativeStore: operativeStore,
+            subcontractorStore: subcontractorStore,
+            taskStore: taskStore,
+            holidayStore: holidayStore,
+            userStore: userStore
+        )
 
         // Keep Home/warnings/reminders quiet while secondary loads land and UI settles.
         firebaseBackend.launchQuietUntil = Date().addingTimeInterval(30)
@@ -230,7 +310,8 @@ enum PlannerStoreWiring {
                 operativeStore: operativeStore,
                 subcontractorStore: subcontractorStore,
                 taskStore: taskStore,
-                holidayStore: holidayStore
+                holidayStore: holidayStore,
+                userStore: userStore
             )
         }
 

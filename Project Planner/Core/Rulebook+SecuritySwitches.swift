@@ -31,6 +31,7 @@ extension Notification.Name {
 nonisolated enum SecuritySwitchContext {
     nonisolated(unsafe) private static var config: [String: Any]?
     nonisolated(unsafe) private static var configKey = "none"
+    nonisolated(unsafe) private static var hasAnswered = false
     private static let lock = NSLock()
     private static let memo = RulebookAnswerMemo<String, SecuritySwitchState>(limit: 32)
     private static let ghostMemo = RulebookAnswerMemo<String, Bool>(limit: 32)
@@ -51,6 +52,14 @@ nonisolated enum SecuritySwitchContext {
     static var current: SecuritySwitchState { switches(organizationId: OrganizationRulebookContext.organizationId) }
     static var enforcedReads: Bool { current.enforcedReads }
     static var privatePay: Bool { current.privatePay }
+
+    /// Whether `platformConfig/app` has been read (or confirmed missing) since launch. RULEBOOK 1.40.0 (review r306):
+    /// a leave balance waits for it, so it is never worked out on "privatePay off" before the switch is known.
+    static var hasRead: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return hasAnswered
+    }
 
     /// RULEBOOK 1.34.0 §18 (owner decision 7 Nov "1b"): `ghostAccountsEnabled(platformConfig/app, organizationId)` —
     /// whether the Ghost account toggle may show. Not read yet, a missing document or an unanswered script is off.
@@ -92,6 +101,7 @@ nonisolated enum SecuritySwitchContext {
         lock.lock()
         config = next
         configKey = nextKey
+        hasAnswered = true
         lock.unlock()
         if dataCheckPanel != panelBefore {
             DispatchQueue.main.async {
@@ -296,6 +306,38 @@ extension FirebaseBackend {
     /// `payRateHistoryWriteFields` wrote for a row with no account). A plain `operativeId ==` query is refused by the rules.
     nonisolated static func catalogueRateHistoryQuery(operativeId: String) -> (DocumentReference) -> Query {
         { $0.collection("operativeDayRateHistory").whereField("operativeId", isEqualTo: operativeId).whereField("userId", isEqualTo: "") }
+    }
+
+    /// RULEBOOK §1 `LIVE_COLLECTIONS` ("Pay history `operativeDayRateHistory` listens while open") and 1.26.0 / 1.27.0 §8
+    /// `rateHistoryQueryPlan`: the listeners one person's pay-history screen (Edit User) holds, mirroring web
+    /// `watchOperativeDayRateHistory`. Plan `all`: the whole collection (one listener). Plan `people`: one `userId ==`
+    /// listener per id the person goes by that the plan lists (the plan's stored id, matched without case), and one
+    /// `operativeId ==` + `userId == ''` listener per `operatives` row of the person that the plan lists as a catalogue
+    /// operative. A person whose pay this viewer may not see gets none (nothing is read). Keys are stable per query, so a
+    /// plan change re-attaches only what changed.
+    nonisolated static func rateHistoryPersonListenQueries(
+        plan: RulebookRateHistoryPlan,
+        userIds: [String],
+        operativeRowIds: [String]
+    ) -> [(key: String, query: (DocumentReference) -> Query)] {
+        switch plan {
+        case .all:
+            return [(key: "all", query: { $0.collection("operativeDayRateHistory") })]
+        case .people(let planUserIds, let planOperativeIds):
+            func planIds(_ wanted: [String], in listed: [String]) -> [String] {
+                let keys = Set(wanted.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
+                var seen = Set<String>()
+                return listed.filter { keys.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) && seen.insert($0).inserted }
+            }
+            var out: [(key: String, query: (DocumentReference) -> Query)] = []
+            for id in planIds(userIds, in: planUserIds) {
+                out.append((key: "u:\(id)", query: { $0.collection("operativeDayRateHistory").whereField("userId", isEqualTo: id) }))
+            }
+            for id in planIds(operativeRowIds, in: planOperativeIds) {
+                out.append((key: "o:\(id)", query: catalogueRateHistoryQuery(operativeId: id)))
+            }
+            return out
+        }
     }
 
     /// The target suffix that makes a pay screen's history listener re-attach when the plan changes.

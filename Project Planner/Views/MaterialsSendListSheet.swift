@@ -665,7 +665,7 @@ struct MaterialsSendListSheet: View {
         if !userEmail.isEmpty { senderSignature += "\n\(userEmail)" }
         if !orgName.isEmpty { senderSignature += "\n\(orgName)" }
 
-        let request = MaterialOrderRequest(
+        var request = MaterialOrderRequest(
             projectId: project.id,
             projectNumber: project.jobNumber,
             projectName: project.siteName,
@@ -700,6 +700,11 @@ struct MaterialsSendListSheet: View {
             recipients: recipientSnapshots,
             lines: items.map(\.sendLineSnapshot)
         )
+        // One `sendEmail` request id per email (web functions/email/requestDedupe.js): the send record's id, unless an
+        // earlier press of this same email was not confirmed (an online timeout) — then that press's id, so the function
+        // answers from the first send instead of emailing the wholesaler again. Kept if the send is queued.
+        let contentSignature = MaterialRequestEmailPayload.contentSignature(request, senderEmail: userEmail)
+        request.requestId = MaterialRequestRetryIds.requestId(signature: contentSignature, fresh: sendRecord.id.uuidString)
 
         Task {
             guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else {
@@ -716,6 +721,8 @@ struct MaterialsSendListSheet: View {
                 )
                 await MainActor.run {
                     isSending = false
+                    // Sent, or queued with its own request id: a later press of this email is a new request.
+                    MaterialRequestRetryIds.confirmed(signature: contentSignature)
                     if result == .queuedForSync {
                         sendConfirmation = SendConfirmationState(
                             requestType: type,

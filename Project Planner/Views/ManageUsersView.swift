@@ -1562,6 +1562,10 @@ struct EditUserView: View {
     /// RULEBOOK 1.14.0 `payRateRequiredError`, shown under the rate field after a refused save.
     @State private var payRateFieldError: String?
     @State private var dayRateHistory: [OperativeDayRateHistoryEntry] = []
+    /// The live pay-history rows by listener (`rateHistoryListenQueries`), merged by document id when shown.
+    @State private var liveRateHistoryRows: [String: LiveDocumentRows] = [:]
+    /// One id per Edit User screen, so two open screens never share (and remove) each other's pay-history listeners.
+    @State private var rateHistoryListenerInstance = UUID().uuidString
     @State private var showingQualificationsEditor = false
     @State private var operativeForQualificationsEditor: Operative?
     @State private var openingQualificationsEditor = false
@@ -1612,6 +1616,10 @@ struct EditUserView: View {
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
     @State private var baselineRemainingText = ""
+    /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments, for the remaining figure shown (read only).
+    @StateObject private var leaveAdjustmentsModel = AnnualLeaveAdjustmentsModel()
+    /// RULEBOOK 1.40.0 (review r306 #2): the employment type from the person's pay record.
+    @StateObject private var leaveEmploymentModel = AnnualLeaveEmploymentModel()
     @State private var employmentTypeDraft: EmploymentType
     @State private var showingEmploymentTypeConfirmation = false
     @State private var employmentTypeConfirmationAccepted = false
@@ -1908,9 +1916,13 @@ struct EditUserView: View {
         return permissions.operativeMode || user.role == .operative || permissions.manager
     }
 
-    private func currentRemainingDays(for subject: AppUser) -> Double {
+    /// The remaining figure as the rulebook gives it, or nil until the pay record and the adjustments have loaded
+    /// (review r306 #2, #9).
+    private func remainingLeaveSummary(for subject: AppUser) -> AnnualLeaveUsageSummary? {
+        let employment = leaveEmploymentModel.employment(for: subject, backend: firebaseBackend)
+        guard employment.ready, leaveAdjustmentsModel.isLoaded(for: [subject.id]) else { return nil }
         let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
-        let summary = AnnualLeavePolicy.usageSummary(
+        return AnnualLeavePolicy.usageSummary(
             bookings: holidayStore.myBookings(account: subject, operatives: operativeStore.allOperatives),
             daysPerYear: subject.annualLeaveDaysPerYear,
             startMonth: subject.annualLeaveYearStartMonth,
@@ -1922,9 +1934,22 @@ struct EditUserView: View {
             orgEndMonth: org.endMonth,
             yearAllowance: subject.annualLeaveYearAllowance,
             yearAllowanceKey: subject.annualLeaveYearAllowanceKey,
-            employmentStartDayKey: subject.employmentStartDate
+            employmentStartDayKey: subject.employmentStartDate,
+            // RULEBOOK 1.40.0 §4.4: PAYE days only (the type from the pay record), with this year's adjustments.
+            employment: employment.employment,
+            adjustments: leaveAdjustmentsModel.rows(for: [subject.id])
         )
-        return summary.remainingDays ?? 0
+    }
+
+    private func currentRemainingDays(for subject: AppUser) -> Double {
+        remainingLeaveSummary(for: subject)?.remainingDays ?? 0
+    }
+
+    /// The Edit User remaining line: the figure, "Counting leave…" until it is known, or the read error.
+    private func remainingLeaveLine(for subject: AppUser) -> String {
+        if leaveAdjustmentsModel.failed(for: [subject.id]) { return AnnualLeaveAdjustmentsModel.readError }
+        guard let summary = remainingLeaveSummary(for: subject) else { return "Counting leave…" }
+        return "\(AnnualLeavePolicy.formatAllowanceDays(summary.remainingDays ?? 0)) days"
     }
 
     private func parsedRemainingForSave() -> Double? {
@@ -2007,19 +2032,25 @@ struct EditUserView: View {
                     isEnabled: canEditPermissionsMatrix
                 )
                 .padding(14)
+                // RULEBOOK 1.40.0 (owner decision 11 Nov H35): no "set remaining" box any more — days are added or taken
+                // off with a reason on the person's annual leave page (Annual leave → Team); a stored override still
+                // counts until its leave year ends.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(annualLeaveAllowanceCopy.remainingTitle)
+                    Text("Remaining this leave year")
                         .font(.subheadline.weight(.semibold))
-                    TextField("Remaining", text: $remainingLeaveText)
-                        .keyboardType(.decimalPad)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(!canEditPermissionsMatrix)
-                    Text(annualLeaveAllowanceCopy.remainingNote)
+                    Text(remainingLeaveLine(for: userStore.rosterRow(for: user.id) ?? user))
+                        .font(.body.weight(.semibold))
+                        .monospacedDigit()
+                        .accessibilityIdentifier("editUser.remainingLeave")
+                    Text("To add or take off days, open this person on Annual leave → Team and choose Adjust leave. Each change needs a reason and is kept as history.")
                         .font(.caption)
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 14)
+                .task(id: user.id) {
+                    leaveAdjustmentsModel.listen(backend: firebaseBackend, userIds: [user.id])
+                }
                 employmentStartDateRow
             }
         }
@@ -2345,6 +2376,12 @@ struct EditUserView: View {
             }
             .task {
                 await loadDayRateHistory()
+            }
+            // RULEBOOK §1 `LIVE_COLLECTIONS` "Pay history listens while open" and 1.26.0 §8 `rateHistoryQueryPlan`: the
+            // person's `operativeDayRateHistory` rows stay live while Edit User is open (web `watchOperativeDayRateHistory`).
+            .listensWhileOpen("operativeDayRateHistory", keyPrefix: "operativeDayRateHistory.editUser.\(rateHistoryListenerInstance)",
+                              firebaseBackend: firebaseBackend, queries: rateHistoryListenQueries) { queryKey, rows in
+                applyLiveRateHistoryRows(queryKey: queryKey, rows: rows)
             }
             .task {
                 await loadSentInvitationForLineManagerLock()
@@ -3581,21 +3618,74 @@ struct EditUserView: View {
         }
     }
     
+    /// Whether this screen shows the person's previous rates at all (the gate `loadDayRateHistory` has always used).
+    private var showsDayRateHistory: Bool {
+        permissions.operativeMode || permissions.manager || permissions.adminAccess
+    }
+
+    /// RULEBOOK 1.36.0 §8: every users id of the person (their own, the stored former and same-email ids).
+    private var rateHistoryPersonUserIds: [String] {
+        [user.id] + user.formerUserIds + user.sameEmailUserIds
+    }
+
+    /// Every `operatives` row of the person (`bookingIdsForAccount` through `personOperativeIds`), as in-app UUID strings.
+    private var rateHistoryPersonOperativeIds: [String] {
+        PayrollRateResolver.personOperativeIds(user: user, operative: linkedOperativeForUser, operatives: operativeStore.allOperatives)
+    }
+
+    /// The pay-history listeners while Edit User is open: `rateHistoryPersonListenQueries` over this viewer's
+    /// `rateHistoryQueryPlan` (none when the screen shows no history, or the plan gives this viewer none of the person).
+    private var rateHistoryListenQueries: [(key: String, query: (DocumentReference) -> Query)] {
+        guard showsDayRateHistory else { return [] }
+        let operativeIds = Set(rateHistoryPersonOperativeIds.map { $0.lowercased() })
+        let rowIds = operativeStore.allOperatives
+            .filter { operativeIds.contains($0.id.uuidString.lowercased()) }
+            .map(\.documentId)
+        return FirebaseBackend.rateHistoryPersonListenQueries(
+            plan: firebaseBackend.rateHistoryPlan,
+            userIds: rateHistoryPersonUserIds,
+            operativeRowIds: rowIds
+        )
+    }
+
+    /// One listener's server rows: kept by query, merged by document id, read through `parsePayRateHistoryDocuments`
+    /// (`FirebaseBackend.operativeDayRateHistory(fromDocuments:)`) and shown as `loadDayRateHistory` shows them.
+    private func applyLiveRateHistoryRows(queryKey: String, rows: LiveDocumentRows) {
+        guard showsDayRateHistory else {
+            liveRateHistoryRows = [:]
+            dayRateHistory = []
+            return
+        }
+        liveRateHistoryRows[queryKey] = rows
+        let current = Set(rateHistoryListenQueries.map(\.key))
+        liveRateHistoryRows = liveRateHistoryRows.filter { current.contains($0.key) }
+        // Each query keeps its own latest rows; the list is shown only once every current query has answered, so one
+        // query's first snapshot never replaces the rows the others (and the first load) already gave.
+        guard current.isSubset(of: Set(liveRateHistoryRows.keys)) else { return }
+        var seen = Set<String>()
+        var merged: LiveDocumentRows = []
+        for key in liveRateHistoryRows.keys.sorted() {
+            for row in liveRateHistoryRows[key] ?? [] where seen.insert(row.id).inserted { merged.append(row) }
+        }
+        showDayRateHistory(FirebaseBackend.operativeDayRateHistory(fromDocuments: merged))
+    }
+
+    private func showDayRateHistory(_ collection: OperativeDayRateHistoryCollection) {
+        // RULEBOOK 1.36.0 §8: previous rates under every id of the person (users ids from `personIdSet` through the
+        // stored former / same-email ids, and every `operatives` row `bookingIdsForAccount` matches), without case.
+        dayRateHistory = collection
+            .entries(userIds: rateHistoryPersonUserIds, operativeIds: rateHistoryPersonOperativeIds)
+            .sorted(by: { $0.effectiveAt > $1.effectiveAt })
+    }
+
     private func loadDayRateHistory() async {
-        guard permissions.operativeMode || permissions.manager || permissions.adminAccess else {
+        guard showsDayRateHistory else {
             dayRateHistory = []
             return
         }
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let collection = (try? await firebaseBackend.loadOperativeDayRateHistory(organizationId: orgId)) ?? .empty
-        // RULEBOOK 1.36.0 §8: previous rates under every id of the person (users ids from `personIdSet` through the
-        // stored former / same-email ids, and every `operatives` row `bookingIdsForAccount` matches), without case.
-        let operativeIds = PayrollRateResolver.personOperativeIds(
-            user: user, operative: linkedOperativeForUser, operatives: operativeStore.allOperatives
-        )
-        dayRateHistory = collection
-            .entries(userIds: [user.id] + user.formerUserIds + user.sameEmailUserIds, operativeIds: operativeIds)
-            .sorted(by: { $0.effectiveAt > $1.effectiveAt })
+        showDayRateHistory(collection)
     }
 
     private func lastSeenDisplay(for u: AppUser) -> String {
