@@ -101,7 +101,9 @@ enum MaterialOfflineService {
         // Online: a dropped connection or a timeout is retried straight away (`MaterialRequestSendRetry`), with the
         // same `requestId`, so the function sends it at most once (it answers a repeat from the first send, or 409
         // "still sending"). Only when the quick retries also fail is the email queued for the next sync.
-        let outcome = try await MaterialRequestSendRetry.perform(isOnline: isOnline) {
+        // Only a request with an id is retried: without one the function cannot tell a retry from a new send.
+        let canRetry = MaterialRequestEmailPayload.requestIdValue(request.requestId) != nil
+        let outcome = try await MaterialRequestSendRetry.perform(isOnline: isOnline, canRetry: canRetry) {
             try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
         }
         switch outcome {
@@ -188,10 +190,12 @@ enum MaterialRequestSendRetry {
     }
 
     /// `retriesSoFar` is how many quick retries have already been made for this press.
-    static func action(after error: Error, isOnline: Bool, retriesSoFar: Int) -> Action {
+    /// `canRetry` is false for a request without a `requestId`: it is never sent again straight away (the old
+    /// queue-or-fail answer applies), because the function could not tell the retry from a new send.
+    static func action(after error: Error, isOnline: Bool, retriesSoFar: Int, canRetry: Bool = true) -> Action {
         if (error as? MaterialRequestEmailError) == .stillSending { return .queue }
         if !isOnline { return .queue }
-        if isTransient(error) {
+        if canRetry, isTransient(error) {
             let limit = isTimeout(error) ? maxTimeoutRetries : maxQuickRetries
             if retriesSoFar < limit {
                 return .retry(after: delays[min(retriesSoFar, delays.count - 1)])
@@ -206,6 +210,7 @@ enum MaterialRequestSendRetry {
     /// Runs `operation`, retrying it as `action` says. Throws the last error when the answer is `.fail`.
     static func perform(
         isOnline: Bool,
+        canRetry: Bool = true,
         sleep: (TimeInterval) async -> Void = { seconds in
             try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
         },
@@ -217,7 +222,7 @@ enum MaterialRequestSendRetry {
                 try await operation()
                 return .sent
             } catch {
-                switch action(after: error, isOnline: isOnline, retriesSoFar: retries) {
+                switch action(after: error, isOnline: isOnline, retriesSoFar: retries, canRetry: canRetry) {
                 case .retry(let delay):
                     print("⚠️ [materials/send] connection problem, retrying (\(retries + 1)): \(error.localizedDescription)")
                     retries += 1

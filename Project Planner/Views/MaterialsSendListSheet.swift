@@ -1030,7 +1030,7 @@ struct MaterialsSendConfirmationView: View {
         let items = "\(confirmation.itemCount) item\(confirmation.itemCount == 1 ? "" : "s")"
         if confirmation.queuedForSync {
             if confirmation.queuedWhileOnline {
-                return "The connection dropped — it will be emailed to \(recipients) automatically · \(items)"
+                return "Not confirmed yet — it will be checked and emailed to \(recipients) automatically · \(items)"
             }
             return "No signal — it will be emailed to \(recipients) when you're back online · \(items)"
         }
@@ -1041,7 +1041,11 @@ struct MaterialsSendConfirmationView: View {
     static func queuedWarning(_ confirmation: MaterialsSendListSheet.SendConfirmationState) -> String? {
         guard confirmation.queuedForSync else { return nil }
         let what = confirmation.requestType == .quote ? "quote" : "order"
-        return "The wholesaler has NOT received this \(what) yet. It is waiting on this phone and shows as \"Pending sync\" at the top of the app until it goes. Keep the app open with signal, or check the queue there."
+        // Queued with signal (a dropped connection, or an earlier press still sending): it may already have gone.
+        let state = confirmation.queuedWhileOnline
+            ? "The wholesaler may not have received this \(what) yet."
+            : "The wholesaler has NOT received this \(what) yet."
+        return "\(state) It is waiting on this phone and shows as \"Pending sync\" at the top of the app until it is confirmed. It is never emailed twice. Keep the app open with signal, or check the queue there."
     }
 
     var body: some View {

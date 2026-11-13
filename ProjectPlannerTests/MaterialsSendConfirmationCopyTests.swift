@@ -42,7 +42,7 @@ final class MaterialsSendConfirmationCopyTests: XCTestCase {
         XCTAssertEqual(MaterialsSendConfirmationView.headline(state), "Quote not sent yet")
         XCTAssertEqual(
             MaterialsSendConfirmationView.detail(state),
-            "The connection dropped — it will be emailed to 1 recipient automatically · 1 item"
+            "Not confirmed yet — it will be checked and emailed to 1 recipient automatically · 1 item"
         )
     }
 
@@ -51,6 +51,10 @@ final class MaterialsSendConfirmationCopyTests: XCTestCase {
         let warning = try? XCTUnwrap(MaterialsSendConfirmationView.queuedWarning(queued))
         XCTAssertTrue(warning?.contains("has NOT received this order yet") == true)
         XCTAssertTrue(warning?.contains("Pending sync") == true)
+        let online = MaterialsSendListSheet.SendConfirmationState(
+            requestType: .quote, itemCount: 2, recipientCount: 1, queuedForSync: true, queuedWhileOnline: true
+        )
+        XCTAssertTrue(MaterialsSendConfirmationView.queuedWarning(online)?.contains("may not have received this quote yet") == true)
         let sent = MaterialsSendListSheet.SendConfirmationState(requestType: .order, itemCount: 2, recipientCount: 1)
         XCTAssertNil(MaterialsSendConfirmationView.queuedWarning(sent))
     }

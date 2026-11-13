@@ -98,4 +98,19 @@ final class MaterialRequestSendRetryTests: XCTestCase {
         }
         XCTAssertEqual(ids, ["6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8", "6F1D2C3B-4A5E-4F60-8172-93A4B5C6D7E8"])
     }
+
+    func testARequestWithoutAnIdIsNeverRetried() async throws {
+        XCTAssertEqual(
+            MaterialRequestSendRetry.action(after: URLError(.notConnectedToInternet), isOnline: true, retriesSoFar: 0, canRetry: false),
+            .queue
+        )
+        XCTAssertEqual(MaterialRequestSendRetry.action(after: MaterialRequestEmailError.timedOut, isOnline: true, retriesSoFar: 0, canRetry: false), .fail)
+        var calls = 0
+        let outcome = try await MaterialRequestSendRetry.perform(isOnline: true, canRetry: false, sleep: { _ in }) {
+            calls += 1
+            throw URLError(.notConnectedToInternet)
+        }
+        XCTAssertEqual(outcome, .queue)
+        XCTAssertEqual(calls, 1)
+    }
 }
