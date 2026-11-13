@@ -59,6 +59,86 @@ nonisolated enum LiveListenerAttachPolicy {
         let ns = error as NSError
         return ns.domain == "FIRFirestoreErrorDomain" && ns.code == 7
     }
+
+    /// A delayed retry of a failed listener attaches again only while someone is signed in and the organisation the
+    /// listener was for is still the open one (ids without case). Never another company's listener after a switch.
+    static func mayRetryAttach(listenerOrganizationId: String, currentOrganizationId: String?, isAuthenticated: Bool) -> Bool {
+        func key(_ id: String?) -> String { (id ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        let listener = key(listenerOrganizationId)
+        return isAuthenticated && !listener.isEmpty && listener == key(currentOrganizationId)
+    }
+
+    /// What `organizations/{orgId}` (the settings document) needs when its listener is asked for.
+    nonisolated enum OrganizationDocumentAttach: Equatable, Sendable {
+        /// The listener for this organisation is attached: nothing to do.
+        case keep
+        /// This organisation's listener failed (or was dropped by the watchdog): attach it again on its own, leaving
+        /// every other listener of the same organisation as it is.
+        case reattachSameOrganization
+        /// No listener, or another organisation's: the full organisation switch (every listener stops first).
+        case replace
+    }
+
+    /// `activeTarget` is the target remembered for the settings listener (kept after a failure, so an organisation
+    /// switch is still recognised as one); `hasRegistration` whether a Firestore listener is actually attached.
+    static func organizationDocumentAttach(activeTarget: String?, requestedTarget: String, hasRegistration: Bool) -> OrganizationDocumentAttach {
+        let requested = requestedTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !requested.isEmpty else { return .keep }
+        let active = (activeTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !active.isEmpty, active == requested else { return .replace }
+        return hasRegistration ? .keep : .reattachSameOrganization
+    }
+
+    /// Planned listeners (`listenPlannedSources`: projects, small works, bookings, manager site bookings, subcontractor
+    /// bookings) retry their own failed query parts (2 s up to 60 s, until the plan is replaced), so the watchdog
+    /// attaches one only when none is recorded for the key (`DataParityListenerLedger.snapshot` is nil) and the device
+    /// is online. A recorded listener that is merely slow is never torn down (review of #228: a 20-second grace
+    /// re-listened healthy plans on every launch and foreground).
+    static func plannedListenerNeedsReattach(listenerRecorded: Bool, online: Bool) -> Bool {
+        online && !listenerRecorded
+    }
+
+    /// A failure of the settings listener counts only when it is the current attach (`generation`) for the same
+    /// target: a replaced or switched-away listener's late error changes nothing.
+    static func acceptsOrganizationDocumentFailure(
+        failedGeneration: UUID,
+        currentGeneration: UUID,
+        failedTarget: String,
+        activeTarget: String?
+    ) -> Bool {
+        failedGeneration == currentGeneration && activeTarget == failedTarget
+    }
+
+    /// The planned keys the stale-cache watchdog checks (each re-attached by its own owner).
+    static let plannedWatchdogKeys = ["projects", "smallWorks", "subcontractorBookings", "bookings", "managerSiteBookings"]
+}
+
+/// Single-document listeners ask Firestore for metadata changes so they learn when the server answered (a server copy
+/// equal to the cached one raises nothing otherwise). This passes on only snapshots whose data changed (or the first
+/// one), so the screen sees exactly the snapshots it saw before metadata changes were switched on.
+nonisolated final class DocumentSnapshotDeduper: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delivered = false
+    private var last: NSDictionary?
+
+    init() {}
+
+    /// True when `data` (nil: the document does not exist) differs from the last delivered data, or nothing was
+    /// delivered yet. Marks it delivered.
+    func shouldDeliver(_ data: [String: Any]?) -> Bool {
+        let next = data.map { $0 as NSDictionary }
+        lock.lock(); defer { lock.unlock() }
+        if delivered {
+            switch (last, next) {
+            case (nil, nil): return false
+            case let (previous?, incoming?) where previous.isEqual(incoming): return false
+            default: break
+            }
+        }
+        delivered = true
+        last = next
+        return true
+    }
 }
 
 /// When each keyed organisation listener was attached, when its last server snapshot arrived, and how many times in a

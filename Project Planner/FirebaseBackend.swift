@@ -264,6 +264,8 @@ class FirebaseBackend: ObservableObject {
     private var lastOrganizationDidLoadBroadcastAt: Date?
     private var organizationDocumentListener: ListenerRegistration?
     private var organizationDocumentListenerTarget: String?
+    /// Which attach of the settings listener is current, so a late failure of a replaced one changes nothing.
+    private var organizationDocumentListenerGeneration = UUID()
     private var bookingsLiveListener: ListenerRegistration?
     private var bookingsLiveListenerTarget: String?
     /// Counts from the last booking read: how many documents the shared parser kept or refused.
@@ -425,19 +427,64 @@ class FirebaseBackend: ObservableObject {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
         let target = "org:\(orgId)"
-        guard LaunchStartupPolicy.shouldAttachListener(
+        // RULEBOOK §1: a failed settings listener is attached again on its own (before 13 Nov its target stayed set
+        // after the failure, so neither a retry nor a foreground return ever attached it again that session).
+        switch LiveListenerAttachPolicy.organizationDocumentAttach(
             activeTarget: organizationDocumentListenerTarget,
-            requestedTarget: target
-        ) else { return }
-        stopOrganizationDocumentListener()
+            requestedTarget: target,
+            hasRegistration: organizationDocumentListener != nil
+        ) {
+        case .keep:
+            return
+        case .reattachSameOrganization:
+            break
+        case .replace:
+            stopOrganizationDocumentListener()
+        }
         organizationDocumentListenerTarget = target
+        attachOrganizationDocumentListener(orgId: orgId)
+    }
+
+    /// The stale-cache watchdog: the settings listener has had no server snapshot, so it is attached afresh (its
+    /// first snapshot is a new read). Only the settings listener; every other listener stays.
+    func reattachOrganizationDocumentListenerIfCurrent(organizationId: String) {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard LiveListenerAttachPolicy.mayRetryAttach(
+            listenerOrganizationId: orgId,
+            currentOrganizationId: currentOrganization?.firestoreDocumentId,
+            isAuthenticated: isAuthenticated
+        ), organizationDocumentListenerTarget == "org:\(orgId)" else { return }
+        organizationDocumentListener?.remove()
+        organizationDocumentListener = nil
+        attachOrganizationDocumentListener(orgId: orgId)
+    }
+
+    private func attachOrganizationDocumentListener(orgId: String) {
+        let generation = UUID()
+        organizationDocumentListenerGeneration = generation
+        let deduper = DocumentSnapshotDeduper()
+        // Metadata changes are on only so `LiveListenerClock` learns when the server answered; the settings are
+        // applied only when the document's data changed (`DocumentSnapshotDeduper`), as before.
         organizationDocumentListener = db.collection("organizations").document(orgId)
-            .addSnapshotListener { [weak self] snapshot, error in
+            .addSnapshotListener(includeMetadataChanges: true) { [weak self] snapshot, error in
                 if let error {
-                    print("🔥🔥🔥 DEBUG: organization listener error: \(error.localizedDescription)")
+                    NSLog("LIVE_LISTENER_FAILED key=organization org=%@ error=%@", orgId, error.localizedDescription)
+                    let permissionDenied = LiveListenerAttachPolicy.isPermissionDenied(error)
+                    Task { @MainActor [weak self] in
+                        self?.organizationDocumentListenerFailed(
+                            orgId: orgId,
+                            generation: generation,
+                            permissionDenied: permissionDenied
+                        )
+                    }
                     return
                 }
-                guard let self, let snapshot, snapshot.exists, let data = snapshot.data() else { return }
+                guard let snapshot else { return }
+                if !snapshot.metadata.isFromCache {
+                    LiveListenerClock.shared.markServerSnapshot(key: "organization", organizationId: orgId)
+                }
+                guard snapshot.exists, let data = snapshot.data(), deduper.shouldDeliver(data) else { return }
+                guard let self else { return }
                 Task { @MainActor in
                     // A snapshot for a company the user has since left is ignored.
                     guard organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
@@ -453,6 +500,33 @@ class FirebaseBackend: ObservableObject {
                     self.organizationMembersSnapshot = (organizationId: orgId, members: members)
                 }
             }
+        LiveListenerClock.shared.markAttached(key: "organization", organizationId: orgId)
+    }
+
+    /// A failed settings listener drops its registration (keeping its target, so an organisation switch is still a
+    /// switch) and is attached again after `LiveListenerAttachPolicy.retryDelay` while the same organisation is open
+    /// and someone is signed in. A foreground return (`broadcastOrganizationDidLoadIfNeeded`) attaches it sooner.
+    private func organizationDocumentListenerFailed(orgId: String, generation: UUID, permissionDenied: Bool) {
+        guard LiveListenerAttachPolicy.acceptsOrganizationDocumentFailure(
+            failedGeneration: generation,
+            currentGeneration: organizationDocumentListenerGeneration,
+            failedTarget: "org:\(orgId)",
+            activeTarget: organizationDocumentListenerTarget
+        ) else { return }
+        organizationDocumentListener?.remove()
+        organizationDocumentListener = nil
+        let failures = LiveListenerClock.shared.markFailed(key: "organization", organizationId: orgId)
+        guard let delay = LiveListenerAttachPolicy.retryDelay(afterFailures: failures, permissionDenied: permissionDenied) else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, LiveListenerAttachPolicy.mayRetryAttach(
+                listenerOrganizationId: orgId,
+                currentOrganizationId: self.currentOrganization?.firestoreDocumentId,
+                isAuthenticated: self.isAuthenticated
+            ) else { return }
+            // `.keep` when it was attached again meanwhile; never a second listener.
+            self.startOrganizationDocumentListener(organizationId: orgId)
+        }
     }
 
     /// Every snapshot of `organizations/{orgId}` re-parses ALL settings (working hours incl. prior and
