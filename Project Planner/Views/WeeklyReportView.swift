@@ -1272,7 +1272,7 @@ struct WeeklyReportView: View {
                 && day <= reportEndDay
                 && booking.occupiesDay
         }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
         var totals: [String: Double] = [:]
         var rowsMap: [String: ProjectWorkRow] = [:]
         for booking in filtered {
@@ -1390,7 +1390,7 @@ struct WeeklyReportView: View {
             return day >= reportStartDay
                 && day <= reportEndDay
         }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
         
         var totals: [String: LabourRateSummary] = [:]
         for booking in operativeBookings {
@@ -1791,7 +1791,7 @@ struct WeeklyReportView: View {
                 && day <= reportEndDay
                 && $0.occupiesDay
         }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
         for booking in operativeBookings {
             let person = reportPerson(for: booking, people: people)
             let linkedUser = person.user
