@@ -2782,8 +2782,9 @@ struct EditUserView: View {
                                 iconName: "folder.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Projects",
-                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
+                                // RULEBOOK 1.42.0 §11: the rulebook's row text (`PERMISSION_TOGGLE_CATALOGUE`), never a copy.
+                                title: CanonicalBusinessEngine.projectsToggleLabel,
+                                description: CanonicalBusinessEngine.projectsToggleHelp,
                                 isOn: $managerTransitionProjects
                             )
                             ManageUserCardDivider()
@@ -2791,8 +2792,8 @@ struct EditUserView: View {
                                 iconName: "hammer.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Small Works",
-                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
+                                title: CanonicalBusinessEngine.smallWorksToggleLabel,
+                                description: CanonicalBusinessEngine.smallWorksToggleHelp,
                                 isOn: $managerTransitionSmallWorks
                             )
                         }
