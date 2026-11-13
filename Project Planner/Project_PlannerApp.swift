@@ -61,7 +61,15 @@ private enum FirebaseStartup {
 /// hop back onto the main actor while already on the main thread, so the first frame
 /// never arrives: white launch screen, then the system kills the app.
 nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
-    var onPushToken: ((String) -> Void)?
+    /// Set by the root view once the session exists. A token Firebase gave before that (at launch, before sign-in) is
+    /// replayed when the closure is set, so it is never dropped.
+    var onPushToken: ((String) -> Void)? {
+        didSet {
+            if let token = latestPushToken, !token.isEmpty { onPushToken?(token) }
+        }
+    }
+    /// The latest FCM token this device received (main queue only).
+    private(set) var latestPushToken: String?
     var foregroundNotificationHandler: ((Bool, String?) -> UNNotificationPresentationOptions)?
     private var firebaseAuthStateHandle: AuthStateDidChangeListenerHandle?
 
@@ -147,6 +155,24 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
 #if canImport(FirebaseMessaging)
         Messaging.messaging().apnsToken = deviceToken
 #endif
+        print("🔥🔥🔥 DEBUG: [PUSH] APNs registration succeeded")
+        Task { @MainActor in
+            PushRegistrationStatus.shared.recordAPNsRegistered()
+        }
+    }
+
+    /// APNs refused to register this device (no push entitlement in the build, simulator without a network, …).
+    /// Without this nothing reached the log and the phone simply never got a token.
+    nonisolated func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        let message = error.localizedDescription
+        print("🔥🔥🔥 DEBUG: [PUSH] APNs registration FAILED: \(message)")
+        NSLog("PUSH_APNS_REGISTRATION_FAILED %@", message as NSString)
+        Task { @MainActor in
+            PushRegistrationStatus.shared.recordAPNsFailure(message)
+        }
     }
 
     nonisolated func application(
@@ -181,9 +207,14 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
 #if canImport(FirebaseMessaging)
 extension AppDelegate: MessagingDelegate {
     nonisolated func messaging(_ messaging: Messaging, didReceiveRegistrationToken fcmToken: String?) {
-        guard let token = fcmToken, !token.isEmpty else { return }
-        print("🔥🔥🔥 DEBUG: Received FCM token")
+        guard let token = fcmToken, !token.isEmpty else {
+            print("🔥🔥🔥 DEBUG: [PUSH] FCM gave no token")
+            return
+        }
+        print("🔥🔥🔥 DEBUG: [PUSH] Received FCM token \(PushRegistrationStatus.tokenSuffix(token))")
         Task { @MainActor in
+            PushRegistrationStatus.shared.recordFCMToken(token)
+            self.latestPushToken = token
             self.onPushToken?(token)
         }
     }

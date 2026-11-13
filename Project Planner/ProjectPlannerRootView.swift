@@ -636,8 +636,18 @@ struct ProjectPlannerRootView: View {
             }
         }
         .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { oldId, newId in
+            // RULEBOOK §13: save this device's push token whenever the organisation loads (a device-owned field).
+            if newId != nil {
+                Task { await firebaseBackend.reregisterPushTokenIfAvailable() }
+            }
             guard let oldId, let newId, oldId != newId else { return }
             contentShellEpoch += 1
+        }
+        .onChange(of: userStore.currentUser?.id) { _, userId in
+            // RULEBOOK §13: on sign-in and each time the signed-in user loads, save this device's push token to their
+            // own users document — not only when Firebase calls back with a new token (that can happen before sign-in).
+            guard let userId, !userId.isEmpty else { return }
+            Task { await firebaseBackend.reregisterPushTokenIfAvailable() }
         }
         .onChange(of: firebaseBackend.organizationSwitchToken) { _, token in
             guard token != nil else { return }
