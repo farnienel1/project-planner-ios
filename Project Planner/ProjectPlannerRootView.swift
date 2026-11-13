@@ -124,7 +124,9 @@ enum PlannerStoreWiring {
         scheduleStaleCacheWatchdog(
             organizationId: organizationId,
             firebaseBackend: firebaseBackend,
+            projectStore: projectStore,
             operativeStore: operativeStore,
+            subcontractorStore: subcontractorStore,
             userStore: userStore
         )
     }
@@ -137,7 +139,9 @@ enum PlannerStoreWiring {
     private static func scheduleStaleCacheWatchdog(
         organizationId: String,
         firebaseBackend: FirebaseBackend,
+        projectStore: ProjectStore,
         operativeStore: OperativeStore,
+        subcontractorStore: SubcontractorStore,
         userStore: UserStore?
     ) {
         let grace: TimeInterval = 20
@@ -174,6 +178,38 @@ enum PlannerStoreWiring {
                     Task { await userStore.loadOrganizationUsers(forceRefresh: true) }
                 } else {
                     userStore.ensureOrganizationUsersLive()
+                }
+            }
+            // The organisation settings document (working hours, warning settings, payment runs, …).
+            if LiveListenerAttachPolicy.needsServerRead(
+                attachedAt: clock.attachedAt(key: "organization", organizationId: organizationId),
+                lastServerSnapshotAt: clock.lastServerSnapshotAt(key: "organization", organizationId: organizationId),
+                online: online,
+                now: now,
+                grace: grace
+            ) {
+                NSLog("STALE_CACHE_SERVER_READ collection=organization org=%@", organizationId)
+                firebaseBackend.reattachOrganizationDocumentListenerIfCurrent(organizationId: organizationId)
+            }
+            // Planned listeners retry their own failed parts; this only attaches one that is missing. A recorded
+            // listener, even a slow one, is left alone (never two listeners for one key, no needless re-listen).
+            for key in LiveListenerAttachPolicy.plannedWatchdogKeys {
+                let recorded = DataParityListenerLedger.shared.snapshot(key: key, organizationId: organizationId)
+                guard LiveListenerAttachPolicy.plannedListenerNeedsReattach(
+                    listenerRecorded: recorded != nil,
+                    online: online
+                ) else { continue }
+                NSLog("STALE_CACHE_SERVER_READ collection=%@ org=%@ listener=missing", key, organizationId)
+                switch key {
+                case "projects", "smallWorks":
+                    // A no-op for the slice already attached (`needsAttach`).
+                    projectStore.startLiveUpdates(organizationId: organizationId)
+                case "subcontractorBookings":
+                    subcontractorStore.startLiveUpdates(organizationId: organizationId)
+                default:
+                    // Bookings and manager site bookings: their stores asked for them; with no request yet there is
+                    // nothing to attach here (the store attaches it when it loads).
+                    firebaseBackend.reattachScheduleListenerForDataCheck(collection: key)
                 }
             }
         }
@@ -636,8 +672,18 @@ struct ProjectPlannerRootView: View {
             }
         }
         .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { oldId, newId in
+            // RULEBOOK §13: save this device's push token whenever the organisation loads (a device-owned field).
+            if newId != nil {
+                Task { await firebaseBackend.reregisterPushTokenIfAvailable() }
+            }
             guard let oldId, let newId, oldId != newId else { return }
             contentShellEpoch += 1
+        }
+        .onChange(of: userStore.currentUser?.id) { _, userId in
+            // RULEBOOK §13: on sign-in and each time the signed-in user loads, save this device's push token to their
+            // own users document — not only when Firebase calls back with a new token (that can happen before sign-in).
+            guard let userId, !userId.isEmpty else { return }
+            Task { await firebaseBackend.reregisterPushTokenIfAvailable() }
         }
         .onChange(of: firebaseBackend.organizationSwitchToken) { _, token in
             guard token != nil else { return }
