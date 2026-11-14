@@ -287,24 +287,19 @@ extension CanonicalBusinessEngine {
         entries: [(id: String, amount: Double, managerDecision: String, managerRevisedAmount: Double?)],
         reviewedByUserId: String,
         reviewedAtMs: Double,
-        entryFields: [String: [String: Any]] = [:]
+        reviewFingerprints: [String: String] = [:]
     ) -> [String: Any]? {
         var stored: Any = NSNull()
         if let storedSheet, let sheetJSON = timesheetJSONSafe(storedSheet) {
             guard let parsed = callJSON("parseTimesheetEntryReviews", arguments: [sheetJSON]) else { return nil }
             stored = parsed
         }
-        // RULEBOOK 1.45.0 §8 (review #322 F1): each entry's own fields (title, details, jobNumber, agreedManagerName,
-        // dates, amount, evidence; `entryFields` by entry id, stored shape) go in too, so the review stores
-        // `reviewedFingerprint` (`timesheetEntryFingerprint`) and any later owner change reads as pending. Without them
-        // the review is amount-only, as before.
+        // RULEBOOK 1.45.0 §8 (review #322): each entry's `reviewFingerprint` (the stored row's, from
+        // `parseTimesheetEntries`, by entry id) goes in, so the review stores `reviewedFingerprint` and any later owner
+        // change reads as pending. Without one the review is amount-only, as before. Only changed reviews are written.
         let entryRows: [[String: Any]] = entries.map { entry in
             var row: [String: Any] = [:]
-            if let fields = entryFields[entry.id], let safe = timesheetJSONSafe(fields) {
-                for key in ["title", "details", "jobNumber", "agreedManagerName", "date", "startDate", "endDate", "evidence"] {
-                    if let value = safe[key] { row[key] = value }
-                }
-            }
+            if let fingerprint = reviewFingerprints[entry.id], !fingerprint.isEmpty { row["reviewFingerprint"] = fingerprint }
             row["id"] = entry.id
             row["amount"] = entry.amount
             row["managerDecision"] = entry.managerDecision

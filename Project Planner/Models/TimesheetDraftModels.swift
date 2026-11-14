@@ -36,6 +36,9 @@ struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     /// RULEBOOK 1.45.0 §8: files, photos and frozen personal site audit copies the owner attached (the PAYE claim
     /// evidence shape). Read through `parseTimesheetEntries`; written back on every save so it is never dropped.
     var evidence: [PayeClaimEvidence] = []
+    /// RULEBOOK 1.45.0 §8 (review #322): the stored row's fingerprint as `parseTimesheetEntries` returned it. Passed to
+    /// the review rules (`timesheetEntryReviewWriteFields`, `timesheetEntryDecision`); never written back. Nil on a new entry.
+    var reviewFingerprint: String? = nil
 }
 
 struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
@@ -53,6 +56,8 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var storedId: String? = nil
     /// RULEBOOK 1.45.0 §8: optional evidence (the PAYE claim evidence shape); written back on every save.
     var evidence: [PayeClaimEvidence] = []
+    /// RULEBOOK 1.45.0 §8: the stored row's fingerprint from `parseTimesheetEntries`; never written back.
+    var reviewFingerprint: String? = nil
 }
 
 struct TimesheetDraft: Codable {

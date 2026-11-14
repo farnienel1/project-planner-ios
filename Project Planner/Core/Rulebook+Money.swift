@@ -122,7 +122,8 @@ extension TimesheetPayrollLineItem {
 /// their on-screen entry decisions apply.
 enum TimesheetTotalsSource {
     static func sheetJSON(_ draft: TimesheetDraft, reviewing: Bool) -> [String: Any] {
-        var sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft)) as? [String: Any] ?? [:]
+        // RULEBOOK 1.45.0 §8: with each entry's stored-row `reviewFingerprint` (never written back).
+        var sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asRulebookSheetMap(draft)) as? [String: Any] ?? [:]
         if reviewing {
             func entry(storedId: String?, id: UUID, amount: Double, decision: TimesheetManagerDecision, revised: Double?) -> [String: Any] {
                 [

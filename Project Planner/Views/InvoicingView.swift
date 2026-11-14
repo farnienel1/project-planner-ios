@@ -1154,23 +1154,20 @@ enum TimesheetDraftStore {
             } + draft.priceWorkEntries.map {
                 (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
             }
-            // RULEBOOK 1.45.0 §8 (review #322 F1): each entry's own fields, so the review stores its fingerprint.
-            var entryFields: [String: [String: Any]] = [:]
-            let map = asFirestoreMap(draft)
-            for (index, row) in ((map["expenseEntries"] as? [[String: Any]]) ?? []).enumerated() where index < draft.expenseEntries.count {
-                let entry = draft.expenseEntries[index]
-                entryFields[entryId(entry.id, entry.storedId)] = row
+            // RULEBOOK 1.45.0 §8 (review #322): each entry's stored-row fingerprint, so the review stores it.
+            var reviewFingerprints: [String: String] = [:]
+            for entry in draft.expenseEntries {
+                if let fingerprint = entry.reviewFingerprint { reviewFingerprints[entryId(entry.id, entry.storedId)] = fingerprint }
             }
-            for (index, row) in ((map["priceWorkEntries"] as? [[String: Any]]) ?? []).enumerated() where index < draft.priceWorkEntries.count {
-                let entry = draft.priceWorkEntries[index]
-                entryFields[entryId(entry.id, entry.storedId)] = row
+            for entry in draft.priceWorkEntries {
+                if let fingerprint = entry.reviewFingerprint { reviewFingerprints[entryId(entry.id, entry.storedId)] = fingerprint }
             }
             if let reviewFields = CanonicalBusinessEngine.timesheetEntryReviewWriteFields(
                 storedSheet: server,
                 entries: entries,
                 reviewedByUserId: writerId,
                 reviewedAtMs: Date().timeIntervalSince1970 * 1000,
-                entryFields: entryFields
+                reviewFingerprints: reviewFingerprints
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
             }
@@ -1265,6 +1262,22 @@ enum TimesheetDraftStore {
             if let auditId = item.auditId, !auditId.isEmpty { row["auditId"] = auditId }
             return row
         }
+    }
+
+    /// The sheet as the rulebook reads it for decisions, totals and invoice rows: `asFirestoreMap` plus each entry's
+    /// stored-row `reviewFingerprint` (RULEBOOK 1.45.0 §8, review #322). Never written to Firestore.
+    static func asRulebookSheetMap(_ draft: TimesheetDraft) -> [String: Any] {
+        var map = asFirestoreMap(draft)
+        func tagged(_ key: String, _ fingerprints: [String?]) {
+            guard var rows = map[key] as? [[String: Any]] else { return }
+            for index in rows.indices where index < fingerprints.count {
+                if let fingerprint = fingerprints[index], !fingerprint.isEmpty { rows[index]["reviewFingerprint"] = fingerprint }
+            }
+            map[key] = rows
+        }
+        tagged("expenseEntries", draft.expenseEntries.map(\.reviewFingerprint))
+        tagged("priceWorkEntries", draft.priceWorkEntries.map(\.reviewFingerprint))
+        return map
     }
 
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
@@ -1391,7 +1404,8 @@ enum TimesheetDraftStore {
                 managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
                 managerRevisedAmount: row.number("managerRevisedAmount"),
                 storedId: row.id,
-                evidence: Self.entryEvidence(row)
+                evidence: Self.entryEvidence(row),
+                reviewFingerprint: row.optionalText("reviewFingerprint")
             )
         }
 
@@ -1408,7 +1422,8 @@ enum TimesheetDraftStore {
                 managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
                 managerRevisedAmount: row.number("managerRevisedAmount"),
                 storedId: row.id,
-                evidence: Self.entryEvidence(row)
+                evidence: Self.entryEvidence(row),
+                reviewFingerprint: row.optionalText("reviewFingerprint")
             )
         }
 
@@ -6221,6 +6236,8 @@ private struct TimesheetMoneyEntrySheet: View {
             entry.date = date
             entry.amount = amount
             entry.evidence = evidence
+            // The stored row changes with this save: its old fingerprint no longer describes it.
+            entry.reviewFingerprint = nil
             refused = await onSaveExpense(entry)
         } else {
             var entry = editingPriceWork ?? TimesheetPriceWorkEntry(
@@ -6234,6 +6251,8 @@ private struct TimesheetMoneyEntrySheet: View {
             entry.endDate = includeEndDate ? endDate : nil
             entry.amount = amount
             entry.evidence = evidence
+            // The stored row changes with this save: its old fingerprint no longer describes it.
+            entry.reviewFingerprint = nil
             refused = await onSavePriceWork(entry)
         }
         saving = nil
@@ -7402,7 +7421,7 @@ private enum TimesheetInvoiceRows {
         extrasMode: ExtrasMode,
         period: ClosedRange<Date>
     ) -> [[String: Any]]? {
-        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
+        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asRulebookSheetMap(draft))
         let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
         var input: [String: Any] = [
             "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
