@@ -824,7 +824,7 @@ enum TimesheetApprovalPolicy {
 enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
     /// RULEBOOK 1.43.0 (review r318): the period's sheet could not be read, so it is not opened as a new one.
-    static let periodReadFailedMessage = "Could not load this timesheet. Check your connection and try again."
+    static let periodReadFailedMessage = "Couldn't check older timesheets — try again."
 
     static func load(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft {
         guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
@@ -1939,7 +1939,8 @@ private struct MyTimesheetView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(
+        if periodLoadFailed { return TimesheetDraftStore.periodReadFailedMessage }
+        return PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
             bookings: periodBookingsState
@@ -1979,6 +1980,9 @@ private struct MyTimesheetView: View {
     @State private var saveErrorMessage: String?
     /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
     @State private var snapshotRebuildTried = false
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
+    /// invoiced and no blank sheet is opened until a Retry reads it.
+    @State private var periodLoadFailed = false
 
     /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
     /// bookings (loaded) have some, and the sheet was not exported.
@@ -2912,6 +2916,11 @@ private struct MyTimesheetView: View {
     }
 
     private func saveDraft() {
+        // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
+        guard !periodLoadFailed else {
+            saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
@@ -2978,8 +2987,15 @@ private struct MyTimesheetView: View {
         )
         // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
         if read.failed {
-            await MainActor.run { saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage }
+            await MainActor.run {
+                periodLoadFailed = true
+                saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            }
             return
+        }
+        await MainActor.run {
+            if periodLoadFailed { saveErrorMessage = nil }
+            periodLoadFailed = false
         }
         guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a change is open.
@@ -3007,6 +3023,8 @@ private struct MyTimesheetView: View {
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
         ensurePeriodBookings()
+        // The Retry of a failed period read reads the sheet again.
+        if periodLoadFailed { await refreshDraftFromCloud() }
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }
@@ -4167,6 +4185,46 @@ struct OperativeTimesheetsView: View {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let targets = filteredReports
+        // RULEBOOK 1.43.0 §8 (review r318, 2nd round): an export waits for the same server-confirmed bookings gate as
+        // sign-off, and each sheet's snapshot is built (an empty frozen one rebuilt) BEFORE `exportedAt` is stamped —
+        // an exported snapshot is never rebuilt. The emailed PDF reads the same sheets.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: week.start, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: week.start
+            )
+        ) {
+            exportMessage = blocked
+            return
+        }
+        var preparedDrafts: [String: TimesheetDraft] = [:]
+        for op in targets {
+            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
+            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+                to: &d,
+                user: op,
+                week: week,
+                bookings: bookingStore.bookings,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                operatives: operativeStore.allOperatives,
+                projects: projectStore.projects,
+                smallWorks: projectStore.smallWorks,
+                history: dayRateHistoryCollection,
+                policy: policy,
+                organization: firebaseBackend.currentOrganization,
+                scheduleOptions: scheduleOptions,
+                viewer: exporter,
+                relatedUsers: userStore.organizationUsers,
+                snapshotInputsReady: true
+            )
+            preparedDrafts[op.id] = d
+        }
         var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
         for target in targets {
             if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
@@ -4180,7 +4238,7 @@ struct OperativeTimesheetsView: View {
         let result = await TimesheetExportHelper.exportAndEmail(
             operatives: targets,
             week: week,
-            draftForUser: { TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
+            draftForUser: { preparedDrafts[$0.id] ?? TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
             bookingStore: bookingStore,
             managerScheduleStore: managerScheduleStore,
             operativeStore: operativeStore,
@@ -4211,24 +4269,9 @@ struct OperativeTimesheetsView: View {
 
         var markFailures: [String] = []
         for op in targets where result.emailedUserIds.contains(op.id) {
-            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
+            // The snapshot was built (or an empty one rebuilt) above, before the stamp; it is not touched after it.
+            var d = preparedDrafts[op.id] ?? TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
-            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
-                to: &d,
-                user: op,
-                week: week,
-                bookings: bookingStore.bookings,
-                managerBookings: managerScheduleStore.managerSiteBookings,
-                operatives: operativeStore.allOperatives,
-                projects: projectStore.projects,
-                smallWorks: projectStore.smallWorks,
-                history: dayRateHistoryCollection,
-                policy: policy,
-                organization: firebaseBackend.currentOrganization,
-                scheduleOptions: scheduleOptions,
-                viewer: exporter,
-                relatedUsers: userStore.organizationUsers
-            )
             TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
             let snapshot = d
             if let failure = await TimesheetDraftStore.saveToCloud(
@@ -4440,6 +4483,7 @@ private struct OperativeTimesheetReviewView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
+        if periodLoadFailed { return TimesheetDraftStore.periodReadFailedMessage }
         if let blocked = PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
@@ -4481,6 +4525,9 @@ private struct OperativeTimesheetReviewView: View {
     @State private var saveErrorMessage: String?
     /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
     @State private var snapshotRebuildTried = false
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
+    /// invoiced and no blank sheet is opened until a Retry reads it.
+    @State private var periodLoadFailed = false
 
     /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
     /// bookings (loaded) have some, and the sheet was not exported.
@@ -5047,6 +5094,11 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func saveDraft() {
+        // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
+        guard !periodLoadFailed else {
+            saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
         TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
@@ -5128,8 +5180,15 @@ private struct OperativeTimesheetReviewView: View {
         )
         // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
         if read.failed {
-            await MainActor.run { saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage }
+            await MainActor.run {
+                periodLoadFailed = true
+                saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            }
             return
+        }
+        await MainActor.run {
+            if periodLoadFailed { saveErrorMessage = nil }
+            periodLoadFailed = false
         }
         guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a review is open.
@@ -5154,6 +5213,8 @@ private struct OperativeTimesheetReviewView: View {
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
         ensurePeriodBookings()
+        // The Retry of a failed period read reads the sheet again.
+        if periodLoadFailed { await refreshDraftFromCloud() }
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }

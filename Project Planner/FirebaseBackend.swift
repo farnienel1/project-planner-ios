@@ -8588,7 +8588,7 @@ class FirebaseBackend: ObservableObject {
     func listenManagerSiteBookings(
         organizationId: String,
         startingOn start: Date? = nil,
-        onChange: @escaping ([ManagerSiteBooking]) -> Void
+        onChange: @escaping (_ bookings: [ManagerSiteBooking], _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
@@ -8631,7 +8631,7 @@ class FirebaseBackend: ObservableObject {
                 return
             }
             let list = self.managerSiteBookingsFromFirestoreDocuments(documents)
-            onChange(list)
+            onChange(list, fromCache)
         }
     }
 

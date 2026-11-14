@@ -162,15 +162,15 @@ extension CanonicalBusinessEngine {
 
     /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild(sheet, liveLabourLines)` (review r318): the stored signed snapshot
     /// was frozen with no labour lines by the loading bug — nobody exported it, and the period has a live labour line
-    /// (PAYE days left out) whose booking was created on or before the sheet's approval (the snapshot's `approvedAt`,
-    /// else `managerSignedAt`). A booking added later, or one whose creation time is unknown, never re-prices a signed
-    /// sheet. False for no snapshot, a snapshot with any labour line, an exported sheet, or no answer.
+    /// (PAYE days left out) whose booking was created AND last written on or before the sheet's approval (the later of
+    /// `createdAt` / `updatedAt` ≤ the snapshot's `approvedAt`, else `managerSignedAt`). A booking added, moved or
+    /// changed later, or with either time unknown, never re-prices a signed sheet. False for no snapshot, a snapshot with any labour line, an exported sheet, or no answer.
     nonisolated static func timesheetSnapshotNeedsRebuild(
         storedOverrideLineCount: Int?,
         overrideApprovedAt: Date?,
         exportedAt: Date?,
         managerSignedAt: Date?,
-        liveLabourLines: [(isPayeDay: Bool, bookingCreatedAt: Date?)]
+        liveLabourLines: [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)]
     ) -> Bool {
         var sheet: [String: Any] = [
             "exportedAt": instantArgument(exportedAt),
@@ -185,7 +185,11 @@ extension CanonicalBusinessEngine {
             sheet["weeklyReportOverride"] = NSNull()
         }
         let lines: [[String: Any]] = liveLabourLines.map { line in
-            ["isPayeDay": line.isPayeDay, "bookingCreatedAt": instantArgument(line.bookingCreatedAt)]
+            [
+                "isPayeDay": line.isPayeDay,
+                "bookingCreatedAt": instantArgument(line.bookingCreatedAt),
+                "bookingUpdatedAt": instantArgument(line.bookingUpdatedAt),
+            ]
         }
         return callJSON("timesheetSnapshotNeedsRebuild", arguments: [sheet, lines]) as? Bool ?? false
     }

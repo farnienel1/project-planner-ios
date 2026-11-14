@@ -270,6 +270,9 @@ class BookingStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a new read (window or plan may change) clears the period gate
+        // until it answers from the server.
+        serverCoverage = nil
         let loadingOrganizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
         
         Task { @MainActor in
@@ -1250,6 +1253,9 @@ class BookingStore: ObservableObject {
             ) else {
                 return
             }
+            // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a cache snapshot (or a plan not every part of which the
+            // server answered) clears the period gate; a server answer of this listener's whole query restores it.
+            self.serverCoverage = fromCache ? nil : BookingServerCoverage(organizationId: organizationId, fromDate: start)
             self.applyRemoteBookings(remote, fromCache: fromCache)
         }
     }

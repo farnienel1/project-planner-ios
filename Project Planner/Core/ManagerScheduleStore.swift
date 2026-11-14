@@ -197,6 +197,8 @@ class ManagerScheduleStore: ObservableObject {
 
         isLoading = true
         errorMessage = nil
+        // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a new read (window or plan may change) clears the period gate.
+        serverCoverage = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
@@ -214,7 +216,7 @@ class ManagerScheduleStore: ObservableObject {
                 self.lastLoadAt = Date()
                 self.lastLoadFailed = false
                 self.smartCache?.markSynced()
-                fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote in
+                fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote, fromCache in
                     guard let self else { return }
                     guard WarningsBookingScanScheduler.acceptsListener(
                         listenerOrganizationId: orgId,
@@ -223,6 +225,9 @@ class ManagerScheduleStore: ObservableObject {
                     ) else {
                         return
                     }
+                    // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a cache snapshot clears the period gate; a server
+                    // answer of the whole query restores it.
+                    self.serverCoverage = fromCache ? nil : BookingServerCoverage(organizationId: orgId, fromDate: queryStart)
                     self.applyRemoteManagerBookings(remote, organizationId: orgId)
                 }
                 if !duplicates.isEmpty {

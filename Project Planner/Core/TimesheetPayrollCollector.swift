@@ -41,6 +41,9 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     /// RULEBOOK 1.43.0 (review r318; rebuild check only, never stored): when the line's booking was created
     /// (`timesheetSnapshotNeedsRebuild` counts only bookings that existed when the sheet was approved).
     var bookingCreatedAt: Date? = nil
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): when the line's booking was last written (`updatedAt`); the rebuild
+    /// check uses the later of the two, so a booking moved into the period after approval never counts.
+    var bookingUpdatedAt: Date? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -116,7 +119,8 @@ enum TimesheetPayrollCollector {
             details: String,
             labels: (jobNumber: String, siteName: String),
             operative: Operative?,
-            createdAt: Date?
+            createdAt: Date?,
+            updatedAt: Date?
         ) {
             let policy = dayPolicy(for: day)
             let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
@@ -190,7 +194,8 @@ enum TimesheetPayrollCollector {
                     bookingStartTime: hasClockTimes ? bookingStart : nil,
                     bookingEndTime: hasClockTimes ? bookingEnd : nil,
                     bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
-                    bookingCreatedAt: createdAt
+                    bookingCreatedAt: createdAt,
+                    bookingUpdatedAt: updatedAt
                 )
             )
 
@@ -222,7 +227,8 @@ enum TimesheetPayrollCollector {
                         bookingStartTime: hasClockTimes ? bookingStart : nil,
                         bookingEndTime: hasClockTimes ? bookingEnd : nil,
                         bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
-                        bookingCreatedAt: createdAt
+                        bookingCreatedAt: createdAt,
+                        bookingUpdatedAt: updatedAt
                     )
                 )
             }
@@ -243,7 +249,8 @@ enum TimesheetPayrollCollector {
                 details: booking.scheduleLabel(policy: policy),
                 labels: projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById),
                 operative: matchedOperative,
-                createdAt: booking.createdAt
+                createdAt: booking.createdAt,
+                updatedAt: booking.updatedAt
             )
         }
 
@@ -262,7 +269,8 @@ enum TimesheetPayrollCollector {
                 details: booking.scheduleLabel(policy: policy),
                 labels: managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById),
                 operative: matchedOperatives.first,
-                createdAt: booking.createdAt
+                createdAt: booking.createdAt,
+                updatedAt: booking.updatedAt
             )
         }
 
@@ -361,8 +369,10 @@ enum TimesheetPayrollCollector {
 
     /// RULEBOOK 1.43.0 §8 (review r318): the live lines as `timesheetSnapshotNeedsRebuild` reads them — PAYE flag and
     /// the booking's creation time. A mapping only.
-    static func snapshotRebuildLines(_ lines: [TimesheetPayrollLineItem]) -> [(isPayeDay: Bool, bookingCreatedAt: Date?)] {
-        lines.map { (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt) }
+    static func snapshotRebuildLines(
+        _ lines: [TimesheetPayrollLineItem]
+    ) -> [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)] {
+        lines.map { (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt, bookingUpdatedAt: $0.bookingUpdatedAt) }
     }
 
     /// RULEBOOK 1.43.0 §8: what a timesheet line shows beside its rate line — `timesheetLineClockText(details)`, the clock

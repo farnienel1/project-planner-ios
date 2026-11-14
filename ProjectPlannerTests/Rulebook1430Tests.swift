@@ -2,7 +2,7 @@ import XCTest
 @testable import Project_Planner
 
 /// RULEBOOK 1.43.0 through `CanonicalBusinessEngine` (owner reports, 14 Nov). Expected values were checked in node
-/// against the packed `canonical-business.js` (sha256 417e1d97…3a207ca0) and match web `lib/canonical/canonical.test.ts`:
+/// against the packed `canonical-business.js` (sha256 23265359…a3b707c8) and match web `lib/canonical/canonical.test.ts`:
 ///   - a timesheet's standard line shows the standard-window times and its overtime line the overtime times
 ///     (`payrollLineClockRanges`), and the multiplied text is never printed twice (`timesheetLineClockText`);
 ///   - booking previews price the booking's own overtime rate (`bookingHoursExplanation`, `weekendBookingBreakdown`);
@@ -167,7 +167,7 @@ final class Rulebook1430Tests: XCTestCase {
             exported: Date? = nil,
             overrideApprovedAt: Date? = approved,
             managerSignedAt: Date? = nil,
-            _ lines: [(isPayeDay: Bool, bookingCreatedAt: Date?)]
+            _ lines: [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)]
         ) -> Bool {
             CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
                 storedOverrideLineCount: stored,
@@ -178,17 +178,21 @@ final class Rulebook1430Tests: XCTestCase {
             )
         }
         // A booking that existed when the sheet was approved and is missing from the snapshot: the loading bug.
-        XCTAssertTrue(needs([(isPayeDay: false, bookingCreatedAt: before)]))
-        XCTAssertTrue(needs(overrideApprovedAt: nil, managerSignedAt: approved, [(isPayeDay: false, bookingCreatedAt: before)]))
+        XCTAssertTrue(needs([(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]))
+        XCTAssertTrue(needs(overrideApprovedAt: nil, managerSignedAt: approved, [(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]))
         // Review r318: a booking added after approval, or of unknown age, never re-prices a signed sheet.
-        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: after)]))
-        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: nil)]))
-        XCTAssertFalse(needs([(isPayeDay: true, bookingCreatedAt: before)]), "PAYE days are never timesheet lines")
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: after, bookingUpdatedAt: after)]))
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: nil, bookingUpdatedAt: before)]))
+        // 2nd round: the later of createdAt and updatedAt counts — a booking moved into the period after approval, or
+        // with no updatedAt, never re-prices it.
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: after)]), "changed after approval")
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: nil)]), "updatedAt unknown")
+        XCTAssertFalse(needs([(isPayeDay: true, bookingCreatedAt: before, bookingUpdatedAt: before)]), "PAYE days are never timesheet lines")
         XCTAssertFalse(needs([]))
-        XCTAssertFalse(needs(stored: 1, [(isPayeDay: false, bookingCreatedAt: before)]), "never re-priced")
-        XCTAssertFalse(needs(exported: Date(), [(isPayeDay: false, bookingCreatedAt: before)]), "exported")
-        XCTAssertFalse(needs(stored: nil, [(isPayeDay: false, bookingCreatedAt: before)]), "no snapshot")
-        XCTAssertFalse(needs(overrideApprovedAt: nil, [(isPayeDay: false, bookingCreatedAt: before)]), "no approval time")
+        XCTAssertFalse(needs(stored: 1, [(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]), "never re-priced")
+        XCTAssertFalse(needs(exported: Date(), [(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]), "exported")
+        XCTAssertFalse(needs(stored: nil, [(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]), "no snapshot")
+        XCTAssertFalse(needs(overrideApprovedAt: nil, [(isPayeDay: false, bookingCreatedAt: before, bookingUpdatedAt: before)]), "no approval time")
     }
 
     /// Review r318: sign-off opens only on a server-answered read that reaches the period — never the cache's copy or a
