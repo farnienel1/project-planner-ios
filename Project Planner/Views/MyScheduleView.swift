@@ -646,19 +646,22 @@ fileprivate struct ManagerCustomHoursSheet: View {
             }
             .navigationTitle("Custom hours")
             .navigationBarTitleDisplayMode(.inline)
-            .onChange(of: "\(startText)|\(endText)|\(breakRemoved)", initial: true) { _, _ in
+            .onChange(of: "\(startText)|\(endText)|\(breakRemoved)|\(overtimeRate.map { String($0) } ?? "org")", initial: true) { _, _ in
                 let start = startText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let end = endText.trimmingCharacters(in: .whitespacesAndNewlines)
+                // RULEBOOK 1.43.0 §25: priced at the rate on screen (nil = the organisation's).
                 weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
                     CanonicalBusinessEngine.weekendBookingBreakdown(
                         on: context.days,
                         start: start,
                         end: end,
                         isBreakRemoved: breakRemoved,
-                        fallbackPolicy: policy
+                        fallbackPolicy: policy,
+                        otMultiplierOverride: overtimeRate
                     )
                 ) + CanonicalBusinessEngine.weekdayExplanationSections(
-                    on: context.days, start: start, end: end, isBreakRemoved: breakRemoved, fallbackPolicy: policy
+                    on: context.days, start: start, end: end, isBreakRemoved: breakRemoved, fallbackPolicy: policy,
+                    otMultiplierOverride: overtimeRate
                 )
             }
             .toolbar {
@@ -2583,18 +2586,21 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
         .navigationTitle("Book yourself in")
         .navigationBarTitleDisplayMode(.inline)
-        .onChange(of: "\(hhmm(startTime))|\(hhmm(endTime))", initial: true) { _, _ in
-            // Saved with the break kept (`breakRemoved: false`), as the booking flow writes it.
+        .onChange(of: "\(hhmm(startTime))|\(hhmm(endTime))|\(overtimeRate.map { String($0) } ?? "org")", initial: true) { _, _ in
+            // Saved with the break kept (`breakRemoved: false`), as the booking flow writes it. RULEBOOK 1.43.0 §25:
+            // priced at the rate on screen (nil = the organisation's).
             weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
                 CanonicalBusinessEngine.weekendBookingBreakdown(
                     on: [day],
                     start: hhmm(startTime),
                     end: hhmm(endTime),
                     isBreakRemoved: false,
-                    fallbackPolicy: policy
+                    fallbackPolicy: policy,
+                    otMultiplierOverride: overtimeRate
                 )
             ) + CanonicalBusinessEngine.weekdayExplanationSections(
-                on: [day], start: hhmm(startTime), end: hhmm(endTime), isBreakRemoved: false, fallbackPolicy: policy
+                on: [day], start: hhmm(startTime), end: hhmm(endTime), isBreakRemoved: false, fallbackPolicy: policy,
+                otMultiplierOverride: overtimeRate
             )
         }
     }

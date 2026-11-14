@@ -1065,7 +1065,10 @@ struct ScheduleOperativeView: View {
         isBreakRemoved: Bool,
         paidHours paidH: Double
     ) -> some View {
-        let weekendSections = weekendBreakdownSections(start: start, end: end, isBreakRemoved: isBreakRemoved)
+        // RULEBOOK 1.43.0 §25: the rows and the explanation price the booking's own overtime rate (the probe's).
+        let weekendSections = weekendBreakdownSections(
+            start: start, end: end, isBreakRemoved: isBreakRemoved, otMultiplierOverride: probe.otMultiplierOverride
+        )
         if !weekendSections.isEmpty {
             WeekendBookingBreakdownView(sections: weekendSections)
         } else {
@@ -1092,7 +1095,8 @@ struct ScheduleOperativeView: View {
                 start: start,
                 end: end,
                 isBreakRemoved: isBreakRemoved,
-                fallbackPolicy: primarySelectedDatePolicy
+                fallbackPolicy: primarySelectedDatePolicy,
+                otMultiplierOverride: probe.otMultiplierOverride
             ))
         }
     }
@@ -1323,7 +1327,12 @@ struct ScheduleOperativeView: View {
 
     /// `weekendBookingBreakdown` rows for the selected days with one pair of times, with their 1.39.0 explanation
     /// (`collapsedBreakdownSections`); empty for a weekday-only selection or no dates.
-    private func weekendBreakdownSections(start: String, end: String, isBreakRemoved: Bool) -> [RulebookBreakdownSection] {
+    private func weekendBreakdownSections(
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        otMultiplierOverride: Double? = nil
+    ) -> [RulebookBreakdownSection] {
         guard !selectedDates.isEmpty else { return [] }
         return CanonicalBusinessEngine.collapsedBreakdownSections(
             CanonicalBusinessEngine.weekendBookingBreakdown(
@@ -1331,7 +1340,8 @@ struct ScheduleOperativeView: View {
                 start: start,
                 end: end,
                 isBreakRemoved: isBreakRemoved,
-                fallbackPolicy: primarySelectedDatePolicy
+                fallbackPolicy: primarySelectedDatePolicy,
+                otMultiplierOverride: otMultiplierOverride
             )
         )
     }

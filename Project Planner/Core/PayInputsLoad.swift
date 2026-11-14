@@ -48,6 +48,70 @@ enum PayInputsLoad {
         case .failed(let message): return message
         }
     }
+
+    // MARK: RULEBOOK 1.43.0 §8 — the period's bookings (`timesheetSnapshotReady`)
+
+    /// Whether the period's labour and manager site bookings have arrived: both stores finished a read for the open
+    /// organisation that reaches back to `periodStart` (nil = the whole archive), and neither read failed. A
+    /// counter-signature made before they arrived froze a snapshot with no labour lines (owner report, 14 Nov).
+    static func periodBookings(
+        firebaseBackend: FirebaseBackend,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        from periodStart: Date?
+    ) -> (loaded: Bool, failed: Bool) {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return (false, false) }
+        let failed = bookingStore.lastLoadFailed || managerScheduleStore.lastLoadFailed
+        let finished = !bookingStore.isLoading
+            && !managerScheduleStore.isLoading
+            && bookingStore.finishedLoadOrganizationId == orgId
+            && managerScheduleStore.finishedLoadOrganizationId == orgId
+        // The download's lower bound (nil = every date once the archive was asked for).
+        let reaches: Bool = {
+            guard let start = firebaseBackend.scheduleBookingQueryStart() else { return true }
+            guard let periodStart else { return false }
+            return start <= periodStart
+        }()
+        return (finished && reaches && !failed, finished && failed)
+    }
+
+    /// Asks the stores for the period's bookings when the download does not reach `periodStart` (nil = the whole
+    /// archive), or — on a retry — when the last read failed. Plumbing only.
+    static func ensurePeriodBookings(
+        firebaseBackend: FirebaseBackend,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        from periodStart: Date?,
+        retryFailed: Bool = false
+    ) {
+        var reload: Bool
+        if let periodStart {
+            reload = firebaseBackend.noteScheduleNeedsDate(periodStart)
+        } else {
+            reload = firebaseBackend.noteScheduleNeedsFullHistory()
+        }
+        if retryFailed && (bookingStore.lastLoadFailed || managerScheduleStore.lastLoadFailed) { reload = true }
+        guard reload else { return }
+        bookingStore.loadData()
+        managerScheduleStore.loadData(force: true)
+    }
+
+    /// `blockMessage` plus RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: sign-off, counter-signature, the agreed snapshot
+    /// and invoices also wait for the period's bookings ("Loading bookings…"), or say they could not be loaded.
+    static func blockMessage(
+        state: PayInputsLoadState,
+        organization: Organization?,
+        bookings: (loaded: Bool, failed: Bool)
+    ) -> String? {
+        if let blocked = blockMessage(state: state, organization: organization) { return blocked }
+        guard let ready = CanonicalBusinessEngine.timesheetSnapshotReady(
+            bookingsLoaded: bookings.loaded,
+            bookingsFailed: bookings.failed
+        ) else {
+            return "The rulebook did not answer. Try again."
+        }
+        return ready.ready ? nil : (ready.message ?? "Loading bookings…")
+    }
 }
 
 /// The "pay could not be worked out" notice with a Retry button.

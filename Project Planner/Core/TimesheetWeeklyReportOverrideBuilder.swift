@@ -24,7 +24,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
         scheduleOptions: MyScheduleOptions,
         viewer: AppUser?,
         relatedUsers: [AppUser] = [],
-        writerIsReviewer: Bool? = nil
+        writerIsReviewer: Bool? = nil,
+        /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's bookings and pay inputs have loaded. An empty
+        /// frozen snapshot is rebuilt only then, never from a partial download.
+        snapshotInputsReady: Bool = false
     ) {
         // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when the sheet is self-signed
         // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`; 1.28.0: Timesheet self-sign on, or the Super Admin). An owner save (writerIsReviewer == false) with a line manager leaves the
@@ -35,6 +38,44 @@ enum TimesheetWeeklyReportOverrideBuilder {
             return
         }
         if let existing = draft.weeklyReportOverride {
+            // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (signed before
+            // the period's bookings had loaded) is rebuilt from the live bookings when they hold labour lines and nobody
+            // has exported the sheet. Signatures and who approved it stay as stored (web `applyWeeklyReportOverride`).
+            // A snapshot with any labour line is never rebuilt or re-priced.
+            if snapshotInputsReady && existing.lines.isEmpty && draft.exportedAt == nil {
+                let fresh = make(
+                    user: user,
+                    week: week,
+                    draft: draft,
+                    bookings: bookings,
+                    managerBookings: managerBookings,
+                    operatives: operatives,
+                    projects: projects,
+                    smallWorks: smallWorks,
+                    history: history,
+                    policy: policy,
+                    organization: organization,
+                    scheduleOptions: scheduleOptions,
+                    viewer: viewer,
+                    relatedUsers: relatedUsers
+                )
+                if CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+                    storedOverrideLineCount: existing.lines.count,
+                    exportedAt: draft.exportedAt,
+                    liveLabourLineCount: fresh.lines.count
+                ) {
+                    draft.weeklyReportOverride = TimesheetWeeklyReportOverride(
+                        approvedAt: existing.approvedAt,
+                        approvedByUserId: existing.approvedByUserId,
+                        approvedByName: existing.approvedByName,
+                        selfSigned: existing.selfSigned,
+                        lines: fresh.lines,
+                        priceWork: fresh.priceWork,
+                        expenses: fresh.expenses
+                    )
+                    return
+                }
+            }
             // Keep the agreed labour snapshot. Later schedule edits must not undo a
             // counter-sign; only line-manager (or exported-tab) review changes apply.
             draft.weeklyReportOverride = reapplyReviews(

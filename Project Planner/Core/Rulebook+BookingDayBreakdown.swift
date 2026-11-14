@@ -196,6 +196,23 @@ nonisolated private struct BookingPickerMemoKey: Hashable, Sendable {
     let isBreakRemoved: Bool
     let todayKey: String
     let timeZone: String
+    /// RULEBOOK 1.43.0 §25: the booking's own overtime rate (nil = the organisation's), priced in the rows.
+    var otMultiplierOverride: Double? = nil
+}
+
+extension CanonicalBusinessEngine {
+    /// RULEBOOK 1.43.0 §25: a booking's own overtime rate as the script reads it — a positive number, else nil (the
+    /// organisation's rate). A mapping only: `weekendBookingBreakdown` / `payrollHoursResult` decide what it prices.
+    nonisolated static func bookingOwnRate(_ value: Double?) -> Double? {
+        guard let value, value.isFinite, value > 0 else { return nil }
+        return value
+    }
+
+    /// The script argument for an optional rate: the number, or JSON null.
+    nonisolated static func bookingOwnRateArgument(_ value: Double?) -> Any {
+        if let rate = bookingOwnRate(value) { return rate }
+        return NSNull()
+    }
 }
 
 extension CanonicalBusinessEngine {
@@ -284,21 +301,25 @@ extension CanonicalBusinessEngine {
         end: String,
         isBreakRemoved: Bool,
         todayKey: String? = nil,
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        otMultiplierOverride: Double? = nil
     ) -> [RulebookBookingDayBreakdownRow]? {
         let today = todayKey ?? organizationDayKey(Date(), timeZoneIdentifier: timeZone)
+        // RULEBOOK 1.43.0 §25: the booking's own overtime rate is the script's 7th argument (null = the organisation's).
+        let rate = bookingOwnRate(otMultiplierOverride)
+        let rateArgument = bookingOwnRateArgument(rate)
         let compute: () -> [RulebookBookingDayBreakdownRow]? = {
             guard let state = payrollPolicyState(policyDocument: policyDocument, todayKey: today, timeZone: timeZone),
                   let rows = callJSON(
                     "weekendBookingBreakdown",
-                    arguments: [state, dayKeys, start, end, isBreakRemoved, timeZone]
+                    arguments: [state, dayKeys, start, end, isBreakRemoved, timeZone, rateArgument]
                   ) as? [Any] else { return nil }
             return rows.compactMap(RulebookBookingDayBreakdownRow.init(json:))
         }
         guard let document = documentKey(policyDocument) else { return compute() }
         let key = BookingPickerMemoKey(
             document: document, policy: nil, dayKeys: dayKeys, start: start, end: end,
-            isBreakRemoved: isBreakRemoved, todayKey: today, timeZone: timeZone
+            isBreakRemoved: isBreakRemoved, todayKey: today, timeZone: timeZone, otMultiplierOverride: rate
         )
         return weekendBreakdownMemo.value(for: key, compute: compute)
     }
@@ -310,17 +331,20 @@ extension CanonicalBusinessEngine {
         start: String,
         end: String,
         isBreakRemoved: Bool,
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        otMultiplierOverride: Double? = nil
     ) -> [RulebookBookingDayBreakdownRow]? {
+        let rate = bookingOwnRate(otMultiplierOverride)
+        let rateArgument = bookingOwnRateArgument(rate)
         let key = BookingPickerMemoKey(
             document: nil, policy: policy, dayKeys: dayKeys, start: start, end: end,
-            isBreakRemoved: isBreakRemoved, todayKey: "", timeZone: timeZone
+            isBreakRemoved: isBreakRemoved, todayKey: "", timeZone: timeZone, otMultiplierOverride: rate
         )
         return weekendBreakdownMemo.value(for: key) {
             guard let policyJSON = payrollPolicyJSON(policy),
                   let rows = callJSON(
                     "weekendBookingBreakdown",
-                    arguments: [policyJSON, dayKeys, start, end, isBreakRemoved, timeZone]
+                    arguments: [policyJSON, dayKeys, start, end, isBreakRemoved, timeZone, rateArgument]
                   ) as? [Any] else { return nil }
             return rows.compactMap(RulebookBookingDayBreakdownRow.init(json:))
         }
@@ -328,24 +352,27 @@ extension CanonicalBusinessEngine {
 
     /// The per-day rows for a booking whose selection holds a Saturday or Sunday (web `weekendBreakdownForDates`), or
     /// `[]` for a weekday-only selection, where the screen keeps its usual hours breakdown. Uses the open organisation's
-    /// policy state when loaded, else `fallbackPolicy`.
+    /// policy state when loaded, else `fallbackPolicy`. RULEBOOK 1.43.0: `otMultiplierOverride` is the rate on screen.
     nonisolated static func weekendBookingBreakdown(
         on dates: [Date],
         start: String,
         end: String,
         isBreakRemoved: Bool,
-        fallbackPolicy: OrgPayrollTimePolicy
+        fallbackPolicy: OrgPayrollTimePolicy,
+        otMultiplierOverride: Double? = nil
     ) -> [RulebookBookingDayBreakdownRow] {
         let keys = dates.map { bookingDayKey($0) }
         guard keys.contains(where: { isWeekendDayKey($0) }) else { return [] }
         if let document = OrganizationRulebookContext.payrollPolicyDocument,
            let rows = weekendBookingBreakdown(
-            policyDocument: document, dayKeys: keys, start: start, end: end, isBreakRemoved: isBreakRemoved
+            policyDocument: document, dayKeys: keys, start: start, end: end, isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: otMultiplierOverride
            ) {
             return rows
         }
         return weekendBookingBreakdown(
-            policy: fallbackPolicy, dayKeys: keys, start: start, end: end, isBreakRemoved: isBreakRemoved
+            policy: fallbackPolicy, dayKeys: keys, start: start, end: end, isBreakRemoved: isBreakRemoved,
+            otMultiplierOverride: otMultiplierOverride
         ) ?? []
     }
 
@@ -360,12 +387,13 @@ extension CanonicalBusinessEngine {
         end: String,
         isBreakRemoved: Bool,
         fallbackPolicy: OrgPayrollTimePolicy,
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        otMultiplierOverride: Double? = nil
     ) -> RulebookBookingHoursExplanation? {
         let key = bookingDayKey(date)
-        let booking: [String: Any] = [
-            "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
-        ]
+        let booking = explanationBooking(
+            start: start, end: end, isBreakRemoved: isBreakRemoved, otMultiplierOverride: otMultiplierOverride
+        )
         if let document = OrganizationRulebookContext.payrollPolicyDocument,
            let state = payrollPolicyState(
             policyDocument: document,
@@ -376,7 +404,8 @@ extension CanonicalBusinessEngine {
             return row
         }
         return bookingHoursExplanation(
-            policy: fallbackPolicy, dayKey: key, start: start, end: end, isBreakRemoved: isBreakRemoved, timeZone: timeZone
+            policy: fallbackPolicy, dayKey: key, start: start, end: end, isBreakRemoved: isBreakRemoved, timeZone: timeZone,
+            otMultiplierOverride: otMultiplierOverride
         )
     }
 
@@ -387,31 +416,50 @@ extension CanonicalBusinessEngine {
         start: String,
         end: String,
         isBreakRemoved: Bool,
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        otMultiplierOverride: Double? = nil
     ) -> RulebookBookingHoursExplanation? {
         guard let policyJSON = payrollPolicyJSON(policy) else { return nil }
-        let booking: [String: Any] = [
+        let booking = explanationBooking(
+            start: start, end: end, isBreakRemoved: isBreakRemoved, otMultiplierOverride: otMultiplierOverride
+        )
+        return RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [policyJSON, dayKey, booking, timeZone]))
+    }
+
+    /// The custom-hours booking `bookingHoursExplanation` reads. RULEBOOK 1.43.0 §25: with the booking's own overtime
+    /// rate (left out = the organisation's), so the explanation prices what the booking will be paid. A mapping only.
+    nonisolated static func explanationBooking(
+        start: String,
+        end: String,
+        isBreakRemoved: Bool,
+        otMultiplierOverride: Double?
+    ) -> [String: Any] {
+        var booking: [String: Any] = [
             "timeSlot": "CUSTOM_HOURS", "workStartTime": start, "workEndTime": end, "isBreakRemoved": isBreakRemoved,
         ]
-        return RulebookBookingHoursExplanation(json: memoCallJSON("bookingHoursExplanation", arguments: [policyJSON, dayKey, booking, timeZone]))
+        if let rate = bookingOwnRate(otMultiplierOverride) { booking["otMultiplierOverride"] = rate }
+        return booking
     }
 
     /// The explanation of a weekday selection's hours as screen sections (the weekend rows carry their own): one per
     /// weekday, days that read the same once the day name is taken off sharing one ("Monday/Tuesday full day: …"). `[]`
-    /// when the selection holds a Saturday or Sunday or nothing answered.
+    /// when the selection holds a Saturday or Sunday or nothing answered. RULEBOOK 1.43.0: `otMultiplierOverride` is the
+    /// booking's own overtime rate on screen (nil = the organisation's).
     nonisolated static func weekdayExplanationSections(
         on dates: [Date],
         start: String,
         end: String,
         isBreakRemoved: Bool,
-        fallbackPolicy: OrgPayrollTimePolicy
+        fallbackPolicy: OrgPayrollTimePolicy,
+        otMultiplierOverride: Double? = nil
     ) -> [RulebookBreakdownSection] {
         guard !dates.isEmpty, !dates.contains(where: { isWeekendDayKey(bookingDayKey($0)) }) else { return [] }
         var order: [String] = []
         var groups: [String: (labels: [String], rule: String, steps: [String])] = [:]
         for date in dates {
             guard let row = bookingHoursExplanation(
-                on: date, start: start, end: end, isBreakRemoved: isBreakRemoved, fallbackPolicy: fallbackPolicy
+                on: date, start: start, end: end, isBreakRemoved: isBreakRemoved, fallbackPolicy: fallbackPolicy,
+                otMultiplierOverride: otMultiplierOverride
             ) else { continue }
             let ruleBody = row.rule.hasPrefix(row.weekdayLabel) ? String(row.rule.dropFirst(row.weekdayLabel.count)) : " " + row.rule
             let key = ruleBody + "|" + row.steps.joined(separator: "|")

@@ -11136,11 +11136,25 @@ extension FirebaseBackend {
         // Query by userId only, then sort/limit in memory.
         // Ordering by weekStart requires a composite index that may not exist yet and was
         // crashing/failing My Timesheets history loads in Simulator.
-        let snapshot = try await db.collection("organizations")
-            .document(organizationId)
-            .collection("settings")
-            .whereField("userId", isEqualTo: userId)
-            .getDocuments()
+        // RULEBOOK 1.43.0: an operative's own `userId ==` query is allowed once the 1.43.0 rules are published. A refused
+        // or failed query is logged (never swallowed without a trace) and thrown; callers read nothing from it, and a
+        // period still opens from its direct document read (`loadTimesheetState`) — as a new sheet when it has none.
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations")
+                .document(organizationId)
+                .collection("settings")
+                .whereField("userId", isEqualTo: userId)
+                .getDocuments()
+        } catch {
+            NSLog(
+                "TIMESHEET_HISTORY_QUERY_FAILED org=%@ user=%@ %@ — periods open from their direct reads",
+                organizationId,
+                userId,
+                error.localizedDescription
+            )
+            throw error
+        }
         let rows: [[String: Any]] = snapshot.documents.map { doc in
             var row = doc.data()
             row["__documentId"] = doc.documentID

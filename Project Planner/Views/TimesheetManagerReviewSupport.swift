@@ -245,6 +245,17 @@ enum TimesheetPayrollLineBookingLookup {
                 otMultiplierOverride: nil
             )
         }
+        // RULEBOOK 1.43.0: a line's details show only its own part (standard or overtime times), so the booking's whole
+        // times come from the line's booking fields (web `initialHoursChoice`); older lines fall back as before.
+        if let start = row.bookingStartTime, let end = row.bookingEndTime, !start.isEmpty, !end.isEmpty {
+            return OperativeDayBookingChoice(
+                timeSlot: .customHours,
+                workStartTime: start,
+                workEndTime: end,
+                isBreakRemoved: row.bookingBreakRemoved ?? false,
+                otMultiplierOverride: nil
+            )
+        }
         if row.details.contains(":") {
             return OperativeDayBookingChoice(
                 timeSlot: .customHours,

@@ -1918,7 +1918,33 @@ private struct MyTimesheetView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: periodBookingsState
+        )
+    }
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's labour and manager site bookings have arrived
+    /// (`PayInputsLoad.periodBookings`). Sign-off, the counter-signature, the agreed snapshot and invoices wait for them.
+    private var periodBookingsState: (loaded: Bool, failed: Bool) {
+        PayInputsLoad.periodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start
+        )
+    }
+
+    /// Asks for the period's bookings when the download does not reach it, or when the last read failed (Retry).
+    private func ensurePeriodBookings() {
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start,
+            retryFailed: true
+        )
     }
     @State private var showInvoiceUTRWarning = false
     /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
@@ -1930,6 +1956,19 @@ private struct MyTimesheetView: View {
     @State private var invoiceErrorMessage: String?
     /// Shown when the cloud save failed (it used to fail silently).
     @State private var saveErrorMessage: String?
+    /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
+    @State private var snapshotRebuildTried = false
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
+    /// bookings (loaded) have some, and the sheet was not exported.
+    private var snapshotNeedsRebuild: Bool {
+        guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
+        return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+            storedOverrideLineCount: stored.lines.count,
+            exportedAt: draft.exportedAt,
+            liveLabourLineCount: payrollLines.filter { !$0.isPayeDay }.count
+        )
+    }
 
     private enum TimesheetExtraMode {
         case priceWork, expense
@@ -2067,10 +2106,14 @@ private struct MyTimesheetView: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .strikethrough(removed)
-                                Text(row.details)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .strikethrough(removed)
+                                // RULEBOOK 1.43.0 §8 `timesheetLineClockText`: the line's own clock times only (standard
+                                // or overtime part); the hours and any multiplied text are on the rate line below.
+                                if let clock = TimesheetPayrollCollector.lineClockLabel(row.details) {
+                                    Text(clock)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .strikethrough(removed)
+                                }
                                 Text(timesheetHoursRateLine(for: row))
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
@@ -2214,6 +2257,16 @@ private struct MyTimesheetView: View {
                 }
 
                 sectionHeader("Add to this timesheet")
+                // RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras`: nothing is added once the line manager has signed
+                // (a self-signed sheet stays open; adding asks the person to sign again).
+                let extras = extrasPermission
+                if !extras.allowed, let message = extras.message {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.warningAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("timesheets.extrasLocked")
+                }
                 HStack(spacing: 10) {
                     Button {
                         beginAddingExtra(.priceWork)
@@ -2222,6 +2275,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.priceWork")
                     .buttonStyle(.plain)
+                    .disabled(!extras.allowed)
+                    .opacity(extras.allowed ? 1 : 0.5)
                     Button {
                         beginAddingExtra(.expense)
                     } label: {
@@ -2229,6 +2284,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.expenses")
                     .buttonStyle(.plain)
+                    .disabled(!extras.allowed)
+                    .opacity(extras.allowed ? 1 : 0.5)
                 }
 
                 // RULEBOOK §8: no "note to manager" on a self-signed sheet (`timesheetSelfSigned`).
@@ -2457,6 +2514,15 @@ private struct MyTimesheetView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a self-signed sheet whose snapshot froze empty is rebuilt
+        // from the live bookings once they have loaded (signatures unchanged), once per visit.
+        .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
+            guard needs, !snapshotRebuildTried, !isEditingTimesheet,
+                  let user = userStore.displayUser,
+                  !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) else { return }
+            snapshotRebuildTried = true
+            saveDraft()
+        }
         // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the whole collection while `privatePay` is
         // off, else this person's rows.
         .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet",
@@ -2480,6 +2546,12 @@ private struct MyTimesheetView: View {
             titleVisibility: .visible
         ) {
             Button("Accept — add anyway") {
+                // RULEBOOK 1.43.0: never once the line manager has signed (that left the sheet half signed).
+                guard extrasPermission.allowed else {
+                    pendingExtraMode = nil
+                    saveErrorMessage = extrasPermission.message
+                    return
+                }
                 TimesheetApprovalPolicy.clearSignatures(draft: &draft)
                 saveDraft()
                 openPendingExtraSheet()
@@ -2501,6 +2573,7 @@ private struct MyTimesheetView: View {
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
             }
         }
         .sheet(isPresented: $showExpenseSheet) {
@@ -2512,6 +2585,7 @@ private struct MyTimesheetView: View {
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
             }
         }
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -2591,7 +2665,24 @@ private struct MyTimesheetView: View {
         return "You have already signed your timesheet. If you add price work or expenses, you will need to sign it again before generating an invoice."
     }
 
+    /// RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras(sheet, { selfSigned: timesheetSelfSigned })`: whether the person
+    /// may still add price work or expenses (not once their line manager has signed).
+    private var extrasPermission: RulebookTimesheetExtrasPermission {
+        let selfSigned = userStore.displayUser.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+        return CanonicalBusinessEngine.timesheetOwnerCanAddExtras(
+            managerSignedAt: draft.managerSignedAt,
+            approvedAt: nil,
+            selfSigned: selfSigned
+        )
+    }
+
     private func beginAddingExtra(_ mode: TimesheetExtraMode) {
+        // RULEBOOK 1.43.0: no add control and no signature cleared once the line manager has signed.
+        let extras = extrasPermission
+        guard extras.allowed else {
+            saveErrorMessage = extras.message
+            return
+        }
         guard let user = userStore.displayUser else {
             pendingExtraMode = mode
             openPendingExtraSheet()
@@ -2821,7 +2912,9 @@ private struct MyTimesheetView: View {
                     writer: current,
                     subjectUserId: current.id,
                     subject: current
-                )
+                ),
+                // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
+                snapshotInputsReady: payInputsBlockMessage == nil
             )
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
@@ -2884,6 +2977,7 @@ private struct MyTimesheetView: View {
 
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
+        ensurePeriodBookings()
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }
@@ -2893,12 +2987,9 @@ private struct MyTimesheetView: View {
 
     /// RULEBOOK 1.20.4: an overtime line with a break shows "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`,
     /// a signed line's stored text read back with `parseMultipliedHoursText`), never the back-calculated 6.25h.
-    /// The row's details line already reads "OT 6.5h × 2 − 0.5h break = 12.5h" then, so the hours are not repeated
-    /// beside the rate (it used to show the multiplied text twice).
+    /// RULEBOOK 1.43.0: the details line above now shows only the clock part (`timesheetLineClockText`), so the
+    /// multiplied text is shown here, once.
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
-        if row.isOvertimeLine, CanonicalBusinessEngine.parseMultipliedHoursText(row.details) != nil {
-            return row.timesheetRateAnnotation
-        }
         let hours = CanonicalBusinessEngine.payLineHoursText(
             details: row.details, paidHours: row.paidHours, isOvertimeLine: row.isOvertimeLine
         )
@@ -3107,6 +3198,22 @@ private struct PreviousTimesheetsView: View {
         guard !isGeneratingInvoice else { return }
         if payInputsState != .loaded { await loadDayRateHistory() }
         if let blocked = payInputsBlockMessage {
+            invoiceErrorMessage = blocked
+            return
+        }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: period.startDate, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: period.startDate
+            )
+        ) {
             invoiceErrorMessage = blocked
             return
         }
@@ -4304,11 +4411,36 @@ private struct OperativeTimesheetReviewView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        if let blocked = PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization) {
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: periodBookingsState
+        ) {
             return blocked
         }
         // A script call that did not answer is "could not calculate", never £0 (money audit #15).
         return payrollSummary.calculationFailed ? TimesheetPayrollSummary.calculationFailedMessage : nil
+    }
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's labour and manager site bookings have arrived
+    /// (`PayInputsLoad.periodBookings`). Sign-off, the counter-signature, the agreed snapshot and invoices wait for them.
+    private var periodBookingsState: (loaded: Bool, failed: Bool) {
+        PayInputsLoad.periodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start
+        )
+    }
+
+    /// Asks for the period's bookings when the download does not reach it, or when the last read failed (Retry).
+    private func ensurePeriodBookings() {
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start,
+            retryFailed: true
+        )
     }
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?
@@ -4318,6 +4450,19 @@ private struct OperativeTimesheetReviewView: View {
     @State private var showExtrasReviewRequiredAlert = false
     /// Shown when the cloud save failed.
     @State private var saveErrorMessage: String?
+    /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
+    @State private var snapshotRebuildTried = false
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
+    /// bookings (loaded) have some, and the sheet was not exported.
+    private var snapshotNeedsRebuild: Bool {
+        guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
+        return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+            storedOverrideLineCount: stored.lines.count,
+            exportedAt: draft.exportedAt,
+            liveLabourLineCount: payrollSummary.lineItems.filter { !$0.isPayeDay }.count
+        )
+    }
 
     /// RULEBOOK 1.30.2 `timesheetWriterIsReviewer`: the viewer reviews this sheet only as the subject's line manager
     /// or an admin, never their own under any of their ids (admins and the Super Admin included). Their own sheet is
@@ -4370,6 +4515,13 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
+            // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (counter-signed
+            // before the bookings loaded) is rebuilt by the reviewer once they have, signatures unchanged, once per visit.
+            .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
+                guard needs, !snapshotRebuildTried, viewerIsReviewer, !serverTimesheetChangedWhileEditing else { return }
+                snapshotRebuildTried = true
+                saveDraft()
+            }
             // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the subject's rows while `privatePay` is on.
             .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review",
                               targetSuffix: firebaseBackend.rateHistoryListenSuffix, firebaseBackend: firebaseBackend,
@@ -4888,7 +5040,9 @@ private struct OperativeTimesheetReviewView: View {
                     subjectUserId: operative.id,
                     subject: operative
                 )
-            }
+            },
+            // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
+            snapshotInputsReady: payInputsBlockMessage == nil
         )
         }
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
@@ -4962,6 +5116,7 @@ private struct OperativeTimesheetReviewView: View {
 
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
+        ensurePeriodBookings()
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }
@@ -5226,6 +5381,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 private struct TimesheetMoneyEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
     let mode: Mode
     let onSaveExpense: (TimesheetExpenseEntry) -> Void
@@ -5246,21 +5402,18 @@ private struct TimesheetMoneyEntrySheet: View {
         Double(amountText.replacingOccurrences(of: OrgMoney.symbol(), with: "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// RULEBOOK 1.43.0 §8 `agreedManagerSuggestions`: the price work approvers' rule (`priceWorkApproverCandidates`:
+    /// active admins and managers of this organisation, one per person, never the person), name containing the text, at
+    /// most 6. The roster rows carry each users document's stored organisation (`PayeClaimPeople.approverRow`), as web
+    /// passes `homeOrganizationId`. The field stays free text.
     private var managerSuggestions: [String] {
-        let query = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        var seen = Set<String>()
-        var names: [String] = []
-        for user in userStore.organizationUsers where user.isActive {
-            let isManager = user.permissions.manager || user.role == .manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin
-            guard isManager else { continue }
-            let haystack = "\(user.fullName) \(user.firstName) \(user.surname) \(user.email)"
-            guard haystack.localizedCaseInsensitiveContains(query) else { continue }
-            let name = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty, name.caseInsensitiveCompare(query) != .orderedSame, seen.insert(name.lowercased()).inserted else { continue }
-            names.append(name)
-        }
-        return Array(names.prefix(6))
+        guard let person = userStore.displayUser else { return [] }
+        return CanonicalBusinessEngine.agreedManagerSuggestions(
+            query: managerName,
+            person: PayeClaimPeople.approverRow(person),
+            roster: PayeClaimPeople.approverRoster(userStore.organizationUsers),
+            organizationId: firebaseBackend.payeClaimsOrganizationId
+        )
     }
 
     private var jobSuggestions: [String] {
@@ -6253,6 +6406,22 @@ private struct GenerateInvoiceView: View {
             errorMessage = blocked
             return
         }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: period.startDate, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: period.startDate
+            )
+        ) {
+            errorMessage = blocked
+            return
+        }
 
         let pdfURL = InvoicePDFGenerationSupport.generatePDF(
             period: period,
@@ -6972,10 +7141,11 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            // RULEBOOK 1.20.4: an overtime line whose text is already `multipliedHoursText` is not repeated as hours.
-            let detail = item.isOvertimeLine && CanonicalBusinessEngine.parseMultipliedHoursText(item.details) != nil
-                ? "\(item.details) · \(item.timesheetRateAnnotation)"
-                : "\(item.details) · \(CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)) · \(item.timesheetRateAnnotation)"
+            // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
+            // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
+            let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
+            let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
+            let detail = [clockPart, hoursPart, item.timesheetRateAnnotation].filter { !$0.isEmpty }.joined(separator: " · ")
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
