@@ -61,6 +61,11 @@ final class Rulebook1410FollowUpTests: XCTestCase {
         XCTAssertTrue(reader.contains("FieldPath.documentID(), isGreaterThanOrEqualTo: \"timesheet_\\(person)_\""), "sheets stored without userId")
         XCTAssertTrue(reader.contains("CanonicalBusinessEngine.timesheetDocumentSubjectId(doc.documentID)"))
         XCTAssertTrue(reader.contains("CanonicalBusinessEngine.parsePayrunSnapshotSheet(docId: doc.documentID, data: data)"))
+        XCTAssertTrue(reader.contains("withTaskGroup(of: (Int, QuerySnapshot?).self)"), "the reads run at once, as web")
+        // A labour booking's stored key (lower case or not a UUID) is the id asked for, never the UUID round trip.
+        for path in ["Project Planner/Core/BookingStore.swift", "Project Planner/Core/Rulebook+BookingReplace.swift"] {
+            XCTAssertTrue(try source(path).contains("booking.storedOperativeId"), path)
+        }
     }
 
     // MARK: (2) Schedule grid rows from the naming roster

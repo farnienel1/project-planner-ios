@@ -242,7 +242,7 @@ enum BookingReplaceNotices {
             let personId: String
             let day: Date
             if let booking = target.labour {
-                personId = Booking.storedOperativeId(for: booking.operativeId)
+                personId = booking.storedOperativeId
                 day = booking.date
             } else if let booking = target.manager {
                 personId = booking.userId

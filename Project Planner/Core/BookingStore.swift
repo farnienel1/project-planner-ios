@@ -771,7 +771,7 @@ class BookingStore: ObservableObject {
     private func warnIfOnSignedTimesheet(_ booking: Booking, organizationId: String) {
         guard let fb = firebaseBackend else { return }
         // Every id the booked person goes by, sheets without `userId` too (guardrail 1, as web).
-        let userIds = SignedTimesheetPeople.timesheetUserIds(personId: Booking.storedOperativeId(for: booking.operativeId))
+        let userIds = SignedTimesheetPeople.timesheetUserIds(personId: booking.storedOperativeId)
         guard !userIds.isEmpty else { return }
         let dayKey = OrganizationRulebookContext.dayKey(booking.date)
         Task { @MainActor in

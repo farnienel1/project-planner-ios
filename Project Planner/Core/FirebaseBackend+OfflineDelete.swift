@@ -215,21 +215,32 @@ extension FirebaseBackend {
                 rows.append(row)
             }
         }
-        for person in people {
-            do {
-                take(try await settings.whereField("userId", isEqualTo: person).getDocuments())
-            } catch {
-                NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
-            }
-            do {
-                take(try await settings
+        // Both reads per id, every id at once (as web `personTimesheetDocs`, `Promise.all`); a refused read gives no
+        // sheets for it. Results are taken in request order so the rows do not depend on which read answered first.
+        let queries: [Query] = people.flatMap { person -> [Query] in
+            [
+                settings.whereField("userId", isEqualTo: person),
+                settings
                     .whereField(FieldPath.documentID(), isGreaterThanOrEqualTo: "timesheet_\(person)_")
-                    .whereField(FieldPath.documentID(), isLessThan: "timesheet_\(person)_\u{F8FF}")
-                    .getDocuments())
-            } catch {
-                NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
-            }
+                    .whereField(FieldPath.documentID(), isLessThan: "timesheet_\(person)_\u{F8FF}"),
+            ]
         }
+        let snapshots = await withTaskGroup(of: (Int, QuerySnapshot?).self) { group -> [QuerySnapshot?] in
+            for (index, query) in queries.enumerated() {
+                group.addTask {
+                    do {
+                        return (index, try await query.getDocuments())
+                    } catch {
+                        NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
+                        return (index, nil)
+                    }
+                }
+            }
+            var ordered = [QuerySnapshot?](repeating: nil, count: queries.count)
+            for await (index, snapshot) in group { ordered[index] = snapshot }
+            return ordered
+        }
+        for snapshot in snapshots { take(snapshot) }
         return rows
     }
 }
