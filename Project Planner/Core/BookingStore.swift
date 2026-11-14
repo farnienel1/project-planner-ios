@@ -75,6 +75,8 @@ class BookingStore: ObservableObject {
     /// RULEBOOK 1.43.0 §8 (review r318): the live listener's last authority report (its window and whether its whole
     /// query is a server answer with no pending writes).
     private var listenerAuthority: BookingListenerAuthority?
+    /// The organisation and window the live listener was last asked for (review r318: stale listeners are ignored).
+    private var liveWindow: BookingServerCoverage?
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -1261,6 +1263,7 @@ class BookingStore: ObservableObject {
         finishedLoadOrganizationId = nil
         serverCoverage = nil
         listenerAuthority = nil
+        liveWindow = nil
         lastLoadFailed = false
         listenerFailed = false
         isLoading = false
@@ -1276,6 +1279,8 @@ class BookingStore: ObservableObject {
     }
 
     func startLiveUpdates(organizationId: String, startingOn start: Date? = nil) {
+        // Review r318: the window the live listener now serves; a report from a listener of another window is ignored.
+        liveWindow = BookingServerCoverage(organizationId: organizationId, fromDate: start)
         firebaseBackend?.listenBookings(
             organizationId: organizationId,
             startingOn: start,
@@ -1283,7 +1288,8 @@ class BookingStore: ObservableObject {
             // the server answered its whole query with no pending local writes; the period gate follows it.
             onAuthority: { [weak self] authoritative in
                 guard let self,
-                      self.firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId else { return }
+                      self.firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId,
+                      self.liveWindow == BookingServerCoverage(organizationId: organizationId, fromDate: start) else { return }
                 self.listenerAuthority = BookingListenerAuthority(
                     organizationId: organizationId, fromDate: start, authoritative: authoritative
                 )

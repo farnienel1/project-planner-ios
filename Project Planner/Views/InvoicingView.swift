@@ -2904,6 +2904,9 @@ private struct MyTimesheetView: View {
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
+        // RULEBOOK 1.43.0 §8 (review r318): signing re-checks the period's bookings (reloads them when no server answer
+        // covers the period), as the counter-signature does.
+        ensurePeriodBookings()
         // Nothing is signed (or frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
@@ -3729,6 +3732,20 @@ struct OperativeTimesheetsView: View {
                                     }
                                     .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDF")
                                 }
+                                // Review r318: the same action, visible on every row (not long-press only).
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        Task { await downloadExportedPDF(row, confirmedRebuild: false) }
+                                    } label: {
+                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDFButton")
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 8)
                                 if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 66)
                                 }
@@ -4425,7 +4442,9 @@ struct OperativeTimesheetsView: View {
             userStore: userStore
         )
         let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
-        guard let attachment = TimesheetExportHelper.makeSheetPDF(
+        let attachment: TimesheetExportHelper.PDFAttachment
+        do {
+            attachment = try TimesheetExportHelper.makeSheetPDF(
             operative: row.user,
             week: row.week,
             draft: sheet,
@@ -4441,8 +4460,9 @@ struct OperativeTimesheetsView: View {
             organizationUsers: userStore.organizationUsers,
             taxIds: taxIds,
             rebuiltNote: rebuilt ? TimesheetExportMessages.rebuiltExportNote() : nil
-        ) else {
-            exportMessage = "Couldn't build the PDF for \(name)."
+            )
+        } catch {
+            exportMessage = "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
             return
         }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.fileName)
@@ -6996,7 +7016,21 @@ private enum TimesheetInvoiceRows {
             let fromOverride = (row["source"] as? String) == "override"
             switch row["kind"] as? String {
             case "labour":
-                if let live = liveById[key(id)] {
+                // RULEBOOK 1.43.0 (review r318): a row the script took from the signed snapshot is shown as stored in it
+                // (Export and the Exported tab's Download PDF), never re-read from the live line; the snapshot stores no
+                // rate, so the rate label still comes from the live line when there is one.
+                if fromOverride, let line = overrideLines[key(id)] {
+                    let live = liveById[key(id)]
+                    var item = InvoiceLineItem(
+                        lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
+                        details: line.details, paidHours: line.paidHours, payrollBasis: live?.payrollBasis ?? .dayRate,
+                        dayRate: live?.dayRate ?? 0, hourlyRate: live?.hourlyRate, amount: amount,
+                        isPayeDay: false, isOvertimeLine: line.isOvertime
+                    )
+                    item.isOverlapping = live?.isOverlapping ?? false
+                    item.bookingId = line.bookingId ?? live?.bookingId
+                    rows.append(item)
+                } else if let live = liveById[key(id)] {
                     var item = InvoiceLineItem(
                         lineId: live.id, date: live.date, jobNumber: live.jobNumber, projectName: live.projectName,
                         details: live.details, paidHours: live.paidHours, payrollBasis: live.payrollBasis,
@@ -7006,12 +7040,6 @@ private enum TimesheetInvoiceRows {
                     item.isOverlapping = live.isOverlapping
                     item.bookingId = live.bookingId
                     rows.append(item)
-                } else if fromOverride, let line = overrideLines[key(id)] {
-                    rows.append(InvoiceLineItem(
-                        lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
-                        details: line.details, paidHours: line.paidHours, payrollBasis: .dayRate, dayRate: 0,
-                        hourlyRate: nil, amount: amount, isPayeDay: false, isOvertimeLine: line.isOvertime
-                    ))
                 }
             case "priceWork":
                 if fromOverride, let line = overridePriceWork[key(id)] {
@@ -7520,8 +7548,14 @@ private enum TimesheetExportHelper {
         let data: Data
     }
 
+    /// Why a sheet's PDF could not be built (its text is shown, as web shows the error message).
+    struct PDFBuildError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// One sheet's PDF from the copy that was saved (its stored snapshot) — the same builder for Export and for the
-    /// Exported tab's Download. Nil when it could not be built.
+    /// Exported tab's Download. Throws with the reason when it could not be built.
     static func makeSheetPDF(
         operative: AppUser,
         week: WeekRange,
@@ -7538,7 +7572,7 @@ private enum TimesheetExportHelper {
         organizationUsers: [AppUser] = [],
         taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile? = nil,
         rebuiltNote: String? = nil
-    ) -> PDFAttachment? {
+    ) throws -> PDFAttachment {
         let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
         let paymentRunStamp = paymentRunDateStamp(for: week)
         let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
@@ -7578,10 +7612,10 @@ private enum TimesheetExportHelper {
                 totalLabel: "Total timesheet amount",
                 emptyStateMessage: "No work entries were found for this timesheet period."
             )
-        ), let pdfData = try? Data(contentsOf: pdfURL) else {
-            return nil
+        ) else {
+            throw PDFBuildError(message: "the PDF could not be drawn")
         }
-        return PDFAttachment(fileName: fileName, data: pdfData)
+        return PDFAttachment(fileName: fileName, data: try Data(contentsOf: pdfURL))
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `runTimesheetExport` deliver): every STAMPED sheet gets its PDF (from the copy
@@ -7612,7 +7646,9 @@ private enum TimesheetExportHelper {
 
         for row in stamped {
             let userName = row.operative.fullName.isEmpty ? row.operative.email : row.operative.fullName
-            guard let attachment = makeSheetPDF(
+            let attachment: PDFAttachment
+            do {
+                attachment = try makeSheetPDF(
                 operative: row.operative,
                 week: week,
                 draft: row.draft,
@@ -7627,8 +7663,9 @@ private enum TimesheetExportHelper {
                 scheduleOptions: scheduleOptions,
                 organizationUsers: organizationUsers,
                 taxIds: taxIdsByUserId[row.operative.id]
-            ) else {
-                delivery.notSent.append("\(userName) (the PDF could not be built)")
+                )
+            } catch {
+                delivery.notSent.append("\(userName) (\(error.localizedDescription))")
                 continue
             }
             attachments.append(attachment)
@@ -7684,7 +7721,7 @@ private enum TimesheetExportHelper {
                 fromName: emailFromName
             )
         }
-        if !sent { delivery.emailProblem = "email delivery failed" }
+        if !sent { delivery.emailProblem = resend.errorMessage ?? "email delivery failed" }
         return delivery
     }
     static func paymentRunDateStamp(for week: WeekRange) -> String {
