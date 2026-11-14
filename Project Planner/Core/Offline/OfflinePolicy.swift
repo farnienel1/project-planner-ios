@@ -30,6 +30,8 @@ nonisolated enum OfflineAction: String, Sendable, CaseIterable {
     case deleteBooking = "booking.delete"
     /// RULEBOOK 1.33.0: deleting a subcontractor booking stays online only (`bookingDeleteOfflineAction`).
     case deleteSubcontractorBooking = "booking.delete_subcontractor"
+    /// RULEBOOK 1.41.0 §5: Replace on a double-booking row (create + delete + tombstone in one batch) is online only.
+    case replaceBooking = "booking.replace"
     case annualLeaveRequest = "annual_leave.request"
     case ownProfileFields = "profile.own_fields"
     case ownNotificationToggles = "notifications.own_toggles"

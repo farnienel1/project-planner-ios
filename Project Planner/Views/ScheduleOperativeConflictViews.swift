@@ -14,9 +14,14 @@ struct ScheduleConflictRowView: View {
     let isStruck: Bool
     let onAcknowledge: () -> Void
     let onStrike: () -> Void
+    /// RULEBOOK 1.41.0 §5: Replace chosen on this row (it then also counts as acknowledged).
+    var isReplaced: Bool = false
+    /// Nil where the flow does not save a Replace: the row then shows ✓ and ✕ only.
+    var onReplace: (() -> Void)? = nil
+
+    private var isLeave: Bool { row.kind == .approvedAnnualLeave || row.kind == .pendingAnnualLeave }
 
     private var item: BookingConflictItem {
-        let isLeave = row.kind == .approvedAnnualLeave || row.kind == .pendingAnnualLeave
         let dayKey = OrganizationRulebookContext.dayKey(row.date)
         return BookingConflictItem(
             id: row.id,
@@ -26,12 +31,14 @@ struct ScheduleConflictRowView: View {
             personName: personName,
             dayLabel: BookingConflictItem.dayLabel(dayKey),
             detail: row.conflictDetail ?? row.detail,
-            pending: row.kind == .pendingAnnualLeave
+            pending: row.kind == .pendingAnnualLeave,
+            replace: !isLeave && onReplace != nil ? row.replaceRefs : nil
         )
     }
 
     private var decision: BookingConflictDecision? {
         if isStruck { return .drop }
+        if isReplaced { return .replace }
         if isAcknowledged { return .confirm }
         return nil
     }
@@ -41,6 +48,7 @@ struct ScheduleConflictRowView: View {
             switch next {
             case .confirm: onAcknowledge()
             case .drop: onStrike()
+            case .replace: onReplace?()
             }
         }
     }
@@ -55,6 +63,9 @@ struct ScheduleOperativeMainConflictBlock: View {
     let onToggleExpand: () -> Void
     let onAcknowledge: (String) -> Void
     let onStrike: (String) -> Void
+    /// RULEBOOK 1.41.0 §5: rows where Replace was chosen, and the action (nil: no Replace in this flow).
+    var replacedIds: Set<String> = []
+    var onReplace: ((String) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -91,7 +102,9 @@ struct ScheduleOperativeMainConflictBlock: View {
                         isAcknowledged: acknowledgedIds.contains(row.id),
                         isStruck: struckIds.contains(row.id),
                         onAcknowledge: { onAcknowledge(row.id) },
-                        onStrike: { onStrike(row.id) }
+                        onStrike: { onStrike(row.id) },
+                        isReplaced: replacedIds.contains(row.id),
+                        onReplace: onReplace.map { action in { action(row.id) } }
                     )
                 }
             }

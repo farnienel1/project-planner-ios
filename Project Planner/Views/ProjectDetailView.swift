@@ -104,6 +104,8 @@ struct ProjectDetailView: View {
     @State private var expandedSchedulingDayKeys: Set<TimeInterval> = []
     @State private var showingScheduleSubcontractor = false
     @State private var quickAddRequest: QuickAddRequest?
+    /// RULEBOOK 1.41.0 §21: a person-day tile with several bookings asks which one to open.
+    @State private var schedulingDayChooser: SchedulingDayChooser?
     /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on an edited booking's day is ticked or dropped first.
     @StateObject private var leaveGate = BookingConflictGate()
     @State private var showingEditProject = false
@@ -269,6 +271,33 @@ struct ProjectDetailView: View {
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .bookingConflictSheet(leaveGate)
+        .confirmationDialog(
+            schedulingDayChooser.map { "\($0.row.name) · \($0.day.dayLabel?.headline ?? "")" } ?? "",
+            isPresented: Binding(
+                get: { schedulingDayChooser != nil },
+                set: { if !$0 { schedulingDayChooser = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: schedulingDayChooser
+        ) { chooser in
+            ForEach(chooser.day.allBookings) { choice in
+                Button(choice.label) {
+                    let picked = SchedulingGridDayCell(
+                        id: chooser.day.id,
+                        date: chooser.day.date,
+                        kind: chooser.day.kind,
+                        operativeBooking: choice.operativeBooking,
+                        managerBooking: choice.managerBooking,
+                        subcontractorBooking: choice.subcontractorBooking
+                    )
+                    schedulingDayChooser = nil
+                    openSchedulingBooking(row: chooser.row, day: picked)
+                }
+            }
+            Button("Cancel", role: .cancel) { schedulingDayChooser = nil }
+        } message: { _ in
+            Text("Pick the booking to open.")
+        }
         .sheet(item: $quickAddRequest) { request in
             let policy = firebaseBackend.payrollPolicy(for: request.day)
             ScheduleQuickAddSheet(
@@ -292,11 +321,14 @@ struct ProjectDetailView: View {
                     managerBookings: managerScheduleStore.managerSiteBookings
                 ),
                 showsNotes: request.person.savesAsOperativeBooking,
-                onSave: { draft in
-                    await commitQuickAdd(request, draft: draft, policy: policy)
+                onSave: { draft, replaces in
+                    await commitQuickAdd(request, draft: draft, policy: policy, replaces: replaces)
                 },
                 onCancel: { quickAddRequest = nil },
                 leaveConflicts: { draft in
+                    // RULEBOOK 1.41.0 §5: an overlap is an orange row (✓ book both, ✕ drop, Replace when the viewer may
+                    // delete every overlapping booking), like every other booking flow; before 1.41.0 Quick Add refused it.
+                    quickAddClashRows(request, draft: draft, policy: policy) +
                     // RULEBOOK 1.16.0 `bookingLeaveConflicts`: leave on this day for this person and slot.
                     BookingLeaveConflictItems.items(
                         booked: [.init(
@@ -938,7 +970,19 @@ struct ProjectDetailView: View {
                     "Operatives & managers",
                     count: staffRows.isEmpty ? nil : "\(staffRows.count) \(staffRows.count == 1 ? "person" : "people")"
                 )
-                if staffRows.isEmpty {
+                if staffRows.isEmpty && schedulingRosterStillLoading {
+                    // Review 1.41 #5: a booking whose person the phone cannot name yet is left off the grid, so while
+                    // the roster loads the week says so rather than flashing "No operatives or managers booked".
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text("Loading people…")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 12)
+                    .padding(.horizontal, 12)
+                } else if staffRows.isEmpty {
                     schedulingEmptyRow("No operatives or managers booked this week")
                 } else {
                     ForEach(staffRows) { row in
@@ -995,6 +1039,26 @@ struct ProjectDetailView: View {
         let subcontractorBooking: SubcontractorBooking?
         /// RULEBOOK 1.37.0 `jobScheduleLeaveMarks`: this day's annual leave for the person (nil when none).
         var leave: RulebookScheduleLeaveMark? = nil
+        /// RULEBOOK 1.41.0 `scheduleDayCell`: the tile's text ("26h · 2 bookings").
+        var dayLabel: RulebookScheduleDayCell? = nil
+        /// Every booking on the tile; a tap with more than one opens a chooser (1.41.0), so each stays editable.
+        var allBookings: [SchedulingGridBookingChoice] = []
+    }
+
+    /// One booking of a person-day tile, for the chooser (RULEBOOK 1.41.0 §21).
+    private struct SchedulingGridBookingChoice: Identifiable {
+        let id: String
+        let label: String
+        let operativeBooking: Booking?
+        let managerBooking: ManagerSiteBooking?
+        let subcontractorBooking: SubcontractorBooking?
+    }
+
+    /// The day being chosen from (more than one booking on a person-day tile).
+    private struct SchedulingDayChooser: Identifiable {
+        let id = UUID()
+        let row: SchedulingGridPersonRow
+        let day: SchedulingGridDayCell
     }
 
     private struct QuickAddRequest: Identifiable {
@@ -1028,6 +1092,14 @@ struct ProjectDetailView: View {
                 }
             }.count
         }
+    }
+
+    /// The week has bookings but the roster that names their people is still loading (or not loaded yet).
+    private var schedulingRosterStillLoading: Bool {
+        let hasBookings = weekDays.contains { !bookingsForDate($0).isEmpty || !managerBookingsForDate($0).isEmpty }
+        guard hasBookings else { return false }
+        return userStore.isLoading || operativeStore.isLoading
+            || (userStore.organizationUsers.isEmpty && operativeStore.allOperatives.isEmpty)
     }
 
     private var schedulingOpsAndManagersRows: [SchedulingGridPersonRow] {
@@ -1080,60 +1152,60 @@ struct ProjectDetailView: View {
         userIds: [String],
         leave: RulebookScheduleLeaveMark?
     ) -> SchedulingGridDayCell {
-        var paid = 0.0
-        var overtime = 0.0
-        var count = 0
-        var slot: TimeSlot?
+        // RULEBOOK 1.41.0 §21 (owner option a): one tile per person-day — every booking's pay-rule figures go to
+        // `scheduleDayCell`, and every booking stays reachable (a chooser when there is more than one).
+        var figures: [RulebookScheduleDayBooking] = []
+        var choices: [SchedulingGridBookingChoice] = []
         var operativeBooking: Booking?
         var managerBooking: ManagerSiteBooking?
-        var bestPaid = -1.0
         for booking in bookingsForDate(day) where operativeIds.contains(booking.operativeId) {
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
-            let hours = booking.paidBookedHours(policy: policy)
-            paid += hours
-            overtime += CanonicalBusinessEngine.scheduleCellHours(booking.payrollHoursResult(policy: policy).scheduleCellHoursInput)?.overtimeHours ?? 0
-            count += 1
-            slot = booking.timeSlot
-            if hours >= bestPaid {
-                bestPaid = hours
-                operativeBooking = booking
-            }
+            let result = booking.payrollHoursResult(policy: policy)
+            figures.append(.from(result, timeSlot: booking.timeSlot.rawValue))
+            choices.append(SchedulingGridBookingChoice(
+                id: "o:\(booking.id.uuidString)",
+                label: "\(booking.scheduleLabel(policy: policy)) · \(SchedulingV2CellKindBuilder.hoursLabel(result.totalPaidHours))",
+                operativeBooking: booking, managerBooking: nil, subcontractorBooking: nil
+            ))
+            if operativeBooking == nil { operativeBooking = booking }
         }
         for booking in managerBookingsForDate(day) where userIds.contains(booking.userId) {
             let policy = firebaseBackend.payrollPolicy(for: booking.date)
-            let hours = booking.paidBookedHours(policy: policy)
-            paid += hours
-            overtime += CanonicalBusinessEngine.scheduleCellHours(booking.payrollHoursResult(policy: policy).scheduleCellHoursInput)?.overtimeHours ?? 0
-            count += 1
-            if operativeBooking == nil {
-                slot = {
-                    switch booking.timeSlot {
-                    case .morning: return .morning
-                    case .afternoon: return .afternoon
-                    case .fullDay: return .fullDay
-                    case .customHours: return .customHours
-                    }
-                }()
-                if hours >= bestPaid {
-                    bestPaid = hours
-                    managerBooking = booking
+            let result = booking.payrollHoursResult(policy: policy)
+            let slot: TimeSlot = {
+                switch booking.timeSlot {
+                case .morning: return .morning
+                case .afternoon: return .afternoon
+                case .fullDay: return .fullDay
+                case .customHours: return .customHours
                 }
-            }
+            }()
+            figures.append(.from(result, timeSlot: slot.rawValue))
+            let clock = booking.workStartTime.flatMap { s in booking.workEndTime.map { "\(s)–\($0)" } } ?? booking.timeSlot.displayName
+            choices.append(SchedulingGridBookingChoice(
+                id: "m:\(booking.id.uuidString)",
+                label: "\(clock) · \(SchedulingV2CellKindBuilder.hoursLabel(result.totalPaidHours))",
+                operativeBooking: nil, managerBooking: booking, subcontractorBooking: nil
+            ))
+            if managerBooking == nil { managerBooking = booking }
         }
-        if count > 0 {
-            let cell = SchedulingV2CellKindBuilder.fromBooking(
-                paidHours: paid,
-                overtimeHours: overtime,
-                timeSlot: count == 1 ? slot : nil
+        if !figures.isEmpty {
+            let dayCell = CanonicalBusinessEngine.scheduleDayCell(bookings: figures, onLeave: leave != nil)
+            let kind = dayCell.map(SchedulingV2CellKindBuilder.fromDayCell) ?? SchedulingV2CellKindBuilder.fromBooking(
+                paidHours: figures.reduce(0) { $0 + $1.paidHours },
+                overtimeHours: figures.reduce(0) { $0 + $1.overtimeHours },
+                timeSlot: nil
             )
             return SchedulingGridDayCell(
                 id: dayId,
                 date: day,
-                kind: cell,
+                kind: kind,
                 operativeBooking: operativeBooking,
                 managerBooking: operativeBooking == nil ? managerBooking : nil,
                 subcontractorBooking: nil,
-                leave: leave
+                leave: leave,
+                dayLabel: dayCell,
+                allBookings: choices
             )
         }
         if let leave {
@@ -1230,13 +1302,27 @@ struct ProjectDetailView: View {
                     )
                 }
             case .subcontractor(let subId):
-                let booking = subcontractorBookingsForDate(day).first(where: { $0.subcontractorId == subId })
-                if let booking {
-                    let mirror = booking.payrollMirrorBooking()
+                // RULEBOOK 1.41.0 §21: every booking of the firm that day on one tile (iOS showed only the first).
+                let firmBookings = subcontractorBookingsForDate(day).filter { $0.subcontractorId == subId }
+                if let booking = firmBookings.first {
+                    var figures: [RulebookScheduleDayBooking] = []
+                    var choices: [SchedulingGridBookingChoice] = []
+                    for entry in firmBookings {
+                        let mirror = entry.payrollMirrorBooking()
+                        let p = firebaseBackend.payrollPolicy(for: entry.date)
+                        let result = mirror.payrollHoursResult(policy: p)
+                        figures.append(.from(result, timeSlot: entry.timeSlot.rawValue))
+                        choices.append(SchedulingGridBookingChoice(
+                            id: "s:\(entry.id.uuidString)",
+                            label: "\(mirror.scheduleLabel(policy: p)) · \(SchedulingV2CellKindBuilder.hoursLabel(result.totalPaidHours))",
+                            operativeBooking: nil, managerBooking: nil, subcontractorBooking: entry
+                        ))
+                    }
+                    let dayCell = CanonicalBusinessEngine.scheduleDayCell(bookings: figures, onLeave: false)
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
-                    let cell = SchedulingV2CellKindBuilder.fromBooking(
-                        paidHours: mirror.paidBookedHours(policy: p),
-                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(mirror.payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
+                    let cell = dayCell.map(SchedulingV2CellKindBuilder.fromDayCell) ?? SchedulingV2CellKindBuilder.fromBooking(
+                        paidHours: booking.payrollMirrorBooking().paidBookedHours(policy: p),
+                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(booking.payrollMirrorBooking().payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
                         timeSlot: booking.timeSlot
                     )
                     return SchedulingGridDayCell(
@@ -1245,7 +1331,9 @@ struct ProjectDetailView: View {
                         kind: cell,
                         operativeBooking: nil,
                         managerBooking: nil,
-                        subcontractorBooking: booking
+                        subcontractorBooking: booking,
+                        dayLabel: dayCell,
+                        allBookings: choices
                     )
                 }
             }
@@ -1409,6 +1497,7 @@ struct ProjectDetailView: View {
                     SchedulingV2BookingCell(
                         kind: day.kind,
                         leaveBand: day.leave,
+                        dayLabel: day.dayLabel,
                         isToday: OrganizationRulebookContext.calendar.isDate(day.date, inSameDayAs: Date()),
                         isWeekend: index >= 5,
                         accessibilityDay: day.date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)),
@@ -1438,6 +1527,16 @@ struct ProjectDetailView: View {
     }
 
     private func handleSchedulingCellTap(row: SchedulingGridPersonRow, day: SchedulingGridDayCell) {
+        // RULEBOOK 1.41.0 §21: a tile with several bookings asks which one to open (every booking stays editable).
+        if day.allBookings.count > 1 {
+            schedulingDayChooser = SchedulingDayChooser(row: row, day: day)
+            return
+        }
+        openSchedulingBooking(row: row, day: day)
+    }
+
+    /// Opens the tile's booking (its editor, gated by `canWriteBooking`), or the quick add / scheduler for an empty day.
+    private func openSchedulingBooking(row: SchedulingGridPersonRow, day: SchedulingGridDayCell) {
         if let booking = day.operativeBooking {
             guard schedulingTapAction(.labourBooking) == .edit else { return }
             // 1.33.1 (owner): tapping a person's booking always opens Edit booking for that booking — times on the
@@ -1489,12 +1588,14 @@ struct ProjectDetailView: View {
         }
     }
 
-    private func commitQuickAdd(
+    /// RULEBOOK 1.41.0 §5: the orange row for a Quick Add that overlaps the person's other bookings that day
+    /// (`overlappingBookings`), with Replace when `bookingReplaceOffer` allows it.
+    private func quickAddClashRows(
         _ request: QuickAddRequest,
         draft: ScheduleQuickAddDraft,
         policy: OrgPayrollTimePolicy
-    ) async -> String? {
-        if let message = ScheduleWeekGrid.overlapMessage(
+    ) -> [BookingConflictItem] {
+        let hits = ScheduleWeekGrid.overlappingBookings(
             operativeIds: request.person.operativeIds,
             userIds: request.person.userIds,
             day: request.day,
@@ -1504,9 +1605,56 @@ struct ProjectDetailView: View {
             operativeBookings: bookingStore.bookings,
             managerBookings: managerScheduleStore.managerSiteBookings,
             policy: policy
-        ) {
-            return message
+        )
+        let replace = quickAddReplaceCandidates(request, draft: draft, policy: policy)
+        guard !hits.labour.isEmpty || !hits.manager.isEmpty || !replace.labour.isEmpty || !replace.manager.isEmpty else { return [] }
+        let person = BookingLeaveConflictItems.person(operativeIds: request.person.operativeIds, userIds: request.person.userIds)
+        return [.doubleBooking(
+            personKey: person.id,
+            dayKey: OrganizationRulebookContext.dayKey(request.day),
+            personName: request.person.name,
+            detail: "Already booked · " + ScheduleWeekGrid.overlapRowDetail,
+            // Review 1.41 #8, #9: the bookings Replace removes come from the rulebook (`bookingReplaceCandidates`) over
+            // that day and the day before, so a night booking reaching this morning is replaced too; none when the
+            // script does not answer.
+            replace: CanonicalBusinessEngine.bookingReplaceOffer(labour: replace.labour, manager: replace.manager)
+        )]
+    }
+
+    /// `CanonicalBusinessEngine.bookingReplaceCandidates` for a Quick Add: the person's bookings that day and the day
+    /// before (labour under every id of the row, manager schedule under its user ids).
+    private func quickAddReplaceCandidates(
+        _ request: QuickAddRequest,
+        draft: ScheduleQuickAddDraft,
+        policy: OrgPayrollTimePolicy
+    ) -> (labour: [Booking], manager: [ManagerSiteBooking]) {
+        let dayKey = OrganizationRulebookContext.dayKey(request.day)
+        let keys: Set<String> = [dayKey, OrganizationRulebookContext.dayKey(request.day.addingTimeInterval(-12 * 3600))]
+        let operativeIds = Set(request.person.operativeIds)
+        let userIds = Set(request.person.userIds.map { $0.lowercased() })
+        let labour = bookingStore.bookings.filter {
+            operativeIds.contains($0.operativeId) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
         }
+        let manager = managerScheduleStore.managerSiteBookings.filter {
+            userIds.contains($0.userId.lowercased()) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
+        return CanonicalBusinessEngine.bookingReplaceCandidates(
+            request: RulebookClashBooking(
+                id: "request", dayKey: dayKey, timeSlot: draft.timeSlot.rawValue,
+                workStartTime: draft.workStart, workEndTime: draft.workEnd
+            ),
+            labour: labour,
+            manager: manager,
+            policy: policy
+        )
+    }
+
+    private func commitQuickAdd(
+        _ request: QuickAddRequest,
+        draft: ScheduleQuickAddDraft,
+        policy: OrgPayrollTimePolicy,
+        replaces: [RulebookBookingReplaceRef] = []
+    ) async -> String? {
         guard let target = ScheduleWeekGrid.saveTarget(for: request.person, jobType: project.isSmallWorksDocument ? .smallWorks : .catA) else {
             return "This person cannot be booked from here."
         }
@@ -1524,16 +1672,32 @@ struct ProjectDetailView: View {
             guard let bookedBy = firebaseBackend.currentUser?.uid else {
                 return "Not signed in."
             }
-            await bookingStore.bookOperative(
-                operative,
-                on: request.day,
-                timeSlot: draft.timeSlot,
-                for: project,
-                bookedBy: bookedBy,
-                notes: draft.notes,
-                workStartTime: draft.workStart,
-                workEndTime: draft.workEnd
-            )
+            if replaces.isEmpty {
+                await bookingStore.bookOperative(
+                    operative,
+                    on: request.day,
+                    timeSlot: draft.timeSlot,
+                    for: project,
+                    bookedBy: bookedBy,
+                    notes: draft.notes,
+                    workStartTime: draft.workStart,
+                    workEndTime: draft.workEnd
+                )
+            } else {
+                // RULEBOOK 1.41.0 §5: the booking and the replaced deletes + tombstones in one batch (online only).
+                var booking = Booking(
+                    operativeId: operative.id,
+                    projectId: project.id,
+                    date: request.day,
+                    timeSlot: draft.timeSlot,
+                    bookedBy: bookedBy,
+                    notes: draft.notes,
+                    workStartTime: draft.workStart,
+                    workEndTime: draft.workEnd
+                )
+                booking.updatedAt = Date()
+                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) { return problem }
+            }
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             // 1.33.1: the notice follows on its own task, so "Saving…" ends when the booking is saved, not when every
             // notice has been confirmed by the server.
@@ -1561,7 +1725,11 @@ struct ProjectDetailView: View {
                 workStartTime: draft.workStart,
                 workEndTime: draft.workEnd
             )
-            await managerScheduleStore.saveBooking(booking)
+            if replaces.isEmpty {
+                await managerScheduleStore.saveBooking(booking)
+            } else if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: replaces, labourBookings: bookingStore.bookings) {
+                return problem
+            }
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
         quickAddRequest = nil
@@ -1860,6 +2028,7 @@ struct ProjectDetailView: View {
             || leaveGate.pending != nil
             || quickAddRequest != nil
             || subcontractorEditBooking != nil
+            || schedulingDayChooser != nil
             || showingEditProject
             || labourDeleteRefusalMessage != nil
             || bookingEditSaveAlert != nil

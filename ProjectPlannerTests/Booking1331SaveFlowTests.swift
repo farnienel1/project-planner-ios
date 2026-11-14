@@ -75,8 +75,8 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let proceed = try body(of: "private func proceedWithBooking()", in: wizard)
         XCTAssertTrue(proceed.contains("ScheduleBookingSaveOutcome.decide(results: saveResults)"))
         XCTAssertEqual(
-            proceed.components(separatedBy: "createdDatesByOperative[").count - 1, 2,
-            "a booking is counted (and notified) only from its own kept outcome, for edits and for new bookings"
+            proceed.components(separatedBy: "createdDatesByOperative[").count - 1, 3,
+            "a booking is counted (and notified) only from its own kept outcome, for edits, new bookings and (1.41.0) Replace"
         )
         XCTAssertEqual(proceed.components(separatedBy: "if result.keepsBooking {").count - 1, 2)
     }
@@ -431,7 +431,8 @@ final class Booking1331SaveFlowTests: XCTestCase {
 
     func testTappingAGroupBookingOpensEditBookingNotTheScheduleScreen() throws {
         let detail = try source("Views/ProjectDetailView.swift")
-        let tap = try body(of: "private func handleSchedulingCellTap(", in: detail)
+        // RULEBOOK 1.41.0: the tap opens a chooser for a tile with several bookings, then `openSchedulingBooking`.
+        let tap = try body(of: "private func openSchedulingBooking(", in: detail)
         let operativeBranch = try XCTUnwrap(tap.range(of: "if let booking = day.operativeBooking {"))
         let managerBranch = try XCTUnwrap(tap.range(of: "if let booking = day.managerBooking {"))
         let branch = tap[operativeBranch.upperBound..<managerBranch.lowerBound]

@@ -260,6 +260,49 @@ class ManagerScheduleStore: ObservableObject {
         )
     }
 
+    /// RULEBOOK 1.41.0 §5: Replace for a manager schedule booking — one checked transaction
+    /// (`FirebaseBackend.createBookingReplacing`, `CanonicalBusinessEngine.bookingReplaceWrites`), online only.
+    /// `labourBookings`: the labour bookings on this phone, so a replaced one is resolved from what the person was shown.
+    /// The delete's signed-timesheet warning first (`CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning`), the
+    /// overtime reopen notices after (review 1.41 #1, #2). Returns nil when saved, else why nothing was saved.
+    func saveBookingReplacing(
+        _ booking: ManagerSiteBooking,
+        replaces refs: [RulebookBookingReplaceRef],
+        labourBookings: [Booking]
+    ) async -> String? {
+        guard let targets = BookingReplaceTarget.resolve(refs, bookings: labourBookings, managerBookings: managerSiteBookings) else {
+            return BookingReplaceMessages.notOnThisPhone
+        }
+        guard let fb = firebaseBackend, let orgId = fb.resolvedOrganizationIdForOfflineWrites() else {
+            return "This booking could not be saved."
+        }
+        if let refusal = writeRefusal(booking) {
+            errorMessage = refusal
+            return refusal
+        }
+        guard OfflinePolicy.isEnabled(.replaceBooking, isOnline: smartCache?.isOnline != false) else {
+            return OfflinePolicy.onlineOnlyMessage
+        }
+        var normalized = booking
+        normalized.date = BookingDay.organizationMidnight(for: booking.date)
+        normalized.updatedAt = Date()
+        await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: orgId, firebaseBackend: fb)
+        do {
+            try await fb.createBookingReplacing(manager: normalized, replacing: targets, organizationId: orgId,
+                onLateApply: { BookingReplaceNotices.reopenOvertime(targets, organizationId: orgId) }
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return error.localizedDescription
+        }
+        BookingReplaceNotices.reopenOvertime(targets, organizationId: orgId)
+        let gone = Set(targets.filter { $0.ref.collection == "managerSiteBookings" }.map { $0.ref.bookingId.lowercased() })
+        managerSiteBookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+        managerSiteBookings.append(normalized)
+        // A replaced booking of the other collection leaves that store through its live listener.
+        return nil
+    }
+
     func saveBooking(_ booking: ManagerSiteBooking) async {
         await saveBookingReportingProblem(booking)
     }

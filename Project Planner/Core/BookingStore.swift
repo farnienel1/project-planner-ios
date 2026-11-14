@@ -384,6 +384,57 @@ class BookingStore: ObservableObject {
         await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
     }
 
+    /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov): Replace — the new booking and each replaced booking's delete with its
+    /// tombstone in one checked transaction (`FirebaseBackend.createBookingReplacing`, `bookingReplaceWrites`). Online
+    /// only (`booking.replace`): offline it writes nothing and returns `OFFLINE_ONLINE_ONLY_MESSAGE`. `managerBookings`:
+    /// the manager schedule bookings on this phone, so a replaced one is resolved from what the person was shown.
+    /// Before it is written the delete's signed-timesheet warning is shown
+    /// (`CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning`); after it, each replaced booking's overtime line
+    /// reopens (review 1.41 #1, #2). Returns nil when saved, else why nothing was saved.
+    func addBookingReplacing(
+        _ booking: Booking,
+        replaces refs: [RulebookBookingReplaceRef],
+        managerBookings: [ManagerSiteBooking]
+    ) async -> String? {
+        guard let targets = BookingReplaceTarget.resolve(refs, bookings: bookings, managerBookings: managerBookings) else {
+            return BookingReplaceMessages.notOnThisPhone
+        }
+        return await addBookingReplacing(booking, replacing: targets)
+    }
+
+    func addBookingReplacing(_ booking: Booking, replacing targets: [BookingReplaceTarget]) async -> String? {
+        var booking = booking
+        booking.date = BookingDay.organizationMidnight(for: booking.date)
+        if let refusal = writeRefusal([booking]) {
+            errorMessage = refusal
+            return refusal
+        }
+        guard OfflinePolicy.isEnabled(.replaceBooking, isOnline: smartCache?.isOnline != false) else {
+            return OfflinePolicy.onlineOnlyMessage
+        }
+        guard let firebaseBackend, let organizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() else {
+            return "This booking could not be saved."
+        }
+        await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: organizationId, firebaseBackend: firebaseBackend)
+        do {
+            try await firebaseBackend.createBookingReplacing(labour: booking, replacing: targets, organizationId: organizationId,
+                onLateApply: { BookingReplaceNotices.reopenOvertime(targets, organizationId: organizationId) }
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+            return error.localizedDescription
+        }
+        BookingReplaceNotices.reopenOvertime(targets, organizationId: organizationId)
+        let gone = Set(targets.filter { $0.ref.collection == "bookings" }.map { $0.ref.bookingId.lowercased() })
+        bookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+        bookings.append(booking)
+        try? await persistenceService.saveBookingData(bookings: bookings)
+        smartCache?.cacheBookings(bookings)
+        // A replaced booking of the other collection leaves that store through its live listener.
+        ScheduleChangeNotifier.postBookingStoreDidChange()
+        return nil
+    }
+
     /// Append multiple bookings then sync only the new rows (much faster than repeated full saves).
     func addBookings(_ newBookings: [Booking]) async {
         await addBookingsReturningResults(newBookings)

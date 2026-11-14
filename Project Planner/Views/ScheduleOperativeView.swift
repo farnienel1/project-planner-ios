@@ -56,6 +56,11 @@ struct ScheduleOperativeView: View {
     @State private var replaceBookingOnConfirmByOverrideKey: [String: UUID] = [:]
     @State private var acknowledgedConflictIds: Set<String> = []
     @State private var struckConflictIds: Set<String> = []
+    /// RULEBOOK 1.41.0 §5: conflict rows where Replace was chosen (also in `acknowledgedConflictIds`).
+    @State private var replacedConflictIds: Set<String> = []
+    /// Re-review 1.41 #3: the refs of each row the person tapped Replace on, captured when they tapped it (with the
+    /// fingerprint of the booking as the row showed it), never rebuilt from the stores at save time.
+    @State private var replacedConflictRefs: [String: (date: Date, refs: [RulebookBookingReplaceRef])] = [:]
     @State private var expandedMainConflictPersonIds: Set<UUID> = []
     @State private var expandedPickerPersonIds: Set<UUID> = []
     @State private var showingSelectDatesFirstAlert = false
@@ -238,6 +243,8 @@ struct ScheduleOperativeView: View {
                 if oldSet != newSet {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()
+                    replacedConflictIds.removeAll()
+                    replacedConflictRefs.removeAll()
                 }
                 if newSet.count == 1, let only = newSet.sorted().first {
                     sharedBulkChoice = baseChoice(for: only)
@@ -249,6 +256,9 @@ struct ScheduleOperativeView: View {
             }
             .onChange(of: operativeSlotOverrides.count) { _, _ in
                 handleHoursOrDatesChanged()
+            }
+            .onChange(of: replacedConflictIds) { oldIds, newIds in
+                captureReplacedConflictRefs(added: newIds.subtracting(oldIds), removed: oldIds.subtracting(newIds))
             }
             .onChange(of: sharedBulkChoice) { _, _ in
                 handleHoursOrDatesChanged()
@@ -334,7 +344,8 @@ struct ScheduleOperativeView: View {
             excludingBookingIds: excludingBookingIds,
             acknowledgedConflictIds: $acknowledgedConflictIds,
             struckConflictIds: $struckConflictIds,
-            expandedPersonIds: $expandedPickerPersonIds
+            expandedPersonIds: $expandedPickerPersonIds,
+            replacedConflictIds: $replacedConflictIds
         )
         .environmentObject(operativeStore)
         .environmentObject(userStore)
@@ -469,6 +480,21 @@ struct ScheduleOperativeView: View {
         [:]
     }
 
+    /// Re-review 1.41 #3: the rows just marked Replace keep the refs they showed (`CanonicalBusinessEngine.bookingReplaceOffer`,
+    /// stamped with the shown fingerprint); rows un-marked drop theirs.
+    private func captureReplacedConflictRefs(added: Set<String>, removed: Set<String>) {
+        for id in removed { replacedConflictRefs[id] = nil }
+        guard !added.isEmpty else { return }
+        for person in bookablePeople {
+            guard let rows = personConflictSummary(person)?.rows else { continue }
+            for row in rows where added.contains(row.id) {
+                if let refs = row.replaceRefs, !refs.isEmpty {
+                    replacedConflictRefs[row.id] = (row.date, refs)
+                }
+            }
+        }
+    }
+
     private func personConflictSummary(_ person: ScheduleBookablePerson) -> SchedulePersonConflictSummary? {
         ScheduleBookingConflictEngine.summarizePerson(
             person: person,
@@ -498,6 +524,7 @@ struct ScheduleOperativeView: View {
     private func handleHoursOrDatesChanged() {
         acknowledgedConflictIds.removeAll()
         struckConflictIds.removeAll()
+        replacedConflictIds.removeAll()
         droppedClashOperativeIds.removeAll()
         if mainScreenHasUnactionedConflicts && !didShowHoursClashAlertThisSession {
             didShowHoursClashAlertThisSession = true
@@ -1262,8 +1289,10 @@ struct ScheduleOperativeView: View {
                             expandedMainConflictPersonIds.insert(person.operativeId)
                         }
                     },
-                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) },
-                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0) }
+                    onAcknowledge: { acknowledgedConflictIds.insert($0); struckConflictIds.remove($0); replacedConflictIds.remove($0) },
+                    onStrike: { struckConflictIds.insert($0); acknowledgedConflictIds.remove($0); replacedConflictIds.remove($0) },
+                    replacedIds: replacedConflictIds,
+                    onReplace: { replacedConflictIds.insert($0); acknowledgedConflictIds.insert($0); struckConflictIds.remove($0) }
                 )
                 .padding(.leading, 4)
             }
@@ -1795,6 +1824,23 @@ struct ScheduleOperativeView: View {
             // first wait that times out (a write, a read before an edit, or the organisation check) every later wait of
             // this Confirm is 1 s at most, so a dead link cannot add 15–38 s per booking.
             let writeSession = BookingWriteSession(organizationId: savingOrganizationId)
+            // RULEBOOK 1.41.0 §5: per operative and day, the bookings Replace removes (read before any write changes the
+            // stores). Those bookings are saved one by one, each in one batch with its replaced deletes (online only).
+            var replacing: [(booking: Booking, refs: [RulebookBookingReplaceRef])] = []
+            var refsByOperativeDay: [String: [RulebookBookingReplaceRef]] = [:]
+            if !replacedConflictIds.isEmpty {
+                for operative in operatives {
+                    guard let person = bookablePeople.first(where: { $0.operativeId == operative.id }),
+                          let rows = personConflictSummary(person)?.rows else { continue }
+                    for row in rows where replacedConflictIds.contains(row.id) {
+                        // The refs captured when Replace was tapped (re-review #3); a row that no longer lists a
+                        // clash keeps none.
+                        guard let captured = replacedConflictRefs[row.id], !captured.refs.isEmpty else { continue }
+                        refsByOperativeDay[operativeOverrideKey(operative.id, captured.date), default: []]
+                            .append(contentsOf: captured.refs)
+                    }
+                }
+            }
 
             for operative in operatives {
                 let dates = effectiveDates(for: operative.id)
@@ -1869,8 +1915,38 @@ struct ScheduleOperativeView: View {
                             bookingGroupId: groupId
                         )
                         booking.updatedAt = Date()
-                        newBookings.append(booking)
+                        if let refs = refsByOperativeDay[ovKey], !refs.isEmpty {
+                            replacing.append((booking, refs))
+                        } else {
+                            newBookings.append(booking)
+                        }
                     }
+                }
+            }
+
+            // Review 1.41 #10: an overnight booking can overlap two selected days. It is replaced once, on the first
+            // day (in date order); a later day whose bookings were all replaced already is a plain create.
+            // Re-review 1.41 #1: a booking counts as replaced only once its day saved; a refused day leaves it for the
+            // next day (never a silent double booking). The refs are `CanonicalBusinessEngine.bookingReplaceOffer`'s.
+            var alreadyReplaced = Set<String>()
+            for entry in replacing.sorted(by: { $0.booking.date < $1.booking.date }) {
+                let refs = entry.refs.filter { ref in
+                    !alreadyReplaced.contains("\(ref.collection)/\(ref.bookingId.lowercased())")
+                }
+                guard !refs.isEmpty else {
+                    newBookings.append(entry.booking)
+                    continue
+                }
+                if let problem = await bookingStore.addBookingReplacing(
+                    entry.booking,
+                    replaces: refs,
+                    managerBookings: managerScheduleStore.managerSiteBookings
+                ) {
+                    saveResults.append(.refused(problem))
+                } else {
+                    for ref in refs { alreadyReplaced.insert("\(ref.collection)/\(ref.bookingId.lowercased())") }
+                    saveResults.append(.saved)
+                    createdDatesByOperative[entry.booking.operativeId, default: []].insert(entry.booking.date)
                 }
             }
 
@@ -1907,6 +1983,7 @@ struct ScheduleOperativeView: View {
                 if outcome.clearsSelection {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()
+                    replacedConflictIds.removeAll()
                     selectedDates.removeAll()
                     selectedOperatives.removeAll()
                     dateSlotChoices.removeAll()
