@@ -319,7 +319,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 row.otMultiplier = part.isOvertime ? part.otMultiplier : nil
                 row.decision = .edited
                 row.appliedReviewKey = appliedKey
-                if part.id.lowercased() != line.id.lowercased() { row.reviewPartOf = line.id }
+                if part.id.lowercased() != line.id.lowercased() {
+                    row.reviewPartOf = line.id
+                    if part.isOvertime && !line.isOvertime { row.projectName = "\(line.projectName) (Overtime)" }
+                }
                 return row
             }
             partsFrom[line.id.lowercased()] = rows
@@ -350,10 +353,15 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     return [declined]
                 }
                 if let recomputed = (partsFrom[source.id.lowercased()] ?? []).first(where: { $0.id.lowercased() == line.id.lowercased() }) {
-                    var row = recomputed
-                    row.bookingFingerprint = line.bookingFingerprint
-                    row.bookingHadOvertimeLine = line.bookingHadOvertimeLine
-                    row.reviewPartOf = line.reviewPartOf
+                    // Web fifth review: the part keeps its own label and overtime flag; only its figures follow.
+                    var row = line
+                    row.paidHours = recomputed.paidHours
+                    row.days = recomputed.days
+                    row.amount = recomputed.amount
+                    row.isOvertime = true
+                    row.otMultiplier = recomputed.otMultiplier
+                    row.decision = .edited
+                    row.appliedReviewKey = recomputed.appliedReviewKey
                     return [row]
                 }
                 if sourceReview.decision == .edited, sourceReview.revisedStandardHours != nil {

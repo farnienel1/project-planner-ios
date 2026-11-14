@@ -335,6 +335,8 @@ final class Rulebook1460Tests: XCTestCase {
         XCTAssertEqual(applied.lines[1].otMultiplier, 2)
         XCTAssertEqual(applied.lines[1].reviewPartOf, "op-TEST-B1-normal", "the part records its standard line")
         XCTAssertNil(applied.lines[0].reviewPartOf)
+        XCTAssertEqual(applied.lines[1].projectName, "TEST-Kitchen refit (Overtime)", "the added part keeps its own label")
+        XCTAssertTrue(applied.lines[1].isOvertime)
         let key = try XCTUnwrap(applied.lines[0].appliedReviewKey)
         XCTAssertFalse(key.isEmpty)
         // Applied once: a second save with the same review changes nothing.
