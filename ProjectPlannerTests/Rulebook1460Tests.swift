@@ -283,7 +283,7 @@ final class Rulebook1460Tests: XCTestCase {
         var draft = TimesheetDraft()
         draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft)
         let current = TimesheetDraftAdjustments.currentPayrollAdjustments(draft: draft, lines: [original])
-        XCTAssertEqual(current.map(\.line.id), [original.id])
+        XCTAssertEqual(current.map { $0.line.id }, [original.id])
         XCTAssertEqual(TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: [original]), 1)
 
         let changed = [standardLine(fingerprint: after, hasOvertimeLine: true), overtimeLine(fingerprint: after)]
