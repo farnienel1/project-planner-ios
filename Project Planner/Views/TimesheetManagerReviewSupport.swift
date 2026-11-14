@@ -40,22 +40,27 @@ extension TimesheetManagerDecision {
 }
 
 enum TimesheetDraftAdjustments {
-    /// RULEBOOK 1.10.0 §8 `payrollLineReview(sheet, lineId)`: the line id as stored, then without case (iOS keys
-    /// reviews by `UUID.uuidString`, web by the stored line id). Falls back to the exact key when the script did not
-    /// answer.
-    static func payrollReview(in draft: TimesheetDraft, lineId: String) -> TimesheetPayrollLineReview? {
+    /// RULEBOOK 1.10.0 §8 `payrollLineReview(sheet, lineId, live)`: the line id as stored, then without case (iOS keys
+    /// reviews by `UUID.uuidString`, web by the stored line id). 1.46.0: given the live line, a review made against a
+    /// booking that has changed since (`reviewedBookingFingerprint` ≠ the line's `bookingFingerprint`), or a
+    /// standard-line review carrying overtime once the booking has its own overtime line, is stale (nil: pending at the
+    /// live amount). Falls back to the exact key when the script did not answer.
+    static func payrollReview(in draft: TimesheetDraft, lineId: String, live: TimesheetPayrollLineItem? = nil) -> TimesheetPayrollLineReview? {
+        payrollReview(in: draft, lineId: lineId, liveJSON: live?.rulebookLiveBookingJSON)
+    }
+
+    /// `payrollLineReview(sheet, lineId, live)` with the live booking as the script reads it (a signed snapshot line passes
+    /// the values it was signed with: `bookingFingerprint`, `isOvertimeLine`, `bookingHadOvertimeLine`).
+    static func payrollReview(in draft: TimesheetDraft, lineId: String, liveJSON: [String: Any]?) -> TimesheetPayrollLineReview? {
         guard !draft.payrollLineReviews.isEmpty else { return nil }
-        let reviews: [String: Any] = draft.payrollLineReviews.mapValues { review in
-            ["decision": review.decision.rawValue, "revisedAmount": review.revisedAmount ?? NSNull()] as [String: Any]
-        }
-        guard let answer = CanonicalBusinessEngine.callJSON("payrollLineReview", arguments: [["payrollLineReviews": reviews], lineId]) else {
+        let reviews: [String: Any] = draft.payrollLineReviews.mapValues { $0.storedFields }
+        var arguments: [Any] = [["payrollLineReviews": reviews], lineId]
+        if let liveJSON { arguments.append(liveJSON) }
+        guard let answer = CanonicalBusinessEngine.callJSON("payrollLineReview", arguments: arguments) else {
             return draft.payrollLineReviews[lineId]
         }
         guard let row = answer as? [String: Any] else { return nil }
-        return TimesheetPayrollLineReview(
-            decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
-            revisedAmount: (row["revisedAmount"] as? NSNumber)?.doubleValue
-        )
+        return TimesheetPayrollLineReview(stored: row, defaultDecision: .approved)
     }
 
     static func expenseDecision(_ entry: TimesheetExpenseEntry) -> TimesheetManagerDecision {
@@ -73,15 +78,15 @@ enum TimesheetDraftAdjustments {
         applyLiveReview: Bool = false
     ) -> Double {
         let applyDecisions = managerHasSigned || applyLiveReview
-        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id) else {
+        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id, live: line) else {
             return line.amount
         }
-        switch review.decision {
-        case .declined: return 0
-        case .approved: return line.amount
-        case .edited: return review.revisedAmount ?? line.amount
-        case .pending: return line.amount
-        }
+        // RULEBOOK 1.46.0 `timesheetEntryEffectiveAmount`: a revised amount counts in pennies.
+        return CanonicalBusinessEngine.timesheetEntryEffectiveAmount(
+            decision: review.decision.rawValue,
+            revisedAmount: review.revisedAmount,
+            amount: line.amount
+        ) ?? line.amount
     }
 
     static func isPayrollLineRemoved(
@@ -91,7 +96,7 @@ enum TimesheetDraftAdjustments {
         applyLiveReview: Bool = false
     ) -> Bool {
         let applyDecisions = managerHasSigned || applyLiveReview
-        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id) else { return false }
+        guard applyDecisions, let review = payrollReview(in: draft, lineId: line.id, live: line) else { return false }
         return review.decision == .declined
     }
 
@@ -268,50 +273,141 @@ enum TimesheetPayrollLineBookingLookup {
         return nil
     }
 
-    static func revisedAmount(
-        for row: TimesheetPayrollLineItem,
+    /// RULEBOOK 1.46.0 §8 (web `payrollLineBookingLookup.ts` `payrollLineEdit`): a line manager's Edit hours re-prices the
+    /// whole booking through `CanonicalBusinessEngine.revisedPayrollLineAmounts` (`payrollHoursResult` under the policy
+    /// in effect that day, the booking's own overtime rate, `payForHours`, pennies) — never the old hours ratio. Returns
+    /// the review fields for each line of that booking on the sheet (its standard line and, when it has one, its overtime
+    /// line). The rate is the standard line's (an overtime line shows the rate × multiplier for display).
+    struct Edit {
+        /// `revisedPayrollLineTimesError` when the times cannot be priced (Save is refused); else nil.
+        let error: String?
+        let amounts: RulebookRevisedPayrollLineAmounts?
+        let reviewFieldsByLineId: [String: RulebookPayrollLineEditReviewFields]
+        let standardLine: TimesheetPayrollLineItem?
+        let overtimeLine: TimesheetPayrollLineItem?
+    }
+
+    static func payrollLineEdit(
+        row: TimesheetPayrollLineItem,
+        lines: [TimesheetPayrollLineItem],
         startTime: String,
         endTime: String,
         breakRemoved: Bool,
-        otMultiplier: Double?,
-        policy: OrgPayrollTimePolicy
-    ) -> Double {
-        let probe = Booking(
-            operativeId: UUID(),
-            projectId: UUID(),
-            date: row.date,
-            timeSlot: .customHours,
-            bookedBy: "",
-            workStartTime: startTime,
-            workEndTime: endTime,
-            isBreakRemoved: breakRemoved,
-            otMultiplierOverride: otMultiplier
-        )
-        let paid = probe.paidBookedHours(policy: policy)
-        let ot = probe.overtimeHoursBeyondPaidStandard(policy: policy)
-        let otPaid = ot * (otMultiplier ?? probe.effectiveWeekdayOtMultiplier(policy: policy))
-        let relevantHours: Double
-        if row.isOvertimeLine {
-            relevantHours = ot
-        } else {
-            relevantHours = max(0, paid - otPaid)
+        typedOvertimeRate: Double?,
+        policy: OrgPayrollTimePolicy,
+        employment: [String: Any]?
+    ) -> Edit {
+        let base = Self.bookingKey(row)
+        let sameBooking: (TimesheetPayrollLineItem) -> Bool = { Self.bookingKey($0) == base }
+        let standardLine = row.isOvertimeLine ? lines.first(where: { !$0.isOvertimeLine && sameBooking($0) }) : row
+        let overtimeLine = row.isOvertimeLine ? row : lines.first(where: { $0.isOvertimeLine && sameBooking($0) })
+        let rateLine = standardLine ?? row
+        let multiplier = row.isOvertimeLine ? (row.otMultiplier.flatMap { $0 > 0 ? $0 : nil } ?? 1) : 1
+        let dayRate = standardLine != nil ? rateLine.dayRate : row.dayRate / multiplier
+        let hourlyRate = standardLine != nil ? rateLine.hourlyRate : row.hourlyRate.map { $0 / multiplier }
+        // The overtime rate typed on an overtime line (1–3), else the booking's own (web `typedOvertimeRate`).
+        let typed = row.isOvertimeLine ? typedOvertimeRate.flatMap { (1...3).contains($0) ? $0 : nil } : nil
+        if let timesError = CanonicalBusinessEngine.revisedPayrollLineTimesError(startTime: startTime, endTime: endTime) {
+            return Edit(error: timesError, amounts: nil, reviewFieldsByLineId: [:], standardLine: standardLine, overtimeLine: overtimeLine)
         }
-        guard row.paidHours > 0.01 else { return row.amount }
-        return row.amount * (relevantHours / row.paidHours)
+        let amounts = CanonicalBusinessEngine.revisedPayrollLineAmounts(
+            dayKey: OrganizationRulebookContext.dayKey(row.date),
+            policy: policy,
+            startTime: startTime,
+            endTime: endTime,
+            isBreakRemoved: breakRemoved,
+            otMultiplierOverride: typed ?? rateLine.bookingOtMultiplierOverride,
+            payBasis: rateLine.payrollBasis == .hourly ? "hourly" : "day",
+            dayRate: dayRate,
+            hourlyRate: hourlyRate,
+            employment: employment,
+            bookingHasOvertimeLine: overtimeLine != nil,
+            bookingFingerprint: rateLine.bookingFingerprint ?? row.bookingFingerprint
+        )
+        var fields: [String: RulebookPayrollLineEditReviewFields] = [:]
+        if let amounts, let standardLine { fields[standardLine.id] = amounts.standardFields }
+        if let amounts, let overtimeLine, let overtime = amounts.overtimeFields { fields[overtimeLine.id] = overtime }
+        return Edit(
+            error: amounts == nil ? CanonicalBusinessEngine.payrollLineEditTimesMessage : nil,
+            amounts: amounts,
+            reviewFieldsByLineId: fields,
+            standardLine: standardLine,
+            overtimeLine: overtimeLine
+        )
+    }
+
+    /// The booking a line comes from: the rulebook's `payrollLineBookingKey` (collection and `bookingId`, else the line
+    /// id without its `-normal` / `-ot` suffix). The line's own id when the script did not answer (it then groups alone).
+    private static func bookingKey(_ line: TimesheetPayrollLineItem) -> String {
+        CanonicalBusinessEngine.payrollLineBookingKey(
+            lineId: line.id,
+            bookingId: line.bookingId,
+            bookingCollection: line.bookingCollection
+        ) ?? "line|\(line.id)"
+    }
+
+    /// RULEBOOK 1.46.0: the reviews after an Edit hours save (web `TimesheetPeriodPage` save + `managerReviewSave.ts`):
+    /// the edited line always, and the booking's other line only when its amount changes or it already has an `edited`
+    /// review. Each review is `{ decision, revisedAmount }` (a declined line becomes approved; an unchanged amount is
+    /// approved) with the Edit hours fields on an `edited` one; revised amounts in pennies (`roundPennies`).
+    static func reviewsAfterEdit(
+        _ edit: Edit,
+        editedLineId: String,
+        draft: TimesheetDraft
+    ) -> [String: TimesheetPayrollLineReview] {
+        var reviews = draft.payrollLineReviews
+        for line in [edit.standardLine, edit.overtimeLine].compactMap({ $0 }) {
+            guard let fields = edit.reviewFieldsByLineId[line.id] else { continue }
+            let existing = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)
+            let unchanged = abs(fields.revisedAmount - line.amount) < 0.01
+            if line.id != editedLineId && unchanged && existing?.decision != .edited { continue }
+            let decision: TimesheetManagerDecision = (existing?.decision == .declined || unchanged) ? .approved : .edited
+            if decision == .edited {
+                var review = fields.editedReview
+                review.revisedAmount = CanonicalBusinessEngine.roundPennies(fields.revisedAmount)
+                reviews[line.id] = review
+            } else {
+                reviews[line.id] = TimesheetPayrollLineReview(
+                    decision: .approved,
+                    revisedAmount: unchanged ? nil : CanonicalBusinessEngine.roundPennies(fields.revisedAmount)
+                )
+            }
+        }
+        return reviews
     }
 }
 
 struct TimesheetPayrollLineEditHoursSheet: View {
     let row: TimesheetPayrollLineItem
+    /// Every payroll line of the sheet (to find the booking's other line).
+    let lines: [TimesheetPayrollLineItem]
     let policy: OrgPayrollTimePolicy
     let initialChoice: OperativeDayBookingChoice?
-    let onSave: (Double) -> Void
+    /// The person's employment fields (`CanonicalBusinessEngine.timesheetPerson`): a PAYE day pays 0.
+    let employment: [String: Any]?
+    let onSave: (TimesheetPayrollLineBookingLookup.Edit) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var refusal: String?
+
+    private func edit(_ start: String, _ end: String, _ breakRemoved: Bool, _ otMult: Double?) -> TimesheetPayrollLineBookingLookup.Edit {
+        TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: row,
+            lines: lines,
+            startTime: start,
+            endTime: end,
+            breakRemoved: breakRemoved,
+            typedOvertimeRate: otMult,
+            policy: policy,
+            employment: employment
+        )
+    }
 
     var body: some View {
         OperativeCustomHoursSheet(
             policy: policy,
+            // RULEBOOK 1.19.0: the working hours in effect on the line's day (was today's).
+            referenceDay: row.date,
             title: "Edit Hours",
             subtitle: "\(row.date.formatted(date: .abbreviated, time: .omitted)) · \(row.jobNumber) \(row.projectName)",
             allowsOtMultiplierOverride: row.isOvertimeLine,
@@ -320,19 +416,25 @@ struct TimesheetPayrollLineEditHoursSheet: View {
             showsFooterNote: false,
             initialChoice: initialChoice,
             onSave: { start, end, breakRemoved, otMult in
-                let amount = TimesheetPayrollLineBookingLookup.revisedAmount(
-                    for: row,
-                    startTime: start,
-                    endTime: end,
-                    breakRemoved: breakRemoved,
-                    otMultiplier: otMult,
-                    policy: policy
-                )
-                onSave(amount)
+                let result = edit(start, end, breakRemoved, otMult)
+                // RULEBOOK 1.46.0: blank times or a start equal to the finish are never priced.
+                if let error = result.error ?? (result.amounts == nil ? CanonicalBusinessEngine.payrollLineEditTimesMessage : nil) {
+                    refusal = error
+                    return
+                }
+                onSave(result)
                 dismiss()
             },
             onCancel: { dismiss() }
         )
+        .withAmountPreview { start, end, breakRemoved, otMult in
+            edit(start, end, breakRemoved, otMult).amounts.map { OrgMoney.format($0.total) }
+        }
+        .alert("Cannot save these hours", isPresented: Binding(get: { refusal != nil }, set: { if !$0 { refusal = nil } })) {
+            Button("OK", role: .cancel) { refusal = nil }
+        } message: {
+            Text(refusal ?? "")
+        }
     }
 }
 

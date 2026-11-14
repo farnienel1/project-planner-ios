@@ -44,6 +44,18 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     /// RULEBOOK 1.43.0 (review r318, 2nd round): when the line's booking was last written (`updatedAt`); the rebuild
     /// check uses the later of the two, so a booking moved into the period after approval never counts.
     var bookingUpdatedAt: Date? = nil
+    /// RULEBOOK 1.46.0 (never stored on the line): the booking as it is now — `CanonicalBusinessEngine
+    /// .overtimeBookingFingerprint` (web the same, no status), on both lines of a booking. Edit hours stores it on its
+    /// review (`reviewedBookingFingerprint`); once the booking changes the review is stale (`payrollLineReview`).
+    var bookingFingerprint: String? = nil
+    /// RULEBOOK 1.46.0 (never stored): whether this line's booking has its own overtime line on the sheet.
+    var bookingHasOvertimeLine: Bool = false
+    /// RULEBOOK 1.46.0 (never stored): the booking's own overtime rate (`otMultiplierOverride`), so Edit hours re-prices
+    /// the booking at it. Nil = the organisation's rate.
+    var bookingOtMultiplierOverride: Double? = nil
+    /// RULEBOOK 1.46.0 (never stored): the booking's collection (`bookings` / `managerSiteBookings`), so a labour and a
+    /// manager site booking never group (`payrollLineBookingKey`).
+    var bookingCollection: String? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -148,6 +160,24 @@ enum TimesheetPayrollCollector {
             overtimeHours += multiplied?.clockHours ?? otHours
             let isPaye = user.employmentType(on: day) == .paye
             let lineBookingId = "\(idPrefix)-\(bookingId.uuidString)"
+            // RULEBOOK 1.46.0: the booking's fingerprint from the rulebook (`overtimeBookingFingerprint`, no status —
+            // exactly web's collector input), never built in Swift, so web and iPhone compare the same string.
+            let bookingCollection = idPrefix == "mgr" ? "managerSiteBookings" : "bookings"
+            let bookingFingerprint = CanonicalBusinessEngine.payrollLineBookingFingerprint(
+                OvertimeBookingInput(
+                    id: bookingId.uuidString,
+                    collection: bookingCollection,
+                    personId: "",
+                    dayKey: OrganizationRulebookContext.dayKey(day),
+                    timeSlot: probe.timeSlot.rawValue,
+                    workStartTime: probe.workStartTime,
+                    workEndTime: probe.workEndTime,
+                    isBreakRemoved: probe.isBreakRemoved,
+                    otMultiplierOverride: probe.otMultiplierOverride,
+                    status: nil,
+                    jobId: nil
+                )
+            )
             paidBookings.append(
                 CanonicalOverlapBookingInput(
                     id: lineBookingId,
@@ -195,11 +225,14 @@ enum TimesheetPayrollCollector {
                     bookingEndTime: hasClockTimes ? bookingEnd : nil,
                     bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
                     bookingCreatedAt: createdAt,
-                    bookingUpdatedAt: updatedAt
+                    bookingUpdatedAt: updatedAt,
+                    bookingFingerprint: bookingFingerprint,
+                    bookingOtMultiplierOverride: probe.otMultiplierOverride,
+                    bookingCollection: bookingCollection
                 )
             )
 
-            if otHours > 0.05 {
+            if otHours > CanonicalBusinessEngine.timesheetOvertimeLineMinHours {
                 let otPay = resolved.payForHoursIfCalculated(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
                 if otPay == nil { calculationFailed = true }
                 let otAmount = otPay ?? 0
@@ -228,7 +261,10 @@ enum TimesheetPayrollCollector {
                         bookingEndTime: hasClockTimes ? bookingEnd : nil,
                         bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
                         bookingCreatedAt: createdAt,
-                        bookingUpdatedAt: updatedAt
+                        bookingUpdatedAt: updatedAt,
+                        bookingFingerprint: bookingFingerprint,
+                        bookingOtMultiplierOverride: probe.otMultiplierOverride,
+                        bookingCollection: bookingCollection
                     )
                 )
             }
@@ -288,6 +324,13 @@ enum TimesheetPayrollCollector {
                     lineItems[index].isOverlapping = true
                 }
             }
+        }
+
+        // RULEBOOK 1.46.0 (web collector): a standard-line Edit hours review carrying overtime is stale once the booking
+        // has its own overtime line, so each line says whether its booking has one.
+        let bookingsWithOvertime = Set(lineItems.filter(\.isOvertimeLine).compactMap(\.bookingId))
+        for index in lineItems.indices {
+            lineItems[index].bookingHasOvertimeLine = lineItems[index].bookingId.map { bookingsWithOvertime.contains($0) } ?? false
         }
 
         let sortedItems = lineItems.sorted {

@@ -1420,12 +1420,9 @@ enum TimesheetDraftStore {
                 if let evidence = evidenceWriteFields(p.evidence) { row["evidence"] = evidence }
                 return row
             },
-            "payrollLineReviews": draft.payrollLineReviews.mapValues { review in
-                [
-                    "decision": review.decision.rawValue,
-                    "revisedAmount": review.revisedAmount as Any
-                ]
-            }
+            // RULEBOOK 1.46.0 §8: an Edit hours review keeps its hours, parts and booking fingerprint
+            // (`PayrollLineEditReviewFields`, web `payrollLineEditFieldsOf`), so a save never drops them.
+            "payrollLineReviews": draft.payrollLineReviews.mapValues { $0.storedFields }
         ]
     }
 
@@ -1522,11 +1519,8 @@ enum TimesheetDraftStore {
         if let reviewMap = map["payrollLineReviews"] as? [String: [String: Any]] {
             var reviews: [String: TimesheetPayrollLineReview] = [:]
             for (lineId, payload) in reviewMap {
-                let decision = TimesheetManagerDecision(rawValue: payload["decision"] as? String ?? "") ?? .pending
-                reviews[lineId] = TimesheetPayrollLineReview(
-                    decision: decision,
-                    revisedAmount: payload["revisedAmount"] as? Double
-                )
+                // RULEBOOK 1.46.0: every stored review field, numbers read as NSNumber.
+                reviews[lineId] = TimesheetPayrollLineReview(stored: payload)
             }
             output.payrollLineReviews = reviews
         }
@@ -1581,6 +1575,12 @@ enum TimesheetDraftStore {
                 // RULEBOOK 1.44.0 §8 (web `weeklyReportOverride.ts` `payBasis`: 'day' | 'hourly'), only when known: a line
                 // signed before it was stored keeps its stored shape.
                 if let basis = line.payBasis { row["payBasis"] = basis }
+                // RULEBOOK 1.46.0 §8 (web `weeklyReportOverrideToFirestore`): the booking as signed, and an overtime line's
+                // multiplier, only when known.
+                if let signed = line.bookingFingerprint, !signed.isEmpty { row["bookingFingerprint"] = signed }
+                if line.isOvertime, let multiplier = line.otMultiplier { row["otMultiplier"] = multiplier }
+                if let had = line.bookingHadOvertimeLine { row["bookingHadOvertimeLine"] = had }
+                if let key = line.appliedReviewKey { row["appliedReviewKey"] = key }
                 return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),
@@ -1617,7 +1617,11 @@ enum TimesheetDraftStore {
                 isOvertime: row["isOvertime"] as? Bool ?? false,
                 decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
                 bookingId: (bookingId?.isEmpty == false) ? bookingId : nil,
-                payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"])
+                payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"]),
+                bookingFingerprint: (row["bookingFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
+                bookingHadOvertimeLine: row["bookingHadOvertimeLine"] as? Bool,
+                appliedReviewKey: row["appliedReviewKey"] as? String
             )
         }
         func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {
@@ -2322,7 +2326,7 @@ private struct MyTimesheetView: View {
                             draft: draft,
                             managerHasSigned: managerHasSigned
                         )
-                        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.payrollLine.id)
+                        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.payrollLine.id, live: row.payrollLine)
                         let decision = review?.decision ?? .approved
                         let effective = TimesheetDraftAdjustments.effectivePayrollAmount(
                             line: row.payrollLine,
@@ -5469,7 +5473,7 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem) -> some View {
-        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id)
+        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id, live: row)
         let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
             line: row,
             draft: draft,
@@ -5865,21 +5869,11 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
         )
     }
 
-    private func applyPayrollReviewSave(lineId: String, row: TimesheetPayrollLineItem, revisedAmount: Double) {
-        let prior = draft.payrollLineReviews[lineId]?.decision ?? .approved
-        let unchanged = abs(revisedAmount - row.amount) < 0.01
-        let decision: TimesheetManagerDecision
-        if prior == .declined {
-            decision = .approved
-        } else if unchanged {
-            decision = .approved
-        } else {
-            decision = .edited
-        }
-        draft.payrollLineReviews[lineId] = TimesheetPayrollLineReview(
-            decision: decision,
-            revisedAmount: unchanged ? nil : revisedAmount
-        )
+    /// RULEBOOK 1.46.0 §8: an Edit hours save stores, on each line of the booking, the review the rulebook priced
+    /// (`revisedPayrollLineAmounts` → `PayrollLineEditReviewFields`, revised amounts in pennies), exactly web's fields.
+    private func applyPayrollReviewSave(lineId: String, edit: TimesheetPayrollLineBookingLookup.Edit) {
+        guard edit.error == nil, edit.amounts != nil else { return }
+        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: lineId, draft: draft)
         editingPayrollLineId = nil
         onSaveDraft()
     }
@@ -5887,8 +5881,10 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     private func applyExtraReviewSave(
         expenseId: UUID?,
         priceWorkId: UUID?,
-        revisedAmount: Double
+        revisedAmount enteredAmount: Double
     ) {
+        // RULEBOOK 1.46.0 (web `extraReviewAfterSave`): a revised amount is stored in pennies (`roundPennies`).
+        let revisedAmount = CanonicalBusinessEngine.roundPennies(enteredAmount)
         if let expenseId, let index = draft.expenseEntries.firstIndex(where: { $0.id == expenseId }) {
             var entries = draft.expenseEntries
             let prior = entries[index].managerDecision
@@ -5938,10 +5934,12 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
             )
             TimesheetPayrollLineEditHoursSheet(
                 row: row,
+                lines: payrollLines,
                 policy: linePolicy,
                 initialChoice: initialChoice,
-                onSave: { value in
-                    applyPayrollReviewSave(lineId: lineId, row: row, revisedAmount: value)
+                employment: CanonicalBusinessEngine.timesheetPerson(operative),
+                onSave: { edit in
+                    applyPayrollReviewSave(lineId: lineId, edit: edit)
                 }
             )
         }

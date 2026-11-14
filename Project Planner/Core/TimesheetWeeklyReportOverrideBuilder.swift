@@ -166,15 +166,33 @@ enum TimesheetWeeklyReportOverrideBuilder {
 
         var labour: [TimesheetWeeklyReportLabourLine] = []
         labour.reserveCapacity(summary.lineItems.count)
+        // RULEBOOK 1.46.0 (web `weeklyReportOverride.ts`): never two snapshot lines with one id — a part `{booking}-ot`
+        // is left out when the booking has its own overtime line, and a line is never pushed twice.
+        let liveIds = Set(summary.lineItems.map { $0.id.lowercased() })
+        var pushedIds = Set<String>()
+        func push(_ row: TimesheetWeeklyReportLabourLine) {
+            guard pushedIds.insert(row.id.lowercased()).inserted else { return }
+            labour.append(row)
+        }
         for line in summary.lineItems {
-            let decision = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id)?.decision ?? .approved
+            let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)
+            let decision = review?.decision ?? .approved
+            // RULEBOOK 1.46.0 (web `weeklyReportOverride.ts`): each signed line records the booking's state at signing
+            // and the review applied (`payrollLineReviewKey`), so a later save tests a review against the sheet as
+            // signed, never against today's bookings.
+            func signed(_ row: TimesheetWeeklyReportLabourLine) -> TimesheetWeeklyReportLabourLine {
+                var row = row
+                row.bookingHadOvertimeLine = line.bookingHasOvertimeLine
+                row.appliedReviewKey = CanonicalBusinessEngine.payrollLineReviewKey(review) ?? ""
+                return row
+            }
             if TimesheetDraftAdjustments.isPayrollLineRemoved(
                 line: line,
                 draft: draft,
                 managerHasSigned: managerHasSigned,
                 applyLiveReview: applyLiveReview
             ) {
-                labour.append(
+                push(signed(
                     labourLine(
                         from: line,
                         decision: .declined,
@@ -182,7 +200,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
                         days: 0,
                         managerBookings: managerBookings
                     )
-                )
+                ))
                 continue
             }
             let amount = TimesheetDraftAdjustments.effectivePayrollAmount(
@@ -191,8 +209,36 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 managerHasSigned: managerHasSigned,
                 applyLiveReview: applyLiveReview
             )
-            let days = scaledDays(line: line, originalAmount: line.amount, effectiveAmount: amount, policy: policy)
-            labour.append(
+            let linePolicy = organization.map { PayrollTimePolicyCatalog.policy(for: line.date, organization: $0) } ?? policy
+            // RULEBOOK 1.46.0 `payrollLineReviewSnapshotParts`: an Edit hours review signs the hours and money of each
+            // part it pays — a standard line carrying overtime becomes the standard line plus `{booking}-ot` at the
+            // multiplier, never "1 day at the edited total".
+            if let parts = CanonicalBusinessEngine.payrollLineReviewSnapshotParts(
+                lineId: line.id,
+                isOvertimeLine: line.isOvertimeLine,
+                review: review
+            ) {
+                let standard = max(CanonicalBusinessEngine.weekdayPaidHours(linePolicy), 0.01)
+                for part in parts {
+                    if part.id != line.id && liveIds.contains(part.id.lowercased()) { continue }
+                    var row = signed(labourLine(
+                        from: line,
+                        decision: .edited,
+                        amount: part.amount,
+                        days: part.paidHours / standard,
+                        managerBookings: managerBookings
+                    ))
+                    row.id = part.id
+                    row.paidHours = part.paidHours
+                    row.isOvertime = part.isOvertime
+                    row.otMultiplier = part.isOvertime ? part.otMultiplier : nil
+                    if part.isOvertime && !line.isOvertimeLine { row.projectName = "\(line.projectName) (Overtime)" }
+                    push(row)
+                }
+                continue
+            }
+            let days = scaledDays(line: line, originalAmount: line.amount, effectiveAmount: amount, policy: linePolicy)
+            push(signed(
                 labourLine(
                     from: line,
                     decision: decision == .pending ? .approved : decision,
@@ -200,7 +246,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     days: days,
                     managerBookings: managerBookings
                 )
-            )
+            ))
         }
 
         let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
@@ -216,7 +262,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
         )
     }
 
-    private static func reapplyReviews(
+    /// Internal (not private) so `Rulebook1460Tests` can check a signed sheet is never re-priced by a stale review.
+    static func reapplyReviews(
         to existing: TimesheetWeeklyReportOverride,
         draft: TimesheetDraft,
         user: AppUser,
@@ -231,28 +278,89 @@ enum TimesheetWeeklyReportOverrideBuilder {
             ?? draft.operativeSignedByName
             ?? (viewer?.fullName.isEmpty == false ? viewer?.fullName : viewer?.email)
             ?? existing.approvedByName
-        let lines = existing.lines.map { line -> TimesheetWeeklyReportLabourLine in
-            let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id)
-            let decision = review?.decision ?? line.decision
+        let existingIds = Set(existing.lines.map { $0.id.lowercased() })
+        // RULEBOOK 1.46.0 (web `weeklyReportOverride.ts` `reapplyReviews`): a signed line is never re-priced by an Edit
+        // hours review that is stale against the sheet AS SIGNED — the same test as at signing (`payrollLineReview`)
+        // with the booking fingerprint the line was signed with (a line signed before 1.46.0 has none, so a
+        // fingerprinted review never applies to it) and whether the booking had its own overtime line then
+        // (`bookingHadOvertimeLine`). A review that is the one applied at signing (`appliedReviewKey`) changes nothing.
+        enum Found { case none, unchanged, review(TimesheetPayrollLineReview) }
+        func review(for line: TimesheetWeeklyReportLabourLine) -> Found {
+            let live: [String: Any] = [
+                "bookingFingerprint": line.bookingFingerprint ?? "",
+                "isOvertimeLine": line.isOvertime,
+                "bookingHasOvertimeLine": line.bookingHadOvertimeLine == true,
+            ]
+            guard let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, liveJSON: live) else { return .none }
+            if let applied = line.appliedReviewKey, CanonicalBusinessEngine.payrollLineReviewKey(review) == applied { return .unchanged }
+            return .review(review)
+        }
+        // `payrollLineReviewSnapshotParts`: the parts an Edit hours review signs, applied to the snapshot line of that
+        // id — including a `{booking}-ot` line added for a standard line's overtime. When two reviews give a part of one
+        // id, the line's own review wins, else the first line in snapshot order.
+        var partsFrom: [String: [TimesheetWeeklyReportLabourLine]] = [:]
+        var partById: [String: (row: TimesheetWeeklyReportLabourLine, own: Bool)] = [:]
+        for line in existing.lines {
+            guard case .review(let stored) = review(for: line), stored.decision != .declined,
+                  let parts = CanonicalBusinessEngine.payrollLineReviewSnapshotParts(
+                    lineId: line.id, isOvertimeLine: line.isOvertime, review: stored
+                  ) else { continue }
+            let standardDay: Double? = line.days > 0.0001 && line.paidHours > 0 ? line.paidHours / line.days : nil
+            let appliedKey = CanonicalBusinessEngine.payrollLineReviewKey(stored) ?? ""
+            let rows = parts.map { part -> TimesheetWeeklyReportLabourLine in
+                var row = line
+                row.id = part.id
+                row.paidHours = part.paidHours
+                row.days = standardDay.map { part.paidHours / $0 } ?? line.days
+                row.amount = part.amount
+                row.isOvertime = part.isOvertime
+                row.otMultiplier = part.isOvertime ? part.otMultiplier : nil
+                row.decision = .edited
+                row.appliedReviewKey = appliedKey
+                return row
+            }
+            partsFrom[line.id.lowercased()] = rows
+            for row in rows {
+                let key = row.id.lowercased()
+                let own = key == line.id.lowercased()
+                if let held = partById[key], held.own || !own { continue }
+                partById[key] = (row, own)
+            }
+        }
+        let lines = existing.lines.flatMap { line -> [TimesheetWeeklyReportLabourLine] in
+            let found = review(for: line)
+            if case .unchanged = found { return [line] }
+            let stored: TimesheetPayrollLineReview?
+            if case .review(let value) = found { stored = value } else { stored = nil }
+            let decision = stored?.decision ?? line.decision
             if decision == .declined {
                 var declined = line
                 declined.amount = 0
                 declined.days = 0
                 declined.decision = .declined
-                return declined
+                declined.appliedReviewKey = CanonicalBusinessEngine.payrollLineReviewKey(stored) ?? ""
+                return [declined]
             }
-            if decision == .edited, let revised = review?.revisedAmount {
+            let added = (partsFrom[line.id.lowercased()] ?? []).filter { !existingIds.contains($0.id.lowercased()) }
+            if let part = partById[line.id.lowercased()] {
+                var row = part.row
+                row.bookingFingerprint = line.bookingFingerprint
+                row.bookingHadOvertimeLine = line.bookingHadOvertimeLine
+                return [row] + added
+            }
+            if decision == .edited, let stored, let revised = stored.revisedAmount {
                 var edited = line
                 if line.amount > 0.0001 {
                     edited.days = line.days * (revised / line.amount)
                 }
                 edited.amount = revised
                 edited.decision = .edited
-                return edited
+                edited.appliedReviewKey = CanonicalBusinessEngine.payrollLineReviewKey(stored) ?? ""
+                return [edited]
             }
             var kept = line
             kept.decision = decision == .pending ? .approved : decision
-            return kept
+            return [kept] + added
         }
         return TimesheetWeeklyReportOverride(
             approvedAt: draft.managerSignedAt ?? draft.operativeSignedAt ?? existing.approvedAt,
@@ -340,7 +448,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
             decision: decision,
             bookingId: bookingId(from: line.id),
             // RULEBOOK 1.44.0 §8: stored with the signed line (web `payBasis`).
-            payBasis: line.payrollBasis == .hourly ? "hourly" : "day"
+            payBasis: line.payrollBasis == .hourly ? "hourly" : "day",
+            // RULEBOOK 1.46.0 §8: the booking as signed, so a later Edit hours review of another version never
+            // re-prices the line; and an overtime line's multiplier (web `otMultiplier`).
+            bookingFingerprint: line.bookingFingerprint,
+            otMultiplier: line.isOvertimeLine ? line.otMultiplier : nil
         )
     }
 

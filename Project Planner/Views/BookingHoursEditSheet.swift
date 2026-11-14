@@ -551,6 +551,10 @@ struct OperativeCustomHoursSheet: View {
     /// When set, Delete is shown but disabled with this reason (RULEBOOK §2: deleting a booking is online only,
     /// `OfflinePolicy.onlineOnlyMessage`).
     var deleteDisabledReason: String?
+    /// RULEBOOK 1.46.0 (timesheet Edit hours only): the booking's revised amount at the times on screen
+    /// (`revisedPayrollLineAmounts`), shown under the hours; nil when the times cannot be priced. Set with
+    /// `withAmountPreview`. Display only.
+    var amountPreview: ((_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?)? = nil
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -1163,6 +1167,16 @@ struct OperativeCustomHoursSheet: View {
             if showsBreakdown && weekendBreakdownLines.isEmpty && !weekdayExplanationSections.isEmpty {
                 weekdayExplanationCard
             }
+            if let amountPreview {
+                HStack {
+                    Text("Revised amount (this booking)")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(amountPreview(startText, endText, !breakIncluded, otRate) ?? "—")
+                        .font(.subheadline.weight(.bold))
+                }
+                .accessibilityIdentifier("timesheets.editHours.revisedAmount")
+            }
             if let errorMessage {
                 Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote.weight(.medium))
@@ -1170,6 +1184,13 @@ struct OperativeCustomHoursSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// This sheet with the timesheet Edit hours revised-amount row (`amountPreview`).
+    func withAmountPreview(_ preview: @escaping (_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?) -> Self {
+        var copy = self
+        copy.amountPreview = preview
+        return copy
     }
 
     private enum TimeField: Hashable {
