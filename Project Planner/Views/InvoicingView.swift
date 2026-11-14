@@ -4462,7 +4462,7 @@ struct OperativeTimesheetsView: View {
             rebuiltNote: rebuilt ? TimesheetExportMessages.rebuiltExportNote() : nil
             )
         } catch {
-            exportMessage = "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
+            exportMessage = TimesheetExportHelper.pdfFailureMessage(name: name, error: error)
             return
         }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.fileName)
@@ -7551,7 +7551,18 @@ private enum TimesheetExportHelper {
     /// Why a sheet's PDF could not be built (its text is shown, as web shows the error message).
     struct PDFBuildError: LocalizedError {
         let message: String
+        /// True when `message` is a whole sentence for the person (shown as it is, not wrapped in "Couldn't build…").
+        var isPlain: Bool = false
         var errorDescription: String? { message }
+    }
+
+    /// Review #231: the PDF was drawn but its file could not be read back.
+    static let pdfReadBackFailedMessage = "Couldn't open the PDF file — try again."
+
+    /// The message for a PDF that could not be built for `name`: a plain sentence as it is, else the reason in brackets.
+    static func pdfFailureMessage(name: String, error: Error) -> String {
+        if let build = error as? PDFBuildError, build.isPlain { return build.message }
+        return "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
     }
 
     /// One sheet's PDF from the copy that was saved (its stored snapshot) — the same builder for Export and for the
@@ -7615,7 +7626,11 @@ private enum TimesheetExportHelper {
         ) else {
             throw PDFBuildError(message: "the PDF could not be drawn")
         }
-        return PDFAttachment(fileName: fileName, data: try Data(contentsOf: pdfURL))
+        guard let data = try? Data(contentsOf: pdfURL) else {
+            // Review #231: a file that cannot be read back gets a short plain message, never the raw system error.
+            throw PDFBuildError(message: pdfReadBackFailedMessage, isPlain: true)
+        }
+        return PDFAttachment(fileName: fileName, data: data)
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `runTimesheetExport` deliver): every STAMPED sheet gets its PDF (from the copy
@@ -7665,7 +7680,8 @@ private enum TimesheetExportHelper {
                 taxIds: taxIdsByUserId[row.operative.id]
                 )
             } catch {
-                delivery.notSent.append("\(userName) (\(error.localizedDescription))")
+                let reason = (error as? PDFBuildError).map(\.message) ?? error.localizedDescription
+                delivery.notSent.append("\(userName) (\(reason))")
                 continue
             }
             attachments.append(attachment)
