@@ -26,12 +26,16 @@ struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     var jobNumber: String
     var date: Date
     var amount: Double
+    /// Older entries only: the receipt name both apps stored without uploading a file (read-only, RULEBOOK 1.45.0 §8).
     var receiptName: String?
     var managerDecision: TimesheetManagerDecision = .approved
     var managerRevisedAmount: Double?
     /// The entry id as `parseTimesheetEntries` read it (RULEBOOK 1.7.0 §8): the stored id in stored case, or the
     /// deterministic `timesheetEntryId` for an entry stored without one. Written back on save. Nil on a new entry.
     var storedId: String? = nil
+    /// RULEBOOK 1.45.0 §8: files, photos and frozen personal site audit copies the owner attached (the PAYE claim
+    /// evidence shape). Read through `parseTimesheetEntries`; written back on every save so it is never dropped.
+    var evidence: [PayeClaimEvidence] = []
 }
 
 struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
@@ -47,6 +51,8 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var managerRevisedAmount: Double?
     /// The entry id as `parseTimesheetEntries` read it (stored case, or `timesheetEntryId`). Nil on a new entry.
     var storedId: String? = nil
+    /// RULEBOOK 1.45.0 §8: optional evidence (the PAYE claim evidence shape); written back on every save.
+    var evidence: [PayeClaimEvidence] = []
 }
 
 struct TimesheetDraft: Codable {

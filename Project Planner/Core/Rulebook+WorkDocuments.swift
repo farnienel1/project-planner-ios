@@ -194,11 +194,17 @@ extension CanonicalBusinessEngine {
     nonisolated static func parseTimesheetEntries(
         sheetDocumentId: String,
         sheet: [String: Any],
-        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
+        timeZone: String = OrganizationRulebookContext.timeZoneIdentifier,
+        organizationId: String? = OrganizationRulebookContext.organizationId,
+        ownerUserIds: [String] = []
     ) -> CanonicalDocumentRow? {
-        CanonicalDocumentRow(callJSON(
+        // RULEBOOK 1.45.0 §8: each entry's `evidence` is the sheet owner's own claim files only
+        // (`timesheetEvidenceOwnerIds`); evidence outside `organizationId` is dropped.
+        var options: [String: Any] = ["timeZone": timeZone, "ownerUserIds": ownerUserIds]
+        if let organizationId, !organizationId.isEmpty { options["organizationId"] = organizationId }
+        return CanonicalDocumentRow(callJSON(
             "parseTimesheetEntries",
-            arguments: [sheetDocumentId, peopleDocumentJSON(sheet), ["timeZone": timeZone] as [String: Any]]
+            arguments: [sheetDocumentId, peopleDocumentJSON(sheet), options]
         ))
     }
 

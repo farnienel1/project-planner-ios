@@ -1090,19 +1090,44 @@ enum TimesheetDraftStore {
                 return !firestoreValuesEqual(value, server?[key])
             }
             fields = fields.filter { keep.contains($0.key) }
-            // RULEBOOK 1.30.1 §8 `timesheetPriceWorkJobNumberError(previous, next)`: the owner's added or edited price
-            // work entries need a job number; entries they did not touch (older ones without one) never block. Compared
-            // with the sheet as this editor loaded it, else as stored. A reviewer's save never asks.
-            let loadedEntries = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId)
-                .flatMap { asFirestoreMap($0)["priceWorkEntries"] as? [Any] }
-            let previousEntries = loadedEntries ?? (server?["priceWorkEntries"] as? [Any]) ?? []
-            if let message = CanonicalBusinessEngine.timesheetPriceWorkJobNumberError(
-                previous: previousEntries,
-                next: asFirestoreMap(draft)["priceWorkEntries"] as? [Any] ?? []
+            // RULEBOOK 1.30.1 / 1.45.0 §8 `timesheetOwnerEntriesError({ previous, next, organizationId, ownerUserIds })`:
+            // the owner's added or edited entries are checked — price work needs a job number, an expense at least one
+            // piece of evidence, and evidence must be in the owner's own claim folder. Entries they did not touch (older
+            // ones without a job number or with only a receipt name) never block. Compared with the sheet as this editor
+            // loaded it, else as stored. A reviewer's save never asks.
+            let previous: (priceWork: [Any], expenses: [Any])?
+            if let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+                let map = asFirestoreMap(loaded)
+                previous = (map["priceWorkEntries"] as? [Any] ?? [], map["expenseEntries"] as? [Any] ?? [])
+            } else if let server {
+                previous = (server["priceWorkEntries"] as? [Any] ?? [], server["expenseEntries"] as? [Any] ?? [])
+            } else {
+                previous = nil
+            }
+            let next = asFirestoreMap(draft)
+            if let message = CanonicalBusinessEngine.timesheetOwnerEntriesError(
+                previous: previous,
+                next: (next["priceWorkEntries"] as? [Any] ?? [], next["expenseEntries"] as? [Any] ?? []),
+                organizationId: organizationId,
+                // The uploader is the signed-in owner; the sheet's own id counts as theirs too.
+                ownerUserIds: CanonicalBusinessEngine.timesheetEvidenceOwnerIds(
+                    sheetDocumentId: "",
+                    userId: userId,
+                    extra: [writerId].filter { !$0.isEmpty }
+                )
             ) {
                 return message
             }
         }
+        // RULEBOOK 1.45.0 §8 / §24: the evidence on the entries before this save (as loaded, else as stored), so the
+        // files an edit or delete removed can be tidied up after the save.
+        let evidenceBefore: [PayeClaimEvidence] = {
+            if let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
+                return loaded.expenseEntries.flatMap(\.evidence) + loaded.priceWorkEntries.flatMap(\.evidence)
+            }
+            guard let server, let stored = decodeFirestoreMap(server) else { return [] }
+            return stored.expenseEntries.flatMap(\.evidence) + stored.priceWorkEntries.flatMap(\.evidence)
+        }()
         var changed: [String: Any] = [:]
         if server != nil, let loaded = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId) {
             // RULEBOOK 1.9.0 §1, §8: `timesheetChangedFields(base, next)` — only what this editor changed since it
@@ -1153,6 +1178,11 @@ enum TimesheetDraftStore {
         }
         // What this device wrote is now its loaded copy (the base of the next save).
         rememberLoadedCopy(draft, userId: userId, weekStart: weekStart, organizationId: organizationId)
+        if !reviewer && !frozenEntriesChanged {
+            // RULEBOOK 1.45.0 §8 `timesheetEntryEvidenceToDelete`: removed files go only inside the §24 undo window.
+            let evidenceAfter = draft.expenseEntries.flatMap(\.evidence) + draft.priceWorkEntries.flatMap(\.evidence)
+            await firebaseBackend.discardRemovedTimesheetEvidence(before: evidenceBefore, after: evidenceAfter)
+        }
         if frozenEntriesChanged {
             return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
         }
@@ -1209,6 +1239,22 @@ enum TimesheetDraftStore {
         return value
     }
 
+    /// RULEBOOK 1.45.0 §8 `timesheetEntryEvidenceWriteFields(evidence)`: the stored evidence list, nil when the entry has
+    /// none (then no `evidence` key is written). Without a script answer the entry's own evidence is written as read, so a
+    /// save never drops a file.
+    static func evidenceWriteFields(_ evidence: [PayeClaimEvidence]) -> [[String: Any]]? {
+        guard !evidence.isEmpty else { return nil }
+        if let fields = CanonicalBusinessEngine.timesheetEntryEvidenceWriteFields(evidence), fields.count == evidence.count {
+            return fields
+        }
+        return evidence.map { item -> [String: Any] in
+            var row: [String: Any] = ["path": item.path, "name": item.name, "kind": item.kind]
+            if let contentType = item.contentType, !contentType.isEmpty { row["contentType"] = contentType }
+            if let auditId = item.auditId, !auditId.isEmpty { row["auditId"] = auditId }
+            return row
+        }
+    }
+
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
         [
             "managerNote": draft.managerNote,
@@ -1223,8 +1269,8 @@ enum TimesheetDraftStore {
             "approvedByName": draft.managerSignedByName ?? "",
             "exportedAt": draft.exportedAt.map(Timestamp.init(date:)) as Any,
             "weeklyReportOverride": draft.weeklyReportOverride.map(weeklyReportOverrideMap) as Any,
-            "expenseEntries": draft.expenseEntries.map { e in
-                [
+            "expenseEntries": draft.expenseEntries.map { e -> [String: Any] in
+                var row: [String: Any] = [
                     // RULEBOOK 1.7.0 §8: the id as stored (or `timesheetEntryId`), so a review keyed on it still matches.
                     "id": e.storedId ?? WorkDocumentKeys.storedId(for: e.id),
                     "title": e.title,
@@ -1236,9 +1282,13 @@ enum TimesheetDraftStore {
                     "managerDecision": e.managerDecision.rawValue,
                     "managerRevisedAmount": e.managerRevisedAmount as Any
                 ]
+                // RULEBOOK 1.45.0 §8: evidence is written only when the entry has some (web the same), so an older
+                // entry keeps its stored shape and no save ever drops a file.
+                if let evidence = evidenceWriteFields(e.evidence) { row["evidence"] = evidence }
+                return row
             },
-            "priceWorkEntries": draft.priceWorkEntries.map { p in
-                [
+            "priceWorkEntries": draft.priceWorkEntries.map { p -> [String: Any] in
+                var row: [String: Any] = [
                     "id": p.storedId ?? WorkDocumentKeys.storedId(for: p.id),
                     "title": p.title,
                     "details": p.details,
@@ -1250,6 +1300,8 @@ enum TimesheetDraftStore {
                     "managerDecision": p.managerDecision.rawValue,
                     "managerRevisedAmount": p.managerRevisedAmount as Any
                 ]
+                if let evidence = evidenceWriteFields(p.evidence) { row["evidence"] = evidence }
+                return row
             },
             "payrollLineReviews": draft.payrollLineReviews.mapValues { review in
                 [
@@ -1258,6 +1310,12 @@ enum TimesheetDraftStore {
                 ]
             }
         ]
+    }
+
+    /// RULEBOOK 1.45.0 §8: an entry's `evidence` as `parseTimesheetEntries` returned it (the sheet owner's own claim
+    /// files only, `parsePayeClaimEvidence`); empty for an entry stored before 1.45.0.
+    static func entryEvidence(_ row: CanonicalDocumentRow) -> [PayeClaimEvidence] {
+        RulebookJSON.decode([PayeClaimEvidence].self, from: row.raw["evidence"]) ?? []
     }
 
     private static func fromFirestoreMap(_ map: [String: Any]) -> TimesheetDraft? {
@@ -1315,7 +1373,8 @@ enum TimesheetDraftStore {
                 receiptName: row.optionalText("receiptName"),
                 managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
                 managerRevisedAmount: row.number("managerRevisedAmount"),
-                storedId: row.id
+                storedId: row.id,
+                evidence: Self.entryEvidence(row)
             )
         }
 
@@ -1331,7 +1390,8 @@ enum TimesheetDraftStore {
                 amount: row.number("amount") ?? 0,
                 managerDecision: TimesheetManagerDecision(rawValue: row.text("managerDecision")) ?? .approved,
                 managerRevisedAmount: row.number("managerRevisedAmount"),
-                storedId: row.id
+                storedId: row.id,
+                evidence: Self.entryEvidence(row)
             )
         }
 
