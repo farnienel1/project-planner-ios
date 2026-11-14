@@ -255,6 +255,44 @@ final class Rulebook1460Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.revisedPayrollLineTimesError(startTime: "22:00", endTime: "06:00"), "overnight is allowed")
     }
 
+    /// An overnight Edit hours (finish before start) is priced; the sheet refuses only what the rulebook refuses.
+    func testAnOvernightEditIsPriced() throws {
+        let line = standardLine(fingerprint: nil, hasOvertimeLine: false)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: line, lines: [line], startTime: "22:00", endTime: "06:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        XCTAssertNil(edit.error)
+        XCTAssertGreaterThan(try XCTUnwrap(edit.amounts).total, 0)
+        XCTAssertFalse(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: TimesheetDraft()).isEmpty)
+        let support = try source("Project Planner/Views/TimesheetManagerReviewSupport.swift")
+        XCTAssertTrue(support.contains(".withAmountPreview(allowsOvernight: true)"), "Edit hours lets a finish before the start")
+        let sheet = try source("Project Planner/Views/BookingHoursEditSheet.swift")
+        XCTAssertTrue(sheet.contains("revisedPayrollLineTimesError(startTime: start, endTime: end)"))
+    }
+
+    /// "Line manager adjustments" lists only reviews that still apply to their live line: a stale edit is not current.
+    func testTheAdjustmentsCardNeverShowsAStaleEditAsCurrent() throws {
+        let before = try XCTUnwrap(fingerprint(start: "07:00", end: "16:00"))
+        let after = try XCTUnwrap(fingerprint(start: "07:00", end: "19:00"))
+        let original = standardLine(fingerprint: before, hasOvertimeLine: false)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: original, lines: [original], startTime: "07:00", endTime: "19:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft)
+        let current = TimesheetDraftAdjustments.currentPayrollAdjustments(draft: draft, lines: [original])
+        XCTAssertEqual(current.map(\.line.id), [original.id])
+        XCTAssertEqual(TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: [original]), 1)
+
+        let changed = [standardLine(fingerprint: after, hasOvertimeLine: true), overtimeLine(fingerprint: after)]
+        XCTAssertTrue(TimesheetDraftAdjustments.currentPayrollAdjustments(draft: draft, lines: changed).isEmpty)
+        XCTAssertEqual(TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: changed), 0)
+        // A review whose line is gone is not listed either.
+        XCTAssertEqual(TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: []), 0)
+    }
+
     // MARK: Stale reviews
 
     /// Edit 07:00–16:00 to 07:00–19:00 (review 426.47), then the booking itself is changed to 07:00–19:00: the collector

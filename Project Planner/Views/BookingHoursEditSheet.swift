@@ -555,6 +555,10 @@ struct OperativeCustomHoursSheet: View {
     /// (`revisedPayrollLineAmounts`), shown under the hours; nil when the times cannot be priced. Set with
     /// `withAmountPreview`. Display only.
     var amountPreview: ((_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?)? = nil
+    /// RULEBOOK 1.46.0 (timesheet Edit hours only): a finish before the start is an overnight booking, which the rulebook
+    /// prices (`revisedPayrollLineAmounts`). The sheet then refuses only what `revisedPayrollLineTimesError` refuses
+    /// (blank or equal times). Off for every booking flow, which keep their own rule. Set with `withAmountPreview`.
+    var allowsOvernight: Bool = false
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -1187,10 +1191,19 @@ struct OperativeCustomHoursSheet: View {
     }
 
     /// This sheet with the timesheet Edit hours revised-amount row (`amountPreview`).
-    func withAmountPreview(_ preview: @escaping (_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?) -> Self {
+    func withAmountPreview(
+        allowsOvernight: Bool = false,
+        _ preview: @escaping (_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?
+    ) -> Self {
         var copy = self
         copy.amountPreview = preview
+        copy.allowsOvernight = allowsOvernight
         return copy
+    }
+
+    /// The rulebook's refusal for these times when the sheet allows overnight (`revisedPayrollLineTimesError`), else nil.
+    private func overnightTimesError(start: String, end: String) -> String? {
+        CanonicalBusinessEngine.revisedPayrollLineTimesError(startTime: start, endTime: end)
     }
 
     private enum TimeField: Hashable {
@@ -1285,7 +1298,13 @@ struct OperativeCustomHoursSheet: View {
 
     private func applyStartChange(hour: Int, minute: Int) {
         let candidate = BookingHMTimePickerSupport.minutes(hour: hour, minute: minute)
-        if candidate >= endMinutes {
+        if allowsOvernight {
+            if let message = overnightTimesError(start: BookingHMTimePickerSupport.format(hour: hour, minute: minute), end: endText) {
+                revertStartToLastValid()
+                showTimeBanner(message)
+                return
+            }
+        } else if candidate >= endMinutes {
             revertStartToLastValid()
             showTimeBanner("The start time cannot be later than the end time.")
             return
@@ -1298,7 +1317,13 @@ struct OperativeCustomHoursSheet: View {
 
     private func applyEndChange(hour: Int, minute: Int) {
         let candidate = BookingHMTimePickerSupport.minutes(hour: hour, minute: minute)
-        if candidate <= startMinutes {
+        if allowsOvernight {
+            if let message = overnightTimesError(start: startText, end: BookingHMTimePickerSupport.format(hour: hour, minute: minute)) {
+                revertEndToLastValid()
+                showTimeBanner(message)
+                return
+            }
+        } else if candidate <= startMinutes {
             revertEndToLastValid()
             showTimeBanner("The end time cannot be earlier than the start time.")
             return
@@ -1645,7 +1670,13 @@ struct OperativeCustomHoursSheet: View {
 
     private func validateAndSave(breakWarningConfirmed: Bool = false) {
         errorMessage = nil
-        guard endMinutes > startMinutes else {
+        if allowsOvernight {
+            // RULEBOOK 1.46.0: a finish before the start is overnight; only blank or equal times are refused.
+            if let message = overnightTimesError(start: startText, end: endText) {
+                errorMessage = message
+                return
+            }
+        } else if endMinutes <= startMinutes {
             errorMessage = "Choose an end time after the start time."
             return
         }

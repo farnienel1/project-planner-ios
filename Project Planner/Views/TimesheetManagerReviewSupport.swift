@@ -138,8 +138,23 @@ enum TimesheetDraftAdjustments {
     // RULEBOOK 1.22.0 §8: sheet totals (labour, price work, expenses, total) are `CanonicalBusinessEngine.timesheetTotals`
     // (`TimesheetTotalsSource.totals`), the sum of the invoice rows. The Swift sums that were here are deleted.
 
-    static func managerAdjustmentCount(draft: TimesheetDraft) -> Int {
-        let payroll = draft.payrollLineReviews.values.filter { $0.decision == .declined || $0.decision == .edited }.count
+    /// RULEBOOK 1.46.0: the line manager's current payroll adjustments — each live line's review through
+    /// `payrollLineReview(sheet, lineId, live)`, so a review made against a booking that has changed since (stale) is
+    /// never shown as current. A review with no live line pays nothing and is not listed.
+    static func currentPayrollAdjustments(
+        draft: TimesheetDraft,
+        lines: [TimesheetPayrollLineItem]
+    ) -> [(line: TimesheetPayrollLineItem, review: TimesheetPayrollLineReview)] {
+        guard !draft.payrollLineReviews.isEmpty else { return [] }
+        return lines.compactMap { line in
+            guard let review = payrollReview(in: draft, lineId: line.id, live: line),
+                  review.decision == .declined || review.decision == .edited else { return nil }
+            return (line, review)
+        }
+    }
+
+    static func managerAdjustmentCount(draft: TimesheetDraft, lines: [TimesheetPayrollLineItem]) -> Int {
+        let payroll = currentPayrollAdjustments(draft: draft, lines: lines).count
         let expenses = draft.expenseEntries.filter { $0.managerDecision == .declined || $0.managerDecision == .edited }.count
         let priceWork = draft.priceWorkEntries.filter { $0.managerDecision == .declined || $0.managerDecision == .edited }.count
         return payroll + expenses + priceWork
@@ -427,7 +442,7 @@ struct TimesheetPayrollLineEditHoursSheet: View {
             },
             onCancel: { dismiss() }
         )
-        .withAmountPreview { start, end, breakRemoved, otMult in
+        .withAmountPreview(allowsOvernight: true) { start, end, breakRemoved, otMult in
             edit(start, end, breakRemoved, otMult).amounts.map { OrgMoney.format($0.total) }
         }
         .alert("Cannot save these hours", isPresented: Binding(get: { refusal != nil }, set: { if !$0 { refusal = nil } })) {
@@ -472,6 +487,8 @@ struct TimesheetAdjustedAmountText: View {
 
 struct TimesheetManagerAdjustmentSummaryCard: View {
     let draft: TimesheetDraft
+    /// The sheet's live payroll lines: each review is checked against its line (RULEBOOK 1.46.0 `payrollLineReview`).
+    let lines: [TimesheetPayrollLineItem]
     let managerName: String
 
     private var adjustments: [(String, TimesheetManagerDecision, String?)] {
@@ -488,12 +505,15 @@ struct TimesheetManagerAdjustmentSummaryCard: View {
                 : nil
             rows.append(("Price work: \(entry.title)", entry.managerDecision, detail))
         }
-        for (lineId, review) in draft.payrollLineReviews where review.decision == .declined || review.decision == .edited {
+        // RULEBOOK 1.46.0: only reviews that still apply to the live line (a stale edit is not shown as current); the
+        // amount is what the review pays (`timesheetEntryEffectiveAmount`, pennies).
+        for (line, review) in TimesheetDraftAdjustments.currentPayrollAdjustments(draft: draft, lines: lines) {
             let label = review.decision == .declined ? "Day removed" : "Day adjusted"
             let detail: String? = review.decision == .edited
-                ? "New amount \(OrgMoney.format(review.revisedAmount ?? 0))"
+                ? "\(OrgMoney.format(line.amount)) → \(OrgMoney.format(TimesheetDraftAdjustments.effectivePayrollAmount(line: line, draft: draft, managerHasSigned: true)))"
                 : nil
-            rows.append(("\(label) (\(lineId.prefix(8))…)", review.decision, detail))
+            let day = line.date.formatted(date: .abbreviated, time: .omitted)
+            rows.append(("\(label): \(day) · \(line.jobNumber) \(line.projectName)", review.decision, detail))
         }
         return rows
     }

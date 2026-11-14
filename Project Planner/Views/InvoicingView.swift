@@ -2312,9 +2312,10 @@ private struct MyTimesheetView: View {
                         .accessibilityIdentifier("timesheets.saveError")
                 }
 
-                if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft) > 0 {
+                if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
                     TimesheetManagerAdjustmentSummaryCard(
                         draft: draft,
+                        lines: payrollLines,
                         managerName: draft.managerSignedByName ?? "Line manager"
                     )
                 }
