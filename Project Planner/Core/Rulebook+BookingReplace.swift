@@ -237,19 +237,22 @@ enum BookingReplaceNotices {
     @MainActor
     static func warnIfOnSignedTimesheet(_ targets: [BookingReplaceTarget], organizationId: String, firebaseBackend: FirebaseBackend) async {
         for target in targets {
-            let userId: String?
+            // Every id the booked person goes by, sheets without `userId` too — the same people and sheets as a
+            // normal delete and as web `signedTimesheetWarningForBookings` (platform guardrail 1).
+            let personId: String
             let day: Date
             if let booking = target.labour {
-                userId = accountForLabourBooking(operativeId: booking.operativeId, users: RulebookRosterSnapshot.users)?.id
+                personId = Booking.storedOperativeId(for: booking.operativeId)
                 day = booking.date
             } else if let booking = target.manager {
-                userId = booking.userId
+                personId = booking.userId
                 day = booking.date
             } else {
                 continue
             }
-            guard let userId, !userId.isEmpty else { continue }
-            let sheets = await firebaseBackend.signedTimesheetCandidates(organizationId: organizationId, userId: userId)
+            let userIds = SignedTimesheetPeople.timesheetUserIds(personId: personId)
+            guard !userIds.isEmpty else { continue }
+            let sheets = await firebaseBackend.signedTimesheetCandidates(organizationId: organizationId, userIds: userIds)
             if let warning = CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(
                 dayKey: OrganizationRulebookContext.dayKey(day),
                 sheets: sheets

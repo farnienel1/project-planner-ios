@@ -183,29 +183,53 @@ extension FirebaseBackend {
     }
 
     /// The person's timesheets as `{ startDayKey, endDayKey, ...stored fields }` for
-    /// `bookingDeleteSignedTimesheetWarning` (`settings` documents `timesheet_*` where `userId ==`). Empty when they
-    /// cannot be read (no warning is shown then; the delete never depends on it).
-    func signedTimesheetCandidates(organizationId: String, userId: String) async -> [[String: Any]] {
+    /// `bookingDeleteSignedTimesheetWarning`, under every id they go by (`userIds`, from
+    /// `SignedTimesheetPeople.timesheetUserIds`): `settings` documents where `userId ==` each id, and the
+    /// `timesheet_{id}_…` document ids for a sheet stored without `userId` (`timesheetDocumentSubjectId`) — the same
+    /// reads as web `personTimesheetDocs` (platform guardrail 1). Each sheet's pay run is the rulebook's
+    /// (`parsePayrunSnapshotSheet`). A read the viewer may not make gives no sheets for it (no warning is shown then; the
+    /// delete never depends on it).
+    func signedTimesheetCandidates(organizationId: String, userIds: [String]) async -> [[String: Any]] {
         let orgId = normalizedOrganizationId(organizationId)
-        let person = userId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !orgId.isEmpty, !person.isEmpty else { return [] }
-        do {
-            let snapshot = try await db.collection("organizations").document(orgId).collection("settings")
-                .whereField("userId", isEqualTo: person)
-                .getDocuments()
-            return snapshot.documents
-                .filter { $0.documentID.hasPrefix("timesheet_") }
-                .compactMap { doc -> [String: Any]? in
-                    let data = doc.data()
-                    guard let start = data["weekStartKey"] as? String, let end = data["weekEndKey"] as? String else { return nil }
-                    var row = (Self.firestoreJSON(data) as? [String: Any]) ?? [:]
-                    row["startDayKey"] = start
-                    row["endDayKey"] = end
-                    return row
+        var seenIds = Set<String>()
+        let people = userIds
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seenIds.insert($0).inserted }
+        guard !orgId.isEmpty, !people.isEmpty else { return [] }
+        let settings = db.collection("organizations").document(orgId).collection("settings")
+        var seenDocs = Set<String>()
+        var rows: [[String: Any]] = []
+        func take(_ snapshot: QuerySnapshot?) {
+            for doc in snapshot?.documents ?? [] where doc.documentID.hasPrefix("timesheet_") {
+                guard seenDocs.insert(doc.documentID).inserted else { continue }
+                var data = (Self.firestoreJSON(doc.data()) as? [String: Any]) ?? [:]
+                let stored = (data["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if stored.isEmpty, let subject = CanonicalBusinessEngine.timesheetDocumentSubjectId(doc.documentID), !subject.isEmpty {
+                    data["userId"] = subject
                 }
-        } catch {
-            NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
-            return []
+                guard let sheet = CanonicalBusinessEngine.parsePayrunSnapshotSheet(docId: doc.documentID, data: data),
+                      let end = sheet["endDayKey"] as? String, !end.isEmpty else { continue }
+                var row = data
+                row["startDayKey"] = sheet["startDayKey"] as? String ?? end
+                row["endDayKey"] = end
+                rows.append(row)
+            }
         }
+        for person in people {
+            do {
+                take(try await settings.whereField("userId", isEqualTo: person).getDocuments())
+            } catch {
+                NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
+            }
+            do {
+                take(try await settings
+                    .whereField(FieldPath.documentID(), isGreaterThanOrEqualTo: "timesheet_\(person)_")
+                    .whereField(FieldPath.documentID(), isLessThan: "timesheet_\(person)_\u{F8FF}")
+                    .getDocuments())
+            } catch {
+                NSLog("SIGNED_TIMESHEET_READ_FAILED error=%@", error.localizedDescription)
+            }
+        }
+        return rows
     }
 }
