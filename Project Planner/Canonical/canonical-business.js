@@ -383,6 +383,7 @@ var ProjectPlannerCanonical = (() => {
     PAYMENT_RUN_1_LAST_END_DAY: () => PAYMENT_RUN_1_LAST_END_DAY,
     PAYROLL_BREAK_TIME_STEP_MESSAGE: () => PAYROLL_BREAK_TIME_STEP_MESSAGE,
     PAYROLL_BREAK_TIME_STEP_MINUTES: () => PAYROLL_BREAK_TIME_STEP_MINUTES,
+    PAYROLL_LINE_EDIT_TIMES_MESSAGE: () => PAYROLL_LINE_EDIT_TIMES_MESSAGE,
     PAYROLL_POLICY_HISTORY_START: () => PAYROLL_POLICY_HISTORY_START,
     PAYROLL_POLICY_LIMITS: () => PAYROLL_POLICY_LIMITS,
     PAYROLL_POLICY_STALE_SAVE_MESSAGE: () => PAYROLL_POLICY_STALE_SAVE_MESSAGE,
@@ -629,6 +630,7 @@ var ProjectPlannerCanonical = (() => {
     bookingLeaveConflicts: () => bookingLeaveConflicts,
     bookingLoadStart: () => bookingLoadStart,
     bookingOccupiesDay: () => bookingOccupiesDay,
+    bookingPaySlices: () => bookingPaySlices,
     bookingPersonIdHint: () => bookingPersonIdHint,
     bookingPersonKey: () => bookingPersonKey,
     bookingQueryPlan: () => bookingQueryPlan,
@@ -1008,6 +1010,7 @@ var ProjectPlannerCanonical = (() => {
     materialSendRecordCreateFields: () => materialSendRecordCreateFields,
     materialSendStatusWriteFields: () => materialSendStatusWriteFields,
     materialWhatsAppRows: () => materialWhatsAppRows,
+    mergeBookingPaySlice: () => mergeBookingPaySlice,
     mergeHealthSafetyRowCopies: () => mergeHealthSafetyRowCopies,
     mergeJobTypeCatalogues: () => mergeJobTypeCatalogues,
     mergeMinuteIntervals: () => mergeMinuteIntervals,
@@ -1323,8 +1326,11 @@ var ProjectPlannerCanonical = (() => {
     payrollDayKeyFromValue: () => payrollDayKeyFromValue,
     payrollDayWindows: () => payrollDayWindows,
     payrollHoursResult: () => payrollHoursResult,
+    payrollLineBookingKey: () => payrollLineBookingKey,
     payrollLineClockRanges: () => payrollLineClockRanges,
     payrollLineReview: () => payrollLineReview,
+    payrollLineReviewKey: () => payrollLineReviewKey,
+    payrollLineReviewSnapshotParts: () => payrollLineReviewSnapshotParts,
     payrollMultipliedHours: () => payrollMultipliedHours,
     payrollOutsideClockHours: () => payrollOutsideClockHours,
     payrollOutsideMultiplier: () => payrollOutsideMultiplier,
@@ -1407,6 +1413,8 @@ var ProjectPlannerCanonical = (() => {
     resolveWeekendCoverageDay: () => resolveWeekendCoverageDay,
     resolvedWarningKeys: () => resolvedWarningKeys,
     reviewApprovalMessage: () => reviewApprovalMessage,
+    revisedPayrollLineAmounts: () => revisedPayrollLineAmounts,
+    revisedPayrollLineTimesError: () => revisedPayrollLineTimesError,
     rosterAliasIdsFor: () => rosterAliasIdsFor,
     rosterDocumentRank: () => rosterDocumentRank,
     rosterListFor: () => rosterListFor,
@@ -7896,10 +7904,10 @@ var ProjectPlannerCanonical = (() => {
     const daysAhead = weekday2 === 6 ? 2 : 1;
     return dayKeyInZone(addDaysInZone(now, daysAhead, zone3), zone3);
   }
-  function materialDeliveryInstant(dayKey, clockMinutes, timeZone) {
+  function materialDeliveryInstant(dayKey, clockMinutes2, timeZone) {
     const zone3 = zoneOrLondon(timeZone);
     const midnight = dateFromDayKeyInZone(dayKey, zone3);
-    const clamped = Math.max(0, Math.min(Math.round(clockMinutes), 24 * 60));
+    const clamped = Math.max(0, Math.min(Math.round(clockMinutes2), 24 * 60));
     return new Date(midnight.getTime() + clamped * 6e4);
   }
   function defaultMaterialDeliveryRequiredAt(referenceIso, timeZone) {
@@ -11109,7 +11117,10 @@ var ProjectPlannerCanonical = (() => {
   }
   function timesheetEntryEffectiveAmount(decision, revisedAmount, amount) {
     if (decision === "declined") return 0;
-    if (decision === "edited") return finite(revisedAmount) ?? amount;
+    if (decision === "edited") {
+      const revised = finite(revisedAmount);
+      return revised == null ? amount : roundPennies(revised);
+    }
     return amount;
   }
   function timesheetEntryDecision(sheet, entry, kind, trustedFingerprint) {
@@ -11245,7 +11256,22 @@ var ProjectPlannerCanonical = (() => {
     };
     return documentWriteFields(strip(base) ?? null, strip(next) ?? {}, { createOnly: ["userId"] });
   }
-  function payrollLineReview(sheet, lineId) {
+  function payrollLineReviewKey(review) {
+    if (!review) return "";
+    const n = (value) => typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+    return [
+      review.decision,
+      n(review.revisedAmount),
+      n(review.revisedStandardHours),
+      n(review.revisedOvertimeHours),
+      n(review.revisedOvertimeClockHours),
+      n(review.revisedOvertimeMultiplier),
+      n(review.revisedStandardAmount),
+      n(review.revisedOvertimeAmount),
+      review.reviewedBookingFingerprint ?? ""
+    ].join("|");
+  }
+  function payrollLineReview(sheet, lineId, live) {
     const raw = sheet && typeof sheet === "object" ? sheet.payrollLineReviews : null;
     if (!raw || typeof raw !== "object") return null;
     const reviews = raw;
@@ -11261,7 +11287,27 @@ var ProjectPlannerCanonical = (() => {
     const row2 = value;
     const decision = parseTimesheetEntryDecision(row2.decision);
     const revised = typeof row2.revisedAmount === "number" && Number.isFinite(row2.revisedAmount) ? row2.revisedAmount : null;
-    return { decision, revisedAmount: decision === "edited" ? revised : null };
+    const storedFingerprint = typeof row2.reviewedBookingFingerprint === "string" ? row2.reviewedBookingFingerprint.trim() : "";
+    const liveFingerprint = typeof live?.bookingFingerprint === "string" ? live.bookingFingerprint.trim() : null;
+    if (storedFingerprint && liveFingerprint != null && storedFingerprint !== liveFingerprint) return null;
+    const num2 = (value2) => typeof value2 === "number" && Number.isFinite(value2) ? value2 : null;
+    if (decision === "edited" && live?.isOvertimeLine !== true && live?.bookingHasOvertimeLine === true && ((num2(row2.revisedOvertimeAmount) ?? 0) > 0 || (num2(row2.revisedOvertimeHours) ?? 0) > 0)) {
+      return null;
+    }
+    if (decision !== "edited") return { decision, revisedAmount: null };
+    const review = { decision, revisedAmount: revised };
+    const standardHours = num2(row2.revisedStandardHours);
+    const overtimeHours = num2(row2.revisedOvertimeHours);
+    if (standardHours != null && overtimeHours != null) {
+      review.revisedStandardHours = standardHours;
+      review.revisedOvertimeHours = overtimeHours;
+      review.revisedOvertimeClockHours = num2(row2.revisedOvertimeClockHours) ?? overtimeHours;
+      review.revisedOvertimeMultiplier = num2(row2.revisedOvertimeMultiplier);
+      review.revisedStandardAmount = num2(row2.revisedStandardAmount) ?? 0;
+      review.revisedOvertimeAmount = num2(row2.revisedOvertimeAmount) ?? 0;
+    }
+    if (storedFingerprint) review.reviewedBookingFingerprint = storedFingerprint;
+    return review;
   }
 
   // lib/canonical/reportPay.ts
@@ -11290,6 +11336,12 @@ var ProjectPlannerCanonical = (() => {
       return { pay: null, label: PAYE_PAY_CELL_LABEL, countsTowardPayTotal: false };
     }
     return { pay: reportPayTotal(lines), label: null, countsTowardPayTotal: true };
+  }
+  function payrollLineBookingKey(line) {
+    if (!line) return "";
+    const id2 = line.bookingId ? String(line.bookingId) : String(line.id ?? "").replace(/-(?:normal|ot)$/i, "");
+    const collection = typeof line.bookingCollection === "string" ? line.bookingCollection.trim() : "";
+    return `${collection}|${normalizeDocumentId(id2)}`;
   }
   function isInvoiceLine(line) {
     if (!line) return false;
@@ -11331,7 +11383,8 @@ var ProjectPlannerCanonical = (() => {
     if (override && typeof override === "object") {
       const snapshot = override;
       for (const row2 of rowsOf(snapshot.lines)) {
-        const amount = amountOf(row2.amount);
+        const stored = amountOf(row2.amount);
+        const amount = row2.decision === "edited" ? roundPennies(stored) : stored;
         if (row2.decision === "declined" || amount <= INVOICE_AMOUNT_EPSILON) continue;
         const id2 = String(row2.id ?? "").trim();
         const live = liveById.get(normalizeDocumentId(id2)) ?? null;
@@ -11352,15 +11405,25 @@ var ProjectPlannerCanonical = (() => {
     const decided = input.extrasMode === "decided";
     const managerSigned = parseTimesheetStatusFields(sheet).managerSignedAtMs != null;
     const labourReviews = input.applyLabourReviews == null ? managerSigned : input.applyLabourReviews === true;
+    const groupOf = (line) => payrollLineBookingKey(line);
+    const groupsWithOvertime = new Set(lines.filter((line) => line && line.isOvertimeLine === true).map(groupOf));
     for (const line of invoiceLines(lines)) {
       if (!onCountedDay(line.dayKey)) continue;
       let amount = line.amount;
+      let applied = null;
       if (decided && labourReviews) {
-        const review = payrollLineReview(sheet, line.id);
+        const review = payrollLineReview(sheet, line.id, {
+          bookingFingerprint: line.bookingFingerprint,
+          isOvertimeLine: line.isOvertimeLine,
+          bookingHasOvertimeLine: line.bookingHasOvertimeLine ?? groupsWithOvertime.has(groupOf(line))
+        });
         if (review?.decision === "declined") continue;
-        if (review?.decision === "edited" && review.revisedAmount != null) amount = review.revisedAmount;
+        if (review?.decision === "edited" && review.revisedAmount != null) {
+          amount = roundPennies(review.revisedAmount);
+          applied = review;
+        }
       }
-      rows3.push({ kind: "labour", id: line.id, amount, source: "live", line, stored: null, jobNumber: jobNumberOf(line.jobNumber) });
+      rows3.push({ kind: "labour", id: line.id, amount, source: "live", line, stored: null, jobNumber: jobNumberOf(line.jobNumber), review: applied });
     }
     for (const [kind, key5] of [["priceWork", "priceWorkEntries"], ["expense", "expenseEntries"]]) {
       for (const entry of rowsOf(sheet[key5])) {
@@ -11683,8 +11746,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.45.0" : "",
-      sha256: true ? "ee8d3d0e539f0a8db49f1c1e8d978004708d21c9c6e8178a9f2895f45886526b" : ""
+      version: true ? "1.46.0" : "",
+      sha256: true ? "9d1912f8c860c0e0237cc40270ae982c2174c67a83d93e05ef561b34c0720608" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -17960,6 +18023,13 @@ var ProjectPlannerCanonical = (() => {
     for (const row2 of rows3) {
       if (row2.kind === "labour") {
         labour += row2.amount;
+        const split = row2.review && row2.review.revisedStandardAmount != null && row2.review.revisedStandardHours != null;
+        if (split) {
+          const standardPart = roundPennies(Math.min(row2.amount, Number(row2.review?.revisedStandardAmount) || 0));
+          standardLabour += standardPart;
+          overtimeLabour += row2.amount - standardPart;
+          continue;
+        }
         const overtime = row2.source === "override" ? row2.stored?.isOvertime === true : row2.line?.isOvertimeLine === true;
         if (overtime) overtimeLabour += row2.amount;
         else standardLabour += row2.amount;
@@ -17982,10 +18052,39 @@ var ProjectPlannerCanonical = (() => {
       }
     }
     const withBookingFigures = byBookingStandard.size > 0;
+    const reviewedLines = /* @__PURE__ */ new Map();
+    for (const row2 of rows3) {
+      if (row2.kind === "labour" && row2.source === "live" && row2.review && row2.review.revisedStandardHours != null && row2.review.revisedOvertimeHours != null) {
+        reviewedLines.set(normalizeDocumentId(row2.id), row2.review);
+      }
+    }
+    const groupOf = (line) => payrollLineBookingKey(line);
+    const reviewedGroups = /* @__PURE__ */ new Set();
+    for (const line of input.payrollLines || []) {
+      if (line && reviewedLines.has(normalizeDocumentId(line.id))) reviewedGroups.add(groupOf(line));
+    }
     for (const line of input.payrollLines || []) {
       if (!line || isLeaveLine(line)) continue;
       if (days && (days.size === 0 || line.dayKey && !days.has(line.dayKey))) continue;
       const paid = finite4(line.paidHours);
+      if (reviewedGroups.size > 0 && reviewedGroups.has(groupOf(line))) {
+        if (payrollLineReview(sheet, line.id, line)?.decision === "declined") continue;
+        const review = reviewedLines.get(normalizeDocumentId(line.id));
+        if (review) {
+          const overtimeBase = finite4(review.revisedOvertimeHours);
+          const multiplier = finite4(review.revisedOvertimeMultiplier) > 0 ? finite4(review.revisedOvertimeMultiplier) : 1;
+          standardHours += finite4(review.revisedStandardHours);
+          overtimeHours += review.revisedOvertimeClockHours != null ? finite4(review.revisedOvertimeClockHours) : overtimeBase;
+          hours += finite4(review.revisedStandardHours) + overtimeBase * multiplier;
+        } else if (line.isOvertimeLine === true) {
+          overtimeHours += line.otClockHours != null ? finite4(line.otClockHours) : paid;
+          hours += paid * (finite4(line.otMultiplier) > 0 ? finite4(line.otMultiplier) : 1);
+        } else {
+          standardHours += paid;
+          hours += paid;
+        }
+        continue;
+      }
       if (line.isOvertimeLine === true) {
         if (!withBookingFigures) {
           overtimeHours += line.otClockHours != null ? finite4(line.otClockHours) : paid;
@@ -18016,11 +18115,11 @@ var ProjectPlannerCanonical = (() => {
       }
     }
     const round3 = (value) => roundPennies(value);
-    const roundHours2 = (value) => Math.round(value * 100) / 100;
+    const roundHours3 = (value) => Math.round(value * 100) / 100;
     return {
-      hours: roundHours2(hours),
-      standardHours: roundHours2(standardHours),
-      overtimeHours: roundHours2(overtimeHours),
+      hours: roundHours3(hours),
+      standardHours: roundHours3(standardHours),
+      overtimeHours: roundHours3(overtimeHours),
       labour: round3(labour),
       standardLabour: round3(standardLabour),
       overtimeLabour: round3(overtimeLabour),
@@ -23498,6 +23597,150 @@ var ProjectPlannerCanonical = (() => {
     }
     if (deletes.length > BOOKING_TOMBSTONE_BATCH_DELETE_LIMIT) return null;
     return { bookingPath: `organizations/${organizationId}/${bookingCollection}/${bookingId}`, deletes };
+  }
+
+  // lib/canonical/timesheetLineEdit.ts
+  var HOURS_EPSILON = 1e-9;
+  function roundHours2(value) {
+    return Math.round(value * 1e4) / 1e4;
+  }
+  function basisOf(value) {
+    const text39 = String(value ?? "").trim().toLowerCase();
+    return text39 === "hourly" || text39 === "hour" ? "hourly" : "day";
+  }
+  var PAYROLL_LINE_EDIT_TIMES_MESSAGE = "Enter a start and a finish time that are different.";
+  function clockMinutes(value) {
+    const match = String(value ?? "").trim().match(/^(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (hours > 23 || minutes > 59) return null;
+    return hours * 60 + minutes;
+  }
+  function revisedPayrollLineTimesError(startTime, endTime) {
+    const start = clockMinutes(startTime);
+    const end = clockMinutes(endTime);
+    if (start == null || end == null || start === end) return PAYROLL_LINE_EDIT_TIMES_MESSAGE;
+    return null;
+  }
+  function revisedPayrollLineAmounts(input) {
+    if (revisedPayrollLineTimesError(input.startTime, input.endTime)) return null;
+    const dayKey = String(input.dayKey || "").trim();
+    const policy = input.policyState ? payrollTimePolicyForDayFromState(input.policyState, dayKey) : input.policy;
+    const hours = payrollHoursResult({
+      booking: {
+        timeSlot: "CUSTOM_HOURS",
+        workStartTime: String(input.startTime).trim(),
+        workEndTime: String(input.endTime).trim(),
+        isBreakRemoved: input.isBreakRemoved === true,
+        otMultiplierOverride: input.otMultiplierOverride ?? void 0
+      },
+      dayKey,
+      policy,
+      timeZone: input.timeZone
+    });
+    const zone3 = zoneOrLondon(input.timeZone);
+    const isPayeDay = Boolean(input.employment) && employmentTypeOnDay(input.employment, dateFromDayKeyInZone(dayKey, zone3), zone3) === "paye";
+    const standardDayHours = orgDayHours(weekdayPaidHours(policy));
+    const rate = isPayeDay ? { payBasis: basisOf(input.payBasis), dayRate: 0, hourlyRate: 0 } : { payBasis: basisOf(input.payBasis), dayRate: input.dayRate ?? null, hourlyRate: input.hourlyRate ?? null };
+    const standardHours = Math.max(0, hours.standardHours);
+    const minOvertime = Math.max(0, Number(input.overtimeLineMinHours) || 0);
+    const overtimeCounted = hours.outsideHours > minOvertime + HOURS_EPSILON;
+    const overtimeHours = overtimeCounted ? Math.max(0, hours.outsideHours) : 0;
+    const multiplied = overtimeCounted ? payrollMultipliedHours(hours) : null;
+    const overtimeClockHours = overtimeCounted ? multiplied ? multiplied.clockHours : overtimeHours : 0;
+    const multiplier = hours.outsideMultiplier;
+    const standardAmount = payForHours({ ...rate, paidHours: standardHours, standardDayHours });
+    const overtimeAmount = overtimeCounted ? payForHours({ ...rate, paidHours: overtimeHours, standardDayHours, otMultiplier: multiplier }) : 0;
+    const fingerprint = String(input.bookingFingerprint ?? "").trim();
+    const fields = (part) => {
+      const stdAmount = part.std ? standardAmount : 0;
+      const otAmount = part.ot ? overtimeAmount : 0;
+      const otHours = part.ot ? overtimeHours : 0;
+      return {
+        revisedAmount: roundPennies(stdAmount + otAmount),
+        revisedStandardHours: part.std ? roundHours2(standardHours) : 0,
+        revisedOvertimeHours: roundHours2(otHours),
+        revisedOvertimeClockHours: part.ot ? roundHours2(overtimeClockHours) : 0,
+        revisedOvertimeMultiplier: otHours > 0 ? multiplier : null,
+        revisedStandardAmount: stdAmount,
+        revisedOvertimeAmount: otAmount,
+        reviewedBookingFingerprint: fingerprint
+      };
+    };
+    const standardFields = fields({ std: true, ot: !input.bookingHasOvertimeLine });
+    const overtimeFields = input.bookingHasOvertimeLine ? fields({ std: false, ot: true }) : null;
+    return {
+      standardHours: roundHours2(standardHours),
+      overtimeHours: roundHours2(overtimeHours),
+      overtimeClockHours: roundHours2(overtimeClockHours),
+      overtimeMultiplier: multiplier,
+      totalPaidHours: roundHours2(standardHours + overtimeHours * multiplier),
+      standardDayHours,
+      isPayeDay,
+      standardAmount,
+      overtimeAmount,
+      standardLineAmount: standardFields.revisedAmount,
+      overtimeLineAmount: overtimeFields ? overtimeFields.revisedAmount : null,
+      reviewFields: { standard: standardFields, overtime: overtimeFields },
+      total: roundPennies(standardFields.revisedAmount + (overtimeFields ? overtimeFields.revisedAmount : 0))
+    };
+  }
+  function payrollLineReviewSnapshotParts(line, review) {
+    if (!review || review.decision !== "edited" || review.revisedStandardHours == null || review.revisedOvertimeHours == null) return null;
+    const id2 = String(line.id || "");
+    const stdAmount = roundPennies(Number(review.revisedStandardAmount) || 0);
+    const otAmount = roundPennies(Number(review.revisedOvertimeAmount) || 0);
+    const otHours = Math.max(0, Number(review.revisedOvertimeHours) || 0);
+    const multiplier = review.revisedOvertimeMultiplier ?? null;
+    if (line.isOvertimeLine === true) {
+      return [{ id: id2, isOvertime: true, paidHours: otHours, otMultiplier: multiplier, amount: otAmount }];
+    }
+    const parts2 = [
+      { id: id2, isOvertime: false, paidHours: Math.max(0, Number(review.revisedStandardHours) || 0), otMultiplier: null, amount: stdAmount }
+    ];
+    if (otHours > 0) {
+      parts2.push({ id: `${id2.replace(/-normal$/i, "")}-ot`, isOvertime: true, paidHours: otHours, otMultiplier: multiplier, amount: otAmount });
+    }
+    return parts2;
+  }
+  function bookingPaySlices(input) {
+    const isPaye = input.isPaye === true;
+    const payBasis = basisOf(input.payBasis);
+    const standard = orgDayHours(input.standardDayHours);
+    const rateValue = payBasis === "hourly" ? input.hourlyRate : input.dayRate;
+    const rate = isPaye || rateValue == null || !Number.isFinite(Number(rateValue)) ? null : Number(rateValue);
+    const multiplied = payrollMultipliedHours(input.hours);
+    const slices = [];
+    const push = (paidHours, overtime, multiplier) => {
+      if (!(paidHours > 0)) return;
+      const pay = isPaye ? 0 : payForHours({ payBasis, dayRate: input.dayRate ?? null, hourlyRate: input.hourlyRate ?? null, paidHours, standardDayHours: standard, otMultiplier: overtime ? multiplier : 1 });
+      slices.push({
+        payBasis,
+        isOvertime: overtime,
+        otMultiplier: overtime ? multiplier : null,
+        rate: rate == null ? null : overtime ? roundPennies(rate * multiplier) : rate,
+        paidHours,
+        pay,
+        isPaye,
+        standardDayHours: standard,
+        ...overtime && multiplied && multiplied.breakHours > 0 ? { clockHours: multiplied.clockHours, breakHours: multiplied.breakHours } : {}
+      });
+    };
+    push(Math.max(0, input.hours.standardHours), false, 1);
+    push(input.hours.outsideHours, true, input.hours.outsideMultiplier);
+    return slices;
+  }
+  function mergeBookingPaySlice(row2, slice) {
+    const next = { ...row2 };
+    if (slice.isOvertime && (Number(slice.breakHours) > 0 || Number(row2.breakHours) > 0)) {
+      const clockOf2 = (part) => Number(part.breakHours) > 0 ? Number(part.clockHours) || 0 : part.paidHours;
+      next.clockHours = clockOf2(row2) + clockOf2(slice);
+      next.breakHours = (Number(row2.breakHours) || 0) + (Number(slice.breakHours) || 0);
+    }
+    next.paidHours = roundPennies(row2.paidHours + slice.paidHours);
+    next.pay = roundPennies(row2.pay + slice.pay);
+    return next;
   }
   return __toCommonJS(bundleEntry_exports);
 })();
