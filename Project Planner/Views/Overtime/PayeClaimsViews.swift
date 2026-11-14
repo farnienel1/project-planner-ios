@@ -379,8 +379,16 @@ struct PayeClaimsRangeView: View {
             }
         }
         .sheet(item: $open) { item in
-            PayeClaimDetailSheet(item: item, canRemove: writable)
-                .environmentObject(firebaseBackend)
+            PayeClaimDetailSheet(
+                item: item,
+                canRemove: writable,
+                subject: subject,
+                range: range,
+                // A review on this item (any state but Needs review) — saving changes sends it back.
+                hasReview: reviews.contains { $0.itemId.caseInsensitiveCompare(item.id) == .orderedSame }
+            )
+            .environmentObject(firebaseBackend)
+            .environmentObject(userStore)
         }
         .sheet(item: Binding(get: { shareURL.map(OvertimeShareItem.init) }, set: { shareURL = $0?.url })) { item in
             HSDocumentActivityView(activityItems: [item.url])
@@ -542,6 +550,8 @@ struct PayeClaimsRangeView: View {
                     if !row.details.isEmpty {
                         Text(row.details).font(.footnote)
                     }
+                    // RULEBOOK 1.45.0 §8: the entry's evidence (the sheet owner's own claim files), read-only.
+                    ClaimEvidenceLinks(evidence: row.evidence ?? [], legacyReceiptName: row.receiptName)
                 }
                 .padding(14)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -562,7 +572,10 @@ struct PayeClaimsRangeView: View {
             : "\(CanonicalBusinessEngine.formatPayePayrunDay(row.startDate)) – \(CanonicalBusinessEngine.formatPayePayrunDay(row.endDate))"
         // RULEBOOK 1.30.1: price work shows its job number, or "—" for an entry stored before (`priceWorkJobNumberText`).
         let job = kind == .priceWork ? CanonicalBusinessEngine.priceWorkJobNumberText(row.jobNumber) : row.jobNumber
-        return [dates, job, row.approvedByName.isEmpty ? "" : "Agreed by \(row.approvedByName)", "Timesheet: \(row.managerDecision)"]
+        return [
+            dates, job, row.approvedByName.isEmpty ? "" : "Agreed by \(row.approvedByName)", "Timesheet: \(row.managerDecision)",
+            CanonicalBusinessEngine.claimEvidenceCountText(row.evidence?.count ?? 0),
+        ]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
     }
@@ -684,13 +697,26 @@ struct PayeClaimsRangeView: View {
 
 struct PayeClaimDetailSheet: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var userStore: UserStore
     @Environment(\.dismiss) private var dismiss
     let item: PayeClaimItem
     let canRemove: Bool
+    /// RULEBOOK 1.45.0 §26: the person (Edit opens `AddPayeClaimSheet` with `payeClaimEditDraft`).
+    var subject: AppUser? = nil
+    var range: OvertimeDayRange? = nil
+    var hasReview: Bool = false
 
     @State private var error: String?
     @State private var removing = false
     @State private var viewing: IdentifiableURL?
+    @State private var editingItem = false
+    @State private var confirmingDelete = false
+
+    /// `canEditPayeClaim(authUid, item)`: only the person edits or deletes their own item.
+    private var canEdit: Bool {
+        guard canRemove, let uid = firebaseBackend.payeClaimsUid else { return false }
+        return CanonicalBusinessEngine.canEditPayeClaim(viewerId: uid, item: item)
+    }
 
     var body: some View {
         let row = CanonicalBusinessEngine.payeClaimListRow(item, currency: OrganizationRulebookContext.currencyCode)
@@ -722,15 +748,30 @@ struct PayeClaimDetailSheet: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    if canRemove {
-                        Button(role: .destructive) {
-                            Task { await remove() }
-                        } label: {
-                            Text(removing ? "Removing…" : "Remove")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
+                    if canEdit {
+                        HStack(spacing: 10) {
+                            if subject != nil, range != nil {
+                                Button {
+                                    editingItem = true
+                                } label: {
+                                    Text(CanonicalBusinessEngine.payeClaimEditLabel)
+                                        .frame(maxWidth: .infinity)
+                                        .padding(.vertical, 10)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityIdentifier("payeClaims.detail.edit")
+                            }
+                            Button(role: .destructive) {
+                                confirmingDelete = true
+                            } label: {
+                                Text(removing ? "Deleting…" : CanonicalBusinessEngine.payeClaimDeleteLabel)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(removing)
+                            .accessibilityIdentifier("payeClaims.detail.delete")
                         }
-                        .disabled(removing)
                         .padding(.top, 12)
                     }
                     if let error {
@@ -748,6 +789,26 @@ struct PayeClaimDetailSheet: View {
             }
             .sheet(item: $viewing) { target in
                 InAppRemoteDocumentViewer(remoteURL: target.url, title: "Evidence", noun: "evidence")
+            }
+            .sheet(isPresented: $editingItem, onDismiss: { dismiss() }) {
+                if let subject, let range, let kind = PayeClaimKind(rawValue: item.kind) {
+                    AddPayeClaimSheet(kind: kind, subject: subject, range: range, editing: item, editingHasReview: hasReview)
+                        .environmentObject(firebaseBackend)
+                        .environmentObject(userStore)
+                }
+            }
+            .confirmationDialog(
+                CanonicalBusinessEngine.payeClaimDeleteLabel,
+                isPresented: $confirmingDelete,
+                titleVisibility: .visible
+            ) {
+                Button(CanonicalBusinessEngine.payeClaimDeleteLabel, role: .destructive) {
+                    Task { await remove() }
+                }
+                .accessibilityIdentifier("payeClaims.detail.deleteConfirm")
+                Button("Keep it", role: .cancel) {}
+            } message: {
+                Text(CanonicalBusinessEngine.payeClaimDeleteConfirmMessage)
             }
         }
     }
@@ -799,6 +860,10 @@ struct AddPayeClaimSheet: View {
     let kind: PayeClaimKind
     let subject: AppUser
     let range: OvertimeDayRange
+    /// RULEBOOK 1.45.0 §26: the saved item being edited (`payeClaimEditDraft`), nil to add.
+    var editing: PayeClaimItem? = nil
+    /// The item has a review: saving changes sends it back to Needs review (`PAYE_CLAIM_EDIT_REVIEW_NOTE`).
+    var editingHasReview: Bool = false
 
     @State private var title = ""
     @State private var details = ""
@@ -807,14 +872,13 @@ struct AddPayeClaimSheet: View {
     @State private var to = Date()
     @State private var approver = ""
     @State private var amount = ""
+    /// Saved evidence kept on an edit (`existing`) and picked files uploaded on save (`evidence`).
+    @State private var existingEvidence: [PayeClaimEvidence] = []
     @State private var evidence: [PendingPayeClaimEvidence] = []
     @State private var error: String?
     /// A photo or file that could not be added (shown on the Evidence card).
     @State private var evidenceError: String?
     @State private var saving: String?
-    @State private var pickingPhoto: UIImagePickerController.SourceType?
-    @State private var pickingFile = false
-    @State private var pickingAudit = false
     @State private var didSetDates = false
 
     private var priceWork: Bool { kind == .priceWork }
@@ -837,7 +901,8 @@ struct AddPayeClaimSheet: View {
             ]
             return CanonicalBusinessEngine.priceWorkValidationError(draft: draft, person: person, roster: roster, organizationId: organizationId)
         }
-        let placeholders: [[String: Any]] = evidence.map { _ in ["path": "", "name": "", "kind": "file"] }
+        let placeholders: [[String: Any]] = (existingEvidence.map(\.json) as [[String: Any]])
+            + evidence.map { _ in ["path": "", "name": "", "kind": "file"] }
         let draft: [String: Any] = [
             "title": title, "details": details, "jobNumber": jobNumber, "date": fromKey, "amount": amount, "evidence": placeholders,
         ]
@@ -859,7 +924,24 @@ struct AddPayeClaimSheet: View {
                         approverCard(message: errorSection == .approver ? shownError : nil)
                     }
                     amountCard(message: errorSection == .amount ? shownError : nil)
-                    evidenceCard(message: evidenceError ?? (errorSection == .evidence ? shownError : nil))
+                    ClaimEvidenceEditor(
+                        existing: $existingEvidence,
+                        pending: $evidence,
+                        message: Binding(
+                            get: { evidenceError ?? (errorSection == .evidence ? shownError : nil) },
+                            set: { evidenceError = $0 }
+                        ),
+                        required: !priceWork,
+                        identifier: "payeClaims.add.evidence"
+                    )
+                    .environmentObject(firebaseBackend)
+                    if editing != nil && editingHasReview {
+                        Text(CanonicalBusinessEngine.payeClaimEditReviewNote)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 4)
+                            .accessibilityIdentifier("payeClaims.edit.reviewNote")
+                    }
                     if let general = error ?? (errorSection == .other ? shownError : nil) {
                         PayeClaimFieldMessage(text: general)
                             .padding(.horizontal, 4)
@@ -874,14 +956,14 @@ struct AddPayeClaimSheet: View {
             .background(PPColor.page.ignoresSafeArea())
             .safeAreaInset(edge: .bottom) {
                 PPBottomActionBar(
-                    title: saving ?? kind.addLabel,
+                    title: saving ?? (editing != nil ? CanonicalBusinessEngine.payeClaimSaveChangesLabel : kind.addLabel),
                     isEnabled: canAdd,
                     isBusy: saving != nil,
                     accessibilityIdentifier: "payeClaims.add.submit",
                     action: { Task { await submit() } }
                 )
             }
-            .navigationTitle(kind.addLabel)
+            .navigationTitle(editing != nil ? (priceWork ? "Edit Price Work" : "Edit Expense") : kind.addLabel)
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {
@@ -894,7 +976,7 @@ struct AddPayeClaimSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     // The same Add as the bottom button, enabled exactly when it is.
-                    Button("Add") { Task { await submit() } }
+                    Button(editing != nil ? "Save" : "Add") { Task { await submit() } }
                         .buttonStyle(PPOnNavyPillButtonStyle())
                         .disabled(!canAdd)
                         .opacity(canAdd ? 1 : 0.5)
@@ -902,29 +984,6 @@ struct AddPayeClaimSheet: View {
                 }
             }
             .onAppear(perform: setInitialDates)
-            .sheet(item: Binding(
-                get: { pickingPhoto.map(PayeClaimPickerSource.init) },
-                set: { pickingPhoto = $0?.sourceType }
-            )) { source in
-                PayeClaimImagePicker(sourceType: source.sourceType) { image in
-                    addPhoto(image)
-                }
-            }
-            .sheet(isPresented: $pickingFile) {
-                PayeClaimDocumentPicker { url in
-                    addFile(url)
-                }
-            }
-            .sheet(isPresented: $pickingAudit) {
-                PersonalSiteAuditPickerSheet { audit in
-                    evidence.append(PendingPayeClaimEvidence(
-                        label: CanonicalBusinessEngine.personalSiteAuditTitle(audit),
-                        source: .audit(audit)
-                    ))
-                    evidenceError = nil
-                }
-                .environmentObject(firebaseBackend)
-            }
         }
         .interactiveDismissDisabled(saving != nil)
     }
@@ -1001,8 +1060,10 @@ struct AddPayeClaimSheet: View {
     }
 
     private func amountCard(message: String?) -> some View {
-        PayeClaimFormCard(title: "Amount", symbol: "banknote", family: .sites, message: message, identifier: "payeClaims.add.amountCard") {
-            PayeClaimLabeledField("Amount (\(OrganizationRulebookContext.currencyCode))") {
+        // RULEBOOK 1.45.0: "Amount inc VAT" for an expense, "Amount" for price work.
+        let label = CanonicalBusinessEngine.claimAmountLabel(isExpense: !priceWork)
+        return PayeClaimFormCard(title: label, symbol: "banknote", family: .sites, message: message, identifier: "payeClaims.add.amountCard") {
+            PayeClaimLabeledField("\(label) (\(OrganizationRulebookContext.currencyCode))") {
                 HStack(spacing: 6) {
                     Text(OrgMoney.symbol())
                         .font(.title3.weight(.semibold))
@@ -1018,66 +1079,29 @@ struct AddPayeClaimSheet: View {
         }
     }
 
-    private func evidenceCard(message: String?) -> some View {
-        let canPickMore = evidence.count < CanonicalBusinessEngine.payeClaimEvidenceMax
-        let well = RoundedRectangle(cornerRadius: 14, style: .continuous)
-        return PayeClaimFormCard(
-            title: priceWork ? "Evidence (optional)" : "Evidence (at least one)",
-            symbol: "paperclip",
-            family: .trade,
-            message: message,
-            identifier: "payeClaims.add.evidence"
-        ) {
-            if !evidence.isEmpty {
-                VStack(spacing: 0) {
-                    ForEach(Array(evidence.enumerated()), id: \.element.id) { index, entry in
-                        if index > 0 {
-                            Divider().padding(.leading, 58)
-                        }
-                        PayeClaimAttachedEvidenceRow(entry: entry) {
-                            evidence.removeAll { $0.id == entry.id }
-                        }
-                    }
-                }
-                .background(PPColor.well, in: well)
-            }
-            if canPickMore {
-                VStack(spacing: 0) {
-                    PayeClaimEvidenceSourceButton(title: "File (PDF or image)", symbol: "doc", family: .plan, identifier: "payeClaims.add.evidence.file") {
-                        pickingFile = true
-                    }
-                    PPRowDivider()
-                    PayeClaimEvidenceSourceButton(
-                        title: "Take photo",
-                        symbol: "camera",
-                        family: .sites,
-                        isEnabled: UIImagePickerController.isSourceTypeAvailable(.camera),
-                        identifier: "payeClaims.add.evidence.camera"
-                    ) {
-                        pickingPhoto = .camera
-                    }
-                    PPRowDivider()
-                    PayeClaimEvidenceSourceButton(title: "Photo library", symbol: "photo.on.rectangle", family: .people, identifier: "payeClaims.add.evidence.library") {
-                        pickingPhoto = .photoLibrary
-                    }
-                    PPRowDivider()
-                    PayeClaimEvidenceSourceButton(title: "Personal site audit", symbol: "checklist", family: .trade, identifier: "payeClaims.add.evidence.audit") {
-                        pickingAudit = true
-                    }
-                }
-                .background(PPColor.well, in: well)
-                .clipShape(well)
-            } else {
-                Text(CanonicalBusinessEngine.payeClaimText("PAYE_CLAIM_EVIDENCE_LIMIT_MESSAGE", fallback: "Up to 20 pieces of evidence."))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private func setInitialDates() {
         guard !didSetDates else { return }
         didSetDates = true
+        // RULEBOOK 1.45.0 §26 `payeClaimEditDraft(item)`: an edit opens with the saved item's own values.
+        if let editing, let draft = CanonicalBusinessEngine.payeClaimEditDraft(editing) {
+            title = draft["title"] as? String ?? editing.title
+            details = draft["details"] as? String ?? editing.details
+            jobNumber = draft["jobNumber"] as? String ?? (editing.jobNumber ?? "")
+            approver = draft["approvedByUserId"] as? String ?? (editing.approvedByUserId ?? "")
+            if let value = (draft["amount"] as? NSNumber)?.doubleValue {
+                amount = value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+            }
+            existingEvidence = editing.evidence
+            let start = (draft["startDate"] as? String) ?? (draft["date"] as? String)
+            if let start, let date = OrganizationRulebookContext.date(fromDayKey: start) {
+                from = date
+                to = date
+            }
+            if let end = draft["endDate"] as? String, let date = OrganizationRulebookContext.date(fromDayKey: end) {
+                to = date
+            }
+            return
+        }
         let today = OvertimeScreenSupport.todayKey()
         let day = today >= range.start && today <= range.end ? today : range.start
         if let date = OrganizationRulebookContext.date(fromDayKey: day) {
@@ -1086,116 +1110,47 @@ struct AddPayeClaimSheet: View {
         }
     }
 
-    /// Every photo becomes a JPEG (`jpegDataFittingUploadLimit`) so the report can draw it full size.
-    private func addPhoto(_ image: UIImage) {
-        do {
-            let data = try StorageUploadPolicy.jpegDataFittingUploadLimit(
-                image,
-                maxBytes: StorageUploadPolicy.standardMaxBytes,
-                initialQuality: 0.85,
-                encodeFailedMessage: "This photo could not be read.",
-                oversizedMessage: "This photo is too large to upload."
-            )
-            evidence.append(PendingPayeClaimEvidence(
-                label: "Photo \(evidence.count + 1)",
-                source: .file(data: data, contentType: "image/jpeg", kind: "photo")
-            ))
-            error = nil
-            evidenceError = nil
-        } catch {
-            evidenceError = error.localizedDescription
-        }
-    }
-
-    /// A PDF is kept as a PDF; an image becomes a JPEG; anything else (SVG included) is refused.
-    private func addFile(_ url: URL) {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else {
-            evidenceError = "This file could not be read."
-            return
-        }
-        let type = UTType(filenameExtension: url.pathExtension.lowercased())
-        if type?.conforms(to: .pdf) == true {
-            guard data.count <= StorageUploadPolicy.standardMaxBytes else {
-                evidenceError = "This file is larger than 10 MB."
-                return
-            }
-            evidence.append(PendingPayeClaimEvidence(
-                label: url.lastPathComponent,
-                source: .file(data: data, contentType: "application/pdf", kind: "file")
-            ))
-            error = nil
-            evidenceError = nil
-        } else if type?.conforms(to: .image) == true, type?.conforms(to: .svg) != true, let image = UIImage(data: data) {
-            addPhoto(image)
-        } else {
-            evidenceError = "Evidence must be a photo or a PDF."
-        }
-    }
-
     private func submit() async {
         guard draftError == nil, saving == nil else { return }
         error = nil
-        // Frozen audit copies are built (and size-checked) before anything is uploaded, so a copy over the claim
-        // folder's 10 MB limit is refused with a clear message and nothing is left behind.
-        var auditCopies: [UUID: Data] = [:]
-        for entry in evidence {
-            guard case .audit(let audit) = entry.source else { continue }
-            saving = "Making the personal site audit copy"
-            let backend = firebaseBackend
-            guard let pdf = await PersonalSiteAuditPDF.makeData(audit: audit, readFile: { path in
-                try await backend.payeClaimStoredFileData(path: path)
-            }) else {
-                saving = nil
-                error = "The personal site audit copy could not be made."
-                return
-            }
-            if let refusal = PersonalSiteAuditPDF.attachRefusal(byteCount: pdf.count) {
-                saving = nil
-                error = refusal
-                return
-            }
-            auditCopies[entry.id] = pdf
-        }
         var uploaded: [PayeClaimEvidence] = []
         do {
-            for (index, entry) in evidence.enumerated() {
-                saving = "Uploading evidence \(index + 1) of \(evidence.count)"
-                switch entry.source {
-                case .file(let data, let contentType, let kind):
-                    uploaded.append(try await firebaseBackend.uploadPayeClaimEvidence(
-                        data: data,
-                        name: entry.label,
-                        contentType: contentType,
-                        kind: kind
-                    ))
-                case .audit(let audit):
-                    guard let pdf = auditCopies[entry.id] else {
-                        throw PayeClaimRefused(message: "The personal site audit copy could not be made.")
-                    }
-                    uploaded.append(try await firebaseBackend.attachPersonalSiteAuditCopy(audit, pdfData: pdf))
-                }
+            uploaded = try await ClaimEvidenceUpload.upload(evidence, firebaseBackend: firebaseBackend) { step in
+                saving = step
             }
-            saving = "Adding…"
-            let evidenceJSON = uploaded.map(\.json)
+        } catch {
+            saving = nil
+            self.error = error.localizedDescription
+            return
+        }
+        do {
+            saving = editing != nil ? "Saving…" : "Adding…"
+            let allEvidence = existingEvidence + uploaded
+            let evidenceJSON = allEvidence.map(\.json)
+            let draft: [String: Any]
             if priceWork {
-                let draft: [String: Any] = [
+                draft = [
                     "title": title, "details": details, "jobNumber": jobNumber, "startDate": fromKey, "endDate": toKey,
                     "approvedByUserId": approver, "amount": amount, "evidence": evidenceJSON,
                 ]
-                _ = try await firebaseBackend.addPriceWork(draft: draft, person: person, roster: roster)
             } else {
-                let draft: [String: Any] = [
+                draft = [
                     "title": title, "details": details, "jobNumber": jobNumber, "date": fromKey,
                     "amount": amount, "evidence": evidenceJSON,
                 ]
+            }
+            if let editing {
+                // RULEBOOK 1.45.0 §26: only the changed fields (`priceWorkUpdateWriteFields` / `expenseUpdateWriteFields`).
+                try await firebaseBackend.updatePayeClaim(editing, draft: draft, newEvidence: allEvidence, person: person, roster: roster)
+            } else if priceWork {
+                _ = try await firebaseBackend.addPriceWork(draft: draft, person: person, roster: roster)
+            } else {
                 _ = try await firebaseBackend.addExpense(draft: draft)
             }
             saving = nil
             dismiss()
         } catch {
-            // 1.30.0: a refused or failed add leaves no copy behind where line managers and admins could read it.
+            // 1.30.0: a refused or failed save leaves no copy behind where line managers and admins could read it.
             await firebaseBackend.discardPayeClaimEvidence(uploaded)
             saving = nil
             self.error = error.localizedDescription

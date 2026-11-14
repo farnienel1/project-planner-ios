@@ -5140,6 +5140,12 @@ private struct OperativeTimesheetReviewView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    /// RULEBOOK 1.45.0 §8 `claimEvidenceCountText`: "… · 2 pieces of evidence" (nothing added for none).
+    private static func extraSubtitle(_ base: String, evidenceCount: Int) -> String {
+        let count = CanonicalBusinessEngine.claimEvidenceCountText(evidenceCount)
+        return count.isEmpty ? base : "\(base) · \(count)"
+    }
+
     @ViewBuilder
     private var reviewExpensesCard: some View {
         if !draft.expenseEntries.isEmpty {
@@ -5147,9 +5153,13 @@ private struct OperativeTimesheetReviewView: View {
                 Text(canManagerReview ? "Expenses — review required" : "Expenses")
                     .font(.headline)
                 ForEach(Array(draft.expenseEntries.enumerated()), id: \.element.id) { index, entry in
+                    // RULEBOOK 1.45.0 §8: the evidence count in the subtitle and a link to each file.
                     managerExtraRow(
                         title: entry.title,
-                        subtitle: "\(entry.date.formatted(date: .abbreviated, time: .omitted)) · \(entry.jobNumber)",
+                        subtitle: Self.extraSubtitle(
+                            "\(entry.date.formatted(date: .abbreviated, time: .omitted)) · \(entry.jobNumber)",
+                            evidenceCount: entry.evidence.count
+                        ),
                         amount: entry.amount,
                         decision: entry.managerDecision,
                         revisedAmount: entry.managerRevisedAmount,
@@ -5159,6 +5169,7 @@ private struct OperativeTimesheetReviewView: View {
                         onEdit: { editingExpenseId = entry.id }
                     )
                     .id("\(entry.id)-\(entry.managerDecision.rawValue)-\(entry.managerRevisedAmount ?? -1)")
+                    ClaimEvidenceLinks(evidence: entry.evidence, legacyReceiptName: entry.receiptName)
                 }
             }
             .padding(14)
@@ -5176,7 +5187,10 @@ private struct OperativeTimesheetReviewView: View {
                 ForEach(Array(draft.priceWorkEntries.enumerated()), id: \.element.id) { index, row in
                     managerExtraRow(
                         title: row.title,
-                        subtitle: "Agreed with: \(row.agreedManagerName) · \(row.startDate.formatted(date: .abbreviated, time: .omitted)) · \(CanonicalBusinessEngine.priceWorkJobNumberText(row.jobNumber))",
+                        subtitle: Self.extraSubtitle(
+                            "Agreed with: \(row.agreedManagerName) · \(row.startDate.formatted(date: .abbreviated, time: .omitted)) · \(CanonicalBusinessEngine.priceWorkJobNumberText(row.jobNumber))",
+                            evidenceCount: row.evidence.count
+                        ),
                         amount: row.amount,
                         decision: row.managerDecision,
                         revisedAmount: row.managerRevisedAmount,
@@ -5186,6 +5200,7 @@ private struct OperativeTimesheetReviewView: View {
                         onEdit: { editingPriceWorkId = row.id }
                     )
                     .id("\(row.id)-\(row.managerDecision.rawValue)-\(row.managerRevisedAmount ?? -1)")
+                    ClaimEvidenceLinks(evidence: row.evidence)
                 }
             }
             .padding(14)
