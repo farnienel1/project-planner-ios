@@ -80,9 +80,12 @@ struct OfflineStatusBanner: View {
                 showingQueue = true
             } label: {
                 statusRow(
-                    icon: "icloud.and.arrow.up",
+                    icon: outbox.unsentMaterialEmailCount > 0 ? "envelope.badge" : "icloud.and.arrow.up",
                     tint: .orange,
-                    message: "\(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") waiting to sync. Tap to see the queue.",
+                    message: Self.withUnsentMaterialEmails(
+                        "\(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") waiting to sync. Tap to see the queue.",
+                        count: outbox.unsentMaterialEmailCount
+                    ),
                     showsChevron: true
                 )
             }
@@ -104,9 +107,19 @@ struct OfflineStatusBanner: View {
         }
     }
 
+    /// Puts unsent material emails first, so a queued wholesaler order is never read as "just a change".
+    static func withUnsentMaterialEmails(_ message: String, count: Int) -> String {
+        guard count > 0 else { return message }
+        let emails = count == 1 ? "1 material email has" : "\(count) material emails have"
+        return "\(emails) NOT been sent yet. \(message)"
+    }
+
     private var offlineMessage: String {
         if smartCache.pendingSyncCount > 0 {
-            return "You are working offline. \(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") will sync when signal returns. Tap to see the queue."
+            return Self.withUnsentMaterialEmails(
+                "You are working offline. \(smartCache.pendingSyncCount) change\(smartCache.pendingSyncCount == 1 ? "" : "s") will sync when signal returns. Tap to see the queue.",
+                count: outbox.unsentMaterialEmailCount
+            )
         }
         return "You are working offline. Bookings, deadlines, and material changes stay on this device and sync when signal returns. Tap to see the queue."
     }
