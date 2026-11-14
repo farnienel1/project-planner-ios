@@ -242,6 +242,15 @@ extension CanonicalBusinessEngine {
             ?? "Administrators have this on. Change user type to remove admin access."
     }
 
+    /// RULEBOOK 1.42.0 §11: one toggle row's text (`label`, `help`) from `permissionToggleRows` for `level` — for
+    /// screens that list toggles one by one (Change user type), so no screen keeps its own copy. Nil when the script
+    /// did not answer or the row is not shown for that level.
+    nonisolated static func permissionToggleText(field: String, level: RulebookPermissionLevel) -> (label: String, help: String)? {
+        guard let row = permissionToggleRows(level: level, user: nil, mode: .edit).first(where: { $0.field == field && $0.visible })
+        else { return nil }
+        return (row.label, row.help)
+    }
+
     /// `isOrganizationSuperAdmin(viewer, org)` (1.28.0 §8, §16): the organisation's creator, or a profile of that
     /// organisation flagged `isSuperAdmin`. Nil when the script did not answer.
     nonisolated static func isOrganizationSuperAdmin(

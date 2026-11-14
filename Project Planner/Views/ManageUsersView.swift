@@ -2725,7 +2725,7 @@ struct EditUserView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    Text("Choose how this account should behave in the app. Permissions are aligned with the Add user flows so Firestore stays consistent. Approved annual leave is kept. Pending approval requests are removed when the person can book their own leave (manager with self-book, or administrator).")
+                    Text(ManageUsersLeaveCopy.changeUserTypeIntro)
                         .font(.subheadline)
                         .foregroundStyle(ManageUserProfilePalette.textSecondary)
 
@@ -2751,8 +2751,8 @@ struct EditUserView: View {
                                 iconName: "person.crop.rectangle.stack.fill",
                                 iconBackground: ManageUserProfilePalette.chipPurpleBg,
                                 iconForeground: ManageUserProfilePalette.chipPurpleFg,
-                                title: "Operatives",
-                                description: "Can manage operatives and view their details. If turned off, the user can still assign operatives to projects and small works, but will not see the Manage Operatives screen or full operative profiles.",
+                                title: changeTypeRowLabel("operatives", level: .manager),
+                                description: changeTypeRowHelp("operatives", level: .manager),
                                 isOn: $managerTransitionOperatives
                             )
                             ManageUserCardDivider()
@@ -2760,8 +2760,8 @@ struct EditUserView: View {
                                 iconName: "beach.umbrella.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Annual Leave Management",
-                                description: "Can book their own annual leave. If off, this manager requests leave for approval.",
+                                title: changeTypeRowLabel("annualLeaveSelfBook", level: .manager),
+                                description: changeTypeRowHelp("annualLeaveSelfBook", level: .manager),
                                 isOn: $managerSelfBookDraft
                             )
                             // RULEBOOK 1.32.0 §11: `weeklyReports` is admin-only — the row shows only while the
@@ -2772,8 +2772,8 @@ struct EditUserView: View {
                                     iconName: "doc.text.fill",
                                     iconBackground: ManageUserProfilePalette.chipTealBg,
                                     iconForeground: ManageUserProfilePalette.chipTealFg,
-                                    title: "Weekly Report",
-                                    description: "Can open Weekly Report from Home. If off, that tile is hidden.",
+                                    title: changeTypeRowLabel("weeklyReports", level: .manager),
+                                    description: changeTypeRowHelp("weeklyReports", level: .manager),
                                     isOn: $managerTransitionWeeklyReports
                                 )
                             }
@@ -2782,8 +2782,8 @@ struct EditUserView: View {
                                 iconName: "calendar.badge.clock",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
-                                title: "Daily Overview",
-                                description: "Can open Daily Overview from Home. If off, that tile is hidden.",
+                                title: changeTypeRowLabel("dailyOverview", level: .manager),
+                                description: changeTypeRowHelp("dailyOverview", level: .manager),
                                 isOn: $managerTransitionDailyOverview
                             )
                             ManageUserCardDivider()
@@ -2791,8 +2791,8 @@ struct EditUserView: View {
                                 iconName: "person.2.wave.2.fill",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
-                                title: "Sub Contractors",
-                                description: "Can add and manage sub contractor records. If off, Sub Contractors is hidden on Home and menus. They can still book existing subcontractors on jobs.",
+                                title: changeTypeRowLabel("subContractors", level: .manager),
+                                description: changeTypeRowHelp("subContractors", level: .manager),
                                 isOn: $managerTransitionSubContractors
                             )
                             ManageUserCardDivider()
@@ -2800,8 +2800,8 @@ struct EditUserView: View {
                                 iconName: "rosette",
                                 iconBackground: ManageUserProfilePalette.chipPinkBg,
                                 iconForeground: ManageUserProfilePalette.chipPinkFg,
-                                title: "Manage Qualifications",
-                                description: "When on, this manager can add and edit organisation qualification templates. When off, Qualifications shows only My Qualifications, and they can still assign templates others have already added.",
+                                title: changeTypeRowLabel("qualifications", level: .manager),
+                                description: changeTypeRowHelp("qualifications", level: .manager),
                                 isOn: $managerTransitionQualifications
                             )
                             ManageUserCardDivider()
@@ -2809,8 +2809,8 @@ struct EditUserView: View {
                                 iconName: "folder.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Projects",
-                                description: "Can create, edit, and add projects. If off, they still see projects they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit project details.",
+                                title: changeTypeRowLabel("projects", level: .manager),
+                                description: changeTypeRowHelp("projects", level: .manager),
                                 isOn: $managerTransitionProjects
                             )
                             ManageUserCardDivider()
@@ -2818,8 +2818,8 @@ struct EditUserView: View {
                                 iconName: "hammer.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Small Works",
-                                description: "Can create, edit, and add small works. If off, they still see small works they are assigned to as a manager or booked onto — scheduling and other job tools stay available, but they cannot add or edit small works details.",
+                                title: changeTypeRowLabel("smallWorks", level: .manager),
+                                description: changeTypeRowHelp("smallWorks", level: .manager),
                                 isOn: $managerTransitionSmallWorks
                             )
                         }
@@ -2830,7 +2830,7 @@ struct EditUserView: View {
                                 .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5)
                         )
 
-                        Text("If Annual Leave Management is turned on, pending approval requests are cleared.")
+                        Text(ManageUsersLeaveCopy.changeUserTypeLeaveNote)
                             .font(.caption)
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
                     }
@@ -2845,8 +2845,8 @@ struct EditUserView: View {
                                 iconName: "beach.umbrella.fill",
                                 iconBackground: ManageUserProfilePalette.chipBlueBg,
                                 iconForeground: ManageUserProfilePalette.chipBlueFg,
-                                title: "Annual Leave Management",
-                                description: "Can book their own annual leave. If off, this administrator requests leave for approval.",
+                                title: changeTypeRowLabel("annualLeaveSelfBook", level: .admin),
+                                description: changeTypeRowHelp("annualLeaveSelfBook", level: .admin),
                                 isOn: $managerSelfBookDraft
                             )
                         }
@@ -2866,8 +2866,8 @@ struct EditUserView: View {
                                 iconName: "shippingbox.fill",
                                 iconBackground: ManageUserProfilePalette.chipAmberBg,
                                 iconForeground: ManageUserProfilePalette.chipAmberFg,
-                                title: "Materials",
-                                description: "Can access material lists in projects and small works. They will not be able to send quotes or place orders.",
+                                title: changeTypeRowLabel("materials", level: .operative),
+                                description: changeTypeRowHelp("materials", level: .operative),
                                 isOn: $operativeTransitionMaterials
                             )
                             ManageUserCardDivider()
@@ -2875,8 +2875,8 @@ struct EditUserView: View {
                                 iconName: "checklist",
                                 iconBackground: ManageUserProfilePalette.chipTealBg,
                                 iconForeground: ManageUserProfilePalette.chipTealFg,
-                                title: "Site audit",
-                                description: "Can view and submit site audits.",
+                                title: changeTypeRowLabel("siteAudit", level: .operative),
+                                description: changeTypeRowHelp("siteAudit", level: .operative),
                                 isOn: $operativeTransitionSiteAudit
                             )
                         }
@@ -4175,6 +4175,34 @@ struct EditUserView: View {
         )
         .filter(\.visible)
         .filter { !(suppressAdminAccessToggle && $0.field == "adminAccess") }
+    }
+
+    /// RULEBOOK 1.42.0 §11: Change user type lists each toggle with the rulebook's row text (`permissionToggleRows`),
+    /// never a copy of its own.
+    /// When the script does not answer, the row keeps a plain display name (never a raw field key) and no help.
+    private func changeTypeRowLabel(_ field: String, level: RulebookPermissionLevel) -> String {
+        CanonicalBusinessEngine.permissionToggleText(field: field, level: level)?.label ?? Self.permissionFallbackName(field)
+    }
+
+    /// Neutral names for the Change user type rows, used only when `permissionToggleRows` did not answer.
+    static func permissionFallbackName(_ field: String) -> String {
+        switch field {
+        case "operatives": return "Operatives"
+        case "annualLeaveSelfBook": return "Annual Leave Management"
+        case "weeklyReports": return "Weekly Report"
+        case "dailyOverview": return "Daily Overview"
+        case "subContractors": return "Sub Contractors"
+        case "qualifications": return "Manage Qualifications"
+        case "projects": return "Projects"
+        case "smallWorks": return "Small Works"
+        case "materials": return "Materials"
+        case "siteAudit": return "Site audit"
+        default: return "Permission"
+        }
+    }
+
+    private func changeTypeRowHelp(_ field: String, level: RulebookPermissionLevel) -> String {
+        CanonicalBusinessEngine.permissionToggleText(field: field, level: level)?.help ?? ""
     }
 
     /// The signed-in person is the person being edited: their own self-manage rows are locked. Plain id

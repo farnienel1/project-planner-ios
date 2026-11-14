@@ -18,6 +18,8 @@ struct ProjectAssignedManagersEditor: View {
     var onCreateManager: () -> Void
     var onEdited: () -> Void = {}
 
+    @State private var showingPicker = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -25,25 +27,10 @@ struct ProjectAssignedManagersEditor: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                 Spacer()
-                Menu {
-                    ForEach(availableManagersToAdd, id: \.id) { manager in
-                        Button("\(manager.firstName) \(manager.lastName)") {
-                            selectedManagers.append(manager)
-                            onEdited()
-                        }
-                            .accessibilityIdentifier("projectAssignedManagersEditor.row.\(manager.id)")
-                    }
-                    if availableManagersToAdd.isEmpty && hasNoCandidates {
-                        Button(CanonicalBusinessEngine.jobManagerNoCandidatesMessage) {}
-                            .accessibilityIdentifier("projectAssignedManagersEditor.noCandidates")
-                            .disabled(true)
-                    } else if availableManagersToAdd.isEmpty {
-                        Button("All managers added") {}
-                            .accessibilityIdentifier("projectAssignedManagersEditor.allManagersAdded")
-                            .disabled(true)
-                    }
-                    Button("Create manager…") { onCreateManager() }
-                        .accessibilityIdentifier("projectAssignedManagersEditor.createManager")
+                // RULEBOOK 1.42.0 (owner decision 13 Nov): several managers per job, easily — a list that stays open,
+                // tick as many as needed, then Done. Same candidates (`jobManagerCandidates`) and the same save.
+                Button {
+                    showingPicker = true
                 } label: {
                     Label("Add", systemImage: "plus")
                         .font(.system(size: 13, weight: .medium))
@@ -124,6 +111,44 @@ struct ProjectAssignedManagersEditor: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(ProjectWorksRevampColors.border, lineWidth: 0.5)
         )
+        .sheet(isPresented: $showingPicker) {
+            ProjectManagersMultiPickSheet(
+                rows: Self.pickerRows(selected: selectedManagers, available: availableManagersToAdd),
+                initiallyTicked: Set(selectedManagers.map(\.id)),
+                formerNotes: formerNotes,
+                hasNoCandidates: hasNoCandidates,
+                onDone: { ticked in
+                    let next = Self.applyingPicks(selected: selectedManagers, available: availableManagersToAdd, ticked: ticked)
+                    if next.map(\.id) != selectedManagers.map(\.id) {
+                        selectedManagers = next
+                        onEdited()
+                    }
+                    showingPicker = false
+                },
+                onCancel: { showingPicker = false },
+                onCreateManager: {
+                    showingPicker = false
+                    onCreateManager()
+                }
+            )
+        }
+    }
+
+    /// The picker's rows: the managers already on the job first (current and former, in stored order), then the
+    /// candidates not on it yet (`availableManagersToAdd`, from `jobManagerCandidates`). Each person once.
+    static func pickerRows(selected: [Manager], available: [Manager]) -> [Manager] {
+        var seen = Set<UUID>()
+        return (selected + available).filter { seen.insert($0.id).inserted }
+    }
+
+    /// The managers after Done: those already on the job that stay ticked keep their place, then the newly ticked ones
+    /// in list order. Unticking removes; nothing else changes (the save is unchanged).
+    static func applyingPicks(selected: [Manager], available: [Manager], ticked: Set<UUID>) -> [Manager] {
+        let kept = selected.filter { ticked.contains($0.id) }
+        let keptIds = Set(kept.map(\.id))
+        var seen = keptIds
+        let added = available.filter { ticked.contains($0.id) && !keptIds.contains($0.id) && seen.insert($0.id).inserted }
+        return kept + added
     }
 
     /// Amber for a former manager, as web shows them.
@@ -134,5 +159,93 @@ struct ProjectAssignedManagersEditor: View {
         let l = manager.lastName.prefix(1)
         let value = "\(f)\(l)".uppercased()
         return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "?" : value
+    }
+}
+
+/// RULEBOOK 1.42.0: the multi-tick manager list for a project or small works (create and edit). Stays open while the
+/// person ticks; Done applies every tick at once.
+struct ProjectManagersMultiPickSheet: View {
+    let rows: [Manager]
+    let initiallyTicked: Set<UUID>
+    var formerNotes: [UUID: String] = [:]
+    var hasNoCandidates: Bool = false
+    let onDone: (Set<UUID>) -> Void
+    let onCancel: () -> Void
+    let onCreateManager: () -> Void
+
+    @State private var ticked: Set<UUID> = []
+    @State private var search = ""
+    @State private var seeded = false
+
+    private var filtered: [Manager] {
+        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return rows }
+        return rows.filter { $0.fullName.lowercased().contains(needle) || $0.email.lowercased().contains(needle) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if rows.isEmpty {
+                    Text(hasNoCandidates ? CanonicalBusinessEngine.jobManagerNoCandidatesMessage : "All managers added")
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .accessibilityIdentifier(hasNoCandidates ? "projectAssignedManagersEditor.noCandidates" : "projectAssignedManagersEditor.allManagersAdded")
+                }
+                ForEach(filtered, id: \.id) { manager in
+                    Button {
+                        if ticked.contains(manager.id) { ticked.remove(manager.id) } else { ticked.insert(manager.id) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: ticked.contains(manager.id) ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20))
+                                .foregroundStyle(ticked.contains(manager.id) ? ProjectWorksRevampColors.blue : ProjectWorksRevampColors.muted)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Assigned manager" : manager.fullName)
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.ink)
+                                if !manager.email.isEmpty {
+                                    Text(manager.email)
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                                }
+                                if let note = formerNotes[manager.id] {
+                                    Text(note)
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(ProjectAssignedManagersEditor.amber)
+                                }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("projectAssignedManagersEditor.row.\(manager.id)")
+                    .accessibilityAddTraits(ticked.contains(manager.id) ? .isSelected : [])
+                }
+                Section {
+                    Button("Create manager…") { onCreateManager() }
+                        .accessibilityIdentifier("projectAssignedManagersEditor.createManager")
+                }
+            }
+            .searchable(text: $search, prompt: "Search managers and admins")
+            .navigationTitle(ticked.isEmpty ? "Managers" : "Managers (\(ticked.count))")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { onCancel() }
+                        .accessibilityIdentifier("projectAssignedManagersEditor.cancel")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { onDone(ticked) }
+                        .fontWeight(.semibold)
+                        .accessibilityIdentifier("projectAssignedManagersEditor.done")
+                }
+            }
+            .onAppear {
+                guard !seeded else { return }
+                ticked = initiallyTicked
+                seeded = true
+            }
+        }
     }
 }

@@ -240,4 +240,8 @@ enum UserPermissionsDraftMerge {
 /// only decides whether future leave saves approved or is requested; existing approved and pending leave stays.
 enum ManageUsersLeaveCopy {
     static let selfBookOffMessage = "Their existing annual leave stays as it is. From now on, their new annual leave will be sent as a request for approval."
+    /// Change user type (1.42.0): the sheet's notes say existing leave is kept — the type change never removes approved
+    /// or pending leave; Annual Leave Management only decides how *future* leave is saved (rulebook §9).
+    static let changeUserTypeIntro = "Choose how this account should behave in the app. Permissions are aligned with the Add user flows so Firestore stays consistent. Existing annual leave, approved and pending, is kept."
+    static let changeUserTypeLeaveNote = "Existing approved and pending annual leave is kept. Annual Leave Management only decides whether their future leave saves straight away or is sent as a request for approval."
 }
