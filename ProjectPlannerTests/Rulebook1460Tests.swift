@@ -420,6 +420,7 @@ final class Rulebook1460Tests: XCTestCase {
             "locationKind": "project", "details": "07:00–16:00", "paidHours": 8.5, "days": 1.0, "amount": 250.0,
             "isOvertime": false, "decision": "edited", "bookingId": "TEST-B1", "payBasis": "day",
             "bookingFingerprint": "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed", "bookingHadOvertimeLine": false,
+            "isPayeDay": true, "isLeave": false,
             "appliedReviewKey": "edited|426.47|8.5|3|3|2|250|176.47|2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed",
         ]
         var signedOvertime = signedNormal
@@ -430,6 +431,8 @@ final class Rulebook1460Tests: XCTestCase {
         signedOvertime["otMultiplier"] = 2.0
         signedOvertime["bookingHadOvertimeLine"] = true
         signedOvertime["reviewPartOf"] = "op-TEST-B1-normal"
+        signedOvertime["isPayeDay"] = false
+        signedOvertime["isLeave"] = false
         let stored: [String: Any] = [
             "managerNote": "",
             "payrollLineReviews": ["op-TEST-B1-normal": review, "op-TEST-B2-normal": noOvertime],
@@ -465,6 +468,8 @@ final class Rulebook1460Tests: XCTestCase {
             XCTAssertEqual(line["bookingHadOvertimeLine"] as? Bool, original["bookingHadOvertimeLine"] as? Bool)
             XCTAssertEqual(line["appliedReviewKey"] as? String, original["appliedReviewKey"] as? String)
             XCTAssertEqual(line["reviewPartOf"] as? String, original["reviewPartOf"] as? String)
+            XCTAssertEqual(line["isPayeDay"] as? Bool, original["isPayeDay"] as? Bool)
+            XCTAssertEqual(line["isLeave"] as? Bool, original["isLeave"] as? Bool)
             XCTAssertEqual((line["amount"] as? NSNumber)?.doubleValue, (original["amount"] as? NSNumber)?.doubleValue)
         }
         XCTAssertEqual((lines[1]["otMultiplier"] as? NSNumber)?.doubleValue, 2)
@@ -473,6 +478,22 @@ final class Rulebook1460Tests: XCTestCase {
         let cached = try JSONDecoder().decode(TimesheetDraft.self, from: JSONEncoder().encode(draft))
         XCTAssertEqual(cached.payrollLineReviews, draft.payrollLineReviews)
         XCTAssertEqual(cached.weeklyReportOverride?.lines, draft.weeklyReportOverride?.lines)
+    }
+
+    /// A signed sheet's invoice is its own: a signed line flagged PAYE never reaches the invoice, whatever the live lines.
+    func testASignedPayeLineNeverReachesTheInvoice() throws {
+        var paye = signedLine(fingerprint: nil, appliedReviewKey: "")
+        paye.isPayeDay = true
+        paye.isLeave = false
+        var worked = signedLine(fingerprint: nil, appliedReviewKey: "")
+        worked.id = "op-TEST-B2-normal"
+        worked.isPayeDay = false
+        worked.isLeave = false
+        var draft = TimesheetDraft()
+        draft.managerSignedAt = Date()
+        draft.weeklyReportOverride = override([paye, worked])
+        let totals = try XCTUnwrap(TimesheetTotalsSource.totals(lines: [], draft: draft, decided: true))
+        XCTAssertEqual(totals.total, 250, accuracy: 0.001, "only the self-employed signed line counts")
     }
 
     /// `payrollLineBookingKey` groups a booking's standard and overtime line (same collection and `bookingId`) and keeps a

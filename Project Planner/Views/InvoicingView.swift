@@ -1582,6 +1582,8 @@ enum TimesheetDraftStore {
                 if let had = line.bookingHadOvertimeLine { row["bookingHadOvertimeLine"] = had }
                 if let key = line.appliedReviewKey { row["appliedReviewKey"] = key }
                 if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
+                if let paye = line.isPayeDay { row["isPayeDay"] = paye }
+                if let leave = line.isLeave { row["isLeave"] = leave }
                 return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),
@@ -1623,7 +1625,9 @@ enum TimesheetDraftStore {
                 otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
                 bookingHadOvertimeLine: row["bookingHadOvertimeLine"] as? Bool,
                 appliedReviewKey: row["appliedReviewKey"] as? String,
-                reviewPartOf: (row["reviewPartOf"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                reviewPartOf: (row["reviewPartOf"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                isPayeDay: row["isPayeDay"] as? Bool,
+                isLeave: row["isLeave"] as? Bool
             )
         }
         func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {

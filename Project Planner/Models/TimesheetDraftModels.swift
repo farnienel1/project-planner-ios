@@ -195,6 +195,11 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     /// RULEBOOK 1.46.0 §8: on a `{booking}-ot` line a standard line's Edit hours review added, that standard line's id;
     /// the part follows its standard line's current review when reviews are re-applied. Nil otherwise.
     var reviewPartOf: String? = nil
+    /// RULEBOOK 1.46.0 §8: the signed line's own PAYE and annual-leave flags (web `isPayeDay`, `isLeave`). A signed
+    /// sheet's invoice rows are left out only by their own stored data (`timesheetInvoiceRows`), so every line iOS
+    /// writes carries them. Nil on a line signed before they were stored (kept as stored).
+    var isPayeDay: Bool? = nil
+    var isLeave: Bool? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
