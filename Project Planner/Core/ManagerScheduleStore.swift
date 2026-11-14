@@ -523,10 +523,12 @@ class ManagerScheduleStore: ObservableObject {
     /// `bookingDeleteSignedTimesheetWarning` for the person's timesheets: shown once, the delete still goes ahead.
     private func warnIfOnSignedTimesheet(_ booking: ManagerSiteBooking, organizationId: String) {
         guard let fb = firebaseBackend else { return }
-        let userId = booking.userId
+        // Every id the booked person goes by, sheets without `userId` too (guardrail 1, as web).
+        let userIds = SignedTimesheetPeople.timesheetUserIds(personId: booking.userId)
+        guard !userIds.isEmpty else { return }
         let dayKey = OrganizationRulebookContext.dayKey(booking.date)
         Task { @MainActor in
-            let sheets = await fb.signedTimesheetCandidates(organizationId: organizationId, userId: userId)
+            let sheets = await fb.signedTimesheetCandidates(organizationId: organizationId, userIds: userIds)
             if let warning = CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: dayKey, sheets: sheets) {
                 OfflineOutboxStore.shared.lastNoticeMessage = warning
             }
