@@ -327,6 +327,13 @@ extension CanonicalBusinessEngine {
         return callJSON("payrollLineBookingKey", arguments: [line]) as? String
     }
 
+    /// `overtimeFingerprintsMatch(a, b)`: whether two booking fingerprints name the same booking state, reading the slot
+    /// of both canonically (a web `CUSTOM` and an iOS `CUSTOM_HOURS`, or a stored pre-1.46 `CUSTOM HOURS`, are one).
+    /// Never compare fingerprints with `==` in Swift. False when the script did not answer, or either side is empty.
+    nonisolated static func overtimeFingerprintsMatch(_ a: String?, _ b: String?) -> Bool {
+        callJSON("overtimeFingerprintsMatch", arguments: [RulebookJSON.orNull(a), RulebookJSON.orNull(b)]) as? Bool ?? false
+    }
+
     nonisolated private static let payrollLineFingerprintMemo = RulebookAnswerMemo<OvertimeBookingInput, String>(limit: 4096)
 
     /// RULEBOOK 1.46.0: a timesheet payroll line's `bookingFingerprint` — the rulebook's `overtimeBookingFingerprint`

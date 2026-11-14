@@ -129,8 +129,40 @@ final class Rulebook1460Tests: XCTestCase {
 
     /// The fingerprint comes from the rulebook, never built in Swift, so web and iPhone compare the same string.
     func testThePayrollLineFingerprintIsTheRulebooksString() {
-        XCTAssertEqual(fingerprint(start: "07:00", end: "16:00"), "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed")
+        XCTAssertEqual(fingerprint(start: "07:00", end: "16:00"), "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed")
         XCTAssertNotEqual(fingerprint(start: "07:00", end: "16:00"), fingerprint(start: "07:00", end: "19:00"))
+    }
+
+    /// One booking, two spellings: web stores the slot `CUSTOM`, iOS reads it as `CUSTOM_HOURS` — the rulebook gives one
+    /// fingerprint, and a fingerprint stored before 1.46.0 (`CUSTOM HOURS`) still matches (`overtimeFingerprintsMatch`).
+    func testAWebCustomAndAnIOSCustomHoursBookingHaveOneFingerprint() throws {
+        func stamp(_ slot: String) -> String {
+            CanonicalBusinessEngine.overtimeBookingFingerprint(
+                OvertimeBookingInput(
+                    id: "TEST-B1", collection: "bookings", personId: "", dayKey: dayKey, timeSlot: slot,
+                    workStartTime: "07:00", workEndTime: "16:00", isBreakRemoved: false, otMultiplierOverride: 2,
+                    status: nil, jobId: nil
+                )
+            )
+        }
+        let web = stamp("CUSTOM")
+        let iOS = stamp(TimeSlot.customHours.rawValue)
+        XCTAssertFalse(web.isEmpty)
+        XCTAssertEqual(web, iOS)
+        XCTAssertEqual(iOS, "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed")
+        let storedBefore146 = "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed"
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(storedBefore146, web))
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(web, iOS))
+        XCTAssertFalse(CanonicalBusinessEngine.overtimeFingerprintsMatch(web, stamp("FULL DAY")))
+        XCTAssertFalse(CanonicalBusinessEngine.overtimeFingerprintsMatch("", ""), "empty never matches")
+
+        // A review web wrote against the `CUSTOM` booking is current for the iPhone's `CUSTOM_HOURS` line.
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews["op-TEST-B1-normal"] = TimesheetPayrollLineReview(
+            decision: .edited, revisedAmount: 300, reviewedBookingFingerprint: storedBefore146
+        )
+        let line = standardLine(fingerprint: iOS, hasOvertimeLine: false)
+        XCTAssertEqual(TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)?.revisedAmount, 300)
     }
 
     // MARK: Edit hours
@@ -444,7 +476,7 @@ final class Rulebook1460Tests: XCTestCase {
     /// (dropping them re-priced a signed 426.47 to 293.48, or paid 602.94).
     func testEverySaveKeepsTheReviewFieldsAndTheSignedLineFields() throws {
         let review: [String: Any] = [
-            "decision": "edited", "revisedAmount": 426.47, "reviewedBookingFingerprint": "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed",
+            "decision": "edited", "revisedAmount": 426.47, "reviewedBookingFingerprint": "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed",
             "revisedStandardHours": 8.5, "revisedOvertimeHours": 3, "revisedOvertimeClockHours": 3, "revisedOvertimeMultiplier": 2,
             "revisedStandardAmount": 250, "revisedOvertimeAmount": 176.47,
         ]
@@ -457,9 +489,9 @@ final class Rulebook1460Tests: XCTestCase {
             "id": "op-TEST-B1-normal", "date": Timestamp(date: day), "jobNumber": "TEST-1", "projectName": "TEST-Kitchen refit",
             "locationKind": "project", "details": "07:00–16:00", "paidHours": 8.5, "days": 1.0, "amount": 250.0,
             "isOvertime": false, "decision": "edited", "bookingId": "TEST-B1", "payBasis": "day",
-            "bookingFingerprint": "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed", "bookingHadOvertimeLine": false,
+            "bookingFingerprint": "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed", "bookingHadOvertimeLine": false,
             "isPayeDay": true, "isLeave": false,
-            "appliedReviewKey": "edited|426.47|8.5|3|3|2|250|176.47|2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed",
+            "appliedReviewKey": "edited|426.47|8.5|3|3|2|250|176.47|2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed",
         ]
         var signedOvertime = signedNormal
         signedOvertime["id"] = "op-TEST-B1-ot"
