@@ -208,7 +208,7 @@ enum PayrollTimePolicyCatalog {
     /// True when Saturday and Sunday org rules match (or Sunday mirrors Saturday).
     static func saturdayAndSundayMatch(in policy: OrgPayrollTimePolicy) -> Bool {
         if policy.sundaySameAsSaturday { return true }
-        return policy.saturday.equivalentForBatchBooking(policy.sunday, fallbackCountsAs: policy.standardPaidHours)
+        return policy.saturday.equivalentForBatchBooking(policy.sunday, fallbackCountsAs: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
     }
 
     /// The bands an hours timeline draws for `day` (RULEBOOK 1.19.0 §4.3 `payrollDayWindows`: the weekday standard day,

@@ -26,12 +26,19 @@ struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
     var jobNumber: String
     var date: Date
     var amount: Double
+    /// Older entries only: the receipt name both apps stored without uploading a file (read-only, RULEBOOK 1.45.0 §8).
     var receiptName: String?
     var managerDecision: TimesheetManagerDecision = .approved
     var managerRevisedAmount: Double?
     /// The entry id as `parseTimesheetEntries` read it (RULEBOOK 1.7.0 §8): the stored id in stored case, or the
     /// deterministic `timesheetEntryId` for an entry stored without one. Written back on save. Nil on a new entry.
     var storedId: String? = nil
+    /// RULEBOOK 1.45.0 §8: files, photos and frozen personal site audit copies the owner attached (the PAYE claim
+    /// evidence shape). Read through `parseTimesheetEntries`; written back on every save so it is never dropped.
+    var evidence: [PayeClaimEvidence] = []
+    /// RULEBOOK 1.45.0 §8 (review #322): the stored row's fingerprint as `parseTimesheetEntries` returned it. Passed to
+    /// the review rules (`timesheetEntryReviewWriteFields`, `timesheetEntryDecision`); never written back. Nil on a new entry.
+    var reviewFingerprint: String? = nil
 }
 
 struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
@@ -47,6 +54,50 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var managerRevisedAmount: Double?
     /// The entry id as `parseTimesheetEntries` read it (stored case, or `timesheetEntryId`). Nil on a new entry.
     var storedId: String? = nil
+    /// RULEBOOK 1.45.0 §8: optional evidence (the PAYE claim evidence shape); written back on every save.
+    var evidence: [PayeClaimEvidence] = []
+    /// RULEBOOK 1.45.0 §8: the stored row's fingerprint from `parseTimesheetEntries`; never written back.
+    var reviewFingerprint: String? = nil
+}
+
+// RULEBOOK 1.45.0: a draft or loaded copy cached before 1.45.0 has no `evidence` key on its entries. The synthesized
+// decoder would refuse the whole draft (losing the "only what this editor changed" baseline), so these decode
+// `evidence` (and `reviewFingerprint`) when present and default the rest exactly as the synthesized decoder did.
+extension TimesheetExpenseEntry {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        details = try container.decode(String.self, forKey: .details)
+        jobNumber = try container.decode(String.self, forKey: .jobNumber)
+        date = try container.decode(Date.self, forKey: .date)
+        amount = try container.decode(Double.self, forKey: .amount)
+        receiptName = try container.decodeIfPresent(String.self, forKey: .receiptName)
+        managerDecision = try container.decodeIfPresent(TimesheetManagerDecision.self, forKey: .managerDecision) ?? .approved
+        managerRevisedAmount = try container.decodeIfPresent(Double.self, forKey: .managerRevisedAmount)
+        storedId = try container.decodeIfPresent(String.self, forKey: .storedId)
+        evidence = try container.decodeIfPresent([PayeClaimEvidence].self, forKey: .evidence) ?? []
+        reviewFingerprint = try container.decodeIfPresent(String.self, forKey: .reviewFingerprint)
+    }
+}
+
+extension TimesheetPriceWorkEntry {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        details = try container.decode(String.self, forKey: .details)
+        jobNumber = try container.decode(String.self, forKey: .jobNumber)
+        agreedManagerName = try container.decode(String.self, forKey: .agreedManagerName)
+        startDate = try container.decode(Date.self, forKey: .startDate)
+        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
+        amount = try container.decode(Double.self, forKey: .amount)
+        managerDecision = try container.decodeIfPresent(TimesheetManagerDecision.self, forKey: .managerDecision) ?? .approved
+        managerRevisedAmount = try container.decodeIfPresent(Double.self, forKey: .managerRevisedAmount)
+        storedId = try container.decodeIfPresent(String.self, forKey: .storedId)
+        evidence = try container.decodeIfPresent([PayeClaimEvidence].self, forKey: .evidence) ?? []
+        reviewFingerprint = try container.decodeIfPresent(String.self, forKey: .reviewFingerprint)
+    }
 }
 
 struct TimesheetDraft: Codable {
@@ -98,6 +149,9 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var isOvertime: Bool
     var decision: TimesheetManagerDecision
     var bookingId: String?
+    /// RULEBOOK 1.44.0 §8: the pay basis stored on the signed line (`day` | `hourly`, web `payBasis`); nil on a line
+    /// signed before it was stored. The signed line reads with it, never the live rate.
+    var payBasis: String? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {

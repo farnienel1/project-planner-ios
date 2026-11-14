@@ -350,7 +350,7 @@ struct OrganisationWorkingHoursView: View {
         }
         let start = sat.customStandardStart ?? draft.standardDayStart
         let end = sat.customStandardEnd ?? "13:00"
-        let flat = sat.resolvedCountsAsHours(fallback: draft.standardPaidHours)
+        let flat = sat.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
         return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sat.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sat))"
     }
 
@@ -369,7 +369,7 @@ struct OrganisationWorkingHoursView: View {
         }
         let start = sun.customStandardStart ?? draft.standardDayStart
         let end = sun.customStandardEnd ?? "13:00"
-        let flat = sun.resolvedCountsAsHours(fallback: draft.standardPaidHours)
+        let flat = sun.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
         return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sun.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sun))"
     }
 
@@ -540,7 +540,7 @@ struct OrganisationWorkingHoursView: View {
             settings.useCustomStandardDayWindow = true
             if settings.customStandardStart == nil { settings.customStandardStart = draft.standardDayStart }
             if settings.customStandardEnd == nil { settings.customStandardEnd = "13:00" }
-            if settings.countsAsHours == nil { settings.countsAsHours = draft.standardPaidHours }
+            if settings.countsAsHours == nil { settings.countsAsHours = CanonicalBusinessEngine.weekendCountsAsHoursFallback }
         }
         draft[keyPath: keyPath] = settings
     }
@@ -614,7 +614,7 @@ struct OrganisationWorkingHoursView: View {
         stepperRow(
             label: "Counts as",
             value: Binding(
-                get: { settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours) },
+                get: { settings.wrappedValue.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback) },
                 set: { settings.wrappedValue.countsAsHours = $0 }
             ),
             step: 0.5,
@@ -652,7 +652,7 @@ struct OrganisationWorkingHoursView: View {
             bottomColor: WorkingHoursPalette.amberGradientBottom,
             rows: [],
             footerLabel: "A \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") \(title) pays",
-            footerValue: "\(formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: draft.standardPaidHours))) @ 1x",
+            footerValue: "\(formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback))) @ 1x",
             accent: WorkingHoursPalette.amber
         )
     }
@@ -1150,8 +1150,8 @@ struct OrganisationWorkingHoursView: View {
         out.unpaidBreakMinutes = Swift.max(Int(breakLimits?.min ?? 0), Swift.min(Int(breakLimits?.max ?? 120), out.unpaidBreakMinutes))
         out.standardPaidHours = Swift.max(paidLimits?.min ?? 1, Swift.min(paidLimits?.max ?? 12, out.standardPaidHours))
         out.weekdayOutsideStandardMultiplier = clampMultiplier(out.weekdayOutsideStandardMultiplier)
-        out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: out.standardPaidHours)
-        out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: out.standardPaidHours)
+        out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
+        out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
         return out
     }
 

@@ -124,19 +124,22 @@ enum TimesheetTotalsSource {
     static func sheetJSON(_ draft: TimesheetDraft, reviewing: Bool) -> [String: Any] {
         var sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft)) as? [String: Any] ?? [:]
         if reviewing {
-            func entry(storedId: String?, id: UUID, amount: Double, decision: TimesheetManagerDecision, revised: Double?) -> [String: Any] {
-                [
+            func entry(storedId: String?, id: UUID, amount: Double, decision: TimesheetManagerDecision, revised: Double?, fingerprint: String?) -> [String: Any] {
+                var row: [String: Any] = [
                     "id": storedId ?? WorkDocumentKeys.storedId(for: id),
                     "amount": amount,
                     "managerDecision": decision.rawValue,
                     "managerRevisedAmount": revised.map { $0 as Any } ?? NSNull(),
                 ]
+                // RULEBOOK 1.45.0 §8: the stored row's fingerprint, so the previewed review carries it.
+                if let fingerprint, !fingerprint.isEmpty { row["reviewFingerprint"] = fingerprint }
+                return row
             }
             let entries: [[String: Any]] =
                 draft.priceWorkEntries.map {
-                    entry(storedId: $0.storedId, id: $0.id, amount: $0.amount, decision: $0.managerDecision, revised: $0.managerRevisedAmount)
+                    entry(storedId: $0.storedId, id: $0.id, amount: $0.amount, decision: $0.managerDecision, revised: $0.managerRevisedAmount, fingerprint: $0.reviewFingerprint)
                 } + draft.expenseEntries.map {
-                    entry(storedId: $0.storedId, id: $0.id, amount: $0.amount, decision: $0.managerDecision, revised: $0.managerRevisedAmount)
+                    entry(storedId: $0.storedId, id: $0.id, amount: $0.amount, decision: $0.managerDecision, revised: $0.managerRevisedAmount, fingerprint: $0.reviewFingerprint)
                 }
             if let reviews = CanonicalBusinessEngine.timesheetEntryReviewsPreview(stored: NSNull(), entries: entries),
                !(reviews is NSNull) {
@@ -177,6 +180,9 @@ enum TimesheetTotalsSource {
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
         ]
         input["applyLabourReviews"] = reviewing ? (true as Any) : (NSNull() as Any)
+        // RULEBOOK 1.45.0 §8: the loaded copy's stored-row fingerprints, handed over explicitly (`entryFingerprints`).
+        let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
+        if !fingerprints.isEmpty { input["entryFingerprints"] = fingerprints }
         if let subject, let period, let days = timesheetDays(for: subject, period: period) {
             input["timesheetDays"] = days
         }

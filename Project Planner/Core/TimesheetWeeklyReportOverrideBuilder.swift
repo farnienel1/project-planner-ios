@@ -338,7 +338,9 @@ enum TimesheetWeeklyReportOverrideBuilder {
             amount: amount,
             isOvertime: line.isOvertimeLine,
             decision: decision,
-            bookingId: bookingId(from: line.id)
+            bookingId: bookingId(from: line.id),
+            // RULEBOOK 1.44.0 §8: stored with the signed line (web `payBasis`).
+            payBasis: line.payrollBasis == .hourly ? "hourly" : "day"
         )
     }
 

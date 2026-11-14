@@ -395,8 +395,8 @@ enum PayeClaimReportPDF {
             let canvas = PayeClaimReportCanvas(context: context, totalPages: totalPages, footerText: layout.footerText)
             drawSummary(layout, logo: logo, canvas: canvas)
             for (heading, content) in zip(layout.evidencePages, contents) {
-                drawEvidencePage(heading, content: content, layout: layout, logo: logo, canvas: canvas,
-                                 notDrawnNote: notDrawnNote, unreadableNote: unreadableNote)
+                drawEvidencePage(heading, content: content, approvedByLabel: layout.isPriceWork ? "APPROVED BY" : nil,
+                                 logo: logo, canvas: canvas, notDrawnNote: notDrawnNote, unreadableNote: unreadableNote)
             }
         }
         let label = report.kind == PayeClaimKind.priceWork.rawValue ? "price-work" : "expenses"
@@ -408,6 +408,101 @@ enum PayeClaimReportPDF {
             return Made(url: url, notDrawn: notDrawn)
         } catch {
             return Made(url: nil, notDrawn: notDrawn)
+        }
+    }
+
+    // MARK: Timesheet invoice evidence (RULEBOOK 1.45.0 §8)
+
+    /// What one evidence page shows, read and decided before drawing (shared by the report and the invoice).
+    private static func evidenceContents(
+        _ pages: [PayeClaimReportLayout.EvidenceHeading],
+        readFile: (String) async throws -> Data
+    ) async -> (contents: [EvidenceContent], notDrawn: Int) {
+        var files: [String: Data] = [:]
+        var unreadable = Set<String>()
+        for page in pages where page.drawAs != "listed" && files[page.path] == nil && !unreadable.contains(page.path) {
+            do {
+                files[page.path] = try await readFile(page.path)
+            } catch {
+                unreadable.insert(page.path)
+            }
+        }
+        var notDrawn = 0
+        let contents: [EvidenceContent] = pages.map { page -> EvidenceContent in
+            if page.drawAs == "listed" { notDrawn += 1; return .notDrawn }
+            guard let bytes = files[page.path] else { notDrawn += 1; return .unreadable }
+            if page.drawAs == "image" {
+                if let image = UIImage(data: bytes) { return .image(image) }
+                notDrawn += 1
+                return .notDrawn
+            }
+            if let provider = CGDataProvider(data: bytes as CFData),
+               let document = CGPDFDocument(provider),
+               document.numberOfPages > 0 {
+                let pages = (1...document.numberOfPages).filter { document.page(at: $0) != nil }.count
+                return .pdf(document, pages: pages)
+            }
+            notDrawn += 1
+            return .unreadable
+        }
+        return (contents, notDrawn)
+    }
+
+    /// RULEBOOK 1.45.0 §8 `timesheetEvidencePages`: the invoice PDF at `invoiceURL` followed by one page per piece of
+    /// evidence on its price work and expense rows, drawn exactly as the PAYE report draws its evidence (image full
+    /// page, a PDF's pages appended, otherwise the not-drawn note). Price work shows "Agreed with" only when the entry
+    /// names who agreed it. The file is rewritten in place. Nil when the invoice could not be read back or written.
+    static func appendTimesheetEvidence(
+        to invoiceURL: URL,
+        pages: [PayeClaimEvidencePage],
+        footerText: String,
+        readFile: (String) async throws -> Data
+    ) async -> (url: URL, notDrawn: Int)? {
+        guard !pages.isEmpty else { return (invoiceURL, 0) }
+        guard let invoice = CGPDFDocument(invoiceURL as CFURL), invoice.numberOfPages > 0 else { return nil }
+        let headings: [PayeClaimReportLayout.EvidenceHeading] = pages.map { page in
+            PayeClaimReportLayout.EvidenceHeading(
+                itemId: page.itemId,
+                itemName: page.itemName,
+                date: page.date,
+                jobNumber: page.jobNumber,
+                approvedBy: page.approvedBy,
+                amount: page.amount,
+                evidenceTitle: page.evidenceTitle,
+                notes: page.notes,
+                path: page.path,
+                drawAs: page.drawAs
+            )
+        }
+        let (contents, notDrawn) = await evidenceContents(headings, readFile: readFile)
+        let evidencePageCount = contents.reduce(0) { sum, content in
+            if case .pdf(_, let count) = content { return sum + 1 + count }
+            return sum + 1
+        }
+        let totalPages = invoice.numberOfPages + evidencePageCount
+        let notDrawnNote = CanonicalBusinessEngine.payeClaimText(
+            "PAYE_CLAIM_EVIDENCE_NOT_DRAWN_NOTE", fallback: "This file type cannot be shown in the PDF. Open it in the app."
+        )
+        let unreadableNote = CanonicalBusinessEngine.payeClaimText(
+            "PAYE_CLAIM_EVIDENCE_UNREADABLE_NOTE", fallback: "This file could not be read when the report was made. Open it in the app."
+        )
+        let renderer = UIGraphicsPDFRenderer(bounds: PayeClaimReportCanvas.page)
+        let data = renderer.pdfData { context in
+            let canvas = PayeClaimReportCanvas(context: context, totalPages: totalPages, footerText: footerText)
+            canvas.append(invoice)
+            for (heading, content) in zip(headings, contents) {
+                drawEvidencePage(
+                    heading, content: content,
+                    approvedByLabel: heading.approvedBy.isEmpty ? nil : "AGREED WITH",
+                    logo: nil, canvas: canvas, notDrawnNote: notDrawnNote, unreadableNote: unreadableNote
+                )
+            }
+        }
+        do {
+            try data.write(to: invoiceURL, options: .atomic)
+            return (invoiceURL, notDrawn)
+        } catch {
+            return nil
         }
     }
 
@@ -509,7 +604,7 @@ enum PayeClaimReportPDF {
     private static func drawEvidencePage(
         _ heading: PayeClaimReportLayout.EvidenceHeading,
         content: EvidenceContent,
-        layout: PayeClaimReportLayout,
+        approvedByLabel: String?,
         logo: UIImage?,
         canvas: PayeClaimReportCanvas,
         notDrawnNote: String,
@@ -521,7 +616,7 @@ enum PayeClaimReportPDF {
             ("JOB NUMBER", heading.jobNumber),
             ("AMOUNT", heading.amount),
         ]
-        if layout.isPriceWork { meta.append((label: "APPROVED BY", value: heading.approvedBy)) }
+        if let approvedByLabel { meta.append((label: approvedByLabel, value: heading.approvedBy)) }
         canvas.headerBlock(
             eyebrow: heading.evidenceTitle,
             title: heading.itemName,
@@ -529,7 +624,7 @@ enum PayeClaimReportPDF {
             brandLine: nil,
             logo: logo,
             meta: meta,
-            columns: layout.isPriceWork ? 4 : 3
+            columns: approvedByLabel == nil ? 3 : 4
         )
         for note in heading.notes {
             canvas.paragraph(note, font: .systemFont(ofSize: 10), color: PayeClaimPDFStyle.slate, maxHeight: 90)

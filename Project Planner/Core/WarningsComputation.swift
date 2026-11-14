@@ -419,10 +419,10 @@ enum WarningsComputation {
                 breakWindowEnd: input.payrollTimePolicy.breakWindowEnd,
                 standardUnpaidBreakHours: input.payrollTimePolicy.standardUnpaidBreakHours,
                 saturdayCountsAsHours: input.payrollTimePolicy.saturday.resolvedCountsAsHours(
-                    fallback: input.payrollTimePolicy.standardPaidHours
+                    fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback
                 ),
                 sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: input.payrollTimePolicy)
-                    .resolvedCountsAsHours(fallback: input.payrollTimePolicy.standardPaidHours)
+                    .resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
             ),
             warningDetection: .init(
                 detectClashes: input.warningDetection.detectClashes,
@@ -1155,9 +1155,9 @@ enum WarningsComputation {
             includeWeekends: includeWeekends,
             excludedUserIds: storedExcludedUserIds(excluded),
             standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
-            saturdayCountsAsHours: policy.saturday.resolvedCountsAsHours(fallback: policy.standardPaidHours),
+            saturdayCountsAsHours: policy.saturday.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback),
             sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy)
-                .resolvedCountsAsHours(fallback: policy.standardPaidHours),
+                .resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback),
             standardDayStart: policy.standardDayStart,
             standardDayEnd: policy.standardDayEnd,
             breakWindowStart: policy.breakWindowStart,
@@ -1370,7 +1370,7 @@ enum WarningsComputation {
                 "standardDayEnd": input.payrollTimePolicy.standardDayEnd,
                 "breakWindowStart": input.payrollTimePolicy.breakWindowStart,
                 "breakWindowEnd": input.payrollTimePolicy.breakWindowEnd,
-                "standardPaidHours": input.payrollTimePolicy.standardPaidHours,
+                "standardPaidHours": input.payrollTimePolicy.standardPaidHours, // already `weekdayPaidHours` (snapshot, ~415)
                 "saturdayCountsAsHours": input.payrollTimePolicy.saturdayCountsAsHours,
                 "sundayCountsAsHours": input.payrollTimePolicy.sundayCountsAsHours,
                 "people": people,

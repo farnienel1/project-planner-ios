@@ -105,7 +105,8 @@ enum PayInputsLoad {
                 firebaseBackend: firebaseBackend,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
-                from: periodStart
+                from: periodStart,
+                retryFailed: retryFailed
             )
             return
         }
@@ -114,37 +115,60 @@ enum PayInputsLoad {
         managerScheduleStore.loadData(force: true)
     }
 
-    /// The periods with a queued re-check (review r318: per period, so a second period's request is never dropped).
-    private static var queuedRerunPeriods = Set<String>()
+    /// The periods with a queued re-check (review r318: per period, so a second period's request is never dropped),
+    /// each with whether the re-check must re-run a failed load (`retryFailed`, kept while it waits — review #231).
+    private static var queuedRerunPeriods: [String: Bool] = [:]
 
-    private static func rerunKey(_ periodStart: Date?) -> String {
+    /// How long one wait for a read in flight lasts before the check is queued again (review #231: a slow read is
+    /// waited for again, never given up on).
+    nonisolated static let rerunWaitSeconds: Double = 60
+
+    static func rerunKey(_ periodStart: Date?) -> String {
         periodStart.map { String($0.timeIntervalSince1970) } ?? "all"
+    }
+
+    /// Records a queued re-check for `key`. Returns true when a new wait must start (none was queued); a second request
+    /// for a queued period only adds `retryFailed`, so a Retry made while a read is in flight is never lost.
+    static func queueRerun(key: String, retryFailed: Bool) -> Bool {
+        if let queued = queuedRerunPeriods[key] {
+            queuedRerunPeriods[key] = queued || retryFailed
+            return false
+        }
+        queuedRerunPeriods[key] = retryFailed
+        return true
+    }
+
+    /// Ends the wait for `key`: whether the re-check re-runs a failed load.
+    static func takeQueuedRerun(key: String) -> Bool {
+        queuedRerunPeriods.removeValue(forKey: key) ?? false
     }
 
     private static func scheduleRerunAfterLoads(
         firebaseBackend: FirebaseBackend,
         bookingStore: BookingStore,
         managerScheduleStore: ManagerScheduleStore,
-        from periodStart: Date?
+        from periodStart: Date?,
+        retryFailed: Bool
     ) {
         let key = rerunKey(periodStart)
-        guard !queuedRerunPeriods.contains(key) else { return }
-        queuedRerunPeriods.insert(key)
+        guard queueRerun(key: key, retryFailed: retryFailed) else { return }
         Task { @MainActor [weak firebaseBackend, weak bookingStore, weak managerScheduleStore] in
-            // At most a minute: a read that never ends is the store's failure state, not this one's.
-            for _ in 0..<120 {
+            let steps = Int(rerunWaitSeconds / 0.5)
+            for _ in 0..<steps {
                 guard let bookingStore, let managerScheduleStore else { break }
                 if !bookingStore.isLoading && !managerScheduleStore.isLoading { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            queuedRerunPeriods.remove(key)
-            guard let firebaseBackend, let bookingStore, let managerScheduleStore,
-                  !bookingStore.isLoading, !managerScheduleStore.isLoading else { return }
+            let retry = takeQueuedRerun(key: key)
+            guard let firebaseBackend, let bookingStore, let managerScheduleStore else { return }
+            // Still reading after a minute: wait again (review #231) rather than give up, keeping `retryFailed`.
+            // `ensurePeriodBookings` queues the next wait itself while a read is in flight.
             ensurePeriodBookings(
                 firebaseBackend: firebaseBackend,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
-                from: periodStart
+                from: periodStart,
+                retryFailed: retry
             )
         }
     }

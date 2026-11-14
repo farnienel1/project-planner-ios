@@ -307,6 +307,61 @@ extension FirebaseBackend {
         await discardPayeClaimEvidence(item.evidence)
     }
 
+    /// RULEBOOK 1.45.0 §26: Save changes on the person's own item (`canEditPayeClaim`). The draft is checked as a new
+    /// item; only the changed fields are written (`priceWorkUpdateWriteFields` / `expenseUpdateWriteFields`, a partial
+    /// `updateData` with write metadata). Evidence the edit removed is deleted only inside the §24 undo window
+    /// (`claimEvidenceRemoved` → `payeClaimEvidenceToDelete`); every other file is kept for recovery.
+    func updatePayeClaim(
+        _ item: PayeClaimItem,
+        draft: [String: Any],
+        newEvidence: [PayeClaimEvidence],
+        person: [String: Any],
+        roster: [[String: Any]]
+    ) async throws {
+        let org = try payeClaimsOrganizationRef()
+        guard let uid = payeClaimsUid, CanonicalBusinessEngine.canEditPayeClaim(viewerId: uid, item: item),
+              let kind = PayeClaimKind(rawValue: item.kind) else {
+            throw PayeClaimRefused(message: "Only the person can change their own items.")
+        }
+        let refusal: String?
+        let write: PayeClaimUpdateWrite?
+        if kind == .priceWork {
+            refusal = CanonicalBusinessEngine.priceWorkValidationError(draft: draft, person: person, roster: roster, organizationId: org.documentID)
+            write = refusal == nil ? CanonicalBusinessEngine.priceWorkUpdateWriteFields(
+                item: item, userId: uid, draft: draft, person: person, roster: roster, organizationId: org.documentID
+            ) : nil
+        } else {
+            refusal = CanonicalBusinessEngine.expenseValidationError(draft: draft, organizationId: org.documentID, userId: uid)
+            write = refusal == nil ? CanonicalBusinessEngine.expenseUpdateWriteFields(
+                item: item, userId: uid, draft: draft, organizationId: org.documentID
+            ) : nil
+        }
+        if let refusal { throw PayeClaimRefused(message: refusal) }
+        guard let write else { throw PayeClaimRefused(message: "This item cannot be changed.") }
+        if !write.isEmpty {
+            var fields = write.set
+            for key in write.remove { fields[key] = FieldValue.delete() }
+            try await org.collection(kind.collection).document(item.id).updateData(WriteMetadata.stamped(fields, userId: uid))
+        }
+        await discardPayeClaimEvidence(CanonicalBusinessEngine.claimEvidenceRemoved(item.evidence, after: newEvidence))
+    }
+
+    /// RULEBOOK 1.45.0 §8 / §24: after an owner's timesheet save, the evidence files it removed that may go
+    /// (`timesheetEntryEvidenceToDelete`: the viewer's own, inside the undo window); every other file is kept.
+    func discardRemovedTimesheetEvidence(before: [PayeClaimEvidence], after: [PayeClaimEvidence]) async {
+        guard let orgId = payeClaimsOrganizationId, let uid = payeClaimsUid, !before.isEmpty else { return }
+        let paths = CanonicalBusinessEngine.timesheetEntryEvidenceToDelete(
+            before: before, after: after, organizationId: orgId, viewerUserId: uid
+        )
+        for path in paths {
+            do {
+                try await storage.reference().child(path).delete()
+            } catch {
+                print("⚠️ [Timesheet] evidence kept, delete refused or failed for \(path): \(error.localizedDescription)")
+            }
+        }
+    }
+
     /// Generate price work / expenses report: saves the frozen copy (`payeClaimReportSnapshot`, written once) and returns
     /// it as read back, so the PDF is built from the saved copy.
     func savePayeClaimReport(
@@ -351,7 +406,12 @@ extension FirebaseBackend {
         return snapshot.documents
             .filter { $0.documentID.hasPrefix("timesheet_") }
             .compactMap { doc -> [String: Any]? in
-                guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(sheetDocumentId: doc.documentID, sheet: doc.data()) else {
+                guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
+                    sheetDocumentId: doc.documentID,
+                    sheet: doc.data(),
+                    organizationId: org.documentID,
+                    ownerUserIds: RulebookRosterSnapshot.personIds(forUserId: userId)
+                ) else {
                     return nil
                 }
                 return ["id": doc.documentID, "entries": entries.raw]

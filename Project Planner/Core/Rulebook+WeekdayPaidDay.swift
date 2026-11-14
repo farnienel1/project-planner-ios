@@ -53,6 +53,17 @@ extension CanonicalBusinessEngine {
         } ?? policy.standardPaidHours
     }
 
+    /// RULEBOOK 1.44.0 §4.3 `weekendCountsAsHours(weekend)` for a weekend day with no stored "counts as" hours: the
+    /// default (8h, `DEFAULT_WEEKEND_COUNTS_AS_HOURS`) — never the weekday paid day, stored or derived. Every Swift
+    /// fallback for a weekend day's "counts as" (`resolvedCountsAsHours(fallback:)`) passes this.
+    nonisolated static var weekendCountsAsHoursFallback: Double { weekendCountsAsHoursFallbackValue }
+
+    /// Asked once: the rulebook default does not change while the app runs.
+    nonisolated private static let weekendCountsAsHoursFallbackValue: Double =
+        (callJSON("weekendCountsAsHours", arguments: [NSNull()]) as? NSNumber)?.doubleValue
+            ?? constant("DEFAULT_WEEKEND_COUNTS_AS_HOURS", as: Double.self)
+            ?? 8
+
     /// RULEBOOK 1.20.0 §4.3 `withDerivedWeekdayPaidHours(policy)`: the policy a 1.20.0 working-hours save writes —
     /// `paidHoursDerived: true` and `standardPaidHours` = the derived day. Nil when the script did not answer.
     nonisolated static func withDerivedWeekdayPaidHours(_ policy: OrgPayrollTimePolicy) -> OrgPayrollTimePolicy? {

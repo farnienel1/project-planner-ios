@@ -76,6 +76,8 @@ nonisolated struct TimesheetClaimRow: Codable, Hashable, Sendable, Identifiable 
     var approvedByName: String
     var receiptName: String?
     var managerDecision: String
+    /// RULEBOOK 1.45.0 §8: the entry's evidence (the sheet owner's own claim files); nil from an older script.
+    var evidence: [PayeClaimEvidence]? = nil
 }
 
 /// `PayeClaimReportItem`.

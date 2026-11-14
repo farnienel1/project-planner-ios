@@ -260,11 +260,14 @@ extension CanonicalBusinessEngine {
     /// Nil when the script did not answer.
     nonisolated static func timesheetEntryDecision(
         sheet: [String: Any],
-        entry: [String: Any]
+        entry: [String: Any],
+        trustedFingerprint: String? = nil
     ) -> (decision: String, revisedAmount: Double?, source: String)? {
+        // RULEBOOK 1.45.0 §8: a loaded copy hands the stored row's fingerprint over explicitly (`trustedFingerprint`).
         guard let sheetJSON = timesheetJSONSafe(sheet),
-              let entryJSON = timesheetJSONSafe(entry),
-              let result = callJSON("timesheetEntryDecision", arguments: [sheetJSON, entryJSON]) as? [String: Any],
+              let entryJSON = timesheetJSONSafe(entry) else { return nil }
+        let arguments: [Any] = [sheetJSON, entryJSON, NSNull(), RulebookJSON.orNull(trustedFingerprint)]
+        guard let result = callJSON("timesheetEntryDecision", arguments: arguments) as? [String: Any],
               let decision = result["decision"] as? String else { return nil }
         return (decision, (result["revisedAmount"] as? NSNumber)?.doubleValue, result["source"] as? String ?? "")
     }
@@ -286,20 +289,25 @@ extension CanonicalBusinessEngine {
         storedSheet: [String: Any]?,
         entries: [(id: String, amount: Double, managerDecision: String, managerRevisedAmount: Double?)],
         reviewedByUserId: String,
-        reviewedAtMs: Double
+        reviewedAtMs: Double,
+        reviewFingerprints: [String: String] = [:]
     ) -> [String: Any]? {
         var stored: Any = NSNull()
         if let storedSheet, let sheetJSON = timesheetJSONSafe(storedSheet) {
             guard let parsed = callJSON("parseTimesheetEntryReviews", arguments: [sheetJSON]) else { return nil }
             stored = parsed
         }
+        // RULEBOOK 1.45.0 §8 (review #322): each entry's `reviewFingerprint` (the stored row's, from
+        // `parseTimesheetEntries`, by entry id) goes in, so the review stores `reviewedFingerprint` and any later owner
+        // change reads as pending. Without one the review is amount-only, as before. Only changed reviews are written.
         let entryRows: [[String: Any]] = entries.map { entry in
-            [
-                "id": entry.id,
-                "amount": entry.amount,
-                "managerDecision": entry.managerDecision,
-                "managerRevisedAmount": entry.managerRevisedAmount.map { $0 as Any } ?? NSNull()
-            ]
+            var row: [String: Any] = [:]
+            if let fingerprint = reviewFingerprints[entry.id], !fingerprint.isEmpty { row["reviewFingerprint"] = fingerprint }
+            row["id"] = entry.id
+            row["amount"] = entry.amount
+            row["managerDecision"] = entry.managerDecision
+            row["managerRevisedAmount"] = entry.managerRevisedAmount.map { $0 as Any } ?? NSNull()
+            return row
         }
         let input: [String: Any] = [
             "stored": stored,

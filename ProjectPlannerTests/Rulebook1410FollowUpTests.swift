@@ -113,17 +113,20 @@ final class Rulebook1410FollowUpTests: XCTestCase {
             operatives: [],
             users: naming
         )
-        XCTAssertEqual(rows.map(\.name), ["Left Over"], "the document-only person keeps their row; unknown ids are left off")
-        XCTAssertFalse(rows.contains { $0.role == .unknown })
+        XCTAssertEqual(rows.filter { $0.role != .unknown }.map(\.name), ["Left Over"], "the document-only person keeps their row")
+        // RULEBOOK 1.44.0 §21: unknown ids are never hidden; they read "Unknown person · <short id>".
+        XCTAssertFalse(rows.filter { $0.role == .unknown }.isEmpty)
+        XCTAssertTrue(rows.filter { $0.role == .unknown }.allSatisfy { $0.name.hasPrefix("Unknown person") })
 
-        // With the listed roster alone the same booking names nobody and is left off, as 1.41 does for any unknown id.
+        // With the listed roster alone the same booking names nobody: one unknown-person row (1.44.0), never the name.
         let listedOnly = ScheduleWeekGrid.staffRows(
             operativeIds: [Booking.internalOperativeId(for: leftover.id)],
             userIds: [],
             operatives: [],
             users: listed
         )
-        XCTAssertTrue(listedOnly.isEmpty)
+        XCTAssertEqual(listedOnly.map(\.role), [.unknown])
+        XCTAssertFalse(listedOnly.contains { $0.name == "Left Over" })
     }
 
     func testTheSchedulingWeekUsesTheNamingRoster() throws {
