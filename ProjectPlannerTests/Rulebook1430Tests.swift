@@ -86,11 +86,11 @@ final class Rulebook1430Tests: XCTestCase {
     func testWeekendRowsPriceTheOwnRate() throws {
         let org = try XCTUnwrap(CanonicalBusinessEngine.weekendBookingBreakdown(
             policy: .default, dayKeys: [saturday], start: "06:00", end: "18:00", isBreakRemoved: false, timeZone: zone
-        ).first)
+        )?.first)
         let own = try XCTUnwrap(CanonicalBusinessEngine.weekendBookingBreakdown(
             policy: .default, dayKeys: [saturday], start: "06:00", end: "18:00", isBreakRemoved: false, timeZone: zone,
             otMultiplierOverride: 3
-        ).first)
+        )?.first)
         XCTAssertEqual(own.multiplier, 3, accuracy: 0.001)
         XCTAssertEqual(own.overtimeHours, org.overtimeHours, accuracy: 0.001)
         XCTAssertGreaterThan(own.paidHoursEquivalent, org.paidHoursEquivalent)
