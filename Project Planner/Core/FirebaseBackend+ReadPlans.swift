@@ -316,6 +316,7 @@ extension FirebaseBackend {
         func attach(_ index: Int, _ query: Query, fallback: Query?, attempt: Int = 0) {
             // RULEBOOK 1.38.0 §27: metadata changes only tell the ledger the server answered; they never reach the store.
             let delivered = SnapshotDeliveredFlag()
+            let lastDeliveredFromCache = SnapshotFromCacheFlag()
             let listener = query.addSnapshotListener(includeMetadataChanges: true) { snapshot, error in
                 if let error {
                     if let fallback, Self.isFailedPrecondition(error) {
@@ -347,12 +348,18 @@ extension FirebaseBackend {
                 }
                 guard let snapshot else { return }
                 let heldIdsChanged = ledgerRecord(index, snapshot.documents.map(\.documentID), snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
-                if DataParityListenerLedger.isMetadataOnly(
+                // RULEBOOK 1.43.0 §8 (review r318, 3rd round): a metadata-only snapshot is still passed on when it is the
+                // server confirming rows last delivered from cache (a network blip), so a store's "server answered"
+                // state (the timesheet bookings gate) comes back without a data change.
+                let serverConfirmsCachedRows = !snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites
+                    && lastDeliveredFromCache.value
+                if !serverConfirmsCachedRows, DataParityListenerLedger.isMetadataOnly(
                     documentChangeCount: snapshot.documentChanges.count,
                     deliveredBefore: delivered.wasDelivered,
                     heldIdsChanged: heldIdsChanged
                 ) { return }
                 _ = delivered.markDelivered()
+                lastDeliveredFromCache.value = snapshot.metadata.isFromCache
                 deliver(index, snapshot.documents.map(fromQueryDocument), snapshot.metadata.isFromCache)
             }
             registration.set(index, listener)

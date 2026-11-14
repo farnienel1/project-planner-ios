@@ -144,3 +144,28 @@ struct PayInputsFailureBanner: View {
         .accessibilityIdentifier("payInputs.failure")
     }
 }
+
+/// RULEBOOK 1.43.0 (review r318, 3rd round): the period's timesheet could not be read. It covers the whole sheet, so
+/// there is no blank sheet to edit, sign or add to — only the message and Retry, until it loads.
+struct TimesheetPeriodLoadFailedView: View {
+    let retry: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "exclamationmark.icloud.fill")
+                .font(.largeTitle)
+                .foregroundStyle(.red)
+            Text(TimesheetDraftStore.periodReadFailedMessage)
+                .font(.body.weight(.semibold))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Retry", action: retry)
+                .buttonStyle(.borderedProminent)
+                .accessibilityIdentifier("timesheets.periodLoadRetry")
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemGroupedBackground).ignoresSafeArea())
+        .accessibilityIdentifier("timesheets.periodLoadFailed")
+    }
+}

@@ -2,7 +2,7 @@ import XCTest
 @testable import Project_Planner
 
 /// RULEBOOK 1.43.0 through `CanonicalBusinessEngine` (owner reports, 14 Nov). Expected values were checked in node
-/// against the packed `canonical-business.js` (sha256 23265359…a3b707c8) and match web `lib/canonical/canonical.test.ts`:
+/// against the packed `canonical-business.js` (sha256 6e2f39c2…2890b623) and match web `lib/canonical/canonical.test.ts`:
 ///   - a timesheet's standard line shows the standard-window times and its overtime line the overtime times
 ///     (`payrollLineClockRanges`), and the multiplied text is never printed twice (`timesheetLineClockText`);
 ///   - booking previews price the booking's own overtime rate (`bookingHoursExplanation`, `weekendBookingBreakdown`);

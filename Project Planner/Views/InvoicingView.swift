@@ -825,6 +825,8 @@ enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
     /// RULEBOOK 1.43.0 (review r318): the period's sheet could not be read, so it is not opened as a new one.
     static let periodReadFailedMessage = "Couldn't check older timesheets — try again."
+    /// RULEBOOK 1.43.0 (review r318, 3rd round): the bookings gate closed during a bulk export (web `EXPORT_STOPPED_MESSAGE`).
+    static let exportStoppedMessage = "Export stopped: the bookings are reloading. Try again in a moment."
 
     static func load(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft {
         guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
@@ -2539,6 +2541,13 @@ private struct MyTimesheetView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Timesheet")
         .navigationBarTitleDisplayMode(.inline)
+        // RULEBOOK 1.43.0 (review r318, 3rd round): while the sheet cannot be read, only the message and Retry — no
+        // blank sheet to edit, sign or add to.
+        .overlay {
+            if periodLoadFailed {
+                TimesheetPeriodLoadFailedView { Task { await refreshDraftFromCloud() } }
+            }
+        }
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
         // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a self-signed sheet whose snapshot froze empty is rebuilt
@@ -4203,9 +4212,41 @@ struct OperativeTimesheetsView: View {
             exportMessage = blocked
             return
         }
+        // Review r318 (3rd round): each sheet is re-read fresh; one another device exported meanwhile is skipped (never
+        // rebuilt or re-stamped); the gate is re-checked before each person, and the export stops while the bookings
+        // reload. The emailed PDF and the stamped copy are the same prepared sheet.
+        guard let exportOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            exportMessage = "Failed: no organisation."
+            return
+        }
         var preparedDrafts: [String: TimesheetDraft] = [:]
+        var exportTargets: [AppUser] = []
+        var skippedElsewhere: [String] = []
         for op in targets {
-            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
+            let gate = PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: week.start
+            )
+            guard gate.loaded else {
+                exportMessage = TimesheetDraftStore.exportStoppedMessage
+                return
+            }
+            let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
+                userId: op.id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: exportOrgId
+            )
+            if fresh.failed {
+                exportMessage = TimesheetDraftStore.periodReadFailedMessage
+                return
+            }
+            guard var d = fresh.draft else { continue }
+            if d.exportedAt != nil {
+                skippedElsewhere.append(op.fullName.isEmpty ? op.email : op.fullName)
+                continue
+            }
+            guard d.operativeSignedAt != nil else { continue }
             TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
                 user: op,
@@ -4224,7 +4265,15 @@ struct OperativeTimesheetsView: View {
                 snapshotInputsReady: true
             )
             preparedDrafts[op.id] = d
+            exportTargets.append(op)
         }
+        guard !exportTargets.isEmpty else {
+            exportMessage = skippedElsewhere.isEmpty
+                ? "Nothing to export."
+                : "Already exported on another device, left as it was: \(skippedElsewhere.joined(separator: ", "))."
+            return
+        }
+        let prepared = preparedDrafts
         var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
         for target in targets {
             if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
@@ -4236,9 +4285,9 @@ struct OperativeTimesheetsView: View {
             }
         }
         let result = await TimesheetExportHelper.exportAndEmail(
-            operatives: targets,
+            operatives: exportTargets,
             week: week,
-            draftForUser: { preparedDrafts[$0.id] ?? TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
+            draftForUser: { prepared[$0.id] ?? TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
             bookingStore: bookingStore,
             managerScheduleStore: managerScheduleStore,
             operativeStore: operativeStore,
@@ -4268,9 +4317,9 @@ struct OperativeTimesheetsView: View {
         }
 
         var markFailures: [String] = []
-        for op in targets where result.emailedUserIds.contains(op.id) {
+        for op in exportTargets where result.emailedUserIds.contains(op.id) {
             // The snapshot was built (or an empty one rebuilt) above, before the stamp; it is not touched after it.
-            var d = preparedDrafts[op.id] ?? TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
+            guard var d = prepared[op.id] else { continue }
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
             TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
             let snapshot = d
@@ -4299,6 +4348,9 @@ struct OperativeTimesheetsView: View {
         }
         if !markFailures.isEmpty {
             exportMessage = (exportMessage ?? "") + " Not marked exported: \(markFailures.joined(separator: "; "))."
+        }
+        if !skippedElsewhere.isEmpty {
+            exportMessage = (exportMessage ?? "") + " Already exported on another device, left as it was: \(skippedElsewhere.joined(separator: ", "))."
         }
     }
 
@@ -4588,6 +4640,12 @@ private struct OperativeTimesheetReviewView: View {
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Review Timesheet")
             .navigationBarTitleDisplayMode(.inline)
+            // RULEBOOK 1.43.0 (review r318, 3rd round): while the sheet cannot be read, only the message and Retry.
+            .overlay {
+                if periodLoadFailed {
+                    TimesheetPeriodLoadFailedView { Task { await refreshDraftFromCloud() } }
+                }
+            }
             .onAppear {
                 draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
                 Task { await refreshDraftFromCloud() }
