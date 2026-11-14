@@ -2740,7 +2740,7 @@ private struct MyTimesheetView: View {
             return
         }
 
-        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
             period: weekInvoicePeriod,
             settings: settings,
             firebaseBackend: firebaseBackend,
@@ -3352,7 +3352,7 @@ private struct PreviousTimesheetsView: View {
         invoiceErrorMessage = nil
         defer { isGeneratingInvoice = false }
 
-        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
             period: period,
             settings: settings,
             firebaseBackend: firebaseBackend,
@@ -6284,7 +6284,39 @@ private enum InvoicePDFGenerationSupport {
         managerScheduleStore: ManagerScheduleStore,
         dayRateHistoryCollection: OperativeDayRateHistoryCollection,
         taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
-    ) -> URL? {
+    ) async -> URL? {
+        guard let made = invoicePDF(
+            period: period, firebaseBackend: firebaseBackend, userStore: userStore, bookingStore: bookingStore,
+            operativeStore: operativeStore, projectStore: projectStore, managerScheduleStore: managerScheduleStore,
+            dayRateHistoryCollection: dayRateHistoryCollection, taxIds: taxIds
+        ) else { return nil }
+        // RULEBOOK 1.45.0 §8 `timesheetEvidencePages`: one page per piece of evidence on the invoice's price work and
+        // expense rows, after the invoice. If the pages cannot be added the invoice is still given without them.
+        guard !made.evidence.isEmpty else { return made.url }
+        let footer = [firebaseBackend.currentOrganization?.name ?? "Organisation", "Invoice", made.userName]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+        let appended = await PayeClaimReportPDF.appendTimesheetEvidence(
+            to: made.url,
+            pages: made.evidence,
+            footerText: footer,
+            readFile: { path in try await firebaseBackend.payeClaimStoredFileData(path: path) }
+        )
+        return appended?.url ?? made.url
+    }
+
+    @MainActor
+    private static func invoicePDF(
+        period: InvoicePeriodOption,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
+        bookingStore: BookingStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        managerScheduleStore: ManagerScheduleStore,
+        dayRateHistoryCollection: OperativeDayRateHistoryCollection,
+        taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
+    ) -> (url: URL, evidence: [PayeClaimEvidencePage], userName: String)? {
         guard let currentUser = userStore.displayUser else { return nil }
         let bookings = bookingStore.bookings
         let managerBookings = managerScheduleStore.managerSiteBookings
@@ -6298,7 +6330,7 @@ private enum InvoicePDFGenerationSupport {
         let userName = currentUser.fullName.isEmpty ? currentUser.email : currentUser.fullName
         let history = dayRateHistoryCollection
 
-        let rows = invoiceLineItems(
+        let (rows, evidence) = invoiceLineItems(
             for: period,
             currentUser: currentUser,
             policy: policy,
@@ -6319,7 +6351,7 @@ private enum InvoicePDFGenerationSupport {
             operatives: operatives,
             dayRateHistoryCollection: history
         )
-        return InvoicePDFBuilder.makePDF(
+        guard let url = InvoicePDFBuilder.makePDF(
             context: InvoicePDFBuilder.Context(
                 organizationName: orgName,
                 userName: userName,
@@ -6332,7 +6364,8 @@ private enum InvoicePDFGenerationSupport {
                 totalAmount: total,
                 rateChangeNotes: notes
             )
-        )
+        ) else { return nil }
+        return (url, evidence, userName)
     }
 
     private static func invoiceLineItems(
@@ -6348,7 +6381,7 @@ private enum InvoicePDFGenerationSupport {
         smallWorks: [Project],
         history: OperativeDayRateHistoryCollection,
         relatedUsers: [AppUser] = []
-    ) -> [InvoiceLineItem] {
+    ) -> (rows: [InvoiceLineItem], evidence: [PayeClaimEvidencePage]) {
         let summary = TimesheetPayrollCollector.collect(
             for: currentUser,
             in: period.startDate...period.endDate,
@@ -6370,12 +6403,17 @@ private enum InvoicePDFGenerationSupport {
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
         // the live lines; PAYE and leave lines never go on an invoice.
         let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
-        return InvoiceLineItem.invoiceLines(rows).sorted {
+        let sorted = InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
             }
             return $0.date < $1.date
         }
+        // RULEBOOK 1.45.0 §8: the evidence pages of this invoice's price work and expense rows.
+        let evidence = TimesheetInvoiceRows.evidencePages(
+            for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate
+        )
+        return (sorted, evidence)
     }
 
     private static func rateChangeNotes(
@@ -6778,7 +6816,7 @@ private struct GenerateInvoiceView: View {
             return
         }
 
-        let pdfURL = InvoicePDFGenerationSupport.generatePDF(
+        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
             period: period,
             settings: settings,
             firebaseBackend: firebaseBackend,
@@ -7036,13 +7074,15 @@ private enum TimesheetInvoiceRows {
         case decided
     }
 
-    static func rows(
+    /// `timesheetInvoiceRows({ sheet, payrollLines, extrasMode, timeZone, timesheetDays })`; nil when the script did
+    /// not answer.
+    private static func scriptRows(
         for user: AppUser,
         summary: TimesheetPayrollSummary,
         draft: TimesheetDraft,
-        extrasMode: ExtrasMode = .raw,
+        extrasMode: ExtrasMode,
         period: ClosedRange<Date>
-    ) -> [InvoiceLineItem] {
+    ) -> [[String: Any]]? {
         let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
         let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
         var input: [String: Any] = [
@@ -7052,10 +7092,53 @@ private enum TimesheetInvoiceRows {
         // RULEBOOK 1.11.0 / 1.22.0 §8: `timesheetDays` (`CanonicalBusinessEngine.timesheetDaysForPerson`) leaves out
         // labour, price work and expenses dated on a PAYE day, as web does (`timesheetDayKeysForPeriod`).
         if let days = TimesheetTotalsSource.timesheetDays(for: user, period: period) { input["timesheetDays"] = days }
-        guard let result = CanonicalBusinessEngine.callJSON(
-            "timesheetInvoiceRows",
-            arguments: [input]
-        ) as? [[String: Any]] else {
+        return CanonicalBusinessEngine.callJSON("timesheetInvoiceRows", arguments: [input]) as? [[String: Any]]
+    }
+
+    /// RULEBOOK 1.45.0 §8 `timesheetEvidencePages({ rows, entries, currency })`: one page per piece of evidence on the
+    /// invoice's price work and expense rows (the same `timesheetInvoiceRows`, so a declined entry has none), the entries
+    /// read with `parseTimesheetEntries` (the sheet owner's own claim files only). Empty when there is none.
+    static func evidencePages(
+        for user: AppUser,
+        summary: TimesheetPayrollSummary,
+        draft: TimesheetDraft,
+        extrasMode: ExtrasMode = .raw,
+        period: ClosedRange<Date>
+    ) -> [PayeClaimEvidencePage] {
+        let hasEvidence = draft.expenseEntries.contains { !$0.evidence.isEmpty }
+            || draft.priceWorkEntries.contains { !$0.evidence.isEmpty }
+        guard hasEvidence,
+              let result = scriptRows(for: user, summary: summary, draft: draft, extrasMode: extrasMode, period: period) else { return [] }
+        let rows: [[String: Any]] = result.compactMap { row in
+            guard let kind = row["kind"] as? String, kind == "priceWork" || kind == "expense",
+                  let id = row["id"] as? String else { return nil }
+            var out: [String: Any] = ["kind": kind, "id": id, "amount": (row["amount"] as? NSNumber)?.doubleValue ?? 0]
+            if let jobNumber = row["jobNumber"] as? String { out["jobNumber"] = jobNumber }
+            return out
+        }
+        guard !rows.isEmpty else { return [] }
+        var sheet = TimesheetDraftStore.asFirestoreMap(draft)
+        sheet["userId"] = user.id
+        guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
+            sheetDocumentId: "",
+            sheet: sheet,
+            ownerUserIds: [user.id] + user.formerUserIds
+        ) else { return [] }
+        return CanonicalBusinessEngine.timesheetEvidencePages(
+            rows: rows,
+            entries: entries.raw,
+            currency: OrganizationRulebookContext.currencyCode
+        )
+    }
+
+    static func rows(
+        for user: AppUser,
+        summary: TimesheetPayrollSummary,
+        draft: TimesheetDraft,
+        extrasMode: ExtrasMode = .raw,
+        period: ClosedRange<Date>
+    ) -> [InvoiceLineItem] {
+        guard let result = scriptRows(for: user, summary: summary, draft: draft, extrasMode: extrasMode, period: period) else {
             // The script did not answer: nothing unchecked is invoiced.
             return []
         }
