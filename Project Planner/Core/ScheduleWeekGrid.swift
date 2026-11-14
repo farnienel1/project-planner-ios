@@ -122,6 +122,19 @@ enum ScheduleWeekGrid {
         return buckets.map { bucket in
             person(from: bucket, operatives: operatives, users: users)
         }
+        // RULEBOOK 1.41.0 §21 (owner 11 Nov: a booked person is never unknown): a booking whose id names nobody this
+        // device has loaded is left off the grid, exactly as web (`ProjectScheduleWeekOverview` drops a row with no
+        // name), and the drop is written to the device log so it can be traced. Former ids, same-email ids,
+        // `operatives` rows and ghosts resolve through `resolveBookingPerson` and keep their row.
+        .filter { person in
+            guard person.role == .unknown else { return true }
+            NSLog(
+                "SCHEDULE_BOOKING_PERSON_UNRESOLVED operativeIds=%@ userIds=%@",
+                person.operativeIds.map { Booking.storedOperativeId(for: $0) }.joined(separator: ","),
+                person.userIds.joined(separator: ",")
+            )
+            return false
+        }
         .sorted {
             let order = $0.name.localizedCaseInsensitiveCompare($1.name)
             if order == .orderedSame { return $0.id < $1.id }
@@ -249,6 +262,41 @@ enum ScheduleWeekGrid {
         policy: OrgPayrollTimePolicy,
         calendar: Calendar = OrganizationRulebookContext.calendar
     ) -> String? {
+        let hits = overlappingBookings(
+            operativeIds: operativeIds,
+            userIds: userIds,
+            day: day,
+            timeSlot: timeSlot,
+            workStart: workStart,
+            workEnd: workEnd,
+            operativeBookings: operativeBookings,
+            managerBookings: managerBookings,
+            policy: policy,
+            calendar: calendar
+        )
+        if !hits.labour.isEmpty || !hits.manager.isEmpty {
+            return overlapRowDetail
+        }
+        return nil
+    }
+
+    /// The text of the orange row (and of the old refusal): the person already has a booking at that time.
+    static let overlapRowDetail = "This booking overlaps another in time on that day."
+
+    /// RULEBOOK 1.41.0 §5: the person's bookings that day the quick-add booking overlaps — the orange row's bookings,
+    /// which Replace removes when the viewer may delete every one (`CanonicalBusinessEngine.bookingReplaceOffer`).
+    static func overlappingBookings(
+        operativeIds: [UUID],
+        userIds: [String],
+        day: Date,
+        timeSlot: TimeSlot,
+        workStart: String,
+        workEnd: String,
+        operativeBookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        policy: OrgPayrollTimePolicy,
+        calendar: Calendar = OrganizationRulebookContext.calendar
+    ) -> (labour: [Booking], manager: [ManagerSiteBooking]) {
         let probe = Booking(
             operativeId: operativeIds.first ?? UUID(),
             projectId: UUID(),
@@ -260,20 +308,17 @@ enum ScheduleWeekGrid {
         )
         let operativeSet = Set(operativeIds)
         let userSet = Set(userIds)
-        let operativeHit = operativeBookings.contains { booking in
+        let labour = operativeBookings.filter { booking in
             operativeSet.contains(booking.operativeId)
                 && counts(booking, on: day, calendar: calendar)
                 && OperativeBookingInterval.bookingsOverlap(probe, booking, policy: policy)
         }
-        let managerHit = managerBookings.contains { booking in
+        let manager = managerBookings.filter { booking in
             userSet.contains(booking.userId)
                 && calendar.isDate(booking.date, inSameDayAs: day)
                 && OperativeBookingInterval.bookingsOverlap(probe, booking.operativePayrollProbe(), policy: policy)
         }
-        if operativeHit || managerHit {
-            return "This booking overlaps another in time on that day."
-        }
-        return nil
+        return (labour, manager)
     }
 
     private static func counts(_ booking: Booking, on day: Date, calendar: Calendar) -> Bool {

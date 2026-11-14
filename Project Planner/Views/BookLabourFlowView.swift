@@ -1724,7 +1724,14 @@ struct BookLabourFlowView: View {
                     personKey: entry.person.id,
                     dayKey: dayKeyForConflicts,
                     personName: person.displayName,
-                    detail: "Already booked · overlaps another booking that day"
+                    detail: "Already booked · overlaps another booking that day",
+                    // RULEBOOK 1.41.0 §5: Replace when the viewer may delete every overlapping booking.
+                    replace: CanonicalBusinessEngine.bookingReplaceOffer(
+                        labour: [],
+                        manager: replaceCandidates(
+                            operativeId: nil, userId: person.user.id, slot: slot.rawValue, workStart: workStart, workEnd: workEnd
+                        ).manager
+                    )
                 ))
             }
         }
@@ -1746,7 +1753,13 @@ struct BookLabourFlowView: View {
                     personKey: entry.person.id,
                     dayKey: dayKeyForConflicts,
                     personName: person.displayName,
-                    detail: (["Already booked"] + lines).joined(separator: " · ")
+                    detail: (["Already booked"] + lines).joined(separator: " · "),
+                    replace: CanonicalBusinessEngine.bookingReplaceOffer(
+                        labour: replaceCandidates(
+                            operativeId: op.id, userId: nil, slot: operativeSlot.rawValue, workStart: workStart, workEnd: workEnd
+                        ).labour,
+                        manager: []
+                    )
                 ))
             }
         }
@@ -1760,11 +1773,18 @@ struct BookLabourFlowView: View {
             workStartTime: workStart,
             workEndTime: workEnd
         )
-        leaveGate.run(rows: clashRows + leaveRows) { dropped in
+        leaveGate.runChoices(rows: clashRows + leaveRows) { choices in
             let dayKey = OrganizationRulebookContext.dayKey(day)
-            let kept = leavePeople.filter { !dropped.contains("\($0.person.id)|\(dayKey)") }.map(\.candidate)
+            let keptEntries = leavePeople.filter { !choices.dropped.contains("\($0.person.id)|\(dayKey)") }
+            let kept = keptEntries.map(\.candidate)
             guard !kept.isEmpty else { return }
+            // RULEBOOK 1.41.0 §5: per candidate (users id), the bookings Replace removes with theirs.
+            var replaced: [String: [RulebookBookingReplaceRef]] = [:]
+            for entry in keptEntries {
+                if let refs = choices.replaced["\(entry.person.id)|\(dayKey)"], !refs.isEmpty { replaced[entry.candidate.user.id] = refs }
+            }
             commitPartyBookings(
+                replacedByUserId: replaced,
                 people: kept,
                 resolvedProject: resolvedProject,
                 operativeSlot: operativeSlot,
@@ -1780,8 +1800,10 @@ struct BookLabourFlowView: View {
         }
     }
 
-    /// Saves the party once every leave row is decided (`savePartyBookings`).
+    /// Saves the party once every leave row is decided (`savePartyBookings`). `replacedByUserId` (RULEBOOK 1.41.0 §5):
+    /// the bookings Replace removes with each person's booking, in one batch (online only).
     private func commitPartyBookings(
+        replacedByUserId: [String: [RulebookBookingReplaceRef]] = [:],
         people: [BookLabourCandidate],
         resolvedProject: Project?,
         operativeSlot: TimeSlot,
@@ -1824,17 +1846,36 @@ struct BookLabourFlowView: View {
                     ) {
                         continue
                     }
-                    await bookingStore.bookOperative(
-                        op,
-                        on: day,
-                        timeSlot: operativeSlot,
-                        for: project,
-                        bookedBy: bookedBy,
-                        workStartTime: workStart,
-                        workEndTime: workEnd,
-                        isBreakRemoved: breakRemoved,
-                        otMultiplierOverride: storedRate
-                    )
+                    if let refs = replacedByUserId[person.user.id], !refs.isEmpty {
+                        var booking = Booking(
+                            operativeId: op.id,
+                            projectId: project.id,
+                            date: day,
+                            timeSlot: operativeSlot,
+                            bookedBy: bookedBy,
+                            workStartTime: workStart,
+                            workEndTime: workEnd,
+                            isBreakRemoved: breakRemoved,
+                            otMultiplierOverride: storedRate
+                        )
+                        booking.updatedAt = Date()
+                        if let problem = await bookingStore.addBookingReplacing(booking, replaces: refs, managerBookings: managerScheduleStore.managerSiteBookings) {
+                            if firstError == nil { firstError = problem }
+                            continue
+                        }
+                    } else {
+                        await bookingStore.bookOperative(
+                            op,
+                            on: day,
+                            timeSlot: operativeSlot,
+                            for: project,
+                            bookedBy: bookedBy,
+                            workStartTime: workStart,
+                            workEndTime: workEnd,
+                            isBreakRemoved: breakRemoved,
+                            otMultiplierOverride: storedRate
+                        )
+                    }
                     await notificationService.notifyBookedUsers(
                         projectName: project.siteName,
                         bookedBy: bookedByName,
@@ -1867,7 +1908,13 @@ struct BookLabourFlowView: View {
                         isBreakRemoved: breakRemoved,
                         otMultiplierOverride: storedRate
                     )
-                    await managerScheduleStore.saveBooking(booking)
+                    if let refs = replacedByUserId[person.user.id], !refs.isEmpty {
+                        if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: refs, labourBookings: bookingStore.bookings), firstError == nil {
+                            firstError = problem
+                        }
+                    } else {
+                        await managerScheduleStore.saveBooking(booking)
+                    }
                 }
             }
             ScheduleChangeNotifier.postBookingStoreDidChange()
@@ -1944,23 +1991,52 @@ struct BookLabourFlowView: View {
                 personKey: Booking.storedOperativeId(for: operative.id),
                 dayKey: OrganizationRulebookContext.dayKey(day),
                 personName: operative.name,
-                detail: (["Already booked"] + clashLines).joined(separator: " · ")
+                detail: (["Already booked"] + clashLines).joined(separator: " · "),
+                // RULEBOOK 1.41.0 §5: Replace when the viewer may delete every overlapping booking.
+                replace: CanonicalBusinessEngine.bookingReplaceOffer(
+                    labour: replaceCandidates(
+                        operativeId: operative.id, userId: nil, slot: slot.rawValue, workStart: workStart, workEnd: workEnd
+                    ).labour,
+                    manager: []
+                )
             ))
         }
-        leaveGate.runSingle(rows: clashRows + leaveRows) {
+        leaveGate.runSingleReplacing(rows: clashRows + leaveRows) { replaces in
         isSaving = true
         Task {
-            await bookingStore.bookOperative(
-                operative,
-                on: day,
-                timeSlot: slot,
-                for: project,
-                bookedBy: bookedBy,
-                workStartTime: workStart,
-                workEndTime: workEnd,
-                isBreakRemoved: breakRemoved,
-                otMultiplierOverride: otMultiplierOverride
-            )
+            if !replaces.isEmpty {
+                var booking = Booking(
+                    operativeId: operative.id,
+                    projectId: project.id,
+                    date: day,
+                    timeSlot: slot,
+                    bookedBy: bookedBy,
+                    workStartTime: workStart,
+                    workEndTime: workEnd,
+                    isBreakRemoved: breakRemoved,
+                    otMultiplierOverride: otMultiplierOverride
+                )
+                booking.updatedAt = Date()
+                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) {
+                    await MainActor.run {
+                        isSaving = false
+                        errorBanner = problem
+                    }
+                    return
+                }
+            } else {
+                await bookingStore.bookOperative(
+                    operative,
+                    on: day,
+                    timeSlot: slot,
+                    for: project,
+                    bookedBy: bookedBy,
+                    workStartTime: workStart,
+                    workEndTime: workEnd,
+                    isBreakRemoved: breakRemoved,
+                    otMultiplierOverride: otMultiplierOverride
+                )
+            }
             await notificationService.notifyBookedUsers(
                 projectName: project.siteName,
                 bookedBy: userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User",
@@ -1973,6 +2049,38 @@ struct BookLabourFlowView: View {
             }
         }
         }
+    }
+
+    /// RULEBOOK 1.41.0 §5 Replace (review 1.41 #8, #9): the person's bookings the booking being made overlaps, from
+    /// `CanonicalBusinessEngine.bookingReplaceCandidates` (`bookingRequestClashIds` under the booked day's working
+    /// hours) over their bookings that day and the day before, so an overnight booking reaching this morning is
+    /// replaced too. Labour bookings under every id of the person (`samePersonIds`), manager schedule bookings under
+    /// `userId`. Fails closed: when the script does not answer, nothing is offered.
+    private func replaceCandidates(
+        operativeId: UUID?,
+        userId: String?,
+        slot: String,
+        workStart: String?,
+        workEnd: String?
+    ) -> (labour: [Booking], manager: [ManagerSiteBooking]) {
+        let dayKey = OrganizationRulebookContext.dayKey(day)
+        let dayBeforeKey = OrganizationRulebookContext.dayKey(day.addingTimeInterval(-12 * 3600))
+        let keys: Set<String> = [dayKey, dayBeforeKey]
+        let personIds = operativeId.map(samePersonIds) ?? []
+        let labour = personIds.isEmpty ? [] : bookingStore.bookings.filter {
+            personIds.contains($0.operativeId) && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
+        let manager: [ManagerSiteBooking] = userId.map { id in
+            managerScheduleStore.managerSiteBookings.filter {
+                $0.userId.lowercased() == id.lowercased() && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+            }
+        } ?? []
+        let request = RulebookClashBooking(
+            id: "request", dayKey: dayKey, timeSlot: slot, workStartTime: workStart, workEndTime: workEnd
+        )
+        return CanonicalBusinessEngine.bookingReplaceCandidates(
+            request: request, labour: labour, manager: manager, policy: payrollTimePolicy
+        )
     }
 
     private func operativeClashDetailLines(

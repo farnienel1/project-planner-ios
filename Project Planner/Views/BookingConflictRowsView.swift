@@ -14,6 +14,18 @@ import SwiftUI
 enum BookingConflictDecision: Equatable {
     case confirm
     case drop
+    /// RULEBOOK 1.41.0 §5: save this booking and remove the overlapping ones (`BookingConflictItem.replace`) in one batch.
+    case replace
+}
+
+/// RULEBOOK 1.41.0: what the booker chose on the conflict list — dropped `personKey|dayKey` pairs and, per pair, the
+/// bookings Replace removes.
+struct BookingConflictChoices: Equatable {
+    var dropped: Set<String> = []
+    var replaced: [String: [RulebookBookingReplaceRef]] = [:]
+
+    /// Every booking to replace (single-booking flows).
+    var allReplaced: [RulebookBookingReplaceRef] { replaced.keys.sorted().flatMap { replaced[$0] ?? [] } }
 }
 
 struct BookingConflictItem: Identifiable, Hashable {
@@ -33,6 +45,8 @@ struct BookingConflictItem: Identifiable, Hashable {
     let detail: String
     /// Annual leave only: pending leave is shown softer.
     let pending: Bool
+    /// Double booking only (RULEBOOK 1.41.0): the bookings Replace removes, set only when `bookingReplaceOffer` offers it.
+    var replace: [RulebookBookingReplaceRef]? = nil
 
     var personDayKey: String { "\(personKey)|\(dayKey)" }
 
@@ -56,7 +70,13 @@ struct BookingConflictItem: Identifiable, Hashable {
 
     /// An orange double-booking row (web `BookingConflictRows` "Already booked"): the same component and decisions as
     /// the leave rows.
-    static func doubleBooking(personKey: String, dayKey: String, personName: String, detail: String) -> BookingConflictItem {
+    static func doubleBooking(
+        personKey: String,
+        dayKey: String,
+        personName: String,
+        detail: String,
+        replace: [RulebookBookingReplaceRef]? = nil
+    ) -> BookingConflictItem {
         BookingConflictItem(
             id: key(personKey: personKey, dayKey: dayKey, kind: .doubleBooking),
             personKey: personKey,
@@ -65,7 +85,8 @@ struct BookingConflictItem: Identifiable, Hashable {
             personName: personName,
             dayLabel: dayLabel(dayKey),
             detail: detail,
-            pending: false
+            pending: false,
+            replace: replace
         )
     }
 
@@ -81,9 +102,29 @@ struct BookingConflictItem: Identifiable, Hashable {
 }
 
 enum BookingConflictResolution {
-    /// True when every row is ticked or dropped (web `conflictsResolved`).
+    /// True when every row is ticked, dropped or (1.41.0) replaced where Replace is offered (web `conflictsResolved`).
     static func resolved(_ rows: [BookingConflictItem], decisions: [String: BookingConflictDecision]) -> Bool {
-        rows.allSatisfy { decisions[$0.id] != nil }
+        rows.allSatisfy { row in
+            switch decisions[row.id] {
+            case .confirm, .drop: return true
+            case .replace: return !(row.replace ?? []).isEmpty
+            case nil: return false
+            }
+        }
+    }
+
+    /// RULEBOOK 1.41.0: per `personKey|dayKey`, the bookings to replace (web `replacedPersonDays`).
+    static func replacedPersonDays(_ rows: [BookingConflictItem], decisions: [String: BookingConflictDecision]) -> [String: [RulebookBookingReplaceRef]] {
+        var out: [String: [RulebookBookingReplaceRef]] = [:]
+        for row in rows where decisions[row.id] == .replace {
+            guard let refs = row.replace, !refs.isEmpty else { continue }
+            out[row.personDayKey, default: []].append(contentsOf: refs)
+        }
+        return out
+    }
+
+    static func choices(_ rows: [BookingConflictItem], decisions: [String: BookingConflictDecision]) -> BookingConflictChoices {
+        BookingConflictChoices(dropped: droppedPersonDays(rows, decisions: decisions), replaced: replacedPersonDays(rows, decisions: decisions))
     }
 
     /// `personKey|dayKey` pairs the booker dropped (web `droppedPersonDays`).
@@ -140,6 +181,8 @@ struct BookingConflictRowView: View {
     let row: BookingConflictItem
     let decision: BookingConflictDecision?
     let onDecide: (BookingConflictDecision) -> Void
+    /// RULEBOOK 1.41.0 §2: Replace is online only (`booking.replace`); disabled offline with the standard message.
+    var isOnline: Bool = SmartCacheService.lastKnownOnline
 
     private var isLeave: Bool { row.kind == .annualLeave }
     private var tone: Color { isLeave ? ProjectWorksRevampColors.leavePurple : ProjectWorksRevampColors.clashOrange }
@@ -153,9 +196,16 @@ struct BookingConflictRowView: View {
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(decision == .drop ? ProjectWorksRevampColors.muted : ProjectWorksRevampColors.ink)
                     .strikethrough(decision == .drop)
-                Text(row.detail + (decision == .confirm ? " · confirmed" : decision == .drop ? " · day dropped" : ""))
+                Text(row.detail + decisionSuffix)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(decision == .drop ? ProjectWorksRevampColors.muted : tone)
+                if row.kind == .doubleBooking, row.replace != nil, !replaceEnabled {
+                    // RULEBOOK 1.41.0 §2: Replace is online only; ✓ and ✕ still work offline.
+                    Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("bookingConflict.\(row.id).replaceOffline")
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
@@ -163,6 +213,9 @@ struct BookingConflictRowView: View {
                     onDecide(.drop)
                 }
                 .accessibilityIdentifier("bookingConflict.\(row.id).drop")
+                if row.kind == .doubleBooking, row.replace != nil {
+                    replaceButton
+                }
                 decisionButton(symbol: "checkmark", color: ProjectWorksRevampColors.blueFill, selected: decision == .confirm, label: "Confirm \(row.dayLabel) for \(row.personName)") {
                     onDecide(.confirm)
                 }
@@ -179,6 +232,40 @@ struct BookingConflictRowView: View {
                 .stroke(decision == nil ? tone : ProjectWorksRevampColors.border, lineWidth: 1)
         )
         .opacity(isLeave && row.pending && decision == nil ? 0.8 : 1)
+    }
+
+    private var decisionSuffix: String {
+        switch decision {
+        case .confirm: return " · confirmed"
+        case .drop: return " · day dropped"
+        case .replace: return " · " + CanonicalBusinessEngine.bookingReplaceChosenText
+        case nil: return ""
+        }
+    }
+
+    private var replaceEnabled: Bool {
+        OfflinePolicy.isEnabled(.replaceBooking, isOnline: isOnline)
+    }
+
+    /// RULEBOOK 1.41.0 §5: the third choice on an orange row, "Replace".
+    private var replaceButton: some View {
+        let selected = decision == .replace
+        let color = ProjectWorksRevampColors.clashOrange
+        return Button { onDecide(.replace) } label: {
+            Text(CanonicalBusinessEngine.bookingReplaceLabel)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(selected ? Color.white : color)
+                .padding(.horizontal, 10)
+                .frame(height: 32)
+                .background(Capsule().fill(selected ? color : ProjectWorksRevampColors.surface))
+                .overlay(Capsule().stroke(color, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .disabled(!replaceEnabled)
+        .opacity(replaceEnabled ? 1 : 0.45)
+        .accessibilityLabel("\(CanonicalBusinessEngine.bookingReplaceHelp): \(row.dayLabel) for \(row.personName)")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("bookingConflict.\(row.id).replace")
     }
 
     private func decisionButton(
@@ -210,20 +297,35 @@ final class BookingConflictGate: ObservableObject {
     struct Pending: Identifiable {
         let id = UUID()
         let rows: [BookingConflictItem]
-        let onConfirm: (Set<String>) -> Void
+        let onConfirm: (BookingConflictChoices) -> Void
     }
 
     @Published var pending: Pending?
 
     /// Saves at once when there is nothing to decide; otherwise asks first. `afterDismiss`: the flow's own sheet is
-    /// closing, so the list opens a moment later (one sheet at a time).
+    /// closing, so the list opens a moment later (one sheet at a time). Flows that do not save a Replace use this one:
+    /// their rows are shown without it.
     func run(
         rows: [BookingConflictItem],
         afterDismiss: Bool = false,
         onConfirm: @escaping (Set<String>) -> Void
     ) {
+        let plain = rows.map { row -> BookingConflictItem in
+            var row = row
+            row.replace = nil
+            return row
+        }
+        runChoices(rows: plain, afterDismiss: afterDismiss) { onConfirm($0.dropped) }
+    }
+
+    /// RULEBOOK 1.41.0 §5: as `run`, with Replace on the rows that offer it; the completion gets every choice.
+    func runChoices(
+        rows: [BookingConflictItem],
+        afterDismiss: Bool = false,
+        onConfirm: @escaping (BookingConflictChoices) -> Void
+    ) {
         if rows.isEmpty {
-            onConfirm([])
+            onConfirm(BookingConflictChoices())
             return
         }
         let next = Pending(rows: rows, onConfirm: onConfirm)
@@ -243,6 +345,18 @@ final class BookingConflictGate: ObservableObject {
         run(rows: rows, afterDismiss: afterDismiss) { dropped in
             guard dropped.isEmpty else { return }
             save()
+        }
+    }
+
+    /// RULEBOOK 1.41.0: `runSingle` with Replace — `save` gets the bookings to replace (empty for ✓).
+    func runSingleReplacing(
+        rows: [BookingConflictItem],
+        afterDismiss: Bool = false,
+        save: @escaping ([RulebookBookingReplaceRef]) -> Void
+    ) {
+        runChoices(rows: rows, afterDismiss: afterDismiss) { choices in
+            guard choices.dropped.isEmpty else { return }
+            save(choices.allReplaced)
         }
     }
 }
@@ -270,10 +384,10 @@ struct BookingConflictSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Book") {
-                        let dropped = BookingConflictResolution.droppedPersonDays(pending.rows, decisions: decisions)
+                        let choices = BookingConflictResolution.choices(pending.rows, decisions: decisions)
                         let confirm = pending.onConfirm
                         onDone()
-                        confirm(dropped)
+                        confirm(choices)
                     }
                     .disabled(!resolved)
                     .accessibilityIdentifier("bookingConflictSheet.book")

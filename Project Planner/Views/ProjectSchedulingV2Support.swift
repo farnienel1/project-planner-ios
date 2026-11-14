@@ -81,6 +81,16 @@ enum SchedulingV2CellKindBuilder {
     static func hoursLabel(_ value: Double) -> String {
         ScheduleCoverageFormat.hours(value) + "h"
     }
+
+    /// RULEBOOK 1.41.0 §21 `scheduleDayCell`: the colour of a person-day tile (the summed hours' `scheduleCellKind`).
+    static func fromDayCell(_ day: RulebookScheduleDayCell) -> SchedulingV2CellKind {
+        switch day.cell.tone {
+        case "split": return .split(stdHours: day.cell.standardHours, otHours: day.cell.overtimeHours)
+        case "otOnly": return .overtimeOnly(hours: day.cell.overtimeHours)
+        case "halfDay": return .halfDay(hours: day.cell.standardHours, label: day.cell.halfLabel ?? "Half day")
+        default: return .standard(hours: day.cell.standardHours)
+        }
+    }
 }
 
 /// One person-day chip on the Scheduling week (docs/design/booking-ui 3.1): Standard (blue), Std + OT (blue STD top,
@@ -91,6 +101,9 @@ struct SchedulingV2BookingCell: View {
     /// RULEBOOK 1.37.0: annual leave on a day that also has a booking — the booking chip stays and a thin brown band
     /// with the label sits across the top (overtime keeps its own marking underneath). Ignored for a leave cell.
     var leaveBand: RulebookScheduleLeaveMark? = nil
+    /// RULEBOOK 1.41.0 `scheduleDayCell`: the tile's text — the day total, the number of bookings when more than one,
+    /// standard and overtime underneath (the Std / OT words dropped under the leave band). Nil: the old chip text.
+    var dayLabel: RulebookScheduleDayCell? = nil
     let isToday: Bool
     let isWeekend: Bool
     var accessibilityDay: String = ""
@@ -160,7 +173,8 @@ struct SchedulingV2BookingCell: View {
         case .halfDay(let h, let label): what = "\(label) half day, \(SchedulingV2CellKindBuilder.hoursLabel(h))"
         }
         let band = bandMark.map { $0.title } ?? ""
-        return [accessibilityPerson, accessibilityDay, what, band].filter { !$0.isEmpty }.joined(separator: ", ")
+        let day = dayLabel.map { label in ([label.headline] + [label.standardText, label.overtimeText].compactMap { $0 }).joined(separator: ", ") }
+        return [accessibilityPerson, accessibilityDay, day ?? what, band].filter { !$0.isEmpty }.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -205,6 +219,76 @@ struct SchedulingV2BookingCell: View {
 
     @ViewBuilder
     private var cellContent: some View {
+        if let day = dayLabel, kind != .empty, !isLeaveCell {
+            dayLabelContent(day)
+        } else {
+            chipContent
+        }
+    }
+
+    private var isLeaveCell: Bool {
+        if case .annualLeave = kind { return true }
+        return false
+    }
+
+    /// RULEBOOK 1.41.0 §21: the person-day tile's text, exactly as `CanonicalBusinessEngine.scheduleDayCell` gives it
+    /// (no hours or words worked out here).
+    @ViewBuilder
+    private func dayLabelContent(_ day: RulebookScheduleDayCell) -> some View {
+        switch kind {
+        case .split:
+            VStack(spacing: 0) {
+                dayHeadline(day, ink: .white, trailing: day.standardText)
+                    .frame(maxHeight: .infinity)
+                smallLine(day.overtimeText ?? "", ink: Self.otInk)
+                    .frame(maxHeight: .infinity)
+            }
+        case .overtimeOnly:
+            dayHeadline(day, ink: Self.otInk, trailing: day.caption ?? (day.bookingCount > 1 ? day.overtimeText : nil))
+        case .halfDay:
+            dayHeadline(day, ink: .white, trailing: day.caption)
+                .shadow(color: .black.opacity(0.25), radius: 1)
+        default:
+            dayHeadline(day, ink: .white, trailing: day.caption)
+        }
+    }
+
+    /// The day total ("26h"), the count under it when more than one booking ("2 bookings"), then one small line.
+    private func dayHeadline(_ day: RulebookScheduleDayCell, ink: Color, trailing: String?) -> some View {
+        VStack(spacing: 0) {
+            Text(day.hoursText)
+                .font(.system(size: day.countText == nil ? 11 : 10, weight: .heavy))
+                .monospacedDigit()
+            if let count = day.countText {
+                Text(count)
+                    .font(.system(size: 6.5, weight: .bold))
+                    .accessibilityIdentifier("schedulingV2BookingCell.count")
+            }
+            if let trailing, !trailing.isEmpty {
+                Text(trailing)
+                    .font(.system(size: 6.5, weight: .bold))
+                    .textCase(.uppercase)
+                    .opacity(0.85)
+            }
+        }
+        .foregroundStyle(ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.55)
+        .padding(.horizontal, 1)
+    }
+
+    private func smallLine(_ text: String, ink: Color) -> some View {
+        Text(text)
+            .font(.system(size: 7, weight: .heavy))
+            .textCase(.uppercase)
+            .foregroundStyle(ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.55)
+            .padding(.horizontal, 1)
+    }
+
+    @ViewBuilder
+    private var chipContent: some View {
         switch kind {
         case .empty:
             EmptyView()
