@@ -229,13 +229,13 @@ final class Rulebook1440And1450Tests: XCTestCase {
     }
 
     /// Evidence the stored sheet holds that the editor never saw (read before every id of the person was known) is
-    /// kept on save; evidence the editor removed stays removed.
-    func testASaveKeepsEvidenceTheEditorNeverSaw() {
+    /// kept on save, through the function `saveToCloud` calls; evidence the editor removed stays removed; and nothing
+    /// is saved before the roster has loaded.
+    func testASaveKeepsEvidenceTheEditorNeverSaw() throws {
         let seen = evidence("seen.jpg")
-        let unseen = PayeClaimEvidence(
-            path: "organizations/\(org)/payeClaims/TEST-old-invite/TEST-old-invite_1763100000001.jpg",
-            name: "unseen.jpg", kind: "photo", contentType: "image/jpeg", auditId: nil
-        )
+        // Filed under an old invite id the (stale) roster does not list: the owner-filtered reader drops it, the raw
+        // stored rows still carry it.
+        let unseenPath = "organizations/\(org)/payeClaims/TEST-old-invite/TEST-old-invite_1763100000001.jpg"
         let removed = PayeClaimEvidence(
             path: "organizations/\(org)/payeClaims/\(owner)/\(owner)_1763100000002.jpg",
             name: "removed.jpg", kind: "photo", contentType: "image/jpeg", auditId: nil
@@ -249,18 +249,51 @@ final class Rulebook1440And1450Tests: XCTestCase {
         }
         var loaded = TimesheetDraft()
         loaded.expenseEntries = [entry([seen, removed])]
-        var stored = TimesheetDraft()
-        stored.expenseEntries = [entry([seen, unseen, removed])]
         var draft = TimesheetDraft()
         draft.expenseEntries = [entry([seen])]
-
-        let saved = TimesheetDraftStore.keepingEvidenceUnseenByEditor(draft, stored: stored, loaded: loaded)
-        XCTAssertEqual(saved.expenseEntries.first?.evidence.map(\.name), ["seen.jpg", "unseen.jpg"])
-        // No sheet is saved before the roster (every id of the person) has loaded.
+        let server: [String: Any] = [
+            "userId": owner,
+            "expenseEntries": [[
+                "id": "TEST-ENTRY", "title": "TEST-Fuel", "amount": 10.0,
+                "evidence": [
+                    ["path": seen.path, "name": seen.name, "kind": "photo"],
+                    ["path": unseenPath, "name": "unseen.jpg", "kind": "photo", "contentType": "image/jpeg"],
+                    ["path": removed.path, "name": removed.name, "kind": "photo"],
+                ],
+            ] as [String: Any]],
+        ]
+        // The reader (owner ids from the roster, which lacks TEST-old-invite) never shows the unseen file…
+        let read = try XCTUnwrap(TimesheetDraftStore.decodeFirestoreMap(server))
+        XCTAssertFalse(read.expenseEntries.flatMap(\.evidence).contains { $0.path == unseenPath })
+        // …but the save keeps it, whatever the roster says.
+        let prepared = TimesheetDraftStore.preparedForSave(draft, server: server, loaded: loaded, rosterLoaded: true)
+        XCTAssertNil(prepared.refusal)
+        XCTAssertEqual(prepared.draft?.expenseEntries.first?.evidence.map(\.path), [seen.path, unseenPath])
+        // No sheet is saved before the roster has loaded.
+        let early = TimesheetDraftStore.preparedForSave(draft, server: server, loaded: loaded, rosterLoaded: false)
+        XCTAssertNil(early.draft)
+        XCTAssertEqual(early.refusal, TimesheetDraftStore.rosterNotLoadedMessage)
         let previous = RulebookRosterSnapshot.users
         RulebookRosterSnapshot.update([])
         XCTAssertFalse(RulebookRosterSnapshot.hasLoaded)
         RulebookRosterSnapshot.update(previous)
+    }
+
+    /// RULEBOOK 1.44.0 §8: a signed line reads with the pay basis stored on it and the rate that gives its signed
+    /// amount — never the live rate (owner example: 1.0625 days for £265.63 reads £250/day, not 1 day at £265.63).
+    func testASignedLineReadsWithItsStoredBasisAndSignedRate() {
+        let day = TimesheetSignedLineRate.rate(storedBasis: "day", liveBasis: .hourly, paidHours: 8.5, days: 1.0625, amount: 265.625)
+        XCTAssertEqual(day.basis, .dayRate)
+        XCTAssertEqual(day.rate, 250, accuracy: 0.001)
+        let hourly = TimesheetSignedLineRate.rate(storedBasis: "hourly", liveBasis: .dayRate, paidHours: 8, days: 1, amount: 160)
+        XCTAssertEqual(hourly.basis, .hourly)
+        XCTAssertEqual(hourly.rate, 20, accuracy: 0.001)
+        let noHours = TimesheetSignedLineRate.rate(storedBasis: "hourly", liveBasis: .dayRate, paidHours: 0, days: 1, amount: 160)
+        XCTAssertEqual(noHours.rate, 0, "an hourly line with no stored hours never shows a day rate")
+        let older = TimesheetSignedLineRate.rate(storedBasis: nil, liveBasis: .hourly, paidHours: 4, days: 0.5, amount: 80)
+        XCTAssertEqual(older.basis, .hourly, "a line signed before the basis was stored falls back to the live line's")
+        XCTAssertEqual(TimesheetSignedLineRate.storedBasis("Hourly"), "hourly")
+        XCTAssertNil(TimesheetSignedLineRate.storedBasis(nil))
     }
 
     // MARK: Review #231 follow-ups

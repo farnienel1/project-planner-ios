@@ -149,6 +149,9 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var isOvertime: Bool
     var decision: TimesheetManagerDecision
     var bookingId: String?
+    /// RULEBOOK 1.44.0 §8: the pay basis stored on the signed line (`day` | `hourly`, web `payBasis`); nil on a line
+    /// signed before it was stored. The signed line reads with it, never the live rate.
+    var payBasis: String? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {

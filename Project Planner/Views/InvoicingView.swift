@@ -1073,15 +1073,13 @@ enum TimesheetDraftStore {
         // RULEBOOK 1.45.0 §8 (review #232): evidence is read only for the sheet's person under every id they go by
         // (`personIdSet`). Until the roster has loaded that set is incomplete, so no sheet is saved; and evidence the
         // stored sheet holds that this editor never saw (read before the roster loaded) is kept on the save.
-        guard RulebookRosterSnapshot.hasLoaded else { return rosterNotLoadedMessage }
-        var draft = draft
-        if let server, let stored = decodeFirestoreMap(server) {
-            draft = keepingEvidenceUnseenByEditor(
-                draft,
-                stored: stored,
-                loaded: loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId)
-            )
-        }
+        let prepared = preparedForSave(
+            draft,
+            server: server,
+            loaded: loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId),
+            rosterLoaded: RulebookRosterSnapshot.hasLoaded
+        )
+        guard let draft = prepared.draft else { return prepared.refusal ?? rosterNotLoadedMessage }
         var fields = asFirestoreMap(draft)
         var frozenEntriesChanged = false
         if !reviewer {
@@ -1213,31 +1211,83 @@ enum TimesheetDraftStore {
     /// Shown when a timesheet would be saved before the people list (and so every id of the sheet's person) has loaded.
     static let rosterNotLoadedMessage = "Couldn't save your timesheet: people are still loading. Try again in a moment."
 
+    /// What `saveToCloud` writes, or why it refuses (RULEBOOK 1.45.0 §8, review #232): nothing is saved before the
+    /// roster has loaded, and evidence the stored sheet holds that this editor never saw is kept (see
+    /// `keepingEvidenceUnseenByEditor`). `server` is the stored sheet as read; `loaded` the copy this editor loaded.
+    static func preparedForSave(
+        _ draft: TimesheetDraft,
+        server: [String: Any]?,
+        loaded: TimesheetDraft?,
+        rosterLoaded: Bool
+    ) -> (draft: TimesheetDraft?, refusal: String?) {
+        guard rosterLoaded else { return (nil, rosterNotLoadedMessage) }
+        guard let server else { return (draft, nil) }
+        return (keepingEvidenceUnseenByEditor(draft, storedEvidence: rawEntryEvidence(server), loaded: loaded), nil)
+    }
+
+    /// Every entry's stored `evidence` as the sheet holds it, by entry id (lower case) — read from the raw stored rows,
+    /// NOT through `parseTimesheetEntries`' owner filter, so a file under an id the roster does not (yet) list is still
+    /// seen. Used only to keep files on save, never to show or open them.
+    static func rawEntryEvidence(_ sheet: [String: Any]) -> [String: [PayeClaimEvidence]] {
+        var out: [String: [PayeClaimEvidence]] = [:]
+        for key in ["expenseEntries", "priceWorkEntries"] {
+            for row in (sheet[key] as? [[String: Any]]) ?? [] {
+                guard let id = (row["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty,
+                      let list = row["evidence"] as? [[String: Any]] else { continue }
+                let evidence = list.compactMap { item -> PayeClaimEvidence? in
+                    guard let path = (item["path"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty else {
+                        return nil
+                    }
+                    let name = (item["name"] as? String) ?? ""
+                    let contentType = (item["contentType"] as? String) ?? ""
+                    let auditId = (item["auditId"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                    return PayeClaimEvidence(
+                        path: path,
+                        name: name.isEmpty ? (path.split(separator: "/").last.map(String.init) ?? "Evidence") : name,
+                        kind: (item["kind"] as? String) ?? "file",
+                        contentType: contentType.isEmpty ? nil : contentType,
+                        auditId: auditId
+                    )
+                }
+                if !evidence.isEmpty { out[id.lowercased(), default: []] += evidence }
+            }
+        }
+        return out
+    }
+
     /// RULEBOOK 1.45.0 §8 (review #232): the draft with any evidence the stored sheet holds on an entry that this
     /// editor never saw — not in the copy it loaded (`loaded`) and not in the draft — added back, so a sheet decoded
     /// before every id of its person was known never loses files on save. Evidence the editor removed (in `loaded`,
     /// not in the draft) stays removed. Entries are matched by stored id without case. No rule is decided here.
-    static func keepingEvidenceUnseenByEditor(_ draft: TimesheetDraft, stored: TimesheetDraft, loaded: TimesheetDraft?) -> TimesheetDraft {
+    static func keepingEvidenceUnseenByEditor(
+        _ draft: TimesheetDraft,
+        storedEvidence: [String: [PayeClaimEvidence]],
+        loaded: TimesheetDraft?
+    ) -> TimesheetDraft {
         func key(_ storedId: String?, _ id: UUID) -> String {
             (storedId ?? WorkDocumentKeys.storedId(for: id)).lowercased()
         }
-        let storedExpense = Dictionary(stored.expenseEntries.map { (key($0.storedId, $0.id), $0.evidence) }, uniquingKeysWith: { first, _ in first })
-        let storedPriceWork = Dictionary(stored.priceWorkEntries.map { (key($0.storedId, $0.id), $0.evidence) }, uniquingKeysWith: { first, _ in first })
-        let loadedExpense = Dictionary((loaded?.expenseEntries ?? []).map { (key($0.storedId, $0.id), $0.evidence) }, uniquingKeysWith: { first, _ in first })
-        let loadedPriceWork = Dictionary((loaded?.priceWorkEntries ?? []).map { (key($0.storedId, $0.id), $0.evidence) }, uniquingKeysWith: { first, _ in first })
-        func merged(_ current: [PayeClaimEvidence], stored: [PayeClaimEvidence]?, seen: [PayeClaimEvidence]?) -> [PayeClaimEvidence] {
-            guard let stored, !stored.isEmpty else { return current }
-            let known = Set(current.map(\.path)).union((seen ?? []).map(\.path))
-            return current + stored.filter { !known.contains($0.path) }
+        var seenByEditor: [String: [PayeClaimEvidence]] = [:]
+        for entry in loaded?.expenseEntries ?? [] { seenByEditor[key(entry.storedId, entry.id), default: []] += entry.evidence }
+        for entry in loaded?.priceWorkEntries ?? [] { seenByEditor[key(entry.storedId, entry.id), default: []] += entry.evidence }
+        func merged(_ current: [PayeClaimEvidence], key entryKey: String) -> [PayeClaimEvidence] {
+            guard let stored = storedEvidence[entryKey], !stored.isEmpty else { return current }
+            var known = Set(current.map(\.path)).union((seenByEditor[entryKey] ?? []).map(\.path))
+            var out = current
+            for item in stored where !known.contains(item.path) {
+                known.insert(item.path)
+                out.append(item)
+            }
+            return out
         }
         var out = draft
         for index in out.expenseEntries.indices {
             let entryKey = key(out.expenseEntries[index].storedId, out.expenseEntries[index].id)
-            out.expenseEntries[index].evidence = merged(out.expenseEntries[index].evidence, stored: storedExpense[entryKey], seen: loadedExpense[entryKey])
+            out.expenseEntries[index].evidence = merged(out.expenseEntries[index].evidence, key: entryKey)
         }
         for index in out.priceWorkEntries.indices {
             let entryKey = key(out.priceWorkEntries[index].storedId, out.priceWorkEntries[index].id)
-            out.priceWorkEntries[index].evidence = merged(out.priceWorkEntries[index].evidence, stored: storedPriceWork[entryKey], seen: loadedPriceWork[entryKey])
+            out.priceWorkEntries[index].evidence = merged(out.priceWorkEntries[index].evidence, key: entryKey)
         }
         return out
     }
@@ -1513,8 +1563,8 @@ enum TimesheetDraftStore {
             "approvedByUserId": override.approvedByUserId,
             "approvedByName": override.approvedByName,
             "selfSigned": override.selfSigned,
-            "lines": override.lines.map { line in
-                [
+            "lines": override.lines.map { line -> [String: Any] in
+                var row: [String: Any] = [
                     "id": line.id,
                     "date": Timestamp(date: line.date),
                     "jobNumber": line.jobNumber,
@@ -1527,7 +1577,11 @@ enum TimesheetDraftStore {
                     "isOvertime": line.isOvertime,
                     "decision": line.decision.rawValue,
                     "bookingId": line.bookingId ?? ""
-                ] as [String: Any]
+                ]
+                // RULEBOOK 1.44.0 §8 (web `weeklyReportOverride.ts` `payBasis`: 'day' | 'hourly'), only when known: a line
+                // signed before it was stored keeps its stored shape.
+                if let basis = line.payBasis { row["payBasis"] = basis }
+                return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),
             "expenses": override.expenses.map(moneyLineMap)
@@ -1562,7 +1616,8 @@ enum TimesheetDraftStore {
                 amount: row["amount"] as? Double ?? 0,
                 isOvertime: row["isOvertime"] as? Bool ?? false,
                 decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
-                bookingId: (bookingId?.isEmpty == false) ? bookingId : nil
+                bookingId: (bookingId?.isEmpty == false) ? bookingId : nil,
+                payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"])
             )
         }
         func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {
@@ -7435,6 +7490,33 @@ private struct TimesheetLeaveInfoRows: View {
     }
 }
 
+/// RULEBOOK 1.44.0 §8 (web `signedLabourSlice`): how a signed labour line reads — the pay basis stored on the line
+/// (else the live line's, else day) and the rate that gives its signed amount: day rate = amount ÷ stored days;
+/// hourly = amount ÷ stored hours (0 when none). A signed line is never re-priced at today's rate or paid day.
+/// Display only. Known gap: a day line with no stored days uses 0, where web divides its hours by today's paid day.
+enum TimesheetSignedLineRate {
+    static func storedBasis(_ value: Any?) -> String? {
+        guard let raw = (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !raw.isEmpty else { return nil }
+        return raw == "hourly" ? "hourly" : "day"
+    }
+
+    static func rate(
+        storedBasis: String?,
+        liveBasis: PayrollRateBasis?,
+        paidHours: Double,
+        days: Double,
+        amount: Double
+    ) -> (basis: PayrollRateBasis, rate: Double) {
+        let basis: PayrollRateBasis = storedBasis.map { $0 == "hourly" ? .hourly : .dayRate } ?? liveBasis ?? .dayRate
+        switch basis {
+        case .hourly:
+            return (basis, paidHours > 0.0001 ? amount / paidHours : 0)
+        case .dayRate:
+            return (basis, days > 0.0001 ? amount / days : 0)
+        }
+    }
+}
+
 /// The rows one person's timesheet puts on an invoice, before `invoiceLines` and sorting. Shared by the
 /// owner's "Generate invoice" and the signed-sheet export so both read the same sheet the same way:
 /// a signed `weeklyReportOverride` wins when present (declined and zero lines left out); otherwise live
@@ -7548,17 +7630,20 @@ private enum TimesheetInvoiceRows {
                 // rate, so the rate label still comes from the live line when there is one.
                 if fromOverride, let line = overrideLines[key(id)] {
                     let live = liveById[key(id)]
-                    // RULEBOOK 1.44.0 §8: a signed line is never re-priced, and neither is how it reads. A day-rate line
-                    // shows the rate that gives its signed amount over its stored days (never today's paid day or the
-                    // live rate); an hourly line the amount over its stored hours.
-                    let basis = live?.payrollBasis ?? .dayRate
-                    let signedDayRate = line.days > 0.0001 ? amount / line.days : (live?.dayRate ?? 0)
-                    let signedHourlyRate = line.paidHours > 0.0001 ? amount / line.paidHours : live?.hourlyRate
+                    // RULEBOOK 1.44.0 §8: a signed line is never re-priced, and neither is how it reads: the basis stored
+                    // on the signed line, and the rate that gives its signed amount (`TimesheetSignedLineRate`).
+                    let signed = TimesheetSignedLineRate.rate(
+                        storedBasis: line.payBasis,
+                        liveBasis: live?.payrollBasis,
+                        paidHours: line.paidHours,
+                        days: line.days,
+                        amount: amount
+                    )
                     var item = InvoiceLineItem(
                         lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
-                        details: line.details, paidHours: line.paidHours, payrollBasis: basis,
-                        dayRate: basis == .dayRate ? signedDayRate : (live?.dayRate ?? 0),
-                        hourlyRate: basis == .dayRate ? live?.hourlyRate : signedHourlyRate,
+                        details: line.details, paidHours: line.paidHours, payrollBasis: signed.basis,
+                        dayRate: signed.basis == .dayRate ? signed.rate : 0,
+                        hourlyRate: signed.basis == .hourly ? signed.rate : nil,
                         amount: amount,
                         isPayeDay: false, isOvertimeLine: line.isOvertime
                     )
