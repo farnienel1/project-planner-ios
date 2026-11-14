@@ -333,7 +333,11 @@ final class ScheduleGridPeopleTests: XCTestCase {
         let catalogue = rows.first { $0.operativeIds == [rowId] }
         XCTAssertEqual(catalogue?.role, .operative, "a catalogue row the id names stays an operative")
         XCTAssertEqual(catalogue.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) }, .operativeBookings(operativeId: rowId))
-        XCTAssertNil(rows.first { $0.operativeIds == [stray] }, "an id that names nothing is left off the grid (RULEBOOK 1.41.0)")
+        // RULEBOOK 1.44.0 §21 (owner decision 14 Nov, question H option 1): an id that names nothing keeps an
+        // unknown-person row (it was left off under 1.41.0), with no Quick Add.
+        let unknown = rows.first { $0.operativeIds == [stray] }
+        XCTAssertEqual(unknown?.role, .unknown)
+        XCTAssertNil(unknown.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) })
     }
 
     func testWhenTheScriptDoesNotAnswerAdminsAreNotLockedOut() {

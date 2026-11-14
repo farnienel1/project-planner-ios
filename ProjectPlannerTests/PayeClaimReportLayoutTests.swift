@@ -64,7 +64,8 @@ final class PayeClaimReportLayoutTests: XCTestCase {
         XCTAssertEqual(layout.personName, "Sam Test")
         XCTAssertEqual(layout.companyName, "TEST-Company Layout")
         XCTAssertEqual(layout.rangeText, rulebook.subtitle, "the range is the rulebook's subtitle")
-        XCTAssertEqual(layout.columnTitles, ["Date", "Job number", "Name", "Amount"])
+        // RULEBOOK 1.45.0: `EXPENSES_REPORT_COLUMNS` reads "Amount inc VAT".
+        XCTAssertEqual(layout.columnTitles, ["Date", "Job number", "Name", "Amount inc VAT"])
 
         XCTAssertEqual(layout.rows.count, 2)
         XCTAssertEqual(layout.rows.map(\.amount), rulebook.rows.map(\.figure), "amounts are the rulebook's figures")

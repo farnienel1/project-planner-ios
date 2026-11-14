@@ -14,6 +14,18 @@ final class Rulebook1440And1450Tests: XCTestCase {
     private let org = "TEST-org"
     private let owner = "TEST-owner"
 
+    // Readers drop evidence outside the open organisation (`parseTimesheetEntries` `organizationId`), so the open
+    // organisation is this test's, never one another test left behind.
+    override func setUp() {
+        super.setUp()
+        OrganizationRulebookContext.update(from: Organization(firestoreDocumentId: org, name: "TEST-Company 145"))
+    }
+
+    override func tearDown() {
+        OrganizationRulebookContext.update(from: nil)
+        super.tearDown()
+    }
+
     func testThePackedScriptIs145AndExportsTheNewRules() throws {
         let stamp = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp())
         let parts = stamp.version.split(separator: ".").compactMap { Int($0) }
@@ -133,8 +145,8 @@ final class Rulebook1440And1450Tests: XCTestCase {
         XCTAssertNil(againExpenses.first?["reviewFingerprint"])
         // 38a1be7: handed to the rules explicitly (`timesheetEntryFingerprintMap` → `entryFingerprints`).
         let fingerprints = TimesheetDraftStore.entryFingerprints(read)
-        XCTAssertEqual(fingerprints.count, 1)
-        XCTAssertEqual(fingerprints.values.first as? String, read.expenseEntries.first?.reviewFingerprint)
+        XCTAssertEqual(fingerprints.count, 2, "one per entry read from the sheet")
+        XCTAssertTrue(fingerprints.values.contains { ($0 as? String) == read.expenseEntries.first?.reviewFingerprint })
     }
 
     func testANewExpenseNeedsEvidenceAndAnOlderReceiptOnlyEntryNeverBlocks() {
