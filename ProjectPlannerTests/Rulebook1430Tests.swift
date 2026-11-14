@@ -78,9 +78,12 @@ final class Rulebook1430Tests: XCTestCase {
             on: [day], start: "07:00", end: "19:00", isBreakRemoved: false, fallbackPolicy: ownerPolicy,
             otMultiplierOverride: 2
         )
+        // The sections read the open organisation's working hours when the app has them loaded (else the fallback), so
+        // assert the own rate rather than the owner example's figures (those are `testOwnerExampleExplainsTheBookingsOwnRate`).
         let text = sections.flatMap(\.detail).joined(separator: "\n")
-        XCTAssertTrue(text.contains("3h × 2 = 6h"), text)
-        XCTAssertTrue(text.contains("→ 14.5h"), text)
+        XCTAssertTrue(text.contains("own overtime rate is 2×"), text)
+        XCTAssertTrue(text.contains("× 2 = "), text)
+        XCTAssertFalse(text.contains("× 1.5 = "), text)
     }
 
     func testWeekendRowsPriceTheOwnRate() throws {
