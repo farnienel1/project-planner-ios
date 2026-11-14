@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 /// Changes on this device that a sign-out would discard.
 @MainActor
