@@ -1154,11 +1154,23 @@ enum TimesheetDraftStore {
             } + draft.priceWorkEntries.map {
                 (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
             }
+            // RULEBOOK 1.45.0 §8 (review #322 F1): each entry's own fields, so the review stores its fingerprint.
+            var entryFields: [String: [String: Any]] = [:]
+            let map = asFirestoreMap(draft)
+            for (index, row) in ((map["expenseEntries"] as? [[String: Any]]) ?? []).enumerated() where index < draft.expenseEntries.count {
+                let entry = draft.expenseEntries[index]
+                entryFields[entryId(entry.id, entry.storedId)] = row
+            }
+            for (index, row) in ((map["priceWorkEntries"] as? [[String: Any]]) ?? []).enumerated() where index < draft.priceWorkEntries.count {
+                let entry = draft.priceWorkEntries[index]
+                entryFields[entryId(entry.id, entry.storedId)] = row
+            }
             if let reviewFields = CanonicalBusinessEngine.timesheetEntryReviewWriteFields(
                 storedSheet: server,
                 entries: entries,
                 reviewedByUserId: writerId,
-                reviewedAtMs: Date().timeIntervalSince1970 * 1000
+                reviewedAtMs: Date().timeIntervalSince1970 * 1000,
+                entryFields: entryFields
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
             }
@@ -1358,9 +1370,14 @@ enum TimesheetDraftStore {
         // `timesheetEntryId`, so `extraEntryReviews[entryId]` matches on every platform and every read. The decision
         // in effect is `timesheetEntryDecision` for that id. Without the script the sheet is not decoded at all
         // (a save from a half-read sheet would drop entries).
+        // RULEBOOK 1.45.0 §8 (review #322 F2): every id the sheet's person goes by, so evidence on a sheet filed under
+        // an older id is kept.
+        let sheetDocumentId = timesheetSheetDocumentId(map)
+        let subjectId = (map["userId"] as? String) ?? CanonicalBusinessEngine.timesheetDocumentSubjectId(sheetDocumentId) ?? ""
         guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
-            sheetDocumentId: timesheetSheetDocumentId(map),
-            sheet: map
+            sheetDocumentId: sheetDocumentId,
+            sheet: map,
+            ownerUserIds: RulebookRosterSnapshot.personIds(forUserId: subjectId)
         ) else { return nil }
         output.expenseEntries = entries.rows("expenseEntries").map { row in
             TimesheetExpenseEntry(

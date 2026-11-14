@@ -256,6 +256,16 @@ enum RulebookRosterSnapshot {
         lineManagerIdsCache = [:]
     }
 
+    /// RULEBOOK 1.45.0 §8 (review #322 F2): every id the person with users id `userId` goes by (`personIdSet`: own
+    /// id, `formerUserIds`, `sameEmailUserIds`, same-email rows), for reading a timesheet's evidence. Just `userId` when
+    /// the roster does not list them.
+    static func personIds(forUserId userId: String) -> [String] {
+        let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        guard let user = users.first(where: { $0.id.caseInsensitiveCompare(trimmed) == .orderedSame }) else { return [trimmed] }
+        return RulebookPeople.ownerIds(for: user, users: users)
+    }
+
     /// `RulebookPeople.roster(users)`, built once per revision.
     static var roster: [[String: Any]] {
         if let cachedRoster { return cachedRoster }

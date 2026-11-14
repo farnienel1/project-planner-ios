@@ -409,7 +409,8 @@ extension FirebaseBackend {
                 guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
                     sheetDocumentId: doc.documentID,
                     sheet: doc.data(),
-                    organizationId: org.documentID
+                    organizationId: org.documentID,
+                    ownerUserIds: RulebookRosterSnapshot.personIds(forUserId: userId)
                 ) else {
                     return nil
                 }
