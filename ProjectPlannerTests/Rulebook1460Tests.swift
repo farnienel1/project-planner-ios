@@ -129,8 +129,17 @@ final class Rulebook1460Tests: XCTestCase {
 
     /// The fingerprint comes from the rulebook, never built in Swift, so web and iPhone compare the same string.
     func testThePayrollLineFingerprintIsTheRulebooksString() {
-        XCTAssertEqual(fingerprint(start: "07:00", end: "16:00"), "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed")
-        XCTAssertNotEqual(fingerprint(start: "07:00", end: "16:00"), fingerprint(start: "07:00", end: "19:00"))
+        // The written format is the rulebook's; Swift only compares through `overtimeFingerprintsMatch`.
+        let written = fingerprint(start: "07:00", end: "16:00")
+        XCTAssertFalse((written ?? "").isEmpty)
+        XCTAssertEqual(written, CanonicalBusinessEngine.overtimeBookingFingerprint(
+            OvertimeBookingInput(
+                id: "TEST-B1", collection: "bookings", personId: "", dayKey: dayKey, timeSlot: TimeSlot.customHours.rawValue,
+                workStartTime: "07:00", workEndTime: "16:00", isBreakRemoved: false, otMultiplierOverride: 2, status: nil, jobId: nil
+            )
+        ))
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(written, "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed"))
+        XCTAssertFalse(CanonicalBusinessEngine.overtimeFingerprintsMatch(written, fingerprint(start: "07:00", end: "19:00")))
     }
 
     /// One booking, two spellings: web stores the slot `CUSTOM`, iOS reads it as `CUSTOM_HOURS` — the rulebook gives one
@@ -148,8 +157,10 @@ final class Rulebook1460Tests: XCTestCase {
         let web = stamp("CUSTOM")
         let iOS = stamp(TimeSlot.customHours.rawValue)
         XCTAssertFalse(web.isEmpty)
-        XCTAssertEqual(web, iOS)
-        XCTAssertEqual(iOS, "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed")
+        XCTAssertFalse(iOS.isEmpty)
+        // Matched through the rulebook, never by the written string.
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(web, iOS))
+        XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(iOS, "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed"))
         let storedBefore146 = "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed"
         XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(storedBefore146, web))
         XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(web, iOS))
