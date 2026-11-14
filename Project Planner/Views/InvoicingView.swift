@@ -2444,7 +2444,7 @@ private struct MyTimesheetView: View {
                             .padding(8)
                             .background(ProjectWorksRevampColors.canvas)
                             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .onChange(of: draft.managerNote) { _, _ in saveDraft() }
+                            .onChange(of: draft.managerNote) { _, _ in _ = saveDraft() }
                     }
                     .padding(14)
                     .background(Color(.systemBackground))
