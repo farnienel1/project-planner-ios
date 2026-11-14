@@ -261,27 +261,70 @@ extension CanonicalBusinessEngine {
         isOvertimeLine: Bool,
         review: TimesheetPayrollLineReview?
     ) -> [RulebookPayrollLineSnapshotPart]? {
-        guard let review else { return nil }
+        payrollLineReviewSnapshotPartsChecked(lineId: lineId, isOvertimeLine: isOvertimeLine, review: review).parts
+    }
+
+    /// `payrollLineReviewSnapshotParts` that also says whether the script failed to answer (`failed`), so a sign or save
+    /// refuses instead of signing the line without its review's parts.
+    @MainActor static func payrollLineReviewSnapshotPartsChecked(
+        lineId: String,
+        isOvertimeLine: Bool,
+        review: TimesheetPayrollLineReview?
+    ) -> (parts: [RulebookPayrollLineSnapshotPart]?, failed: Bool) {
+        guard let review else { return (nil, false) }
         let line: [String: Any] = ["id": lineId, "isOvertimeLine": isOvertimeLine]
-        guard let rows = callJSON("payrollLineReviewSnapshotParts", arguments: [line, review.storedFields]) as? [[String: Any]] else {
-            return nil
-        }
-        return rows.compactMap { row in
-            guard let id = row["id"] as? String else { return nil }
-            return RulebookPayrollLineSnapshotPart(
+        guard let answer = callJSON("payrollLineReviewSnapshotParts", arguments: [line, review.storedFields]) else { return (nil, true) }
+        guard let rows = answer as? [[String: Any]] else { return (nil, false) }
+        var parts: [RulebookPayrollLineSnapshotPart] = []
+        for row in rows {
+            guard let id = row["id"] as? String else { return (nil, true) }
+            parts.append(RulebookPayrollLineSnapshotPart(
                 id: id,
                 isOvertime: row["isOvertime"] as? Bool ?? false,
                 paidHours: (row["paidHours"] as? NSNumber)?.doubleValue ?? 0,
                 otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
                 amount: (row["amount"] as? NSNumber)?.doubleValue ?? 0
-            )
+            ))
         }
+        return (parts, false)
     }
 
     /// `bookingPaySlices({ hours: payrollHoursResult(hoursInput), standardDayHours, payBasis, dayRate, hourlyRate,
     /// isPaye })`: one booking's standard and overtime parts for the weekly report, each priced and rounded. Nil when the
     /// script did not answer.
     nonisolated static func bookingPaySlices(
+        hoursInput: RulebookPayrollHoursInput,
+        standardDayHours: Double,
+        payBasis: String,
+        dayRate: Double?,
+        hourlyRate: Double?,
+        isPaye: Bool
+    ) -> [RulebookBookingPaySlice]? {
+        // Memoised by the exact input: the weekly report prices many bookings with the same times, rate and day.
+        let key = BookingPaySlicesKey(
+            hoursInput: hoursInput, standardDayHours: standardDayHours, payBasis: payBasis,
+            dayRate: dayRate, hourlyRate: hourlyRate, isPaye: isPaye
+        )
+        return bookingPaySlicesMemo.value(for: key) {
+            unmemoisedBookingPaySlices(
+                hoursInput: hoursInput, standardDayHours: standardDayHours, payBasis: payBasis,
+                dayRate: dayRate, hourlyRate: hourlyRate, isPaye: isPaye
+            )
+        }
+    }
+
+    nonisolated private struct BookingPaySlicesKey: Hashable, Sendable {
+        let hoursInput: RulebookPayrollHoursInput
+        let standardDayHours: Double
+        let payBasis: String
+        let dayRate: Double?
+        let hourlyRate: Double?
+        let isPaye: Bool
+    }
+
+    nonisolated private static let bookingPaySlicesMemo = RulebookAnswerMemo<BookingPaySlicesKey, [RulebookBookingPaySlice]>(limit: 4096)
+
+    nonisolated private static func unmemoisedBookingPaySlices(
         hoursInput: RulebookPayrollHoursInput,
         standardDayHours: Double,
         payBasis: String,
@@ -300,7 +343,9 @@ extension CanonicalBusinessEngine {
             "isPaye": isPaye,
         ]
         guard let rows = callJSON("bookingPaySlices", arguments: [input]) as? [Any] else { return nil }
-        return rows.compactMap { RulebookBookingPaySlice(json: $0) }
+        // Every part must read back; a part that does not is a failed answer, never dropped pay.
+        let slices = rows.compactMap { RulebookBookingPaySlice(json: $0) }
+        return slices.count == rows.count ? slices : nil
     }
 
     /// `mergeBookingPaySlice(row, slice)`: a booking's slice added to a row of the same kind — hours and each booking's
@@ -344,6 +389,12 @@ extension CanonicalBusinessEngine {
             let answer = overtimeBookingFingerprint(booking)
             return answer.isEmpty ? nil : answer
         }
+    }
+
+    /// `orgDayHours(hours)`: the paid day a day rate divides by (never below the rulebook's floor). Nil when the script
+    /// did not answer.
+    nonisolated static func orgDayHours(_ hours: Double) -> Double? {
+        (callJSON("orgDayHours", arguments: [hours]) as? NSNumber)?.doubleValue
     }
 
     /// `roundPennies(value)`. Falls back to the value itself when the script did not answer.

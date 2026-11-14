@@ -138,6 +138,7 @@ final class Rulebook1460Tests: XCTestCase {
                 workStartTime: "07:00", workEndTime: "16:00", isBreakRemoved: false, otMultiplierOverride: 2, status: nil, jobId: nil
             )
         ))
+        XCTAssertEqual(written, "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed", "what iOS writes (the 1.45 form)")
         XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(written, "2026-11-18|CUSTOM_HOURS|07:00|16:00|2||confirmed"))
         XCTAssertFalse(CanonicalBusinessEngine.overtimeFingerprintsMatch(written, fingerprint(start: "07:00", end: "19:00")))
     }
@@ -456,6 +457,43 @@ final class Rulebook1460Tests: XCTestCase {
         let declined = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(to: applied, draft: draft, user: subject, viewer: nil)
         XCTAssertEqual(declined.lines.map(\.amount), [0, 0])
         XCTAssertEqual(declined.lines.map(\.decision), [.declined, .declined])
+    }
+
+    /// Review of #233 (fail closed): when the script cannot check a review against the live or signed line, the review
+    /// is never applied — no raw fallback that could re-price a signed sheet — and the signed snapshot is not written.
+    func testAReviewTheScriptCannotCheckIsNeverApplied() throws {
+        let booked = try XCTUnwrap(fingerprint(start: "07:00", end: "16:00"))
+        let line = standardLine(fingerprint: booked, hasOvertimeLine: false)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: line, lines: [line], startTime: "07:00", endTime: "19:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.managerSignedAt = Date()
+        let signed = override([signedLine(fingerprint: booked, appliedReviewKey: "")])
+
+        TimesheetDraftAdjustments.simulateScriptFailureForTesting = true
+        defer { TimesheetDraftAdjustments.simulateScriptFailureForTesting = false }
+        XCTAssertNil(TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line), "never the raw review")
+        XCTAssertEqual(TimesheetDraftAdjustments.effectivePayrollAmount(line: line, draft: draft, managerHasSigned: true), 250, accuracy: 0.001)
+        // Without a live line the stored review is still the answer.
+        XCTAssertNotNil(TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id))
+
+        let check = TimesheetWeeklyReportOverrideBuilder.RulebookCheck()
+        let result = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(to: signed, draft: draft, user: subject, viewer: nil, check: check)
+        XCTAssertTrue(check.failed, "the caller refuses the save")
+        XCTAssertEqual(result.lines.map(\.amount), [250], "the signed line is not re-priced")
+        XCTAssertFalse(TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage.isEmpty)
+    }
+
+    /// The weekly report never understates pay: a booking the rulebook cannot price stops the report.
+    func testTheWeeklyReportRefusesInsteadOfDroppingPay() throws {
+        let weekly = try source("Project Planner/Views/WeeklyReportView.swift")
+        XCTAssertFalse(weekly.contains("isPaye: paye\n            ) ?? []"), "no silent empty slices")
+        XCTAssertTrue(weekly.contains("throw PayCalculationError()"))
+        let builder = try source("Project Planner/Core/TimesheetWeeklyReportOverrideBuilder.swift")
+        XCTAssertFalse(builder.contains("payrollLineReviewKey(review) ?? \"\""), "never an empty applied key for a review")
     }
 
     // MARK: Stored shapes

@@ -175,8 +175,9 @@ final class Rulebook1290Tests: XCTestCase {
     func testLineStatesAndStaleness() throws {
         let b1 = booking("B1", "2026-11-04", "06:30", "14:00")
         let fingerprint = CanonicalBusinessEngine.overtimeBookingFingerprint(b1)
-        // RULEBOOK 1.46.0: fingerprints are compared through the rulebook (`overtimeFingerprintsMatch`), whatever slot
-        // spelling is written.
+        // RULEBOOK 1.46.0: the fingerprint iOS writes (the 1.45 form, kept so older iPhones read it), and comparison
+        // through the rulebook (`overtimeFingerprintsMatch`), whatever slot spelling is written.
+        XCTAssertEqual(fingerprint, "2026-11-04|CUSTOM HOURS|06:30|14:00|||confirmed")
         XCTAssertTrue(CanonicalBusinessEngine.overtimeFingerprintsMatch(fingerprint, "2026-11-04|CUSTOM HOURS|06:30|14:00|||confirmed"))
         XCTAssertFalse(CanonicalBusinessEngine.overtimeFingerprintsMatch(fingerprint, "2026-11-04|CUSTOM HOURS|06:30|15:00|||confirmed"))
         let review = try XCTUnwrap(CanonicalBusinessEngine.parseOvertimeReviewDocument(

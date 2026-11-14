@@ -3292,7 +3292,8 @@ private struct MyTimesheetView: View {
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
-            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never saved (fail closed).
+            let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &draft,
                 user: current,
                 week: week,
@@ -3316,6 +3317,10 @@ private struct MyTimesheetView: View {
                 // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
                 snapshotInputsReady: payInputsBlockMessage == nil
             )
+            if let refusal {
+                saveErrorMessage = refusal
+                return nil
+            }
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return nil }
@@ -4650,7 +4655,8 @@ struct OperativeTimesheetsView: View {
                 continue
             }
             guard d.operativeSignedAt != nil else { continue }
-            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never exported (fail closed).
+            if let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
                 user: op,
                 week: week,
@@ -4666,7 +4672,10 @@ struct OperativeTimesheetsView: View {
                 viewer: exporter,
                 relatedUsers: userStore.organizationUsers,
                 snapshotInputsReady: true
-            )
+            ) {
+                exportMessage = refusal
+                return
+            }
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
             prepared.append((operative: op, draft: d))
         }
@@ -5659,7 +5668,8 @@ private struct OperativeTimesheetReviewView: View {
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
-        TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+        // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never saved (fail closed).
+        let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
             to: &draft,
             user: operative,
             week: week,
@@ -5685,6 +5695,10 @@ private struct OperativeTimesheetReviewView: View {
             // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
             snapshotInputsReady: payInputsBlockMessage == nil
         )
+        if let refusal {
+            saveErrorMessage = refusal
+            return
+        }
         }
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }

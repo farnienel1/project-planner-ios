@@ -49,18 +49,48 @@ enum TimesheetDraftAdjustments {
         payrollReview(in: draft, lineId: lineId, liveJSON: live?.rulebookLiveBookingJSON)
     }
 
+    #if DEBUG
+    /// Tests only: `payrollReviewLookup` answers `.failed`, as when the packed script does not answer.
+    static var simulateScriptFailureForTesting = false
+    #endif
+
+    /// The answer of `payrollLineReview`: a review, no review (none stored, or stale), or the script did not answer.
+    enum PayrollReviewLookup {
+        case review(TimesheetPayrollLineReview)
+        case none
+        case failed
+    }
+
     /// `payrollLineReview(sheet, lineId, live)` with the live booking as the script reads it (a signed snapshot line passes
     /// the values it was signed with: `bookingFingerprint`, `isOvertimeLine`, `bookingHadOvertimeLine`).
-    static func payrollReview(in draft: TimesheetDraft, lineId: String, liveJSON: [String: Any]?) -> TimesheetPayrollLineReview? {
-        guard !draft.payrollLineReviews.isEmpty else { return nil }
+    static func payrollReviewLookup(in draft: TimesheetDraft, lineId: String, liveJSON: [String: Any]?) -> PayrollReviewLookup {
+        guard !draft.payrollLineReviews.isEmpty else { return .none }
+        #if DEBUG
+        if simulateScriptFailureForTesting { return .failed }
+        #endif
         let reviews: [String: Any] = draft.payrollLineReviews.mapValues { $0.storedFields }
         var arguments: [Any] = [["payrollLineReviews": reviews], lineId]
         if let liveJSON { arguments.append(liveJSON) }
-        guard let answer = CanonicalBusinessEngine.callJSON("payrollLineReview", arguments: arguments) else {
+        guard let answer = CanonicalBusinessEngine.callJSON("payrollLineReview", arguments: arguments) else { return .failed }
+        guard let row = answer as? [String: Any] else { return .none }
+        return .review(TimesheetPayrollLineReview(stored: row, defaultDecision: .approved))
+    }
+
+    /// The review, or nil. RULEBOOK 1.46.0 (review of #233): with a live line the stale check cannot be skipped, so when
+    /// the script did not answer this fails closed — no review (the line at its live amount), never the raw stored
+    /// review, which could re-price a signed sheet. Save and sign refuse in that case (`payrollReviewLookup` .failed in
+    /// `TimesheetWeeklyReportOverrideBuilder`). Without a live line the stored review is the answer, as before.
+    static func payrollReview(in draft: TimesheetDraft, lineId: String, liveJSON: [String: Any]?) -> TimesheetPayrollLineReview? {
+        switch payrollReviewLookup(in: draft, lineId: lineId, liveJSON: liveJSON) {
+        case .review(let review): return review
+        case .none: return nil
+        case .failed:
+            guard liveJSON == nil else {
+                NSLog("PAYROLL_LINE_REVIEW_UNAVAILABLE line=%@ — canonical script did not answer; review not applied", lineId)
+                return nil
+            }
             return draft.payrollLineReviews[lineId]
         }
-        guard let row = answer as? [String: Any] else { return nil }
-        return TimesheetPayrollLineReview(stored: row, defaultDecision: .approved)
     }
 
     static func expenseDecision(_ entry: TimesheetExpenseEntry) -> TimesheetManagerDecision {

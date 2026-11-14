@@ -903,7 +903,7 @@ struct WeeklyReportView: View {
             )
             timesheetFeed = feed
             do {
-                let sections = buildExportSections()
+                let sections = try buildExportSections()
                 let exports = try WeeklyReportExportBuilder.makeExports(
                     context: WeeklyReportExportBuilder.Context(
                         organizationName: organizationName,
@@ -930,7 +930,7 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func buildExportSections() -> [WeeklyReportExportBuilder.Section] {
+    private func buildExportSections() throws -> [WeeklyReportExportBuilder.Section] {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
 
@@ -1074,7 +1074,7 @@ struct WeeklyReportView: View {
 
         var payRows: [[String]] = []
         // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = payrollSummaryForViewer()
+        let payShown = try payrollSummaryForViewer()
         for person in payShown.summaries {
             for line in person.lines {
                 payRows.append([
@@ -1101,7 +1101,7 @@ struct WeeklyReportView: View {
         return sections
     }
 
-    private func buildCSV() -> String {
+    private func buildCSV() throws -> String {
         var rows: [[String]] = []
         rows.append(["Weekly Report"])
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
@@ -1228,7 +1228,7 @@ struct WeeklyReportView: View {
         rows.append(["PAY SUMMARY"])
         rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
         // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = payrollSummaryForViewer()
+        let payShown = try payrollSummaryForViewer()
         for person in payShown.summaries {
             for line in person.lines {
                 rows.append([
@@ -1650,8 +1650,8 @@ struct WeeklyReportView: View {
     /// timesheet review) keeps their hours with the rate and pay cells `PAY_HIDDEN_CELL_LABEL`; the grand total covers
     /// the people shown only; `hiddenNote` is `PAY_HIDDEN_NOTE` when anyone was hidden. A row with no known person is
     /// visible to admins only. Swift sends the rows and reads the cells back; nothing is decided here.
-    private func payrollSummaryForViewer() -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
-        let summaries = payrollPersonSummaries()
+    private func payrollSummaryForViewer() throws -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
+        let summaries = try payrollPersonSummaries()
         let rows: [[String: Any]] = summaries.enumerated().map { index, person in
             var row: [String: Any] = [
                 "summaryIndex": index,
@@ -1765,7 +1765,13 @@ struct WeeklyReportView: View {
         return Array(map.values)
     }
 
-    private func payrollPersonSummaries() -> [PayrollPersonSummary] {
+    /// RULEBOOK 1.46.0: a booking the rulebook could not price (`bookingPaySlices` did not answer) stops the report with
+    /// `TimesheetPayrollSummary.calculationFailedMessage` — pay is never understated by leaving a booking out.
+    struct PayCalculationError: LocalizedError {
+        var errorDescription: String? { TimesheetPayrollSummary.calculationFailedMessage }
+    }
+
+    private func payrollPersonSummaries() throws -> [PayrollPersonSummary] {
         struct Acc {
             var name: String
             var role: String
@@ -1782,20 +1788,24 @@ struct WeeklyReportView: View {
             var subject: AppUser? = nil
         }
         var byKey: [String: Acc] = [:]
+        var pricingFailed = false
         let cal = CanonicalBusinessEngine.businessCalendar
 
         /// One booking priced on its own (`bookingPaySlices`) and added to its row (`mergeBookingPaySlice`). Rows keep
         /// today's keys (person, role, basis and rate, multiplier, standard day, PAYE).
         func addBooking(probe: Booking, day: Date, policy: OrgPayrollTimePolicy, name: String, role: String, resolved: ResolvedPayrollRate, paye: Bool, subject: AppUser?) {
             let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
-            let slices = CanonicalBusinessEngine.bookingPaySlices(
+            guard let slices = CanonicalBusinessEngine.bookingPaySlices(
                 hoursInput: PayrollHoursEngine.canonicalInput(booking: probe, day: day, policy: policy),
                 standardDayHours: standardDayHours,
                 payBasis: resolved.basis == .hourly ? "hourly" : "day",
                 dayRate: resolved.dayRate,
                 hourlyRate: resolved.hourlyRate,
                 isPaye: paye
-            ) ?? []
+            ) else {
+                pricingFailed = true
+                return
+            }
             let otMultiplier = slices.first(where: \.isOvertime)?.otMultiplier
                 ?? PayrollHoursEngine.canonicalResult(booking: probe, day: day, policy: policy)?.outsideMultiplier
                 ?? 1
@@ -1807,11 +1817,18 @@ struct WeeklyReportView: View {
             var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
             acc.subject = acc.subject ?? subject
             for slice in slices {
-                if slice.isOvertime {
-                    acc.overtime = acc.overtime.map { CanonicalBusinessEngine.mergeBookingPaySlice($0, slice) ?? $0 } ?? slice
+                let held = slice.isOvertime ? acc.overtime : acc.normal
+                let merged: RulebookBookingPaySlice
+                if let held {
+                    guard let sum = CanonicalBusinessEngine.mergeBookingPaySlice(held, slice) else {
+                        pricingFailed = true
+                        return
+                    }
+                    merged = sum
                 } else {
-                    acc.normal = acc.normal.map { CanonicalBusinessEngine.mergeBookingPaySlice($0, slice) ?? $0 } ?? slice
+                    merged = slice
                 }
+                if slice.isOvertime { acc.overtime = merged } else { acc.normal = merged }
             }
             byKey[key] = acc
         }
@@ -1869,6 +1886,8 @@ struct WeeklyReportView: View {
                 resolved: resolved, paye: isPaye(manager, on: booking.date), subject: manager
             )
         }
+
+        if pricingFailed { throw PayCalculationError() }
 
         let groupedByPerson = Dictionary(grouping: byKey.values) { "\($0.name)|\($0.role)" }
         var summaries: [PayrollPersonSummary] = []

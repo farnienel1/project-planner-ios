@@ -873,7 +873,10 @@ struct OperativeCustomHoursSheet: View {
 
     /// On site = finish − start, clock time (owner decision 2). Display arithmetic on the times on screen.
     private var onSiteHours: Double {
-        Double(max(0, endMinutes - startMinutes)) / 60.0
+        // RULEBOOK 1.46.0 (timesheet Edit hours only): a finish before the start runs past midnight.
+        let span = endMinutes - startMinutes
+        if allowsOvernight && span < 0 { return Double(span + 24 * 60) / 60.0 }
+        return Double(max(0, span)) / 60.0
     }
 
     /// RULEBOOK 1.39.0 `bookingBreakText`: the booking day's own lunch break, from the working hours in effect on it.
