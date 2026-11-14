@@ -8,12 +8,20 @@
 //
 
 import SwiftUI
+import FirebaseAuth
 
 /// Changes on this device that a sign-out would discard.
 @MainActor
 enum PendingSyncCount {
     static var current: Int {
         OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
+    }
+
+    static func draftsLine(_ count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "Your 1 site audit draft on this phone will be deleted."
+            : "Your \(count) site audit drafts on this phone will be deleted."
     }
 
     static func message(_ count: Int) -> String {
@@ -32,6 +40,9 @@ private struct SignOutConfirmationModifier: ViewModifier {
     /// "Finishing sync…": Sync now or Sign out anyway is waiting for the device's sync (at most
     /// `finishSyncTimeoutSeconds`). The screen is covered so taps do not stack.
     @State private var isSyncing = false
+    /// The signed-in person's site audit drafts (owner decision 12 Nov): their sign-out removes them. Counted off the
+    /// main thread when the alert opens.
+    @State private var siteAuditDraftCount = 0
 
     /// A Storage upload or save can stall for minutes; a sign-out never waits longer than this.
     static let finishSyncTimeoutSeconds: Double = 12
@@ -39,7 +50,20 @@ private struct SignOutConfirmationModifier: ViewModifier {
     func body(content: Content) -> some View {
         // Read when the alert is built, so the count is the one on the device now.
         let pending = PendingSyncCount.current
+        let draftsLine = PendingSyncCount.draftsLine(siteAuditDraftCount)
+        let baseMessage = pending > 0 ? PendingSyncCount.message(pending) : "Are you sure you want to sign out?"
         return content
+            .onChange(of: isPresented) { _, presented in
+                guard presented, let userId = firebaseBackend.currentUser?.uid else {
+                    if !presented { siteAuditDraftCount = 0 }
+                    return
+                }
+                Task {
+                    siteAuditDraftCount = await Task.detached(priority: .userInitiated) {
+                        SiteAuditDraftStore.shared.draftCount(userId: userId)
+                    }.value
+                }
+            }
             .overlay {
                 if isSyncing {
                     ZStack {
@@ -103,7 +127,7 @@ private struct SignOutConfirmationModifier: ViewModifier {
                     .accessibilityIdentifier("\(idPrefix).signOut")
                 }
             } message: {
-                Text(pending > 0 ? PendingSyncCount.message(pending) : "Are you sure you want to sign out?")
+                Text(draftsLine.map { "\(baseMessage)\n\n\($0)" } ?? baseMessage)
             }
     }
 }
