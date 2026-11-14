@@ -174,6 +174,17 @@ final class Rulebook1460Tests: XCTestCase {
         )
         let line = standardLine(fingerprint: iOS, hasOvertimeLine: false)
         XCTAssertEqual(TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)?.revisedAmount, 300)
+        // And one web wrote with its own `CUSTOM` spelling.
+        draft.payrollLineReviews["op-TEST-B1-normal"]?.reviewedBookingFingerprint = web
+        XCTAssertEqual(TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)?.revisedAmount, 300)
+        // The overtime screens' staleness check reads it the same way.
+        XCTAssertFalse(CanonicalBusinessEngine.overtimeLineIsStale(
+            storedFingerprint: web,
+            booking: OvertimeBookingInput(
+                id: "TEST-B1", collection: "bookings", personId: "", dayKey: dayKey, timeSlot: TimeSlot.customHours.rawValue,
+                workStartTime: "07:00", workEndTime: "16:00", isBreakRemoved: false, otMultiplierOverride: 2, status: nil, jobId: nil
+            )
+        ))
     }
 
     // MARK: Edit hours
