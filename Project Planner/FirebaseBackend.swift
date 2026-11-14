@@ -8122,15 +8122,24 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [Booking] {
+        try await loadBookingsReportingAuthority(organizationId: organizationId, startingOn: start).bookings
+    }
+
+    /// `loadBookings`, and whether every query of the plan answered from the server (RULEBOOK 1.43.0 §8: sign-off
+    /// waits for an authoritative read of the period's bookings, never cache or a partial plan).
+    func loadBookingsReportingAuthority(
+        organizationId: String,
+        startingOn start: Date? = nil
+    ) async throws -> (bookings: [Booking], authoritative: Bool) {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         // RULEBOOK 1.10.0 §17: the booking queries `bookingQueryPlan` names (with `date >= start`), merged by id.
         let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
-        let documents = try await readPlannedQueryDocuments(plan.sources)
-        let bookings = bookingsFromFirestoreDocuments(documents)
+        let read = try await readPlannedQueryDocumentsReportingAuthority(plan.sources)
+        let bookings = bookingsFromFirestoreDocuments(read.documents)
         if bookings.isEmpty {
             NSLog("BOOKINGS_EMPTY org=%@ start=%@ plan=%@ — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", plan.signature)
         }
-        return bookings
+        return (bookings, read.authoritative)
     }
 
     func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
@@ -8524,9 +8533,18 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
+        try await loadManagerSiteBookingsReportingAuthority(organizationId: organizationId, startingOn: start).bookings
+    }
+
+    /// `loadManagerSiteBookings`, and whether every query of the plan answered from the server (RULEBOOK 1.43.0 §8).
+    func loadManagerSiteBookingsReportingAuthority(
+        organizationId: String,
+        startingOn start: Date? = nil
+    ) async throws -> (bookings: [ManagerSiteBooking], authoritative: Bool) {
         // RULEBOOK 1.33.0 §17: `bookingQueryPlan` (whole collection for admins and every manager; none for operatives).
         let plan = bookingReadSources(organizationId: organizationId, collection: "managerSiteBookings", startingOn: start)
-        return managerSiteBookingsFromFirestoreDocuments(try await readPlannedQueryDocuments(plan.sources))
+        let read = try await readPlannedQueryDocumentsReportingAuthority(plan.sources)
+        return (managerSiteBookingsFromFirestoreDocuments(read.documents), read.authoritative)
     }
 
     func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {

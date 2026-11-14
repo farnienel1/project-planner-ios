@@ -8,6 +8,21 @@
 import Foundation
 import Combine
 
+/// RULEBOOK 1.43.0 §8: what a server-answered booking read covered — the open organisation and the read's lower bound
+/// (nil = the whole archive).
+struct BookingServerCoverage: Equatable {
+    let organizationId: String
+    let fromDate: Date?
+
+    /// The read reaches back to `periodStart` (nil = the whole archive is needed) for `organizationId`.
+    func covers(organizationId: String, from periodStart: Date?) -> Bool {
+        guard self.organizationId == organizationId else { return false }
+        guard let fromDate else { return true }
+        guard let periodStart else { return false }
+        return fromDate <= periodStart
+    }
+}
+
 @MainActor
 class BookingStore: ObservableObject {
     @Published var bookings: [Booking] = [] {
@@ -30,6 +45,10 @@ class BookingStore: ObservableObject {
     /// The organisation whose bookings load last finished (read or failed). Warnings wait for it
     /// (`WarningInputsReadiness`) so an empty list before the first read is never "nobody booked".
     private(set) var finishedLoadOrganizationId: String?
+    /// RULEBOOK 1.43.0 §8 (review r318): the organisation and lower bound (nil = every date) of the last read whose
+    /// every query the server answered — never a cache fallback or a partial plan. Sign-off waits for it to reach the
+    /// period (`PayInputsLoad.periodBookings`). Cleared when a read fails or answers from cache.
+    @Published private(set) var serverCoverage: BookingServerCoverage?
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -284,10 +303,14 @@ class BookingStore: ObservableObject {
                     let queryStart = firebaseBackend.scheduleBookingQueryStart()
                     
                     // Launch reads from the warning window / current week forward, not the whole archive.
-                    let firebaseBookings = try await firebaseBackend.loadBookings(
+                    let read = try await firebaseBackend.loadBookingsReportingAuthority(
                         organizationId: organizationId,
                         startingOn: queryStart
                     )
+                    let firebaseBookings = read.bookings
+                    self.serverCoverage = read.authoritative
+                        ? BookingServerCoverage(organizationId: organizationId, fromDate: queryStart)
+                        : nil
                     if firebaseBackend.suppressStaleOrganizationCache {
                         self.bookings = firebaseBookings
                         self.smartCache?.cacheBookings(firebaseBookings)
@@ -330,6 +353,7 @@ class BookingStore: ObservableObject {
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.lastLoadFailed = true
+                self.serverCoverage = nil
                 NSLog("BOOKINGS_LOAD_FAILED error=%@", error.localizedDescription)
                 if firebaseBackend?.suppressStaleOrganizationCache == true {
                     self.bookings = []
@@ -1201,6 +1225,7 @@ class BookingStore: ObservableObject {
     func discardInMemoryForOrganizationSwitch() {
         bookings = []
         finishedLoadOrganizationId = nil
+        serverCoverage = nil
         lastLoadFailed = false
         listenerFailed = false
         isLoading = false

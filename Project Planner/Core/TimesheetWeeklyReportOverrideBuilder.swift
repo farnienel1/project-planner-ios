@@ -43,10 +43,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
             // has exported the sheet. Signatures and who approved it stay as stored (web `applyWeeklyReportOverride`).
             // A snapshot with any labour line is never rebuilt or re-priced.
             if snapshotInputsReady && existing.lines.isEmpty && draft.exportedAt == nil {
-                let fresh = make(
-                    user: user,
+                // Review r318: only bookings that existed when the sheet was approved count (PAYE days left out), so a
+                // booking added to the period later never re-prices a sheet signed with price work or expenses only.
+                let live = TimesheetPayrollCollector.collect(
+                    for: user,
                     week: week,
-                    draft: draft,
                     bookings: bookings,
                     managerBookings: managerBookings,
                     operatives: operatives,
@@ -56,14 +57,32 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     policy: policy,
                     organization: organization,
                     scheduleOptions: scheduleOptions,
-                    viewer: viewer,
                     relatedUsers: relatedUsers
                 )
-                if CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+                let needsRebuild = CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
                     storedOverrideLineCount: existing.lines.count,
+                    overrideApprovedAt: existing.approvedAt,
                     exportedAt: draft.exportedAt,
-                    liveLabourLineCount: fresh.lines.count
-                ) {
+                    managerSignedAt: draft.managerSignedAt,
+                    liveLabourLines: TimesheetPayrollCollector.snapshotRebuildLines(live.lineItems)
+                )
+                if needsRebuild {
+                    let fresh = make(
+                        user: user,
+                        week: week,
+                        draft: draft,
+                        bookings: bookings,
+                        managerBookings: managerBookings,
+                        operatives: operatives,
+                        projects: projects,
+                        smallWorks: smallWorks,
+                        history: history,
+                        policy: policy,
+                        organization: organization,
+                        scheduleOptions: scheduleOptions,
+                        viewer: viewer,
+                        relatedUsers: relatedUsers
+                    )
                     draft.weeklyReportOverride = TimesheetWeeklyReportOverride(
                         approvedAt: existing.approvedAt,
                         approvedByUserId: existing.approvedByUserId,

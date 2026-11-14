@@ -52,8 +52,10 @@ enum PayInputsLoad {
     // MARK: RULEBOOK 1.43.0 §8 — the period's bookings (`timesheetSnapshotReady`)
 
     /// Whether the period's labour and manager site bookings have arrived: both stores finished a read for the open
-    /// organisation that reaches back to `periodStart` (nil = the whole archive), and neither read failed. A
-    /// counter-signature made before they arrived froze a snapshot with no labour lines (owner report, 14 Nov).
+    /// organisation, every query of which the SERVER answered (`serverCoverage`, review r318 — never the cache's copy, a
+    /// cache fallback or a partial plan), and that read reaches back to `periodStart` (nil = the whole archive) — never
+    /// rows from a narrower, earlier window. A counter-signature made before they arrived froze a snapshot with no
+    /// labour lines (owner report, 14 Nov).
     static func periodBookings(
         firebaseBackend: FirebaseBackend,
         bookingStore: BookingStore,
@@ -66,13 +68,9 @@ enum PayInputsLoad {
             && !managerScheduleStore.isLoading
             && bookingStore.finishedLoadOrganizationId == orgId
             && managerScheduleStore.finishedLoadOrganizationId == orgId
-        // The download's lower bound (nil = every date once the archive was asked for).
-        let reaches: Bool = {
-            guard let start = firebaseBackend.scheduleBookingQueryStart() else { return true }
-            guard let periodStart else { return false }
-            return start <= periodStart
-        }()
-        return (finished && reaches && !failed, finished && failed)
+        let covered = bookingStore.serverCoverage?.covers(organizationId: orgId, from: periodStart) == true
+            && managerScheduleStore.serverCoverage?.covers(organizationId: orgId, from: periodStart) == true
+        return (finished && covered && !failed, finished && failed)
     }
 
     /// Asks the stores for the period's bookings when the download does not reach `periodStart` (nil = the whole
@@ -91,6 +89,13 @@ enum PayInputsLoad {
             reload = firebaseBackend.noteScheduleNeedsFullHistory()
         }
         if retryFailed && (bookingStore.lastLoadFailed || managerScheduleStore.lastLoadFailed) { reload = true }
+        // No server-answered read covers the period yet (the last one came from cache or a narrower window): read again.
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
+           !bookingStore.isLoading, !managerScheduleStore.isLoading,
+           bookingStore.serverCoverage?.covers(organizationId: orgId, from: periodStart) != true
+            || managerScheduleStore.serverCoverage?.covers(organizationId: orgId, from: periodStart) != true {
+            reload = true
+        }
         guard reload else { return }
         bookingStore.loadData()
         managerScheduleStore.loadData(force: true)

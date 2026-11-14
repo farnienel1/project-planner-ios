@@ -38,6 +38,9 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     var bookingStartTime: String? = nil
     var bookingEndTime: String? = nil
     var bookingBreakRemoved: Bool? = nil
+    /// RULEBOOK 1.43.0 (review r318; rebuild check only, never stored): when the line's booking was created
+    /// (`timesheetSnapshotNeedsRebuild` counts only bookings that existed when the sheet was approved).
+    var bookingCreatedAt: Date? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -112,7 +115,8 @@ enum TimesheetPayrollCollector {
             day: Date,
             details: String,
             labels: (jobNumber: String, siteName: String),
-            operative: Operative?
+            operative: Operative?,
+            createdAt: Date?
         ) {
             let policy = dayPolicy(for: day)
             let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
@@ -185,7 +189,8 @@ enum TimesheetPayrollCollector {
                     bookingOvertimeHours: multiplied?.clockHours ?? otHours,
                     bookingStartTime: hasClockTimes ? bookingStart : nil,
                     bookingEndTime: hasClockTimes ? bookingEnd : nil,
-                    bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil
+                    bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
+                    bookingCreatedAt: createdAt
                 )
             )
 
@@ -216,7 +221,8 @@ enum TimesheetPayrollCollector {
                         otClockHours: multiplied?.clockHours ?? otHours,
                         bookingStartTime: hasClockTimes ? bookingStart : nil,
                         bookingEndTime: hasClockTimes ? bookingEnd : nil,
-                        bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil
+                        bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
+                        bookingCreatedAt: createdAt
                     )
                 )
             }
@@ -236,7 +242,8 @@ enum TimesheetPayrollCollector {
                 day: day,
                 details: booking.scheduleLabel(policy: policy),
                 labels: projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById),
-                operative: matchedOperative
+                operative: matchedOperative,
+                createdAt: booking.createdAt
             )
         }
 
@@ -254,7 +261,8 @@ enum TimesheetPayrollCollector {
                 day: day,
                 details: booking.scheduleLabel(policy: policy),
                 labels: managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById),
-                operative: matchedOperatives.first
+                operative: matchedOperatives.first,
+                createdAt: booking.createdAt
             )
         }
 
@@ -349,6 +357,12 @@ enum TimesheetPayrollCollector {
             return overtimeDetails(multiplied: multiplied, otHours: otHours)
         }
         return multipliedText.map { "\(text) · \($0)" } ?? text
+    }
+
+    /// RULEBOOK 1.43.0 §8 (review r318): the live lines as `timesheetSnapshotNeedsRebuild` reads them — PAYE flag and
+    /// the booking's creation time. A mapping only.
+    static func snapshotRebuildLines(_ lines: [TimesheetPayrollLineItem]) -> [(isPayeDay: Bool, bookingCreatedAt: Date?)] {
+        lines.map { (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt) }
     }
 
     /// RULEBOOK 1.43.0 §8: what a timesheet line shows beside its rate line — `timesheetLineClockText(details)`, the clock

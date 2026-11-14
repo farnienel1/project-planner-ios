@@ -2,7 +2,7 @@ import XCTest
 @testable import Project_Planner
 
 /// RULEBOOK 1.43.0 through `CanonicalBusinessEngine` (owner reports, 14 Nov). Expected values were checked in node
-/// against the packed `canonical-business.js` (sha256 f2a561a0…6af79c1) and match web `lib/canonical/canonical.test.ts`:
+/// against the packed `canonical-business.js` (sha256 417e1d97…3a207ca0) and match web `lib/canonical/canonical.test.ts`:
 ///   - a timesheet's standard line shows the standard-window times and its overtime line the overtime times
 ///     (`payrollLineClockRanges`), and the multiplied text is never printed twice (`timesheetLineClockText`);
 ///   - booking previews price the booking's own overtime rate (`bookingHoursExplanation`, `weekendBookingBreakdown`);
@@ -159,11 +159,49 @@ final class Rulebook1430Tests: XCTestCase {
     }
 
     func testOnlyAnEmptyUnexportedSnapshotIsRebuilt() {
-        XCTAssertTrue(CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(storedOverrideLineCount: 0, exportedAt: nil, liveLabourLineCount: 2))
-        XCTAssertFalse(CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(storedOverrideLineCount: 0, exportedAt: nil, liveLabourLineCount: 0))
-        XCTAssertFalse(CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(storedOverrideLineCount: 1, exportedAt: nil, liveLabourLineCount: 2), "never re-priced")
-        XCTAssertFalse(CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(storedOverrideLineCount: 0, exportedAt: Date(), liveLabourLineCount: 2), "exported")
-        XCTAssertFalse(CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(storedOverrideLineCount: nil, exportedAt: nil, liveLabourLineCount: 2), "no snapshot")
+        let approved = Date(timeIntervalSince1970: 1_762_765_200) // 10 Nov 2026 09:00 UTC
+        let before = approved.addingTimeInterval(-86_400)
+        let after = approved.addingTimeInterval(86_400)
+        func needs(
+            stored: Int? = 0,
+            exported: Date? = nil,
+            overrideApprovedAt: Date? = approved,
+            managerSignedAt: Date? = nil,
+            _ lines: [(isPayeDay: Bool, bookingCreatedAt: Date?)]
+        ) -> Bool {
+            CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+                storedOverrideLineCount: stored,
+                overrideApprovedAt: overrideApprovedAt,
+                exportedAt: exported,
+                managerSignedAt: managerSignedAt,
+                liveLabourLines: lines
+            )
+        }
+        // A booking that existed when the sheet was approved and is missing from the snapshot: the loading bug.
+        XCTAssertTrue(needs([(isPayeDay: false, bookingCreatedAt: before)]))
+        XCTAssertTrue(needs(overrideApprovedAt: nil, managerSignedAt: approved, [(isPayeDay: false, bookingCreatedAt: before)]))
+        // Review r318: a booking added after approval, or of unknown age, never re-prices a signed sheet.
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: after)]))
+        XCTAssertFalse(needs([(isPayeDay: false, bookingCreatedAt: nil)]))
+        XCTAssertFalse(needs([(isPayeDay: true, bookingCreatedAt: before)]), "PAYE days are never timesheet lines")
+        XCTAssertFalse(needs([]))
+        XCTAssertFalse(needs(stored: 1, [(isPayeDay: false, bookingCreatedAt: before)]), "never re-priced")
+        XCTAssertFalse(needs(exported: Date(), [(isPayeDay: false, bookingCreatedAt: before)]), "exported")
+        XCTAssertFalse(needs(stored: nil, [(isPayeDay: false, bookingCreatedAt: before)]), "no snapshot")
+        XCTAssertFalse(needs(overrideApprovedAt: nil, [(isPayeDay: false, bookingCreatedAt: before)]), "no approval time")
+    }
+
+    /// Review r318: sign-off opens only on a server-answered read that reaches the period — never the cache's copy or a
+    /// narrower, earlier window, and never another company's read.
+    func testServerCoverageMustReachThePeriod() throws {
+        let periodStart = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-11-01"))
+        let earlier = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-10-26"))
+        let later = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-11-09"))
+        XCTAssertTrue(BookingServerCoverage(organizationId: "org", fromDate: earlier).covers(organizationId: "org", from: periodStart))
+        XCTAssertTrue(BookingServerCoverage(organizationId: "org", fromDate: nil).covers(organizationId: "org", from: periodStart))
+        XCTAssertFalse(BookingServerCoverage(organizationId: "org", fromDate: later).covers(organizationId: "org", from: periodStart))
+        XCTAssertFalse(BookingServerCoverage(organizationId: "other", fromDate: nil).covers(organizationId: "org", from: periodStart))
+        XCTAssertFalse(BookingServerCoverage(organizationId: "org", fromDate: earlier).covers(organizationId: "org", from: nil), "the whole archive was asked for")
     }
 
     func testNoExtrasOnceTheLineManagerHasSigned() {

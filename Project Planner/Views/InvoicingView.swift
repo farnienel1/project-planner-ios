@@ -823,6 +823,8 @@ enum TimesheetApprovalPolicy {
 
 enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
+    /// RULEBOOK 1.43.0 (review r318): the period's sheet could not be read, so it is not opened as a new one.
+    static let periodReadFailedMessage = "Could not load this timesheet. Check your connection and try again."
 
     static func load(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft {
         guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
@@ -969,6 +971,24 @@ enum TimesheetDraftStore {
         firebaseBackend: FirebaseBackend,
         organizationId: String
     ) async -> TimesheetDraft? {
+        await refreshFromCloudReporting(
+            userId: userId,
+            weekStart: weekStart,
+            firebaseBackend: firebaseBackend,
+            organizationId: organizationId
+        ).draft
+    }
+
+    /// RULEBOOK 1.43.0 (review r318): the period's sheet read at its expected document id. `failed` is true when that
+    /// read did not answer — the screen then shows an error instead of opening the period as a new sheet. Only a read
+    /// that answered "missing" opens it as new, and a new sheet is saved at that same expected id
+    /// (`timesheetStateDocumentRef`), never over another document.
+    static func refreshFromCloudReporting(
+        userId: String,
+        weekStart: Date,
+        firebaseBackend: FirebaseBackend,
+        organizationId: String
+    ) async -> (draft: TimesheetDraft?, failed: Bool) {
         let raw: [String: Any]?
         do {
             raw = try await firebaseBackend.loadTimesheetState(
@@ -977,15 +997,16 @@ enum TimesheetDraftStore {
                 weekStart: weekStart
             )
         } catch {
-            return nil
+            NSLog("TIMESHEET_PERIOD_READ_FAILED org=%@ %@", organizationId, error.localizedDescription)
+            return (nil, true)
         }
         guard let raw else {
             // The server has no sheet for this organisation, person and period: the local copy is stale
             // (or another company's) and is never shown or saved back.
             clear(userId: userId, weekStart: weekStart, organizationId: organizationId)
-            return nil
+            return (nil, false)
         }
-        guard let decoded = fromFirestoreMap(raw) else { return nil }
+        guard let decoded = fromFirestoreMap(raw) else { return (nil, false) }
         let endKey = (raw["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startKey = (raw["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
@@ -997,7 +1018,7 @@ enum TimesheetDraftStore {
         }
         save(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
         rememberLoadedCopy(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
-        return decoded
+        return (decoded, false)
     }
 
     /// Manager counter-sign and export fields. The owner never sends them (firestore.rules
@@ -1965,8 +1986,10 @@ private struct MyTimesheetView: View {
         guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
         return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
             storedOverrideLineCount: stored.lines.count,
+            overrideApprovedAt: stored.approvedAt,
             exportedAt: draft.exportedAt,
-            liveLabourLineCount: payrollLines.filter { !$0.isPayeDay }.count
+            managerSignedAt: draft.managerSignedAt,
+            liveLabourLines: TimesheetPayrollCollector.snapshotRebuildLines(payrollLines)
         )
     }
 
@@ -2947,12 +2970,18 @@ private struct MyTimesheetView: View {
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
+        let read = await TimesheetDraftStore.refreshFromCloudReporting(
             userId: currentUserId,
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else {
+        )
+        // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
+        if read.failed {
+            await MainActor.run { saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage }
+            return
+        }
+        guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a change is open.
             await MainActor.run {
                 guard !isEditingTimesheet,
@@ -4459,8 +4488,10 @@ private struct OperativeTimesheetReviewView: View {
         guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
         return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
             storedOverrideLineCount: stored.lines.count,
+            overrideApprovedAt: stored.approvedAt,
             exportedAt: draft.exportedAt,
-            liveLabourLineCount: payrollSummary.lineItems.filter { !$0.isPayeDay }.count
+            managerSignedAt: draft.managerSignedAt,
+            liveLabourLines: TimesheetPayrollCollector.snapshotRebuildLines(payrollSummary.lineItems)
         )
     }
 
@@ -5089,12 +5120,18 @@ private struct OperativeTimesheetReviewView: View {
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
+        let read = await TimesheetDraftStore.refreshFromCloudReporting(
             userId: operative.id,
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else {
+        )
+        // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
+        if read.failed {
+            await MainActor.run { saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage }
+            return
+        }
+        guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a review is open.
             await MainActor.run {
                 guard !isEditingReview,

@@ -160,21 +160,34 @@ extension CanonicalBusinessEngine {
         return date.timeIntervalSince1970 * 1000
     }
 
-    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild(sheet, liveLabourLines)`: the stored signed snapshot was frozen
-    /// with no labour lines while the period has live labour lines (PAYE days left out) and nobody exported it. False
-    /// for no snapshot, a snapshot with any labour line (never re-priced), an exported sheet, or no answer.
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild(sheet, liveLabourLines)` (review r318): the stored signed snapshot
+    /// was frozen with no labour lines by the loading bug — nobody exported it, and the period has a live labour line
+    /// (PAYE days left out) whose booking was created on or before the sheet's approval (the snapshot's `approvedAt`,
+    /// else `managerSignedAt`). A booking added later, or one whose creation time is unknown, never re-prices a signed
+    /// sheet. False for no snapshot, a snapshot with any labour line, an exported sheet, or no answer.
     nonisolated static func timesheetSnapshotNeedsRebuild(
         storedOverrideLineCount: Int?,
+        overrideApprovedAt: Date?,
         exportedAt: Date?,
-        liveLabourLineCount: Int
+        managerSignedAt: Date?,
+        liveLabourLines: [(isPayeDay: Bool, bookingCreatedAt: Date?)]
     ) -> Bool {
-        var sheet: [String: Any] = ["exportedAt": instantArgument(exportedAt)]
+        var sheet: [String: Any] = [
+            "exportedAt": instantArgument(exportedAt),
+            "managerSignedAt": instantArgument(managerSignedAt),
+        ]
         if let count = storedOverrideLineCount {
-            sheet["weeklyReportOverride"] = ["lines": Array(repeating: [String: Any](), count: max(0, count))]
+            sheet["weeklyReportOverride"] = [
+                "lines": Array(repeating: [String: Any](), count: max(0, count)),
+                "approvedAt": instantArgument(overrideApprovedAt),
+            ] as [String: Any]
         } else {
             sheet["weeklyReportOverride"] = NSNull()
         }
-        return callJSON("timesheetSnapshotNeedsRebuild", arguments: [sheet, max(0, liveLabourLineCount)]) as? Bool ?? false
+        let lines: [[String: Any]] = liveLabourLines.map { line in
+            ["isPayeDay": line.isPayeDay, "bookingCreatedAt": instantArgument(line.bookingCreatedAt)]
+        }
+        return callJSON("timesheetSnapshotNeedsRebuild", arguments: [sheet, lines]) as? Bool ?? false
     }
 
     /// RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras(sheet, { selfSigned })`: the person adds price work or expenses

@@ -204,10 +204,20 @@ extension FirebaseBackend {
     /// Every document the plan's queries return, merged by id. A query whose composite index is still building
     /// is read without the date bound. Throws only when every source failed.
     func readPlannedQueryDocuments(_ sources: [PlannedReadSource]) async throws -> [QueryDocumentSnapshot] {
+        try await readPlannedQueryDocumentsReportingAuthority(sources).documents
+    }
+
+    /// `readPlannedQueryDocuments`, and whether the answer is authoritative (RULEBOOK 1.43.0 §8, review r318): every
+    /// query of the plan answered from the server (`metadata.isFromCache == false`) — never a cache fallback, never a
+    /// plan with a failed part. Sign-off waits for an authoritative read of the period's bookings.
+    func readPlannedQueryDocumentsReportingAuthority(
+        _ sources: [PlannedReadSource]
+    ) async throws -> (documents: [QueryDocumentSnapshot], authoritative: Bool) {
         var seen = Set<String>()
         var out: [QueryDocumentSnapshot] = []
         var firstError: Error?
         var answered = 0
+        var authoritative = true
         for source in sources {
             guard case let .query(query, withoutDateBound) = source.kind else { continue }
             do {
@@ -219,14 +229,16 @@ extension FirebaseBackend {
                     snapshot = try await getQueryPreferringServer(withoutDateBound)
                 }
                 answered += 1
+                if snapshot.metadata.isFromCache { authoritative = false }
                 for doc in snapshot.documents where seen.insert(doc.documentID).inserted { out.append(doc) }
             } catch {
                 NSLog("PLANNED_READ_FAILED error=%@", error.localizedDescription)
                 if firstError == nil { firstError = error }
+                authoritative = false
             }
         }
         if answered == 0, let firstError { throw firstError }
-        return out
+        return (out, authoritative)
     }
 
     /// Every document the plan names (queries and single documents), as `(id, data)` rows for a rulebook reader.

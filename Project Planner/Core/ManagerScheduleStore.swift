@@ -24,6 +24,9 @@ class ManagerScheduleStore: ObservableObject {
     /// The organisation whose manager bookings load last finished (read, offline copy, or failed).
     /// Warnings wait for it (`WarningInputsReadiness`).
     private(set) var finishedLoadOrganizationId: String?
+    /// RULEBOOK 1.43.0 §8 (review r318): what the last server-answered read covered (organisation, lower bound) — never
+    /// the offline copy, a cache fallback or a partial plan. Sign-off waits for it (`PayInputsLoad.periodBookings`).
+    @Published private(set) var serverCoverage: BookingServerCoverage?
 
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -167,6 +170,7 @@ class ManagerScheduleStore: ObservableObject {
     func discardInMemoryForOrganizationSwitch() {
         managerSiteBookings = []
         finishedLoadOrganizationId = nil
+        serverCoverage = nil
         lastLoadAt = nil
         errorMessage = nil
     }
@@ -198,7 +202,12 @@ class ManagerScheduleStore: ObservableObject {
             do {
                 fb.prepareLaunchScheduleQueryIfNeeded()
                 let queryStart = fb.scheduleBookingQueryStart()
-                let list = try await fb.loadManagerSiteBookings(organizationId: orgId, startingOn: queryStart)
+                let read = try await fb.loadManagerSiteBookingsReportingAuthority(organizationId: orgId, startingOn: queryStart)
+                let list = read.bookings
+                // RULEBOOK 1.43.0 §8 (review r318): only a read every query of which the server answered covers a period.
+                self.serverCoverage = read.authoritative
+                    ? BookingServerCoverage(organizationId: orgId, fromDate: queryStart)
+                    : nil
                 let duplicates = self.duplicatesToDelete(from: list)
                 self.managerSiteBookings = self.deduplicated(self.withoutQueuedDeletes(list, organizationId: orgId))
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
@@ -233,6 +242,7 @@ class ManagerScheduleStore: ObservableObject {
             } catch {
                 NSLog("MANAGER_BOOKINGS_LOAD_FAILED org=%@ error=%@", orgId, error.localizedDescription)
                 self.lastLoadFailed = true
+                self.serverCoverage = nil
                 let cached = OfflineManagerScheduleLocalStore.load(organizationId: orgId)
                 if !cached.isEmpty {
                     self.managerSiteBookings = self.deduplicated(cached)
