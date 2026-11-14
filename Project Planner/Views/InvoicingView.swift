@@ -1989,6 +1989,12 @@ private struct MyTimesheetsHubView: View {
     }
 }
 
+/// RULEBOOK 1.45.0 §8: the owner's price work or expense entry a Delete asks about.
+enum TimesheetEntryTarget: Equatable {
+    case priceWork(UUID)
+    case expense(UUID)
+}
+
 private struct MyTimesheetView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
@@ -2012,6 +2018,10 @@ private struct MyTimesheetView: View {
     @State private var pendingExtraMode: TimesheetExtraMode?
     @State private var showPriceWorkSheet = false
     @State private var showExpenseSheet = false
+    /// RULEBOOK 1.45.0 §8: the owner's entry being edited or deleted (`canEditTimesheetEntry`).
+    @State private var editingPriceWorkEntry: TimesheetPriceWorkEntry?
+    @State private var editingExpenseEntry: TimesheetExpenseEntry?
+    @State private var deletingEntry: TimesheetEntryTarget?
     /// A server copy of this sheet arrived while an edit sheet was open; it loads when that sheet closes.
     @State private var serverTimesheetChangedWhileEditing = false
     /// The "Note to manager" box has the keyboard. Each keystroke saves, and the live listener would
@@ -2319,11 +2329,23 @@ private struct MyTimesheetView: View {
                                     Text(item.details)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    // RULEBOOK 1.45.0 §8: the evidence count (`claimEvidenceCountText`) and each file.
+                                    let evidenceCount = CanonicalBusinessEngine.claimEvidenceCountText(item.evidence.count)
+                                    if !evidenceCount.isEmpty {
+                                        Text(evidenceCount)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    ClaimEvidenceLinks(evidence: item.evidence)
                                     if managerHasSigned && item.managerDecision != .pending {
                                         Text(item.managerDecision.label)
                                             .font(.caption2.weight(.bold))
                                             .foregroundStyle(item.managerDecision.tint)
                                     }
+                                    entryActions(
+                                        edit: { editingPriceWorkEntry = item },
+                                        delete: { deletingEntry = .priceWork(item.id) }
+                                    )
                                 }
                                 Spacer()
                                 TimesheetAdjustedAmountText(
@@ -2348,11 +2370,23 @@ private struct MyTimesheetView: View {
                                     Text(item.details)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
+                                    // RULEBOOK 1.45.0 §8: the evidence count, each file, and the older-receipt note.
+                                    let evidenceCount = CanonicalBusinessEngine.claimEvidenceCountText(item.evidence.count)
+                                    if !evidenceCount.isEmpty {
+                                        Text(evidenceCount)
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    ClaimEvidenceLinks(evidence: item.evidence, legacyReceiptName: item.receiptName)
                                     if managerHasSigned && item.managerDecision != .pending {
                                         Text(item.managerDecision.label)
                                             .font(.caption2.weight(.bold))
                                             .foregroundStyle(item.managerDecision.tint)
                                     }
+                                    entryActions(
+                                        edit: { editingExpenseEntry = item },
+                                        delete: { deletingEntry = .expense(item.id) }
+                                    )
                                 }
                                 Spacer()
                                 TimesheetAdjustedAmountText(
@@ -2691,10 +2725,8 @@ private struct MyTimesheetView: View {
         }
         .sheet(isPresented: $showPriceWorkSheet) {
             NavigationStack {
-                TimesheetMoneyEntrySheet(mode: .priceWork) { entry in
-                    draft.priceWorkEntries.append(entry)
-                    saveDraft()
-                    showPriceWorkSheet = false
+                TimesheetMoneyEntrySheet(mode: .priceWork, editing: nil as TimesheetPriceWorkEntry?) { (entry: TimesheetPriceWorkEntry) async -> String? in
+                    await applyEntryChange { $0.priceWorkEntries.append(entry) }
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
@@ -2703,15 +2735,59 @@ private struct MyTimesheetView: View {
         }
         .sheet(isPresented: $showExpenseSheet) {
             NavigationStack {
-                TimesheetMoneyEntrySheet(mode: .expense) { entry in
-                    draft.expenseEntries.append(entry)
-                    saveDraft()
-                    showExpenseSheet = false
+                TimesheetMoneyEntrySheet(mode: .expense, editing: nil as TimesheetExpenseEntry?) { (entry: TimesheetExpenseEntry) async -> String? in
+                    await applyEntryChange { $0.expenseEntries.append(entry) }
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
                 .environmentObject(firebaseBackend)
             }
+        }
+        // RULEBOOK 1.45.0 §8: Edit opens the same sheet prefilled; the entry keeps its id.
+        .sheet(item: $editingPriceWorkEntry) { editing in
+            NavigationStack {
+                TimesheetMoneyEntrySheet(mode: .priceWork, editing: editing) { (entry: TimesheetPriceWorkEntry) async -> String? in
+                    await applyEntryChange(clearingSignatures: entryEditClearsSignatures) { sheet in
+                        if let index = sheet.priceWorkEntries.firstIndex(where: { $0.id == entry.id }) {
+                            sheet.priceWorkEntries[index] = entry
+                        }
+                    }
+                }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
+            }
+        }
+        .sheet(item: $editingExpenseEntry) { editing in
+            NavigationStack {
+                TimesheetMoneyEntrySheet(mode: .expense, editing: editing) { (entry: TimesheetExpenseEntry) async -> String? in
+                    await applyEntryChange(clearingSignatures: entryEditClearsSignatures) { sheet in
+                        if let index = sheet.expenseEntries.firstIndex(where: { $0.id == entry.id }) {
+                            sheet.expenseEntries[index] = entry
+                        }
+                    }
+                }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
+            }
+        }
+        .confirmationDialog(
+            CanonicalBusinessEngine.timesheetEntryDeleteLabel,
+            isPresented: Binding(get: { deletingEntry != nil }, set: { if !$0 { deletingEntry = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(CanonicalBusinessEngine.timesheetEntryDeleteLabel, role: .destructive) {
+                guard let target = deletingEntry else { return }
+                deletingEntry = nil
+                Task { await deleteEntry(target) }
+            }
+            .accessibilityIdentifier("timesheets.entry.deleteConfirm")
+            Button("Cancel", role: .cancel) { deletingEntry = nil }
+        } message: {
+            Text(entryEditClearsSignatures
+                ? "\(CanonicalBusinessEngine.timesheetEntryDeleteConfirmMessage)\n\n\(postSignWarningMessage)"
+                : CanonicalBusinessEngine.timesheetEntryDeleteConfirmMessage)
         }
         .sheet(isPresented: $showInvoiceUTRWarning) {
             InvoiceUTRBlankWarningSheet(
@@ -3016,11 +3092,77 @@ private struct MyTimesheetView: View {
         }
     }
 
-    private func saveDraft() {
+    /// RULEBOOK 1.45.0 §8 `canEditTimesheetEntry(sheet, { viewerIsOwner, selfSigned })`: the owner edits or deletes a
+    /// price work or expense entry only while they may add one (never once the line manager has signed).
+    private var entryEditPermission: RulebookTimesheetExtrasPermission {
+        let selfSigned = userStore.displayUser.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+        return CanonicalBusinessEngine.canEditTimesheetEntry(
+            managerSignedAt: draft.managerSignedAt,
+            approvedAt: draft.approvedAt,
+            viewerIsOwner: true,
+            selfSigned: selfSigned
+        )
+    }
+
+    /// A signed self-signed sheet asks the person to sign again after an edit or delete, as adding does.
+    private var entryEditClearsSignatures: Bool {
+        draft.operativeSignedAt != nil
+    }
+
+    /// Edit / Delete on one owner entry row (only when `canEditTimesheetEntry` allows).
+    @ViewBuilder
+    private func entryActions(edit: @escaping () -> Void, delete: @escaping () -> Void) -> some View {
+        if entryEditPermission.allowed {
+            HStack(spacing: 16) {
+                Button(CanonicalBusinessEngine.timesheetEntryEditLabel, action: edit)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("timesheets.entry.edit")
+                Button(CanonicalBusinessEngine.timesheetEntryDeleteLabel, role: .destructive, action: delete)
+                    .font(.caption.weight(.semibold))
+                    .accessibilityIdentifier("timesheets.entry.delete")
+            }
+            .buttonStyle(.borderless)
+            .padding(.top, 2)
+        }
+    }
+
+    private func deleteEntry(_ target: TimesheetEntryTarget) async {
+        if let message = await applyEntryChange(clearingSignatures: entryEditClearsSignatures, { sheet in
+            switch target {
+            case .priceWork(let id): sheet.priceWorkEntries.removeAll { $0.id == id }
+            case .expense(let id): sheet.expenseEntries.removeAll { $0.id == id }
+            }
+        }) {
+            saveErrorMessage = message
+        }
+    }
+
+    /// Applies an entry change, saves the sheet and waits for the save. On a refusal the sheet goes back to how it was
+    /// and the message is returned (the entry sheet then discards any file it just uploaded).
+    private func applyEntryChange(
+        clearingSignatures: Bool = false,
+        _ change: (inout TimesheetDraft) -> Void
+    ) async -> String? {
+        guard !periodLoadFailed else { return TimesheetDraftStore.periodReadFailedMessage }
+        let previous = draft
+        if clearingSignatures { TimesheetApprovalPolicy.clearSignatures(draft: &draft) }
+        change(&draft)
+        guard let task = saveDraft() else { return saveErrorMessage }
+        let message = await task.value
+        if let message {
+            draft = previous
+            TimesheetDraftStore.save(previous, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
+            return message
+        }
+        return nil
+    }
+
+    @discardableResult
+    private func saveDraft() -> Task<String?, Never>? {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
-            return
+            return nil
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
@@ -3051,11 +3193,11 @@ private struct MyTimesheetView: View {
             )
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return nil }
         let snapshot = draft
         let current = userStore.displayUser
-        Task {
-            saveErrorMessage = await TimesheetDraftStore.saveToCloud(
+        return Task {
+            let message = await TimesheetDraftStore.saveToCloud(
                 snapshot,
                 userId: currentUserId,
                 weekStart: week.start,
@@ -3065,6 +3207,8 @@ private struct MyTimesheetView: View {
                 writer: current,
                 subject: current
             )
+            saveErrorMessage = message
+            return message
         }
     }
 
@@ -5750,14 +5894,24 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     }
 }
 
+/// Add / Edit Price Work and Add / Edit Expense on My Timesheets (RULEBOOK 1.30.1 / 1.43.0 / 1.45.0 §8). Evidence is
+/// the shared claim control (`ClaimEvidenceEditor`: Take photo, Choose photo, Add site audit, Add file), uploaded into
+/// the person's own claim folder on save; an expense needs at least one piece (`EXPENSE_EVIDENCE_REQUIRED_MESSAGE`),
+/// price work's is optional. The amount reads `EXPENSE_AMOUNT_LABEL` ("Amount inc VAT") / `PRICE_WORK_AMOUNT_LABEL`.
+/// The owner's save is checked by `timesheetOwnerEntriesError` (job number, evidence) in `TimesheetDraftStore.saveToCloud`;
+/// when it is refused, the files just uploaded are discarded (`payeClaimEvidenceToDelete`) and the message is shown.
 private struct TimesheetMoneyEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
     let mode: Mode
-    let onSaveExpense: (TimesheetExpenseEntry) -> Void
-    let onSavePriceWork: (TimesheetPriceWorkEntry) -> Void
+    /// The entry being edited (same id on save), nil to add.
+    private let editingExpense: TimesheetExpenseEntry?
+    private let editingPriceWork: TimesheetPriceWorkEntry?
+    /// Saves the entry into the sheet; returns the message when the save was refused (nil = saved).
+    private let onSaveExpense: (TimesheetExpenseEntry) async -> String?
+    private let onSavePriceWork: (TimesheetPriceWorkEntry) async -> String?
 
     @State private var entryTitle = ""
     @State private var details = ""
@@ -5767,8 +5921,15 @@ private struct TimesheetMoneyEntrySheet: View {
     @State private var date = Date()
     @State private var endDate: Date?
     @State private var includeEndDate = false
-    @State private var receiptItem: PhotosPickerItem?
-    @State private var receiptName: String?
+    @State private var existingEvidence: [PayeClaimEvidence] = []
+    @State private var pendingEvidence: [PendingPayeClaimEvidence] = []
+    @State private var evidenceMessage: String?
+    @State private var saveError: String?
+    @State private var saving: String?
+    @State private var didPrefill = false
+    @FocusState private var managerFieldFocused: Bool
+
+    private var isEditing: Bool { editingExpense != nil || editingPriceWork != nil }
 
     private var amount: Double? {
         Double(amountText.replacingOccurrences(of: OrgMoney.symbol(), with: "").trimmingCharacters(in: .whitespacesAndNewlines))
@@ -5806,15 +5967,19 @@ private struct TimesheetMoneyEntrySheet: View {
             .map { $0 }
     }
 
-    init(mode: Mode, onSave: @escaping (TimesheetExpenseEntry) -> Void) {
+    init(mode: Mode, editing: TimesheetExpenseEntry? = nil, onSave: @escaping (TimesheetExpenseEntry) async -> String?) {
         self.mode = mode
+        self.editingExpense = editing
+        self.editingPriceWork = nil
         self.onSaveExpense = onSave
-        self.onSavePriceWork = { _ in }
+        self.onSavePriceWork = { _ in nil }
     }
 
-    init(mode: Mode, onSave: @escaping (TimesheetPriceWorkEntry) -> Void) {
+    init(mode: Mode, editing: TimesheetPriceWorkEntry? = nil, onSave: @escaping (TimesheetPriceWorkEntry) async -> String?) {
         self.mode = mode
-        self.onSaveExpense = { _ in }
+        self.editingExpense = nil
+        self.editingPriceWork = editing
+        self.onSaveExpense = { _ in nil }
         self.onSavePriceWork = onSave
     }
 
@@ -5823,126 +5988,248 @@ private struct TimesheetMoneyEntrySheet: View {
         mode == .priceWork ? CanonicalBusinessEngine.priceWorkJobNumberError(jobNumber) : nil
     }
 
+    /// RULEBOOK 1.45.0 §8: an expense needs at least one piece of evidence before it can be saved.
+    private var evidenceMissing: Bool {
+        mode == .expense && existingEvidence.isEmpty && pendingEvidence.isEmpty
+    }
+
+    private var canSave: Bool {
+        guard let amount, amount > 0, jobNumberError == nil, !evidenceMissing, saving == nil else { return false }
+        return true
+    }
+
+    private var saveTitle: String {
+        if let saving { return saving }
+        if isEditing { return CanonicalBusinessEngine.timesheetEntrySaveChangesLabel }
+        return mode == .expense ? "Add expense" : "Add price work"
+    }
+
+    private var screenTitle: String {
+        if isEditing { return CanonicalBusinessEngine.timesheetEntryEditTitle(isExpense: mode == .expense) }
+        return mode == .expense ? "Add Expense" : "Add Price Work"
+    }
+
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                moneyCard {
-                    labeledField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
-                    Divider().overlay(ProjectWorksRevampColors.border)
-                    labeledMultiline("Description", text: $details)
-                    Divider().overlay(ProjectWorksRevampColors.border)
-                    labeledField(mode == .priceWork ? "Job number (required)" : "Job number", text: $jobNumber)
-                    suggestionRow(jobSuggestions) { jobNumber = $0 }
-                    // RULEBOOK 1.30.1: a new price work entry needs a job number (`priceWorkJobNumberError`).
-                    if let jobNumberError, !(entryTitle.isEmpty && amountText.isEmpty) {
-                        Text(jobNumberError)
-                            .font(.system(size: 12))
-                            .foregroundStyle(.red)
-                    }
-                    Divider().overlay(ProjectWorksRevampColors.border)
-                    labeledField("Amount", text: $amountText, keyboard: .decimalPad)
-                }
-
-                moneyCard {
-                    DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
-                        .accessibilityIdentifier("timesheets.date")
-                        .font(.system(size: 13, weight: .medium))
-                    if mode == .priceWork {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    moneyCard {
+                        labeledField(mode == .expense ? "Expense name" : "Price work name", text: $entryTitle)
                         Divider().overlay(ProjectWorksRevampColors.border)
-                        Toggle("Add end date", isOn: $includeEndDate)
-                            .accessibilityIdentifier("timesheets.addEndDate")
-                            .font(.system(size: 13, weight: .medium))
-                        if includeEndDate {
-                            DatePicker("End date", selection: Binding(
-                                get: { endDate ?? date },
-                                set: { endDate = $0 }
-                            ), displayedComponents: .date)
-                            .accessibilityIdentifier("timesheets.endDate")
-                            .font(.system(size: 13, weight: .medium))
+                        labeledMultiline("Description", text: $details)
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                        labeledField(mode == .priceWork ? "Job number (required)" : "Job number", text: $jobNumber)
+                        suggestionRow(jobSuggestions) { jobNumber = $0 }
+                        // RULEBOOK 1.30.1: a new price work entry needs a job number (`priceWorkJobNumberError`).
+                        if let jobNumberError, !(entryTitle.isEmpty && amountText.isEmpty) {
+                            Text(jobNumberError)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.red)
                         }
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                        // RULEBOOK 1.45.0: "Amount inc VAT" for an expense, "Amount" for price work.
+                        labeledField(CanonicalBusinessEngine.claimAmountLabel(isExpense: mode == .expense), text: $amountText, keyboard: .decimalPad)
                     }
-                }
 
-                if mode == .priceWork {
-                    moneyCard {
-                        labeledField("Manager who agreed this", text: $managerName)
-                        suggestionRow(managerSuggestions) { managerName = $0 }
+                    if mode == .priceWork {
+                        moneyCard {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("MANAGER WHO AGREED THIS")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                                    .tracking(0.4)
+                                TextField("Manager who agreed this", text: $managerName)
+                                    .focused($managerFieldFocused)
+                                    .textInputAutocapitalization(.words)
+                                    .autocorrectionDisabled()
+                                    .accessibilityIdentifier("timesheets.\(AccessibilityID.token("Manager who agreed this"))")
+                                    .font(.system(size: 14, weight: .medium))
+                            }
+                            // RULEBOOK 1.43.0 `agreedManagerSuggestions`: shown as the person types, right under the
+                            // field, as a list (the horizontal chips sat under the keyboard and were missed).
+                            managerSuggestionList
+                        }
+                        .id("managerCard")
                     }
-                }
 
-                if mode == .expense {
                     moneyCard {
-                        PhotosPicker(selection: $receiptItem, matching: .any(of: [.images, .not(.livePhotos)])) {
-                            HStack {
-                                Image(systemName: "paperclip")
-                                    .foregroundStyle(ProjectWorksRevampColors.blue)
-                                Text("Upload receipt")
-                                    .font(.system(size: 13, weight: .medium))
-                                    .foregroundStyle(ProjectWorksRevampColors.ink)
-                                Spacer()
-                                Text(receiptName ?? "Required")
-                                    .font(.system(size: 12))
-                                    .foregroundStyle(receiptName == nil ? ProjectWorksRevampColors.requiredPillFg : ProjectWorksRevampColors.blue)
+                        DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                            .accessibilityIdentifier("timesheets.date")
+                            .font(.system(size: 13, weight: .medium))
+                        if mode == .priceWork {
+                            Divider().overlay(ProjectWorksRevampColors.border)
+                            Toggle("Add end date", isOn: $includeEndDate)
+                                .accessibilityIdentifier("timesheets.addEndDate")
+                                .font(.system(size: 13, weight: .medium))
+                            if includeEndDate {
+                                DatePicker("End date", selection: Binding(
+                                    get: { endDate ?? date },
+                                    set: { endDate = $0 }
+                                ), displayedComponents: .date)
+                                .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                                .accessibilityIdentifier("timesheets.endDate")
+                                .font(.system(size: 13, weight: .medium))
                             }
                         }
-                            .accessibilityIdentifier("timesheets.paperclip")
+                    }
+
+                    ClaimEvidenceEditor(
+                        existing: $existingEvidence,
+                        pending: $pendingEvidence,
+                        message: $evidenceMessage,
+                        required: mode == .expense,
+                        identifier: "timesheets.evidence"
+                    )
+                    .environmentObject(firebaseBackend)
+
+                    if let saveError {
+                        PayeClaimFieldMessage(text: saveError)
+                            .accessibilityIdentifier("timesheets.entry.error")
                     }
                 }
+                .padding(16)
             }
-            .padding(16)
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: managerName) { _, _ in
+                guard managerFieldFocused, !managerSuggestions.isEmpty else { return }
+                withAnimation { proxy.scrollTo("managerCard", anchor: .top) }
+            }
         }
         .background(ProjectWorksRevampColors.canvas.ignoresSafeArea())
-        .navigationTitle(mode == .expense ? "Add Expense" : "Add Price Work")
+        .navigationTitle(screenTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") { dismiss() }
+                    .disabled(saving != nil)
                     .accessibilityIdentifier("timesheets.cancel")
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(mode == .expense ? "Add expense" : "Add price work") {
-                    guard let amount, amount > 0, jobNumberError == nil else { return }
-                    if mode == .expense {
-                        onSaveExpense(
-                            .init(
-                                id: UUID(),
-                                title: entryTitle.isEmpty ? "Untitled expense" : entryTitle,
-                                details: details,
-                                jobNumber: jobNumber,
-                                date: date,
-                                amount: amount,
-                                receiptName: receiptName
-                            )
-                        )
-                    } else {
-                        onSavePriceWork(
-                            .init(
-                                id: UUID(),
-                                title: entryTitle.isEmpty ? "Untitled price work" : entryTitle,
-                                details: details,
-                                jobNumber: jobNumber.trimmingCharacters(in: .whitespacesAndNewlines),
-                                agreedManagerName: managerName.isEmpty ? "Manager" : managerName,
-                                startDate: date,
-                                endDate: includeEndDate ? endDate : nil,
-                                amount: amount
-                            )
-                        )
-                    }
-                    dismiss()
+                Button(saveTitle) {
+                    Task { await save() }
                 }
                 .accessibilityIdentifier("timesheets.addExpense")
-                .disabled(amount == nil || (amount ?? 0) <= 0 || (mode == .expense && receiptName == nil) || jobNumberError != nil)
+                .disabled(!canSave)
             }
         }
-        .onChange(of: receiptItem) { _, newItem in
-            guard let newItem else { return }
-            if let name = newItem.supportedContentTypes.first?.preferredFilenameExtension {
-                receiptName = "receipt.\(name)"
-            } else {
-                receiptName = "receipt-uploaded"
+        .interactiveDismissDisabled(saving != nil)
+        .onAppear(perform: prefill)
+    }
+
+    @ViewBuilder
+    private var managerSuggestionList: some View {
+        let suggestions = managerSuggestions
+        if !suggestions.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(suggestions, id: \.self) { suggestion in
+                    Button {
+                        managerName = suggestion
+                        managerFieldFocused = false
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "person.crop.circle")
+                                .foregroundStyle(ProjectWorksRevampColors.blue)
+                            Text(suggestion)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(ProjectWorksRevampColors.ink)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("timesheets.managerSuggestion.\(AccessibilityID.token(suggestion))")
+                    if suggestion != suggestions.last {
+                        Divider().overlay(ProjectWorksRevampColors.border)
+                    }
+                }
             }
+            .padding(.horizontal, 10)
+            .background(ProjectWorksRevampColors.blue.opacity(0.06))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .accessibilityIdentifier("timesheets.managerSuggestions")
         }
+    }
+
+    private func prefill() {
+        guard !didPrefill else { return }
+        didPrefill = true
+        if let entry = editingExpense {
+            entryTitle = entry.title
+            details = entry.details
+            jobNumber = entry.jobNumber
+            amountText = Self.amountText(entry.amount)
+            date = entry.date
+            existingEvidence = entry.evidence
+        } else if let entry = editingPriceWork {
+            entryTitle = entry.title
+            details = entry.details
+            jobNumber = entry.jobNumber
+            amountText = Self.amountText(entry.amount)
+            managerName = entry.agreedManagerName
+            date = entry.startDate
+            endDate = entry.endDate
+            includeEndDate = entry.endDate != nil
+            existingEvidence = entry.evidence
+        }
+    }
+
+    private static func amountText(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+    }
+
+    private func save() async {
+        guard canSave, let amount else { return }
+        saveError = nil
+        var uploaded: [PayeClaimEvidence] = []
+        do {
+            uploaded = try await ClaimEvidenceUpload.upload(pendingEvidence, firebaseBackend: firebaseBackend) { step in
+                saving = step
+            }
+        } catch {
+            saving = nil
+            saveError = error.localizedDescription
+            return
+        }
+        saving = "Saving…"
+        let evidence = existingEvidence + uploaded
+        let refused: String?
+        if mode == .expense {
+            var entry = editingExpense ?? TimesheetExpenseEntry(
+                id: UUID(), title: "", details: "", jobNumber: "", date: date, amount: amount, receiptName: nil
+            )
+            entry.title = entryTitle.isEmpty ? "Untitled expense" : entryTitle
+            entry.details = details
+            entry.jobNumber = jobNumber
+            entry.date = date
+            entry.amount = amount
+            entry.evidence = evidence
+            refused = await onSaveExpense(entry)
+        } else {
+            var entry = editingPriceWork ?? TimesheetPriceWorkEntry(
+                id: UUID(), title: "", details: "", jobNumber: "", agreedManagerName: "", startDate: date, endDate: nil, amount: amount
+            )
+            entry.title = entryTitle.isEmpty ? "Untitled price work" : entryTitle
+            entry.details = details
+            entry.jobNumber = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.agreedManagerName = managerName.isEmpty ? "Manager" : managerName
+            entry.startDate = date
+            entry.endDate = includeEndDate ? endDate : nil
+            entry.amount = amount
+            entry.evidence = evidence
+            refused = await onSavePriceWork(entry)
+        }
+        saving = nil
+        if let refused {
+            // RULEBOOK 1.45.0 §24: a refused save leaves no copy behind (the just-uploaded files only).
+            // The picked files stay on the form, so another save uploads them again.
+            await firebaseBackend.discardPayeClaimEvidence(uploaded)
+            saveError = refused
+            return
+        }
+        dismiss()
     }
 
     private func moneyCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
