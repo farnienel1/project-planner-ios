@@ -16,16 +16,11 @@ enum PendingSyncCount {
         OfflineOutboxStore.shared.pendingCount + SiteAuditOfflineStore.shared.pendingCount
     }
 
-    /// Site audit drafts on this phone (owner decision 12 Nov): a sign-out removes them.
-    static var siteAuditDrafts: Int {
-        SiteAuditDraftStore.shared.totalDraftCount()
-    }
-
     static func draftsLine(_ count: Int) -> String? {
         guard count > 0 else { return nil }
         return count == 1
-            ? "1 site audit draft on this phone will be deleted."
-            : "\(count) site audit drafts on this phone will be deleted."
+            ? "Your 1 site audit draft on this phone will be deleted."
+            : "Your \(count) site audit drafts on this phone will be deleted."
     }
 
     static func message(_ count: Int) -> String {
@@ -44,6 +39,9 @@ private struct SignOutConfirmationModifier: ViewModifier {
     /// "Finishing sync…": Sync now or Sign out anyway is waiting for the device's sync (at most
     /// `finishSyncTimeoutSeconds`). The screen is covered so taps do not stack.
     @State private var isSyncing = false
+    /// The signed-in person's site audit drafts (owner decision 12 Nov): their sign-out removes them. Counted off the
+    /// main thread when the alert opens.
+    @State private var siteAuditDraftCount = 0
 
     /// A Storage upload or save can stall for minutes; a sign-out never waits longer than this.
     static let finishSyncTimeoutSeconds: Double = 12
@@ -51,9 +49,20 @@ private struct SignOutConfirmationModifier: ViewModifier {
     func body(content: Content) -> some View {
         // Read when the alert is built, so the count is the one on the device now.
         let pending = PendingSyncCount.current
-        let draftsLine = PendingSyncCount.draftsLine(PendingSyncCount.siteAuditDrafts)
+        let draftsLine = PendingSyncCount.draftsLine(siteAuditDraftCount)
         let baseMessage = pending > 0 ? PendingSyncCount.message(pending) : "Are you sure you want to sign out?"
         return content
+            .onChange(of: isPresented) { _, presented in
+                guard presented, let userId = firebaseBackend.currentUser?.uid else {
+                    if !presented { siteAuditDraftCount = 0 }
+                    return
+                }
+                Task {
+                    siteAuditDraftCount = await Task.detached(priority: .userInitiated) {
+                        SiteAuditDraftStore.shared.draftCount(userId: userId)
+                    }.value
+                }
+            }
             .overlay {
                 if isSyncing {
                     ZStack {

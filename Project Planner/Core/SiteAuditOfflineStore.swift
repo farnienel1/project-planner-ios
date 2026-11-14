@@ -65,6 +65,25 @@ final class SiteAuditOfflineStore: ObservableObject {
     /// leaves the old copy (and its folder) in place; the new copy replaces it a moment later.
     private var enqueuingAuditIds: Set<UUID> = []
 
+    /// Moves on at every sign-out (`clearAll`). `enqueue` notes it before writing photos and refuses to add the audit
+    /// if it moved meanwhile, so an audit queued just as one account was signed out is never uploaded later as the
+    /// next account.
+    private(set) var signOutEpoch = 0
+
+    /// Queuing was interrupted by a sign-out.
+    struct SignedOutWhileQueuing: Error, LocalizedError {
+        var errorDescription: String? { "You were signed out while this audit was being saved on the phone." }
+    }
+
+    #if DEBUG
+    /// Tests only: runs after the photos are written and before the audit is added (a sign-out landing in the pause).
+    static var testHookAfterPhotoWrite: (() -> Void)?
+    #endif
+
+    nonisolated static func enqueueStillValid(startEpoch: Int, currentEpoch: Int) -> Bool {
+        startEpoch == currentEpoch
+    }
+
     func isQueued(id: UUID) -> Bool {
         pending.contains { $0.id == id }
     }
@@ -141,6 +160,7 @@ final class SiteAuditOfflineStore: ObservableObject {
         organizationId: String,
         draftItems: [SiteAuditDraftItem]
     ) async throws {
+        let startEpoch = signOutEpoch
         enqueuingAuditIds.insert(audit.id)
         defer { enqueuingAuditIds.remove(audit.id) }
         let queued = Self.carryingUploadedPhotoURLs(into: audit, from: pending.first { $0.id == audit.id }?.audit)
@@ -161,6 +181,14 @@ final class SiteAuditOfflineStore: ObservableObject {
         } catch {
             try? FileManager.default.removeItem(at: folder)
             throw error
+        }
+        #if DEBUG
+        Self.testHookAfterPhotoWrite?()
+        #endif
+        guard Self.enqueueStillValid(startEpoch: startEpoch, currentEpoch: signOutEpoch) else {
+            // Signed out while the photos were being written: drop them, never add this account's audit back.
+            try? FileManager.default.removeItem(at: pendingFolderURL(for: queued.id))
+            throw SignedOutWhileQueuing()
         }
         pending.removeAll { $0.id == queued.id }
         pending.append(
@@ -199,6 +227,7 @@ final class SiteAuditOfflineStore: ObservableObject {
     /// Sign-out: every queued audit and its photos are removed, so the next account on this phone never uploads
     /// (or sees) them (security audit M6).
     func clearAll() {
+        signOutEpoch += 1
         for record in pending {
             try? FileManager.default.removeItem(at: pendingFolderURL(for: record.id))
         }
@@ -266,6 +295,7 @@ final class SiteAuditOfflineStore: ObservableObject {
                     // Removed first, so the Drafts list never shows it as "not uploaded" in between.
                     let savedId = record.id
                     await Task.detached(priority: .utility) { SiteAuditDraftStore.shared.deleteSubmittedDraft(id: savedId) }.value
+                    SiteAuditDraftNotifications.postChanged()
                     // Checked again: a new copy may have been queued while the draft was being removed.
                     if !enqueuingAuditIds.contains(record.id), Self.shouldRemoveAfterSync(
                         currentRevision: pending.first(where: { $0.id == record.id }).map(\.revision),

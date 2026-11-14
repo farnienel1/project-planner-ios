@@ -73,8 +73,11 @@ final class SiteAuditDraftAutosaver {
     }
 
     /// Submit: the last state is written with `submittedAt` and kept as a backup until the upload queue saves the
-    /// audit (`SiteAuditOfflineStore` then calls `deleteSubmittedDraft`). No more saves after this.
-    func finishSubmitted(_ snapshot: Snapshot) {
+    /// audit (`SiteAuditOfflineStore` then calls `deleteSubmittedDraft`). No more saves after this. Returns once the
+    /// write is on disk; call it before starting the upload, so a quick upload's delete cannot run before it. If the
+    /// queue has already saved the audit by then (`isStillQueued` false, e.g. the retry timer got there first), the
+    /// draft is removed here instead.
+    func finishSubmitted(_ snapshot: Snapshot, isStillQueued: () -> Bool) async {
         guard !isStopped else { return }
         debounceTask?.cancel()
         debounceTask = nil
@@ -82,6 +85,13 @@ final class SiteAuditDraftAutosaver {
         submitted.draft.submittedAt = Date()
         write(submitted)
         isStopped = true
+        await writeChain?.value
+        if !isStillQueued() {
+            let store = self.store
+            let id = draftId
+            await Task.detached(priority: .utility) { store.deleteSubmittedDraft(id: id) }.value
+            SiteAuditDraftNotifications.postChanged()
+        }
     }
 
     private func write(_ snapshot: Snapshot) {
@@ -116,12 +126,23 @@ final class SiteAuditDraftAutosaver {
                     return changed.map(\.0)
                 }
             }.value
+            SiteAuditDraftNotifications.postChanged()
             // Not written: forget them, so the next save tries again.
             guard let self else { return }
             for id in failedPhotoIds where self.queuedPhotos[id] === changed.first(where: { $0.0 == id })?.1 {
                 self.queuedPhotos[id] = nil
             }
         }
+    }
+}
+
+/// The Drafts list on the Site Audit hub reloads when a draft is written or removed (the editor's last save lands
+/// after the editor has closed).
+enum SiteAuditDraftNotifications {
+    static let changed = Notification.Name("SiteAuditDraftsDidChange")
+
+    static func postChanged() {
+        NotificationCenter.default.post(name: changed, object: nil)
     }
 }
 

@@ -1048,10 +1048,11 @@ class FirebaseBackend: ObservableObject {
         }
         // Captured before sign-out: the token, the account and the open company (same-email copies are found there).
         let target = pushTokenRemovalTarget()
-        // A forced sign-out keeps this person's own site audit drafts (only they ever list them), so an audit they
-        // submitted that had not uploaded yet is offered again when they sign back in. A sign-out they chose was
-        // warned (`SignOutConfirmation`) and removes every draft.
-        let keepDraftsOfUserId = reason == .userRequested ? nil : auth.currentUser?.uid
+        // Site audit drafts: a sign-out the person chose was warned (`SignOutConfirmation`) and removes their drafts;
+        // a forced one keeps them (only they ever list them), so an audit they submitted that had not uploaded yet is
+        // offered again when they sign back in.
+        let signedOutUserId = auth.currentUser?.uid
+        let keepDrafts = reason != .userRequested
         await SignOutSequence.run(
             cleanup: { [weak self] in
                 guard let self, let target else { return }
@@ -1062,7 +1063,7 @@ class FirebaseBackend: ObservableObject {
                 PushRegistrationStatus.shared.resetForSignOut()
                 do {
                     try auth.signOut()
-                    clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: keepDraftsOfUserId)
+                    clearDeviceQueuesOnSignOut(draftsOfUserId: signedOutUserId, keepDrafts: keepDrafts)
                     LiveListenerClock.shared.reset()
                     UnknownBookedPersonRefresh.shared.reset()
                 } catch {
@@ -1076,15 +1077,16 @@ class FirebaseBackend: ObservableObject {
     /// otherwise replay as the next account), every cached timesheet draft, and the SmartCacheService
     /// cache (`clearAllCache`, through `.appDidSignOut`).
     func clearDeviceQueuesOnSignOut() {
-        clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: nil)
+        // No account known: every site audit draft on the phone goes.
+        clearDeviceQueuesOnSignOut(draftsOfUserId: nil, keepDrafts: false)
     }
 
-    func clearDeviceQueuesOnSignOut(keepingDraftsOfUserId: String?) {
+    func clearDeviceQueuesOnSignOut(draftsOfUserId: String?, keepDrafts: Bool) {
         OfflineOutboxStore.shared.clearAll()
         SiteAuditOfflineStore.shared.clearAll()
         // Site audit drafts (and their photos) kept on the phone: the next account never sees them. Saves still
         // running are refused from here on, so none comes back.
-        SiteAuditDraftStore.shared.deleteAll(keepingUserId: keepingDraftsOfUserId)
+        SiteAuditDraftStore.shared.signedOut(userId: draftsOfUserId, keepDrafts: keepDrafts)
         TimesheetDraftStore.clearAll()
         sessionHasNoOrganization = false
         NotificationCenter.default.post(name: .appDidSignOut, object: nil)
@@ -9940,6 +9942,14 @@ extension FirebaseBackend {
         return nil
     }
 
+    /// The organisation a queued site audit is written to: its own (`recordOrganizationId`), else the resolver's.
+    nonisolated static func siteAuditWriteOrganizationId(recordOrganizationId: String, resolvedFallback: String?) -> String? {
+        let own = recordOrganizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !own.isEmpty { return own }
+        let fallback = resolvedFallback?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return fallback.isEmpty ? nil : fallback
+    }
+
     func saveSiteAudit(_ audit: SiteAudit, organizationId: String) async throws {
         guard currentUser != nil else {
             throw NSError(
@@ -9948,8 +9958,16 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save a site audit."]
             )
         }
-        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
-            ?? normalizedOrganizationId(organizationId)
+        // AGENTS.md rule 2: the audit is written to the organisation it was made in (the queued record's), never the
+        // person's home company from `users/{uid}.organizationId` — its photos are already uploaded under that
+        // organisation's path. Only a record with no organisation falls back to the resolver. A person who is no
+        // longer a member there is refused by the security rules; the audit stays queued with that error.
+        let requested = normalizedOrganizationId(organizationId)
+        var fallback: String?
+        if requested.isEmpty {
+            fallback = await resolveOrganizationIdForFirebaseWrites(preferredFallback: nil)
+        }
+        let resolved = Self.siteAuditWriteOrganizationId(recordOrganizationId: requested, resolvedFallback: fallback) ?? ""
         guard !resolved.isEmpty else {
             throw NSError(
                 domain: "FirebaseBackend",

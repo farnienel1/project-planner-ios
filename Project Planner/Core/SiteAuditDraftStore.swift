@@ -247,12 +247,6 @@ nonisolated final class SiteAuditDraftStore: @unchecked Sendable {
         drafts(userId: userId, organizationId: organizationId).first { $0.id == id }
     }
 
-    /// Every draft file on this phone (all accounts): for the sign-out warning.
-    func totalDraftCount() -> Int {
-        lock.lock(); defer { lock.unlock() }
-        return allDraftFolders().count
-    }
-
     /// Writes the draft. `photos` holds JPEG data for the items whose photo is new or changed since the last save;
     /// an item marked `hasPhoto` without data here keeps the file already on disk. Photos of items that were removed,
     /// or no longer have a photo, are deleted. Photos are written before `draft.json`, so a draft never names a photo
@@ -311,39 +305,46 @@ nonisolated final class SiteAuditDraftStore: @unchecked Sendable {
         }
     }
 
-    /// Every draft of one account, in every organisation.
-    func deleteAll(userId: String) {
-        lock.lock(); defer { lock.unlock() }
-        try? FileManager.default.removeItem(at: userFolder(userId: userId))
-    }
-
-    /// Sign-out: every draft on this phone is removed (except, for a forced sign-out, the signed-out person's own
-    /// — `keepingUserId` — so work they submitted but that had not uploaded is offered again when they sign back in;
-    /// other accounts never list it). In-flight saves are refused from here on. The folder is moved aside at once and
-    /// deleted in the background, so this never holds up the main thread.
-    func deleteAll(keepingUserId: String? = nil) {
+    /// Sign-out. In-flight saves are refused from here on (the counter moves), so an autosave still running cannot
+    /// write a draft back.
+    /// - A sign-out the person chose (`keepDrafts` false) removes that account's drafts, in every organisation. Other
+    ///   accounts' drafts on the phone (kept by their own forced sign-out) are theirs and are left alone; only they
+    ///   ever list them. With no account id known, every draft on the phone is removed.
+    /// - A forced sign-out (`keepDrafts` true) removes nothing, so work submitted but not uploaded is offered again
+    ///   when the person signs back in.
+    /// Removed folders are moved aside at once and deleted in the background, never holding up the main thread.
+    func signedOut(userId: String?, keepDrafts: Bool) {
         lock.lock(); defer { lock.unlock() }
         epoch += 1
+        guard !keepDrafts else { return }
+        let target: URL
+        if let userId, !userId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            target = userFolder(userId: userId)
+        } else {
+            target = rootURL
+        }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: rootURL.path) else { return }
+        guard fm.fileExists(atPath: target.path) else { return }
         let trash = rootURL.deletingLastPathComponent()
             .appendingPathComponent("SiteAuditDrafts-removed-\(UUID().uuidString)", isDirectory: true)
         do {
-            try fm.moveItem(at: rootURL, to: trash)
+            try fm.moveItem(at: target, to: trash)
         } catch {
-            try? fm.removeItem(at: rootURL)
+            try? fm.removeItem(at: target)
             return
-        }
-        if let keepingUserId, !keepingUserId.isEmpty {
-            let kept = trash.appendingPathComponent(Self.folderKey(keepingUserId), isDirectory: true)
-            if fm.fileExists(atPath: kept.path) {
-                try? fm.createDirectory(at: rootURL, withIntermediateDirectories: true)
-                try? fm.moveItem(at: kept, to: userFolder(userId: keepingUserId))
-            }
         }
         DispatchQueue.global(qos: .utility).async {
             try? FileManager.default.removeItem(at: trash)
         }
+    }
+
+    /// Drafts of one account (every organisation): what its sign-out would delete.
+    func draftCount(userId: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let user = userFolder(userId: userId)
+        return draftFolders(in: user).flatMap { draftFolders(in: $0) }
+            .filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent(Self.draftFileName).path) }
+            .count
     }
 
     // MARK: Private (call with the lock held)

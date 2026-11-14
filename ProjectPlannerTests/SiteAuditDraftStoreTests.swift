@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Project_Planner
 
 /// Owner decisions 12 Nov: site audit drafts kept on the phone (item 6) and the background save after
@@ -150,23 +151,25 @@ final class SiteAuditDraftStoreTests: XCTestCase {
         XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").map(\.id), [second.id])
     }
 
-    func testSignOutDeleteAllRemovesEveryDraftOnThePhone() throws {
+    func testSignOutWithNoKnownAccountRemovesEveryDraftOnThePhone() throws {
         try store.save(makeDraft(userId: "TEST-user-a"))
         try store.save(makeDraft(userId: "TEST-user-b"))
-        store.deleteAll()
+        store.signedOut(userId: nil, keepDrafts: false)
         XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
         XCTAssertTrue(store.drafts(userId: "TEST-user-b", organizationId: "TEST-org-1").isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.path))
     }
 
-    func testDeleteAllForOneUserKeepsAnotherUsersDrafts() throws {
+    func testChosenSignOutRemovesOnlyThatAccountsDrafts() throws {
         try store.save(makeDraft(userId: "TEST-user-a", organizationId: "TEST-org-1"))
         try store.save(makeDraft(userId: "TEST-user-a", organizationId: "TEST-org-2"))
-        let other = makeDraft(userId: "TEST-user-b")
+        let other = makeDraft(userId: "TEST-user-b") // kept by user b's own forced sign-out
         try store.save(other)
-        store.deleteAll(userId: "TEST-user-a")
+        XCTAssertEqual(store.draftCount(userId: "TEST-user-a"), 2)
+        store.signedOut(userId: "TEST-user-a", keepDrafts: false)
         XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
         XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-2").isEmpty)
+        XCTAssertEqual(store.draftCount(userId: "TEST-user-a"), 0)
         XCTAssertEqual(store.drafts(userId: "TEST-user-b", organizationId: "TEST-org-1").map(\.id), [other.id])
     }
 
@@ -207,7 +210,7 @@ final class SiteAuditDraftStoreTests: XCTestCase {
 
     func testSaveStartedBeforeSignOutIsRefused() throws {
         let epochBefore = store.currentEpoch
-        store.deleteAll()
+        store.signedOut(userId: "TEST-user-a", keepDrafts: false)
         XCTAssertThrowsError(try store.save(makeDraft(), epoch: epochBefore)) { error in
             XCTAssertTrue(error is SiteAuditDraftStoreError)
         }
@@ -218,14 +221,14 @@ final class SiteAuditDraftStoreTests: XCTestCase {
         XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").map(\.id), [draft.id])
     }
 
-    func testForcedSignOutKeepsOnlyThatPersonsDrafts() throws {
+    func testForcedSignOutKeepsDraftsButRefusesInFlightSaves() throws {
         let mine = makeDraft(userId: "TEST-user-a")
         try store.save(mine)
-        try store.save(makeDraft(userId: "TEST-user-b"))
-        store.deleteAll(keepingUserId: "TEST-user-a")
+        let epochBefore = store.currentEpoch
+        store.signedOut(userId: "TEST-user-a", keepDrafts: true)
         XCTAssertEqual(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").map(\.id), [mine.id])
-        XCTAssertTrue(store.drafts(userId: "TEST-user-b", organizationId: "TEST-org-1").isEmpty)
-        XCTAssertEqual(store.totalDraftCount(), 1)
+        XCTAssertEqual(store.draftCount(userId: "TEST-user-a"), 1)
+        XCTAssertThrowsError(try store.save(makeDraft(userId: "TEST-user-a"), epoch: epochBefore))
     }
 
     func testSavedAuditRemovesOnlyItsSubmittedDraft() throws {
@@ -344,5 +347,113 @@ final class SiteAuditQueueCarryOverTests: XCTestCase {
         let merged = SiteAuditOfflineStore.carryingUploadedPhotoURLs(into: next, from: older)
         XCTAssertEqual(merged.items.map(\.imageURL), ["https://example.test/same.jpg", nil, nil])
         XCTAssertEqual(SiteAuditOfflineStore.carryingUploadedPhotoURLs(into: next, from: nil), next)
+    }
+}
+
+/// Submit keeps the draft as a backup until the queue saves the audit, and never leaves it behind when the upload
+/// was quicker than the final draft write (review N2).
+@MainActor
+final class SiteAuditDraftSubmitTests: XCTestCase {
+    private var root: URL!
+    private var store: SiteAuditDraftStore!
+
+    override func setUp() async throws {
+        root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TEST-SiteAuditDraftSubmit-\(UUID().uuidString)", isDirectory: true)
+        store = SiteAuditDraftStore(rootURL: root)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    private func snapshot(id: UUID) -> SiteAuditDraftAutosaver.Snapshot {
+        let item = SiteAuditDraftItemRecord(id: UUID(), title: "TEST item", location: "", assignee: "", comments: "",
+                                            annotations: "", capturedAt: nil, createdAt: Date(), hasPhoto: false)
+        let draft = SiteAuditDraft(id: id, userId: "TEST-user-a", organizationId: "TEST-org-1", projectId: nil,
+                                   projectJobNumber: "J-1", projectName: "TEST-Site", typeRawValue: "General",
+                                   customTitle: "", authorName: "TEST Person", date: Date(), visibleToOperatives: true,
+                                   items: [item], createdAt: Date(), updatedAt: Date())
+        return .init(draft: draft, images: [:])
+    }
+
+    func testSubmittedDraftIsKeptWhileTheAuditIsQueued() async {
+        let id = UUID()
+        let saver = SiteAuditDraftAutosaver(draftId: id, userId: "TEST-user-a", organizationId: "TEST-org-1", store: store)
+        await saver.finishSubmitted(snapshot(id: id)) { true }
+        let kept = store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1")
+        XCTAssertEqual(kept.map(\.id), [id])
+        XCTAssertNotNil(kept.first?.submittedAt)
+        XCTAssertTrue(saver.isStopped)
+        // The queue saves the audit: its submitted draft goes.
+        store.deleteSubmittedDraft(id: id)
+        XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
+    }
+
+    func testDraftWrittenAfterAQuickUploadIsRemoved() async {
+        // The queue already saved the audit (and ran its delete) before the final draft write landed.
+        let id = UUID()
+        let saver = SiteAuditDraftAutosaver(draftId: id, userId: "TEST-user-a", organizationId: "TEST-org-1", store: store)
+        store.deleteSubmittedDraft(id: id) // the queue's delete, too early: nothing there yet
+        await saver.finishSubmitted(snapshot(id: id)) { false }
+        XCTAssertTrue(store.drafts(userId: "TEST-user-a", organizationId: "TEST-org-1").isEmpty)
+    }
+}
+
+/// An audit queued while its account is being signed out is never added back to the queue (review N1).
+@MainActor
+final class SiteAuditQueueSignOutTests: XCTestCase {
+    override func tearDown() async throws {
+        #if DEBUG
+        SiteAuditOfflineStore.testHookAfterPhotoWrite = nil
+        #endif
+    }
+
+    func testQueuedAuditIsWrittenToItsOwnOrganisation() {
+        // Item 12: the record's organisation wins over the home company the resolver would pick.
+        XCTAssertEqual(FirebaseBackend.siteAuditWriteOrganizationId(recordOrganizationId: "TEST-org-2", resolvedFallback: "TEST-home"), "TEST-org-2")
+        XCTAssertEqual(FirebaseBackend.siteAuditWriteOrganizationId(recordOrganizationId: "  ", resolvedFallback: "TEST-home"), "TEST-home")
+        XCTAssertNil(FirebaseBackend.siteAuditWriteOrganizationId(recordOrganizationId: "", resolvedFallback: nil))
+    }
+
+    func testEpochRule() {
+        XCTAssertTrue(SiteAuditOfflineStore.enqueueStillValid(startEpoch: 3, currentEpoch: 3))
+        XCTAssertFalse(SiteAuditOfflineStore.enqueueStillValid(startEpoch: 3, currentEpoch: 4))
+    }
+
+    func testSignOutDuringQueuingDropsTheAudit() async throws {
+        #if DEBUG
+        let queue = SiteAuditOfflineStore.shared
+        let auditId = UUID()
+        let itemId = UUID()
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 4, height: 4)).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 4, height: 4))
+        }
+        let audit = SiteAudit(
+            id: auditId, projectId: UUID(), projectJobNumber: "J-1", projectName: "TEST-Site", type: .general,
+            customTitle: "", authorName: "TEST Person", date: Date(),
+            items: [SiteAuditItem(id: itemId, title: "TEST item", location: "", assignee: "", comments: "",
+                                  annotations: "", imageURL: nil, imageCapturedAt: Date(), createdAt: Date())],
+            createdAt: Date(), createdByUserId: "TEST-user-a", visibleToOperatives: true
+        )
+        // The forced sign-out lands while the photos are being written.
+        SiteAuditOfflineStore.testHookAfterPhotoWrite = { queue.clearAll() }
+        do {
+            try await queue.enqueue(
+                audit: audit,
+                organizationId: "TEST-org-1",
+                draftItems: [SiteAuditDraftItem(id: itemId, title: "TEST item", image: image, capturedAt: Date())]
+            )
+            XCTFail("queuing should be refused after a sign-out")
+        } catch {
+            XCTAssertTrue(error is SiteAuditOfflineStore.SignedOutWhileQueuing)
+        }
+        XCTAssertFalse(queue.isQueued(id: auditId))
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("SiteAuditPending", isDirectory: true)
+            .appendingPathComponent(auditId.uuidString, isDirectory: true)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.path))
+        #endif
     }
 }

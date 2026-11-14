@@ -418,6 +418,7 @@ struct SiteAuditHubView: View {
             .onAppear(perform: reloadDrafts)
             // A submitted draft is removed when the queue saves its audit; its row follows the queue.
             .onReceive(SiteAuditOfflineStore.shared.$pending.dropFirst()) { _ in reloadDrafts() }
+            .onReceive(NotificationCenter.default.publisher(for: SiteAuditDraftNotifications.changed)) { _ in reloadDrafts() }
             .sheet(isPresented: $showingPersonal) {
                 PersonalSiteAuditsView()
                     .environmentObject(userStore)
@@ -1406,9 +1407,15 @@ struct SiteAuditCreateFlowView: View {
                 guard let data = store.photoData(draftId: draft.id, itemId: itemId, userId: draft.userId, organizationId: draft.organizationId) else { return nil }
                 return UIImage(data: data)
             }.value
-            if let image, let idx = items.firstIndex(where: { $0.id == itemId }), items[idx].image == nil {
-                draftAutosaver?.markPhotoOnDisk(itemId: itemId, image: image)
-                items[idx].image = image
+            if let image {
+                if let idx = items.firstIndex(where: { $0.id == itemId }), items[idx].image == nil {
+                    draftAutosaver?.markPhotoOnDisk(itemId: itemId, image: image)
+                    items[idx].image = image
+                }
+            } else if items.contains(where: { $0.id == itemId }) {
+                // The photo file is missing or unreadable: the item stays (without its photo) and the person is told,
+                // through the same "could not be loaded" notice as Multi-add.
+                failedPhotoLoads += 1
             }
             draftPhotosLoading.remove(itemId)
         }
@@ -1520,7 +1527,11 @@ struct SiteAuditCreateFlowView: View {
             }
             // Queued: the draft is kept as a backup (marked submitted) until the queue has saved the audit; the
             // queue then removes it. If the queue is cleared first (a forced sign-out), it is offered again.
-            if let snapshot = draftSnapshot() { draftAutosaver?.finishSubmitted(snapshot) }
+            if let snapshot = draftSnapshot() {
+                await draftAutosaver?.finishSubmitted(snapshot) {
+                    SiteAuditOfflineStore.shared.isQueued(id: auditId)
+                }
+            }
             SiteAuditBackgroundUpload.start(smartCache: smartCache)
 
             let pdfURL = await pdfTask.value
