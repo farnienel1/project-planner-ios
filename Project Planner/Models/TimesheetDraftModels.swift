@@ -60,6 +60,46 @@ struct TimesheetPriceWorkEntry: Codable, Identifiable, Hashable {
     var reviewFingerprint: String? = nil
 }
 
+// RULEBOOK 1.45.0: a draft or loaded copy cached before 1.45.0 has no `evidence` key on its entries. The synthesized
+// decoder would refuse the whole draft (losing the "only what this editor changed" baseline), so these decode
+// `evidence` (and `reviewFingerprint`) when present and default the rest exactly as the synthesized decoder did.
+extension TimesheetExpenseEntry {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        details = try container.decode(String.self, forKey: .details)
+        jobNumber = try container.decode(String.self, forKey: .jobNumber)
+        date = try container.decode(Date.self, forKey: .date)
+        amount = try container.decode(Double.self, forKey: .amount)
+        receiptName = try container.decodeIfPresent(String.self, forKey: .receiptName)
+        managerDecision = try container.decodeIfPresent(TimesheetManagerDecision.self, forKey: .managerDecision) ?? .approved
+        managerRevisedAmount = try container.decodeIfPresent(Double.self, forKey: .managerRevisedAmount)
+        storedId = try container.decodeIfPresent(String.self, forKey: .storedId)
+        evidence = try container.decodeIfPresent([PayeClaimEvidence].self, forKey: .evidence) ?? []
+        reviewFingerprint = try container.decodeIfPresent(String.self, forKey: .reviewFingerprint)
+    }
+}
+
+extension TimesheetPriceWorkEntry {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        details = try container.decode(String.self, forKey: .details)
+        jobNumber = try container.decode(String.self, forKey: .jobNumber)
+        agreedManagerName = try container.decode(String.self, forKey: .agreedManagerName)
+        startDate = try container.decode(Date.self, forKey: .startDate)
+        endDate = try container.decodeIfPresent(Date.self, forKey: .endDate)
+        amount = try container.decode(Double.self, forKey: .amount)
+        managerDecision = try container.decodeIfPresent(TimesheetManagerDecision.self, forKey: .managerDecision) ?? .approved
+        managerRevisedAmount = try container.decodeIfPresent(Double.self, forKey: .managerRevisedAmount)
+        storedId = try container.decodeIfPresent(String.self, forKey: .storedId)
+        evidence = try container.decodeIfPresent([PayeClaimEvidence].self, forKey: .evidence) ?? []
+        reviewFingerprint = try container.decodeIfPresent(String.self, forKey: .reviewFingerprint)
+    }
+}
+
 struct TimesheetDraft: Codable {
     var expenseEntries: [TimesheetExpenseEntry] = []
     var priceWorkEntries: [TimesheetPriceWorkEntry] = []

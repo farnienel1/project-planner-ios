@@ -259,6 +259,9 @@ enum RulebookRosterSnapshot {
     /// RULEBOOK 1.45.0 §8 (review #322 F2): every id the person with users id `userId` goes by (`personIdSet`: own
     /// id, `formerUserIds`, `sameEmailUserIds`, same-email rows), for reading a timesheet's evidence. Just `userId` when
     /// the roster does not list them.
+    /// True once the organisation roster has arrived (a signed-in person is always on it).
+    static var hasLoaded: Bool { !users.isEmpty }
+
     static func personIds(forUserId userId: String) -> [String] {
         let trimmed = userId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }

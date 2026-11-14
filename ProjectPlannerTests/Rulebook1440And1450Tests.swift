@@ -202,6 +202,67 @@ final class Rulebook1440And1450Tests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.claimEvidenceCountText(0), "")
     }
 
+    // MARK: Review #232
+
+    /// A draft cached before 1.45.0 has no `evidence` (or `reviewFingerprint`) on its entries; it must still decode,
+    /// or the save loses its "only what this editor changed" baseline.
+    func testADraftCachedBefore145StillDecodes() throws {
+        let json = """
+        {"expenseEntries":[{"id":"6A9632BA-1111-2222-3333-444455556666","title":"TEST-Fuel","details":"","jobNumber":"J-1",
+          "date":0,"amount":12.5,"receiptName":"receipt.jpg","managerDecision":"approved","storedId":"TEST-old-expense"}],
+         "priceWorkEntries":[{"id":"7B9632BA-1111-2222-3333-444455556666","title":"TEST-Tiling","details":"","jobNumber":"",
+          "agreedManagerName":"Sam","startDate":0,"amount":100,"managerDecision":"approved"}],
+         "payrollLineReviews":{},"managerNote":""}
+        """
+        let draft = try JSONDecoder().decode(TimesheetDraft.self, from: Data(json.utf8))
+        XCTAssertEqual(draft.expenseEntries.first?.evidence, [])
+        XCTAssertNil(draft.expenseEntries.first?.reviewFingerprint)
+        XCTAssertEqual(draft.expenseEntries.first?.receiptName, "receipt.jpg")
+        XCTAssertEqual(draft.expenseEntries.first?.storedId, "TEST-old-expense")
+        XCTAssertEqual(draft.priceWorkEntries.first?.evidence, [])
+        XCTAssertNil(draft.priceWorkEntries.first?.storedId)
+        // And a 1.45.0 draft round-trips with its evidence.
+        var current = draft
+        current.expenseEntries[0].evidence = [evidence()]
+        let again = try JSONDecoder().decode(TimesheetDraft.self, from: JSONEncoder().encode(current))
+        XCTAssertEqual(again.expenseEntries.first?.evidence.map(\.path), [evidence().path])
+    }
+
+    /// Evidence the stored sheet holds that the editor never saw (read before every id of the person was known) is
+    /// kept on save; evidence the editor removed stays removed.
+    func testASaveKeepsEvidenceTheEditorNeverSaw() {
+        let seen = evidence("seen.jpg")
+        let unseen = PayeClaimEvidence(
+            path: "organizations/\(org)/payeClaims/TEST-old-invite/TEST-old-invite_1763100000001.jpg",
+            name: "unseen.jpg", kind: "photo", contentType: "image/jpeg", auditId: nil
+        )
+        let removed = PayeClaimEvidence(
+            path: "organizations/\(org)/payeClaims/\(owner)/\(owner)_1763100000002.jpg",
+            name: "removed.jpg", kind: "photo", contentType: "image/jpeg", auditId: nil
+        )
+        let entryId = UUID()
+        func entry(_ evidence: [PayeClaimEvidence]) -> TimesheetExpenseEntry {
+            TimesheetExpenseEntry(
+                id: entryId, title: "TEST-Fuel", details: "", jobNumber: "", date: Date(timeIntervalSince1970: 0),
+                amount: 10, receiptName: nil, storedId: "TEST-entry", evidence: evidence
+            )
+        }
+        var loaded = TimesheetDraft()
+        loaded.expenseEntries = [entry([seen, removed])]
+        var stored = TimesheetDraft()
+        stored.expenseEntries = [entry([seen, unseen, removed])]
+        var draft = TimesheetDraft()
+        draft.expenseEntries = [entry([seen])]
+
+        let saved = TimesheetDraftStore.keepingEvidenceUnseenByEditor(draft, stored: stored, loaded: loaded)
+        XCTAssertEqual(saved.expenseEntries.first?.evidence.map(\.name), ["seen.jpg", "unseen.jpg"])
+        // No sheet is saved before the roster (every id of the person) has loaded.
+        let previous = RulebookRosterSnapshot.users
+        RulebookRosterSnapshot.update([])
+        XCTAssertFalse(RulebookRosterSnapshot.hasLoaded)
+        RulebookRosterSnapshot.update(previous)
+    }
+
     // MARK: Review #231 follow-ups
 
     func testAQueuedBookingsCheckKeepsRetryFailedWhileItWaits() {
