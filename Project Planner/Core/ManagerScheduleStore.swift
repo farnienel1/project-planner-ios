@@ -29,6 +29,8 @@ class ManagerScheduleStore: ObservableObject {
     @Published private(set) var serverCoverage: BookingServerCoverage?
     /// RULEBOOK 1.43.0 §8 (review r318): the live listener's last authority report.
     private var listenerAuthority: BookingListenerAuthority?
+    /// The organisation and window the live listener was last asked for (review r318: stale listeners are ignored).
+    private var liveWindow: BookingServerCoverage?
 
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -174,6 +176,7 @@ class ManagerScheduleStore: ObservableObject {
         finishedLoadOrganizationId = nil
         serverCoverage = nil
         listenerAuthority = nil
+        liveWindow = nil
         lastLoadAt = nil
         errorMessage = nil
     }
@@ -195,6 +198,10 @@ class ManagerScheduleStore: ObservableObject {
         if smartCache?.isOnline == false {
             managerSiteBookings = deduplicated(withoutQueuedDeletes(OfflineManagerScheduleLocalStore.load(organizationId: orgId), organizationId: orgId))
             finishedLoadOrganizationId = orgId
+            // RULEBOOK 1.43.0 §8 (review r318): the offline copy never opens the timesheet bookings gate; it reopens on
+            // the next server answer once online (`ensurePeriodBookings` on reconnect).
+            serverCoverage = nil
+            listenerAuthority = nil
             return
         }
 
@@ -222,6 +229,8 @@ class ManagerScheduleStore: ObservableObject {
                 self.lastLoadAt = Date()
                 self.lastLoadFailed = false
                 self.smartCache?.markSynced()
+                // Review r318: the window the live listener now serves; reports from another window are ignored.
+                self.liveWindow = BookingServerCoverage(organizationId: orgId, fromDate: queryStart)
                 fb.listenManagerSiteBookings(
                     organizationId: orgId,
                     startingOn: queryStart,
@@ -229,7 +238,8 @@ class ManagerScheduleStore: ObservableObject {
                     // server answered the whole query with no pending local writes; the period gate follows it.
                     onAuthority: { [weak self] authoritative in
                         guard let self,
-                              self.firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId else { return }
+                              self.firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId,
+                              self.liveWindow == BookingServerCoverage(organizationId: orgId, fromDate: queryStart) else { return }
                         self.listenerAuthority = BookingListenerAuthority(
                             organizationId: orgId, fromDate: queryStart, authoritative: authoritative
                         )

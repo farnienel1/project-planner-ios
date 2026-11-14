@@ -98,6 +98,8 @@ enum PayInputsLoad {
         }
         // Review r318: a read already in flight (the launch / bootstrap one, which may ignore a reload request and may
         // read a narrower window) is waited for, then this check runs again, so an older period still gets covered.
+        // No second load is started meanwhile: the re-check reloads once, after the read in flight (the window it needs
+        // was already moved by `noteScheduleNeedsDate`, so the coverage test asks for it).
         if bookingStore.isLoading || managerScheduleStore.isLoading {
             scheduleRerunAfterLoads(
                 firebaseBackend: firebaseBackend,
@@ -105,15 +107,19 @@ enum PayInputsLoad {
                 managerScheduleStore: managerScheduleStore,
                 from: periodStart
             )
-            if !reload { return }
+            return
         }
         guard reload else { return }
         bookingStore.loadData()
         managerScheduleStore.loadData(force: true)
     }
 
-    /// One queued re-check per screen session at a time (a flag, not a second load).
-    private static var rerunQueued = false
+    /// The periods with a queued re-check (review r318: per period, so a second period's request is never dropped).
+    private static var queuedRerunPeriods = Set<String>()
+
+    private static func rerunKey(_ periodStart: Date?) -> String {
+        periodStart.map { String($0.timeIntervalSince1970) } ?? "all"
+    }
 
     private static func scheduleRerunAfterLoads(
         firebaseBackend: FirebaseBackend,
@@ -121,8 +127,9 @@ enum PayInputsLoad {
         managerScheduleStore: ManagerScheduleStore,
         from periodStart: Date?
     ) {
-        guard !rerunQueued else { return }
-        rerunQueued = true
+        let key = rerunKey(periodStart)
+        guard !queuedRerunPeriods.contains(key) else { return }
+        queuedRerunPeriods.insert(key)
         Task { @MainActor [weak firebaseBackend, weak bookingStore, weak managerScheduleStore] in
             // At most a minute: a read that never ends is the store's failure state, not this one's.
             for _ in 0..<120 {
@@ -130,7 +137,7 @@ enum PayInputsLoad {
                 if !bookingStore.isLoading && !managerScheduleStore.isLoading { break }
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
-            rerunQueued = false
+            queuedRerunPeriods.remove(key)
             guard let firebaseBackend, let bookingStore, let managerScheduleStore,
                   !bookingStore.isLoading, !managerScheduleStore.isLoading else { return }
             ensurePeriodBookings(
@@ -225,7 +232,7 @@ enum TimesheetExportMessages {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_GB")
         formatter.timeZone = OrganizationRulebookContext.calendar.timeZone
-        formatter.dateFormat = "d MMM yyyy"
+        formatter.dateFormat = "d MMM yyyy, HH:mm"
         return "Rebuilt on \(formatter.string(from: date)) — may differ from the original export."
     }
 
