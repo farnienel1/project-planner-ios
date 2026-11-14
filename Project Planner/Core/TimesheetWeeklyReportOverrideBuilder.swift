@@ -232,6 +232,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     row.paidHours = part.paidHours
                     row.isOvertime = part.isOvertime
                     row.otMultiplier = part.isOvertime ? part.otMultiplier : nil
+                    // A part the review added (`{booking}-ot`) records the standard line it came from.
+                    if part.id != line.id { row.reviewPartOf = line.id }
                     if part.isOvertime && !line.isOvertimeLine { row.projectName = "\(line.projectName) (Overtime)" }
                     push(row)
                 }
@@ -317,6 +319,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 row.otMultiplier = part.isOvertime ? part.otMultiplier : nil
                 row.decision = .edited
                 row.appliedReviewKey = appliedKey
+                if part.id.lowercased() != line.id.lowercased() { row.reviewPartOf = line.id }
                 return row
             }
             partsFrom[line.id.lowercased()] = rows
@@ -327,7 +330,43 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 partById[key] = (row, own)
             }
         }
+        let byId = Dictionary(existing.lines.map { ($0.id.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
         let lines = existing.lines.flatMap { line -> [TimesheetWeeklyReportLabourLine] in
+            // RULEBOOK 1.46.0 (web fourth review): a `{booking}-ot` line an Edit hours review added follows its standard
+            // line's current review — recomputed with it, 0 when that review is declined or no longer pays overtime,
+            // unchanged when that review is unchanged, stale, an approval or an amount-only edit. A booking's own
+            // overtime line keeps its own review.
+            if let partOf = line.reviewPartOf {
+                guard let source = byId[partOf.lowercased()], case .review(let sourceReview) = review(for: source) else {
+                    return [line]
+                }
+                let key = CanonicalBusinessEngine.payrollLineReviewKey(sourceReview) ?? ""
+                if sourceReview.decision == .declined {
+                    var declined = line
+                    declined.amount = 0
+                    declined.days = 0
+                    declined.decision = .declined
+                    declined.appliedReviewKey = key
+                    return [declined]
+                }
+                if let recomputed = (partsFrom[source.id.lowercased()] ?? []).first(where: { $0.id.lowercased() == line.id.lowercased() }) {
+                    var row = recomputed
+                    row.bookingFingerprint = line.bookingFingerprint
+                    row.bookingHadOvertimeLine = line.bookingHadOvertimeLine
+                    row.reviewPartOf = line.reviewPartOf
+                    return [row]
+                }
+                if sourceReview.decision == .edited, sourceReview.revisedStandardHours != nil {
+                    var none = line
+                    none.amount = 0
+                    none.paidHours = 0
+                    none.days = 0
+                    none.decision = .edited
+                    none.appliedReviewKey = key
+                    return [none]
+                }
+                return [line]
+            }
             let found = review(for: line)
             if case .unchanged = found { return [line] }
             let stored: TimesheetPayrollLineReview?

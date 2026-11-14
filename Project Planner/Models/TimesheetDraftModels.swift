@@ -192,6 +192,9 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     /// RULEBOOK 1.46.0 §8: `payrollLineReviewKey` of the review applied when the line was signed ('' for none); a later
     /// save re-applies a review only when it is a different one. Nil on an older line.
     var appliedReviewKey: String? = nil
+    /// RULEBOOK 1.46.0 §8: on a `{booking}-ot` line a standard line's Edit hours review added, that standard line's id;
+    /// the part follows its standard line's current review when reviews are re-applied. Nil otherwise.
+    var reviewPartOf: String? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {

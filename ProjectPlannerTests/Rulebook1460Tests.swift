@@ -333,11 +333,35 @@ final class Rulebook1460Tests: XCTestCase {
         XCTAssertEqual(applied.lines[0].amount, 250, accuracy: 0.0001)
         XCTAssertEqual(applied.lines[1].amount, 176.47, accuracy: 0.0001)
         XCTAssertEqual(applied.lines[1].otMultiplier, 2)
+        XCTAssertEqual(applied.lines[1].reviewPartOf, "op-TEST-B1-normal", "the part records its standard line")
+        XCTAssertNil(applied.lines[0].reviewPartOf)
         let key = try XCTUnwrap(applied.lines[0].appliedReviewKey)
         XCTAssertFalse(key.isEmpty)
         // Applied once: a second save with the same review changes nothing.
         let again = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(to: applied, draft: draft, user: subject, viewer: nil)
         XCTAssertEqual(again.lines, applied.lines)
+    }
+
+    /// A `{booking}-ot` part a review added follows its standard line's review: declined → 0.
+    func testAnAddedOvertimePartFollowsItsStandardLinesReview() throws {
+        let booked = try XCTUnwrap(fingerprint(start: "07:00", end: "17:00"))
+        let line = standardLine(fingerprint: booked, hasOvertimeLine: false)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: line, lines: [line], startTime: "07:00", endTime: "19:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.managerSignedAt = Date()
+        let applied = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(
+            to: override([signedLine(fingerprint: booked, appliedReviewKey: "")]), draft: draft, user: subject, viewer: nil
+        )
+        XCTAssertEqual(applied.lines.count, 2)
+        // The line manager then declines the standard line: its added overtime part pays 0 too.
+        draft.payrollLineReviews[line.id] = TimesheetPayrollLineReview(decision: .declined, revisedAmount: nil)
+        let declined = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(to: applied, draft: draft, user: subject, viewer: nil)
+        XCTAssertEqual(declined.lines.map(\.amount), [0, 0])
+        XCTAssertEqual(declined.lines.map(\.decision), [.declined, .declined])
     }
 
     // MARK: Stored shapes
@@ -403,6 +427,7 @@ final class Rulebook1460Tests: XCTestCase {
         signedOvertime["amount"] = 176.47
         signedOvertime["otMultiplier"] = 2.0
         signedOvertime["bookingHadOvertimeLine"] = true
+        signedOvertime["reviewPartOf"] = "op-TEST-B1-normal"
         let stored: [String: Any] = [
             "managerNote": "",
             "payrollLineReviews": ["op-TEST-B1-normal": review, "op-TEST-B2-normal": noOvertime],
@@ -437,6 +462,7 @@ final class Rulebook1460Tests: XCTestCase {
             XCTAssertEqual(line["bookingFingerprint"] as? String, original["bookingFingerprint"] as? String)
             XCTAssertEqual(line["bookingHadOvertimeLine"] as? Bool, original["bookingHadOvertimeLine"] as? Bool)
             XCTAssertEqual(line["appliedReviewKey"] as? String, original["appliedReviewKey"] as? String)
+            XCTAssertEqual(line["reviewPartOf"] as? String, original["reviewPartOf"] as? String)
             XCTAssertEqual((line["amount"] as? NSNumber)?.doubleValue, (original["amount"] as? NSNumber)?.doubleValue)
         }
         XCTAssertEqual((lines[1]["otMultiplier"] as? NSNumber)?.doubleValue, 2)
@@ -457,6 +483,12 @@ final class Rulebook1460Tests: XCTestCase {
         }
         XCTAssertNotNil(key(std))
         XCTAssertEqual(key(std), key(ot))
+        // A line without its collection is a labour booking unless its id starts `mgr-`.
+        XCTAssertEqual(key(std), CanonicalBusinessEngine.payrollLineBookingKey(lineId: ot.id, bookingId: ot.bookingId, bookingCollection: nil))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.payrollLineBookingKey(lineId: "mgr-TEST-M1-normal", bookingId: "mgr-TEST-M1", bookingCollection: nil),
+            CanonicalBusinessEngine.payrollLineBookingKey(lineId: "mgr-TEST-M1-ot", bookingId: "mgr-TEST-M1", bookingCollection: "managerSiteBookings")
+        )
         XCTAssertNotEqual(
             key(std),
             CanonicalBusinessEngine.payrollLineBookingKey(lineId: std.id, bookingId: std.bookingId, bookingCollection: "managerSiteBookings")
