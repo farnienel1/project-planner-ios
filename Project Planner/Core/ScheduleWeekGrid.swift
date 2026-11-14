@@ -122,18 +122,19 @@ enum ScheduleWeekGrid {
         return buckets.map { bucket in
             person(from: bucket, operatives: operatives, users: users)
         }
-        // RULEBOOK 1.41.0 §21 (owner 11 Nov: a booked person is never unknown): a booking whose id names nobody this
-        // device has loaded is left off the grid, exactly as web (`ProjectScheduleWeekOverview` drops a row with no
-        // name), and the drop is written to the device log so it can be traced. Former ids, same-email ids,
-        // `operatives` rows and ghosts resolve through `resolveBookingPerson` and keep their row.
-        .filter { person in
-            guard person.role == .unknown else { return true }
+        // RULEBOOK 1.44.0 §21 (owner decision 14 Nov, question H option 1): a booking whose id names nobody this device
+        // has loaded is never hidden. Its row reads `scheduleRowPerson`'s label ("Unknown person · 6A9632BA") with the
+        // amber `UNRESOLVED_BOOKING_PERSON_CHIP` in place of the role pill, has no Quick Add (`saveTarget`), and is
+        // still written to the device log so it can be traced. Former ids, same-email ids, `operatives` rows and
+        // ghosts resolve through `resolveBookingPerson` and keep their own row.
+        .map { person in
+            guard person.role == .unknown else { return person }
             NSLog(
                 "SCHEDULE_BOOKING_PERSON_UNRESOLVED operativeIds=%@ userIds=%@",
                 person.operativeIds.map { Booking.storedOperativeId(for: $0) }.joined(separator: ","),
                 person.userIds.joined(separator: ",")
             )
-            return false
+            return person
         }
         .sorted {
             let order = $0.name.localizedCaseInsensitiveCompare($1.name)
@@ -358,7 +359,9 @@ enum ScheduleWeekGrid {
             id: leading?.user.id
                 ?? operativeIds.first?.uuidString
                 ?? bucket.key,
-            name: displayName(account: leading?.user, bucket: bucket, operatives: operatives, users: users),
+            name: role == .unknown
+                ? unresolvedLabel(bucket: bucket, operatives: operatives, users: users)
+                : displayName(account: leading?.user, bucket: bucket, operatives: operatives, users: users),
             role: role,
             operativeIds: operativeIds,
             userIds: userIds,
@@ -369,6 +372,21 @@ enum ScheduleWeekGrid {
             // catalogue id, or nothing), so a script that did not answer never files them as a manager site booking.
             saveUserId: isOperative && saveOperativeId == nil ? nil : leading?.user.id
         )
+    }
+
+    /// RULEBOOK 1.44.0 §21 `scheduleRowPerson(personId, { accounts, operatives }).label` for a row nobody resolves:
+    /// "Unknown person · 6A9632BA" (the stored id's short hint), the same on web.
+    static func unresolvedLabel(
+        bucket: StaffEmailIdentity.SchedulePersonBucket,
+        operatives: [Operative],
+        users: [AppUser]
+    ) -> String {
+        let storedId = bucket.operativeIds.first.map { Booking.storedOperativeId(for: $0) } ?? bucket.userIds.first ?? bucket.key
+        let input = bookingPersonInput(operatives: operatives, users: users)
+        if let row = CanonicalBusinessEngine.scheduleRowPerson(storedId, input), let label = row.label, !label.isEmpty {
+            return label
+        }
+        return CanonicalBusinessEngine.unknownBookingPersonLabel
     }
 
     private static func displayName(

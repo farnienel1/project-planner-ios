@@ -140,9 +140,9 @@ final class ScheduleGridPeopleTests: XCTestCase {
         XCTAssertEqual(rows[0].role, .admin)
     }
 
-    func testAnIdThatNamesNobodyIsLeftOffTheGridLikeWeb() {
-        // RULEBOOK 1.41.0 §21 (owner 11 Nov): a booked person is never unknown. A booking whose id names nobody is
-        // left off the grid, exactly as web drops a row with no name (it used to read "Unknown person" with a grey pill).
+    func testAnIdThatNamesNobodyIsShownAsUnknownPersonLikeWeb() {
+        // RULEBOOK 1.44.0 §21 (owner decision 14 Nov, question H option 1): a booking whose id names nobody is never
+        // hidden. Its row reads `scheduleRowPerson`'s label with the short id, and has no Quick Add.
         let stray = UUID()
         let someone = account(
             "TEST-someone", email: "someone@example.test", first: "Some", last: "One",
@@ -151,8 +151,11 @@ final class ScheduleGridPeopleTests: XCTestCase {
 
         let rows = ScheduleWeekGrid.staffRows(operativeIds: [stray], userIds: [], operatives: [], users: [someone])
 
-        XCTAssertTrue(rows.isEmpty, "an id that names nobody has no row")
-        XCTAssertFalse(rows.contains { $0.role == .unknown })
+        XCTAssertEqual(rows.count, 1, "an id that names nobody keeps its row")
+        XCTAssertEqual(rows.first?.role, .unknown)
+        let hint = String(Booking.storedOperativeId(for: stray).prefix(8)).uppercased()
+        XCTAssertEqual(rows.first?.name, "Unknown person · \(hint)")
+        XCTAssertNil(rows.first.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) }, "no Quick Add")
     }
 
     func testAStrayIdNeverHidesTheKnownPeopleBookedThatWeek() {
@@ -163,7 +166,8 @@ final class ScheduleGridPeopleTests: XCTestCase {
         person.formerUserIds = ["TEST-old-invite-id"]
         let former = Booking.internalOperativeId(for: "TEST-old-invite-id")
         let rows = ScheduleWeekGrid.staffRows(operativeIds: [former, UUID()], userIds: [], operatives: [], users: [person])
-        XCTAssertEqual(rows.map(\.name), ["Farnie Nel"], "the former id keeps its row; only the stray one is dropped")
+        XCTAssertEqual(rows.filter { $0.role != .unknown }.map(\.name), ["Farnie Nel"], "the former id keeps its row")
+        XCTAssertEqual(rows.filter { $0.role == .unknown }.count, 1, "the stray id is shown as an unknown person (1.44.0)")
     }
 
     // MARK: Tap gate (`canWriteBooking`)

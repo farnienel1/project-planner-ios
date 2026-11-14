@@ -1490,13 +1490,26 @@ struct ProjectDetailView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                Text(row.role.badge)
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(schedulingRoleColor(row.role))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(schedulingRoleColor(row.role).opacity(0.14), in: Capsule())
-                    .accessibilityIdentifier("scheduling.badge.\(row.role.badge)")
+                if row.role == .unknown {
+                    // RULEBOOK 1.44.0 §21: a booking not linked to a person shows the amber chip in place of the role
+                    // pill (`UNRESOLVED_BOOKING_PERSON_CHIP`); an admin links it from web Settings → Data health.
+                    Text(CanonicalBusinessEngine.unresolvedBookingPersonChip)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(Color.orange)
+                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange.opacity(0.16), in: Capsule())
+                        .accessibilityIdentifier("scheduling.badge.unresolved")
+                } else {
+                    Text(row.role.badge)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(schedulingRoleColor(row.role))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(schedulingRoleColor(row.role).opacity(0.14), in: Capsule())
+                        .accessibilityIdentifier("scheduling.badge.\(row.role.badge)")
+                }
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)

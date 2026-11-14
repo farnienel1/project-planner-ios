@@ -65,10 +65,12 @@ final class Rulebook1410Tests: XCTestCase {
 
     // MARK: A booked person is never unknown
 
-    func testAnUnresolvedRowIsDroppedAndLogged() throws {
+    func testAnUnresolvedRowIsShownAndLogged() throws {
+        // RULEBOOK 1.44.0 §21 replaces the 1.41.0 drop: the row is kept (`scheduleRowPerson`) and still logged.
         let grid = try source("Project Planner/Core/ScheduleWeekGrid.swift")
         XCTAssertTrue(grid.contains("SCHEDULE_BOOKING_PERSON_UNRESOLVED"))
-        XCTAssertTrue(grid.contains("guard person.role == .unknown else { return true }"))
+        XCTAssertTrue(grid.contains("guard person.role == .unknown else { return person }"))
+        XCTAssertTrue(grid.contains("CanonicalBusinessEngine.scheduleRowPerson(storedId, input)"))
     }
 
     func testFormerSameEmailCatalogueAndGhostIdsAllResolve() {
