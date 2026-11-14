@@ -1582,8 +1582,10 @@ enum TimesheetDraftStore {
                 if let had = line.bookingHadOvertimeLine { row["bookingHadOvertimeLine"] = had }
                 if let key = line.appliedReviewKey { row["appliedReviewKey"] = key }
                 if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
-                if let paye = line.isPayeDay { row["isPayeDay"] = paye }
-                if let leave = line.isLeave { row["isLeave"] = leave }
+                // RULEBOOK 1.46.0 §8 (web `weeklyReportOverrideToFirestore`): the signed row's own PAYE / leave flags, on
+                // every line written (false when not stored).
+                row["isPayeDay"] = line.isPayeDay == true
+                row["isLeave"] = line.isLeave == true
                 return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),

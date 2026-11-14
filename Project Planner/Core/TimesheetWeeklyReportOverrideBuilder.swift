@@ -358,7 +358,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     row.paidHours = recomputed.paidHours
                     row.days = recomputed.days
                     row.amount = recomputed.amount
-                    row.isOvertime = true
+                    row.isOvertime = recomputed.isOvertime
                     row.otMultiplier = recomputed.otMultiplier
                     row.decision = .edited
                     row.appliedReviewKey = recomputed.appliedReviewKey
