@@ -1370,7 +1370,7 @@ enum WarningsComputation {
                 "standardDayEnd": input.payrollTimePolicy.standardDayEnd,
                 "breakWindowStart": input.payrollTimePolicy.breakWindowStart,
                 "breakWindowEnd": input.payrollTimePolicy.breakWindowEnd,
-                "standardPaidHours": CanonicalBusinessEngine.weekdayPaidHours(input.payrollTimePolicy),
+                "standardPaidHours": input.payrollTimePolicy.standardPaidHours, // already `weekdayPaidHours` (snapshot, ~415)
                 "saturdayCountsAsHours": input.payrollTimePolicy.saturdayCountsAsHours,
                 "sundayCountsAsHours": input.payrollTimePolicy.sundayCountsAsHours,
                 "people": people,
