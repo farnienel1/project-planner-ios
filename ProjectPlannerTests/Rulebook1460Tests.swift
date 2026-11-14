@@ -1,4 +1,5 @@
 import XCTest
+import FirebaseFirestore
 @testable import Project_Planner
 
 /// RULEBOOK 1.46.0 (rates audit) through `CanonicalBusinessEngine`. Expected values were checked in node against the
@@ -372,6 +373,94 @@ final class Rulebook1460Tests: XCTestCase {
         let bare = try JSONDecoder().decode(TimesheetPayrollLineReview.self, from: #"{"decision":"declined"}"#.data(using: .utf8)!)
         XCTAssertEqual(bare.decision, .declined)
         XCTAssertNil(bare.revisedAmount)
+    }
+
+    /// 4th web review (#324): every write keeps the signed-line fields and every review field — not only signing. A
+    /// sheet as web stores it is read, an unrelated field changes, and the map the save sends still holds them all
+    /// (dropping them re-priced a signed 426.47 to 293.48, or paid 602.94).
+    func testEverySaveKeepsTheReviewFieldsAndTheSignedLineFields() throws {
+        let review: [String: Any] = [
+            "decision": "edited", "revisedAmount": 426.47, "reviewedBookingFingerprint": "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed",
+            "revisedStandardHours": 8.5, "revisedOvertimeHours": 3, "revisedOvertimeClockHours": 3, "revisedOvertimeMultiplier": 2,
+            "revisedStandardAmount": 250, "revisedOvertimeAmount": 176.47,
+        ]
+        let noOvertime: [String: Any] = [
+            "decision": "edited", "revisedAmount": 250, "reviewedBookingFingerprint": "fp-2",
+            "revisedStandardHours": 8.5, "revisedOvertimeHours": 0, "revisedOvertimeClockHours": 0, "revisedOvertimeMultiplier": NSNull(),
+            "revisedStandardAmount": 250, "revisedOvertimeAmount": 0,
+        ]
+        let signedNormal: [String: Any] = [
+            "id": "op-TEST-B1-normal", "date": Timestamp(date: day), "jobNumber": "TEST-1", "projectName": "TEST-Kitchen refit",
+            "locationKind": "project", "details": "07:00–16:00", "paidHours": 8.5, "days": 1.0, "amount": 250.0,
+            "isOvertime": false, "decision": "edited", "bookingId": "TEST-B1", "payBasis": "day",
+            "bookingFingerprint": "2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed", "bookingHadOvertimeLine": false,
+            "appliedReviewKey": "edited|426.47|8.5|3|3|2|250|176.47|2026-11-18|CUSTOM HOURS|07:00|16:00|2||confirmed",
+        ]
+        var signedOvertime = signedNormal
+        signedOvertime["id"] = "op-TEST-B1-ot"
+        signedOvertime["isOvertime"] = true
+        signedOvertime["paidHours"] = 3.0
+        signedOvertime["amount"] = 176.47
+        signedOvertime["otMultiplier"] = 2.0
+        signedOvertime["bookingHadOvertimeLine"] = true
+        let stored: [String: Any] = [
+            "managerNote": "",
+            "payrollLineReviews": ["op-TEST-B1-normal": review, "op-TEST-B2-normal": noOvertime],
+            "weeklyReportOverride": [
+                "approvedAt": Timestamp(date: day), "approvedByUserId": "TEST-lm", "approvedByName": "TEST LM", "selfSigned": false,
+                "lines": [signedNormal, signedOvertime], "priceWork": [], "expenses": [],
+            ],
+        ]
+        var draft = try XCTUnwrap(TimesheetDraftStore.decodeFirestoreMap(stored))
+        draft.managerNote = "TEST-unrelated change"
+        let written = TimesheetDraftStore.asFirestoreMap(draft)
+
+        let reviews = try XCTUnwrap(written["payrollLineReviews"] as? [String: [String: Any]])
+        for (id, original) in [("op-TEST-B1-normal", review), ("op-TEST-B2-normal", noOvertime)] {
+            let row = try XCTUnwrap(reviews[id], id)
+            XCTAssertEqual(Set(row.keys), Set(original.keys), id)
+            for (key, value) in original {
+                if value is NSNull {
+                    XCTAssertTrue(row[key] is NSNull, "\(id).\(key) stays null")
+                } else if let text = value as? String {
+                    XCTAssertEqual(row[key] as? String, text, "\(id).\(key)")
+                } else {
+                    XCTAssertEqual((row[key] as? NSNumber)?.doubleValue, (value as? NSNumber)?.doubleValue, "\(id).\(key)")
+                }
+            }
+        }
+
+        let override = try XCTUnwrap(written["weeklyReportOverride"] as? [String: Any])
+        let lines = try XCTUnwrap(override["lines"] as? [[String: Any]])
+        XCTAssertEqual(lines.count, 2)
+        for (line, original) in zip(lines, [signedNormal, signedOvertime]) {
+            XCTAssertEqual(line["bookingFingerprint"] as? String, original["bookingFingerprint"] as? String)
+            XCTAssertEqual(line["bookingHadOvertimeLine"] as? Bool, original["bookingHadOvertimeLine"] as? Bool)
+            XCTAssertEqual(line["appliedReviewKey"] as? String, original["appliedReviewKey"] as? String)
+            XCTAssertEqual((line["amount"] as? NSNumber)?.doubleValue, (original["amount"] as? NSNumber)?.doubleValue)
+        }
+        XCTAssertEqual((lines[1]["otMultiplier"] as? NSNumber)?.doubleValue, 2)
+
+        // And the Swift cache (Codable) keeps them too.
+        let cached = try JSONDecoder().decode(TimesheetDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(cached.payrollLineReviews, draft.payrollLineReviews)
+        XCTAssertEqual(cached.weeklyReportOverride?.lines, draft.weeklyReportOverride?.lines)
+    }
+
+    /// `payrollLineBookingKey` groups a booking's standard and overtime line (same collection and `bookingId`) and keeps a
+    /// labour and a manager site booking with one id apart.
+    func testTheBookingKeyGroupsTheStandardAndOvertimeLines() {
+        let std = standardLine(fingerprint: nil, hasOvertimeLine: true)
+        let ot = overtimeLine(fingerprint: nil)
+        let key = { (line: TimesheetPayrollLineItem) in
+            CanonicalBusinessEngine.payrollLineBookingKey(lineId: line.id, bookingId: line.bookingId, bookingCollection: line.bookingCollection)
+        }
+        XCTAssertNotNil(key(std))
+        XCTAssertEqual(key(std), key(ot))
+        XCTAssertNotEqual(
+            key(std),
+            CanonicalBusinessEngine.payrollLineBookingKey(lineId: std.id, bookingId: std.bookingId, bookingCollection: "managerSiteBookings")
+        )
     }
 
     func testRevisedAmountsAreStoredInPennies() {
