@@ -866,8 +866,6 @@ struct WeeklyReportView: View {
         isGenerating = true
         message = nil
         showGeneratedSuccess = false
-        let range = reportDateRange
-        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT generate \(String(describing: quickRange)) \(range.lowerBound) \(range.upperBound)")
         Task {
             // The report's own range is scanned (§7); the live Warnings window is not used.
             guard await refreshReportWarnings() else {
@@ -902,8 +900,16 @@ struct WeeklyReportView: View {
                 scheduleOptions: appSettings.settings.myScheduleOptions
             )
             timesheetFeed = feed
+            // RULEBOOK 1.46.0: an approved week the rulebook could not check stops the report (never priced live).
+            if let failed = feed.calculationFailedMessage {
+                await MainActor.run {
+                    message = failed
+                    isGenerating = false
+                }
+                return
+            }
             do {
-                let sections = buildExportSections()
+                let sections = try buildExportSections()
                 let exports = try WeeklyReportExportBuilder.makeExports(
                     context: WeeklyReportExportBuilder.Context(
                         organizationName: organizationName,
@@ -930,7 +936,7 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func buildExportSections() -> [WeeklyReportExportBuilder.Section] {
+    private func buildExportSections() throws -> [WeeklyReportExportBuilder.Section] {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
 
@@ -1074,7 +1080,7 @@ struct WeeklyReportView: View {
 
         var payRows: [[String]] = []
         // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = payrollSummaryForViewer()
+        let payShown = try payrollSummaryForViewer()
         for person in payShown.summaries {
             for line in person.lines {
                 payRows.append([
@@ -1101,7 +1107,7 @@ struct WeeklyReportView: View {
         return sections
     }
 
-    private func buildCSV() -> String {
+    private func buildCSV() throws -> String {
         var rows: [[String]] = []
         rows.append(["Weekly Report"])
         rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
@@ -1228,7 +1234,7 @@ struct WeeklyReportView: View {
         rows.append(["PAY SUMMARY"])
         rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
         // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = payrollSummaryForViewer()
+        let payShown = try payrollSummaryForViewer()
         for person in payShown.summaries {
             for line in person.lines {
                 rows.append([
@@ -1650,8 +1656,8 @@ struct WeeklyReportView: View {
     /// timesheet review) keeps their hours with the rate and pay cells `PAY_HIDDEN_CELL_LABEL`; the grand total covers
     /// the people shown only; `hiddenNote` is `PAY_HIDDEN_NOTE` when anyone was hidden. A row with no known person is
     /// visible to admins only. Swift sends the rows and reads the cells back; nothing is decided here.
-    private func payrollSummaryForViewer() -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
-        let summaries = payrollPersonSummaries()
+    private func payrollSummaryForViewer() throws -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
+        let summaries = try payrollPersonSummaries()
         let rows: [[String: Any]] = summaries.enumerated().map { index, person in
             var row: [String: Any] = [
                 "summaryIndex": index,
@@ -1765,17 +1771,22 @@ struct WeeklyReportView: View {
         return Array(map.values)
     }
 
-    private func payrollPersonSummaries() -> [PayrollPersonSummary] {
+    /// RULEBOOK 1.46.0: a booking the rulebook could not price (`bookingPaySlices` did not answer) stops the report with
+    /// `TimesheetPayrollSummary.calculationFailedMessage` — pay is never understated by leaving a booking out.
+    struct PayCalculationError: LocalizedError {
+        var errorDescription: String? { TimesheetPayrollSummary.calculationFailedMessage }
+    }
+
+    private func payrollPersonSummaries() throws -> [PayrollPersonSummary] {
         struct Acc {
             var name: String
             var role: String
             var resolved: ResolvedPayrollRate
-            var normalHours: Double = 0
-            var otHours: Double = 0
-            /// RULEBOOK 1.20.4 (`payrollMultipliedHours`): the clock hours at the multiplier and the unpaid break taken
-            /// off them as plain hours, summed — display only, pay stays `otHours × otMultiplier`.
-            var otClockHours: Double = 0
-            var otBreakHours: Double = 0
+            /// RULEBOOK 1.46.0 §7 (`bookingPaySlices` + `mergeBookingPaySlice`): the row's standard and overtime parts,
+            /// each the sum of every booking's own rounded pay (never re-priced from the summed hours), with the
+            /// overtime clock hours and break for display (`payrollMultipliedHours`).
+            var normal: RulebookBookingPaySlice? = nil
+            var overtime: RulebookBookingPaySlice? = nil
             var otMultiplier: Double
             var standardDayHours: Double
             var isPaye: Bool = false
@@ -1783,7 +1794,54 @@ struct WeeklyReportView: View {
             var subject: AppUser? = nil
         }
         var byKey: [String: Acc] = [:]
+        var pricingFailed = false
         let cal = CanonicalBusinessEngine.businessCalendar
+
+        /// One booking priced on its own (`bookingPaySlices`) and added to its row (`mergeBookingPaySlice`). Rows keep
+        /// today's keys (person, role, basis and rate, multiplier, standard day, PAYE).
+        func addBooking(probe: Booking, day: Date, policy: OrgPayrollTimePolicy, name: String, role: String, resolved: ResolvedPayrollRate, paye: Bool, subject: AppUser?) {
+            // The paid day a day rate divides by (`orgDayHours` of that day's `weekdayPaidHours`), as web.
+            guard let standardDayHours = CanonicalBusinessEngine.orgDayHours(CanonicalBusinessEngine.weekdayPaidHours(policy)) else {
+                pricingFailed = true
+                return
+            }
+            guard let slices = CanonicalBusinessEngine.bookingPaySlices(
+                hoursInput: PayrollHoursEngine.canonicalInput(booking: probe, day: day, policy: policy),
+                standardDayHours: standardDayHours,
+                payBasis: resolved.basis == .hourly ? "hourly" : "day",
+                dayRate: resolved.dayRate,
+                hourlyRate: resolved.hourlyRate,
+                isPaye: paye
+            ) else {
+                pricingFailed = true
+                return
+            }
+            let otMultiplier = slices.first(where: \.isOvertime)?.otMultiplier
+                ?? PayrollHoursEngine.canonicalResult(booking: probe, day: day, policy: policy)?.outsideMultiplier
+                ?? 1
+            let rateKey = resolved.basis == .hourly
+                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
+                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
+            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
+            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
+            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
+            acc.subject = acc.subject ?? subject
+            for slice in slices {
+                let held = slice.isOvertime ? acc.overtime : acc.normal
+                let merged: RulebookBookingPaySlice
+                if let held {
+                    guard let sum = CanonicalBusinessEngine.mergeBookingPaySlice(held, slice) else {
+                        pricingFailed = true
+                        return
+                    }
+                    merged = sum
+                } else {
+                    merged = slice
+                }
+                if slice.isOvertime { acc.overtime = merged } else { acc.normal = merged }
+            }
+            byKey[key] = acc
+        }
 
         let operativeBookings = bookingStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
@@ -1805,26 +1863,10 @@ struct WeeklyReportView: View {
                 operative: StaffEmailIdentity.operativeUsedForPay(user: linkedUser, operative: person.operative),
                 on: booking.date
             )
-            let paid = booking.paidBookedHours(policy: policy)
-            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
-            let rateKey = resolved.basis == .hourly
-                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            let paye = isPaye(linkedUser, on: booking.date)
-            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
-            acc.subject = acc.subject ?? linkedUser
-            acc.normalHours += normalHours
-            acc.otHours += otHours
-            if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
-                acc.otClockHours += multiplied.clockHours
-                acc.otBreakHours += multiplied.breakHours
-            }
-            byKey[key] = acc
+            addBooking(
+                probe: booking, day: booking.date, policy: policy, name: name, role: role, resolved: resolved,
+                paye: isPaye(linkedUser, on: booking.date), subject: linkedUser
+            )
         }
 
         let managerBookings = managerScheduleStore.managerSiteBookings.filter {
@@ -1849,27 +1891,13 @@ struct WeeklyReportView: View {
                 operative: StaffEmailIdentity.operativeUsedForPay(user: manager, operative: linkedOperative),
                 on: booking.date
             )
-            let paid = booking.paidBookedHours(policy: policy)
-            let otHours = booking.overtimeHoursBeyondPaidStandard(policy: policy)
-            let otMultiplier = booking.effectiveWeekdayOtMultiplier(policy: policy)
-            let normalHours = max(0, paid - (otHours * otMultiplier))
-            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
-            let rateKey = resolved.basis == .hourly
-                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            let paye = isPaye(manager, on: booking.date)
-            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
-            acc.subject = acc.subject ?? manager
-            acc.normalHours += normalHours
-            acc.otHours += otHours
-            if let multiplied = booking.payrollHoursResult(policy: policy).multipliedHours {
-                acc.otClockHours += multiplied.clockHours
-                acc.otBreakHours += multiplied.breakHours
-            }
-            byKey[key] = acc
+            addBooking(
+                probe: booking.operativePayrollProbe(), day: booking.date, policy: policy, name: name, role: role,
+                resolved: resolved, paye: isPaye(manager, on: booking.date), subject: manager
+            )
         }
+
+        if pricingFailed { throw PayCalculationError() }
 
         let groupedByPerson = Dictionary(grouping: byKey.values) { "\($0.name)|\($0.role)" }
         var summaries: [PayrollPersonSummary] = []
@@ -1880,59 +1908,49 @@ struct WeeklyReportView: View {
             for entry in entries.sorted(by: {
                 ($0.resolved.reportRateValue() ?? -1) < ($1.resolved.reportRateValue() ?? -1)
             }) {
-                if entry.normalHours > 0.0001 {
+                if let normal = entry.normal, normal.paidHours > 0.0001 {
                     let standard = entry.standardDayHours
-                    let pay = entry.resolved.payForHours(entry.normalHours, standardDayHours: standard)
-                    let days = entry.normalHours / standard
+                    let days = normal.paidHours / standard
                     let rateLabel = entry.resolved.basis == .hourly ? "Normal (hourly)" : "Normal"
                     lines.append(
                         PayrollRateLine(
                             rateTypeLabel: rateLabel,
                             days: days,
                             rate: entry.isPaye ? nil : entry.resolved.reportRateValue(),
-                            pay: pay,
+                            pay: normal.pay,
                             isPaye: entry.isPaye
                         )
                     )
-                    total += pay
+                    total += normal.pay
                 }
-                if entry.otHours > 0.0001 {
+                if let overtime = entry.overtime, overtime.paidHours > 0.0001 {
                     let standard = entry.standardDayHours
-                    let otPay = entry.resolved.payForHours(
-                        entry.otHours,
-                        standardDayHours: standard,
-                        otMultiplier: entry.otMultiplier
-                    )
-                    let otDays = entry.otHours / standard
-                    let otRate: Double?
-                    switch entry.resolved.basis {
-                    case .dayRate:
-                        otRate = entry.resolved.dayRate.map { $0 * entry.otMultiplier }
-                    case .hourly:
-                        otRate = entry.resolved.hourlyRate.map { $0 * entry.otMultiplier }
-                    }
+                    let otDays = overtime.paidHours / standard
                     let label = abs(entry.otMultiplier - entry.otMultiplier.rounded()) < 0.001
                         ? "OT x\(Int(entry.otMultiplier.rounded()))"
                         : String(format: "OT x%.1f", entry.otMultiplier)
                     let otLabel = entry.resolved.basis == .hourly ? "\(label) (hourly)" : label
                     // RULEBOOK 1.20.4: with an unpaid break off the multiplied hours the row shows
                     // "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`), never the back-calculated hours.
-                    let hoursText = entry.otBreakHours > 0.0001 && entry.otClockHours > 0.0001
+                    let breakHours = overtime.breakHours ?? 0
+                    let clockHours = overtime.clockHours ?? 0
+                    let hoursText = breakHours > 0.0001 && clockHours > 0.0001
                         ? CanonicalBusinessEngine.multipliedHoursText(
-                            clockHours: entry.otClockHours, multiplier: entry.otMultiplier, breakHours: entry.otBreakHours
+                            clockHours: clockHours, multiplier: entry.otMultiplier, breakHours: breakHours
                         )
                         : nil
                     lines.append(
                         PayrollRateLine(
                             rateTypeLabel: otLabel,
                             days: otDays,
-                            rate: entry.isPaye ? nil : otRate,
-                            pay: otPay,
+                            // The rate × multiplier, rounded (`bookingPaySlices` `rate`).
+                            rate: entry.isPaye ? nil : overtime.rate,
+                            pay: overtime.pay,
                             isPaye: entry.isPaye,
                             hoursText: hoursText
                         )
                     )
-                    total += otPay
+                    total += overtime.pay
                 }
             }
             summaries.append(PayrollPersonSummary(

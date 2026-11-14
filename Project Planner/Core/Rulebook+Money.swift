@@ -112,7 +112,22 @@ extension TimesheetPayrollLineItem {
         if let otClockHours { row["otClockHours"] = otClockHours }
         if let bookingPaidHours { row["bookingPaidHours"] = bookingPaidHours }
         if let bookingOvertimeHours { row["bookingOvertimeHours"] = bookingOvertimeHours }
+        // RULEBOOK 1.46.0: the booking as it is now, so a stale Edit hours review is ignored (`payrollLineReview`).
+        if let bookingId { row["bookingId"] = bookingId }
+        if let bookingFingerprint { row["bookingFingerprint"] = bookingFingerprint }
+        if let bookingCollection { row["bookingCollection"] = bookingCollection }
+        row["bookingHasOvertimeLine"] = bookingHasOvertimeLine
         return row
+    }
+
+    /// RULEBOOK 1.46.0 `PayrollLineLiveBooking`: the live line `payrollLineReview(sheet, lineId, live)` checks a review
+    /// against.
+    var rulebookLiveBookingJSON: [String: Any] {
+        [
+            "bookingFingerprint": RulebookJSON.orNull(bookingFingerprint),
+            "isOvertimeLine": isOvertimeLine,
+            "bookingHasOvertimeLine": bookingHasOvertimeLine,
+        ]
     }
 }
 

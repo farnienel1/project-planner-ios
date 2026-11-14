@@ -1420,12 +1420,9 @@ enum TimesheetDraftStore {
                 if let evidence = evidenceWriteFields(p.evidence) { row["evidence"] = evidence }
                 return row
             },
-            "payrollLineReviews": draft.payrollLineReviews.mapValues { review in
-                [
-                    "decision": review.decision.rawValue,
-                    "revisedAmount": review.revisedAmount as Any
-                ]
-            }
+            // RULEBOOK 1.46.0 §8: an Edit hours review keeps its hours, parts and booking fingerprint
+            // (`PayrollLineEditReviewFields`, web `payrollLineEditFieldsOf`), so a save never drops them.
+            "payrollLineReviews": draft.payrollLineReviews.mapValues { $0.storedFields }
         ]
     }
 
@@ -1522,11 +1519,8 @@ enum TimesheetDraftStore {
         if let reviewMap = map["payrollLineReviews"] as? [String: [String: Any]] {
             var reviews: [String: TimesheetPayrollLineReview] = [:]
             for (lineId, payload) in reviewMap {
-                let decision = TimesheetManagerDecision(rawValue: payload["decision"] as? String ?? "") ?? .pending
-                reviews[lineId] = TimesheetPayrollLineReview(
-                    decision: decision,
-                    revisedAmount: payload["revisedAmount"] as? Double
-                )
+                // RULEBOOK 1.46.0: every stored review field, numbers read as NSNumber.
+                reviews[lineId] = TimesheetPayrollLineReview(stored: payload)
             }
             output.payrollLineReviews = reviews
         }
@@ -1581,6 +1575,17 @@ enum TimesheetDraftStore {
                 // RULEBOOK 1.44.0 §8 (web `weeklyReportOverride.ts` `payBasis`: 'day' | 'hourly'), only when known: a line
                 // signed before it was stored keeps its stored shape.
                 if let basis = line.payBasis { row["payBasis"] = basis }
+                // RULEBOOK 1.46.0 §8 (web `weeklyReportOverrideToFirestore`): the booking as signed, and an overtime line's
+                // multiplier, only when known.
+                if let signed = line.bookingFingerprint, !signed.isEmpty { row["bookingFingerprint"] = signed }
+                if line.isOvertime, let multiplier = line.otMultiplier { row["otMultiplier"] = multiplier }
+                if let had = line.bookingHadOvertimeLine { row["bookingHadOvertimeLine"] = had }
+                if let key = line.appliedReviewKey { row["appliedReviewKey"] = key }
+                if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
+                // RULEBOOK 1.46.0 §8 (web `weeklyReportOverrideToFirestore`): the signed row's own PAYE / leave flags, on
+                // every line written (false when not stored).
+                row["isPayeDay"] = line.isPayeDay == true
+                row["isLeave"] = line.isLeave == true
                 return row
             },
             "priceWork": override.priceWork.map(moneyLineMap),
@@ -1617,7 +1622,14 @@ enum TimesheetDraftStore {
                 isOvertime: row["isOvertime"] as? Bool ?? false,
                 decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
                 bookingId: (bookingId?.isEmpty == false) ? bookingId : nil,
-                payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"])
+                payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"]),
+                bookingFingerprint: (row["bookingFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
+                bookingHadOvertimeLine: row["bookingHadOvertimeLine"] as? Bool,
+                appliedReviewKey: row["appliedReviewKey"] as? String,
+                reviewPartOf: (row["reviewPartOf"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                isPayeDay: row["isPayeDay"] as? Bool,
+                isLeave: row["isLeave"] as? Bool
             )
         }
         func moneyLines(_ key: String) -> [TimesheetWeeklyReportMoneyLine] {
@@ -2300,9 +2312,10 @@ private struct MyTimesheetView: View {
                         .accessibilityIdentifier("timesheets.saveError")
                 }
 
-                if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft) > 0 {
+                if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
                     TimesheetManagerAdjustmentSummaryCard(
                         draft: draft,
+                        lines: payrollLines,
                         managerName: draft.managerSignedByName ?? "Line manager"
                     )
                 }
@@ -2322,7 +2335,7 @@ private struct MyTimesheetView: View {
                             draft: draft,
                             managerHasSigned: managerHasSigned
                         )
-                        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.payrollLine.id)
+                        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.payrollLine.id, live: row.payrollLine)
                         let decision = review?.decision ?? .approved
                         let effective = TimesheetDraftAdjustments.effectivePayrollAmount(
                             line: row.payrollLine,
@@ -3279,7 +3292,8 @@ private struct MyTimesheetView: View {
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
-            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never saved (fail closed).
+            let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &draft,
                 user: current,
                 week: week,
@@ -3303,6 +3317,10 @@ private struct MyTimesheetView: View {
                 // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
                 snapshotInputsReady: payInputsBlockMessage == nil
             )
+            if let refusal {
+                saveErrorMessage = refusal
+                return nil
+            }
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return nil }
@@ -4637,7 +4655,8 @@ struct OperativeTimesheetsView: View {
                 continue
             }
             guard d.operativeSignedAt != nil else { continue }
-            TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never exported (fail closed).
+            if let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
                 user: op,
                 week: week,
@@ -4653,7 +4672,10 @@ struct OperativeTimesheetsView: View {
                 viewer: exporter,
                 relatedUsers: userStore.organizationUsers,
                 snapshotInputsReady: true
-            )
+            ) {
+                exportMessage = refusal
+                return
+            }
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
             prepared.append((operative: op, draft: d))
         }
@@ -5469,7 +5491,7 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem) -> some View {
-        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id)
+        let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id, live: row)
         let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
             line: row,
             draft: draft,
@@ -5646,7 +5668,8 @@ private struct OperativeTimesheetReviewView: View {
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
-        TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+        // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never saved (fail closed).
+        let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
             to: &draft,
             user: operative,
             week: week,
@@ -5672,6 +5695,10 @@ private struct OperativeTimesheetReviewView: View {
             // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
             snapshotInputsReady: payInputsBlockMessage == nil
         )
+        if let refusal {
+            saveErrorMessage = refusal
+            return
+        }
         }
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -5865,30 +5892,28 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
         )
     }
 
-    private func applyPayrollReviewSave(lineId: String, row: TimesheetPayrollLineItem, revisedAmount: Double) {
-        let prior = draft.payrollLineReviews[lineId]?.decision ?? .approved
-        let unchanged = abs(revisedAmount - row.amount) < 0.01
-        let decision: TimesheetManagerDecision
-        if prior == .declined {
-            decision = .approved
-        } else if unchanged {
-            decision = .approved
-        } else {
-            decision = .edited
+    /// RULEBOOK 1.46.0 §8: an Edit hours save stores, on each line of the booking, the review the rulebook priced
+    /// (`revisedPayrollLineAmounts` → `PayrollLineEditReviewFields`, revised amounts in pennies), exactly web's fields.
+    /// Returns a refusal message when nothing was saved, else nil.
+    private func applyPayrollReviewSave(lineId: String, edit: TimesheetPayrollLineBookingLookup.Edit) -> String? {
+        guard edit.error == nil, edit.amounts != nil else { return edit.error ?? CanonicalBusinessEngine.payrollLineEditTimesMessage }
+        // Review of #233: a line's current review the rulebook could not check refuses the edit (fail closed).
+        guard let reviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: lineId, draft: draft) else {
+            return TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
         }
-        draft.payrollLineReviews[lineId] = TimesheetPayrollLineReview(
-            decision: decision,
-            revisedAmount: unchanged ? nil : revisedAmount
-        )
+        draft.payrollLineReviews = reviews
         editingPayrollLineId = nil
         onSaveDraft()
+        return nil
     }
 
     private func applyExtraReviewSave(
         expenseId: UUID?,
         priceWorkId: UUID?,
-        revisedAmount: Double
+        revisedAmount enteredAmount: Double
     ) {
+        // RULEBOOK 1.46.0 (web `extraReviewAfterSave`): a revised amount is stored in pennies (`roundPennies`).
+        let revisedAmount = CanonicalBusinessEngine.roundPennies(enteredAmount)
         if let expenseId, let index = draft.expenseEntries.firstIndex(where: { $0.id == expenseId }) {
             var entries = draft.expenseEntries
             let prior = entries[index].managerDecision
@@ -5938,10 +5963,12 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
             )
             TimesheetPayrollLineEditHoursSheet(
                 row: row,
+                lines: payrollLines,
                 policy: linePolicy,
                 initialChoice: initialChoice,
-                onSave: { value in
-                    applyPayrollReviewSave(lineId: lineId, row: row, revisedAmount: value)
+                employment: CanonicalBusinessEngine.timesheetPerson(operative),
+                onSave: { edit in
+                    applyPayrollReviewSave(lineId: lineId, edit: edit)
                 }
             )
         }

@@ -26,6 +26,10 @@ struct WeeklyReportTimesheetFeed {
     }
 
     var weeks: [ApprovedWeek]
+    /// RULEBOOK 1.46.0 (review of #233): an approved week whose snapshot could not be checked against the rulebook
+    /// (`applyIfFullyApproved` refused). The report then stops with this message instead of pricing that week from live
+    /// bookings at live rates. Nil when every approved week was read.
+    var calculationFailedMessage: String? = nil
     /// Script answers for these weeks, memoised (one call per user and day / per range, never per render).
     private let cache = FeedAnswerCache()
 
@@ -188,6 +192,7 @@ struct WeeklyReportTimesheetFeed {
         let periods = TimesheetPayrollPolicy.payPeriodsOverlapping(range: range, settings: settings)
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var weeks: [ApprovedWeek] = []
+        var refusal: String?
 
         for user in users {
             guard user.participatesInTimesheets() else { continue }
@@ -236,7 +241,8 @@ struct WeeklyReportTimesheetFeed {
                 let storedAlready = draft.weeklyReportOverride != nil
                 var working = draft
                 if working.weeklyReportOverride == nil {
-                    TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+                    // RULEBOOK 1.46.0: a week the rulebook could not check stops the report (never priced live).
+                    if let failed = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                         to: &working,
                         user: user,
                         week: period,
@@ -251,7 +257,10 @@ struct WeeklyReportTimesheetFeed {
                         scheduleOptions: scheduleOptions,
                         viewer: nil,
                         relatedUsers: users
-                    )
+                    ) {
+                        refusal = failed
+                        continue
+                    }
                     // Built in memory for this report only. Producing a report never writes anyone's
                     // timesheet (§7: reports are not stored); the snapshot is written by their sign-off.
                 }
@@ -273,7 +282,9 @@ struct WeeklyReportTimesheetFeed {
             }
         }
 
-        return WeeklyReportTimesheetFeed(weeks: mergeApprovedWeeks(weeks, users: users))
+        var feed = WeeklyReportTimesheetFeed(weeks: mergeApprovedWeeks(weeks, users: users))
+        feed.calculationFailedMessage = refusal
+        return feed
     }
 
     /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.mergeTimesheetFeedWeeks`: one approved week per person (email, else

@@ -870,13 +870,6 @@ extension AppUser {
         return !trimmed.isEmpty && !trimmed.hasPrefix("directory:")
     }
 
-    /// Base £/hour for payroll: explicit hourly rate, or day rate ÷ 8 when only day rate is set.
-    var payrollHourlyRate: Double? {
-        if let hr = hourlyRate, hr > 0 { return hr }
-        if let dr = dayRate, dr > 0 { return dr / 8.0 }
-        return nil
-    }
-
     /// Employment type on a working day. The day rule is `employmentTypeOnDay` in the canonical script.
     func employmentType(on date: Date) -> EmploymentType {
         guard let raw = CanonicalBusinessEngine.employmentTypeOnDay(

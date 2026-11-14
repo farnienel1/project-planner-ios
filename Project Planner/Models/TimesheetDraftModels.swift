@@ -17,6 +17,35 @@ enum TimesheetManagerDecision: String, Codable, Hashable {
 struct TimesheetPayrollLineReview: Codable, Hashable {
     var decision: TimesheetManagerDecision = .pending
     var revisedAmount: Double?
+    /// RULEBOOK 1.46.0 §8 Edit hours (`revisedPayrollLineAmounts` → `PayrollLineEditReviewFields`), on an `edited` review
+    /// only; nil on an older review and on approve / decline. Read and written back on every save so none is dropped
+    /// (`TimesheetPayrollLineReview.storedFields`). Optional, so a draft cached before 1.46.0 still decodes.
+    var revisedStandardHours: Double? = nil
+    var revisedOvertimeHours: Double? = nil
+    var revisedOvertimeClockHours: Double? = nil
+    var revisedOvertimeMultiplier: Double? = nil
+    var revisedStandardAmount: Double? = nil
+    var revisedOvertimeAmount: Double? = nil
+    /// The booking the review was made against (`overtimeBookingFingerprint`); once the booking changes the review is
+    /// stale (`payrollLineReview` with the live line).
+    var reviewedBookingFingerprint: String? = nil
+}
+
+// RULEBOOK 1.46.0: a review cached before 1.46.0 has only `decision` and `revisedAmount`; every other key decodes when
+// present (the synthesized decoder already does this for optionals; written out so it stays so).
+extension TimesheetPayrollLineReview {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        decision = try container.decodeIfPresent(TimesheetManagerDecision.self, forKey: .decision) ?? .pending
+        revisedAmount = try container.decodeIfPresent(Double.self, forKey: .revisedAmount)
+        revisedStandardHours = try container.decodeIfPresent(Double.self, forKey: .revisedStandardHours)
+        revisedOvertimeHours = try container.decodeIfPresent(Double.self, forKey: .revisedOvertimeHours)
+        revisedOvertimeClockHours = try container.decodeIfPresent(Double.self, forKey: .revisedOvertimeClockHours)
+        revisedOvertimeMultiplier = try container.decodeIfPresent(Double.self, forKey: .revisedOvertimeMultiplier)
+        revisedStandardAmount = try container.decodeIfPresent(Double.self, forKey: .revisedStandardAmount)
+        revisedOvertimeAmount = try container.decodeIfPresent(Double.self, forKey: .revisedOvertimeAmount)
+        reviewedBookingFingerprint = try container.decodeIfPresent(String.self, forKey: .reviewedBookingFingerprint)
+    }
 }
 
 struct TimesheetExpenseEntry: Codable, Identifiable, Hashable {
@@ -152,6 +181,25 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     /// RULEBOOK 1.44.0 §8: the pay basis stored on the signed line (`day` | `hourly`, web `payBasis`); nil on a line
     /// signed before it was stored. The signed line reads with it, never the live rate.
     var payBasis: String? = nil
+    /// RULEBOOK 1.46.0 §8: the booking as it was when the line was signed (`overtimeBookingFingerprint`, web
+    /// `bookingFingerprint`). An Edit hours review made against another version of the booking is never applied to it.
+    var bookingFingerprint: String? = nil
+    /// The overtime multiplier of an overtime line (web `otMultiplier`); nil on a standard line or one signed without it.
+    var otMultiplier: Double? = nil
+    /// RULEBOOK 1.46.0 §8: whether the booking had its own overtime line when the line was signed (the live line's
+    /// `bookingHasOvertimeLine`), so a later save tests a review against the sheet as signed. Nil on an older line.
+    var bookingHadOvertimeLine: Bool? = nil
+    /// RULEBOOK 1.46.0 §8: `payrollLineReviewKey` of the review applied when the line was signed ('' for none); a later
+    /// save re-applies a review only when it is a different one. Nil on an older line.
+    var appliedReviewKey: String? = nil
+    /// RULEBOOK 1.46.0 §8: on a `{booking}-ot` line a standard line's Edit hours review added, that standard line's id;
+    /// the part follows its standard line's current review when reviews are re-applied. Nil otherwise.
+    var reviewPartOf: String? = nil
+    /// RULEBOOK 1.46.0 §8: the signed line's own PAYE and annual-leave flags (web `isPayeDay`, `isLeave`). A signed
+    /// sheet's invoice rows are left out only by their own stored data (`timesheetInvoiceRows`), so every line iOS
+    /// writes carries them. Nil on a line signed before they were stored (kept as stored).
+    var isPayeDay: Bool? = nil
+    var isLeave: Bool? = nil
 }
 
 struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
