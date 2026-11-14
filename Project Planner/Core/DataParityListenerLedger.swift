@@ -168,3 +168,17 @@ nonisolated final class SnapshotDeliveredFlag: @unchecked Sendable {
         return delivered
     }
 }
+
+/// RULEBOOK 1.43.0 §8 (review r318, 3rd round): whether a planned listener part's last delivered snapshot came from the
+/// cache, so the server's metadata-only confirmation of the same rows is still passed on. Plumbing only.
+nonisolated final class SnapshotFromCacheFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fromCache = false
+
+    init() {}
+
+    var value: Bool {
+        get { lock.lock(); defer { lock.unlock() }; return fromCache }
+        set { lock.lock(); fromCache = newValue; lock.unlock() }
+    }
+}

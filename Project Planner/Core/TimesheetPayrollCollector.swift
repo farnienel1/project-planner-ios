@@ -32,6 +32,18 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     var bookingOvertimeHours: Double? = nil
     var otMultiplier: Double? = nil
     var otClockHours: Double? = nil
+    /// RULEBOOK 1.43.0 (display only, never stored): the booking's own clock times and break toggle. `details` now shows
+    /// only this line's part (`payrollLineClockRanges`), so Edit hours reads the whole booking from these (web
+    /// `bookingStartTime` / `bookingEndTime` / `bookingBreakRemoved`).
+    var bookingStartTime: String? = nil
+    var bookingEndTime: String? = nil
+    var bookingBreakRemoved: Bool? = nil
+    /// RULEBOOK 1.43.0 (review r318; rebuild check only, never stored): when the line's booking was created
+    /// (`timesheetSnapshotNeedsRebuild` counts only bookings that existed when the sheet was approved).
+    var bookingCreatedAt: Date? = nil
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): when the line's booking was last written (`updatedAt`); the rebuild
+    /// check uses the later of the two, so a booking moved into the period after approval never counts.
+    var bookingUpdatedAt: Date? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -106,7 +118,9 @@ enum TimesheetPayrollCollector {
             day: Date,
             details: String,
             labels: (jobNumber: String, siteName: String),
-            operative: Operative?
+            operative: Operative?,
+            createdAt: Date?,
+            updatedAt: Date?
         ) {
             let policy = dayPolicy(for: day)
             let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
@@ -144,6 +158,18 @@ enum TimesheetPayrollCollector {
                 )
             )
 
+            // RULEBOOK 1.43.0 §8 (owner rule, `payrollLineClockRanges`): a booking with clock times shows the
+            // standard-window times on its standard line and the overtime times on its overtime line. Wording only; a
+            // booking with no standard part keeps its own times, and a named slot (FULL DAY, AM, PM) keeps its name.
+            let bookingStart = probe.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let bookingEnd = probe.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let hasClockTimes = !bookingStart.isEmpty && !bookingEnd.isEmpty
+            let clockRanges = hasClockTimes ? hours.flatMap { CanonicalBusinessEngine.payrollLineClockRanges($0) } : nil
+            let lineDetails = Self.standardLineDetails(
+                clockRanges: clockRanges, isBreakRemoved: probe.isBreakRemoved, fallback: details
+            )
+            let otLineDetails = Self.overtimeLineDetails(clockRanges: clockRanges, multiplied: multiplied, otHours: otHours)
+
             let normalPay = resolved.payForHoursIfCalculated(normalHours, standardDayHours: standardDayHours)
             if normalPay == nil { calculationFailed = true }
             let normalAmount = normalPay ?? 0
@@ -154,7 +180,7 @@ enum TimesheetPayrollCollector {
                     date: day,
                     jobNumber: labels.jobNumber,
                     projectName: labels.siteName,
-                    details: details,
+                    details: lineDetails,
                     paidHours: normalHours,
                     payrollBasis: resolved.basis,
                     dayRate: resolved.dayRate ?? 0,
@@ -164,7 +190,12 @@ enum TimesheetPayrollCollector {
                     isOvertimeLine: false,
                     bookingId: lineBookingId,
                     bookingPaidHours: paidHours,
-                    bookingOvertimeHours: multiplied?.clockHours ?? otHours
+                    bookingOvertimeHours: multiplied?.clockHours ?? otHours,
+                    bookingStartTime: hasClockTimes ? bookingStart : nil,
+                    bookingEndTime: hasClockTimes ? bookingEnd : nil,
+                    bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
+                    bookingCreatedAt: createdAt,
+                    bookingUpdatedAt: updatedAt
                 )
             )
 
@@ -180,9 +211,9 @@ enum TimesheetPayrollCollector {
                         date: day,
                         jobNumber: labels.jobNumber,
                         projectName: "\(labels.siteName) (Overtime)",
-                        // Web `timesheetPayrollCollector`: "OT 6.5h × 2 − 0.5h break = 12.5h" when a break came off the
-                        // multiplied hours (`multipliedHoursText`), else "OT {clock hours}h".
-                        details: Self.overtimeDetails(multiplied: multiplied, otHours: otHours),
+                        // RULEBOOK 1.43.0: the overtime clock times (`payrollLineClockRanges`), with " · OT 6.5h × 2 − 0.5h
+                        // break = 12.5h" only when a break came off the multiplied hours; no clock times → as before.
+                        details: otLineDetails,
                         paidHours: otHours,
                         payrollBasis: resolved.basis,
                         dayRate: otDisplayRate,
@@ -192,7 +223,12 @@ enum TimesheetPayrollCollector {
                         isOvertimeLine: true,
                         bookingId: lineBookingId,
                         otMultiplier: otMultiplier,
-                        otClockHours: multiplied?.clockHours ?? otHours
+                        otClockHours: multiplied?.clockHours ?? otHours,
+                        bookingStartTime: hasClockTimes ? bookingStart : nil,
+                        bookingEndTime: hasClockTimes ? bookingEnd : nil,
+                        bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,
+                        bookingCreatedAt: createdAt,
+                        bookingUpdatedAt: updatedAt
                     )
                 )
             }
@@ -212,7 +248,9 @@ enum TimesheetPayrollCollector {
                 day: day,
                 details: booking.scheduleLabel(policy: policy),
                 labels: projectLabel(for: booking.projectId, projectsById: projectsById, smallWorksById: smallWorksById),
-                operative: matchedOperative
+                operative: matchedOperative,
+                createdAt: booking.createdAt,
+                updatedAt: booking.updatedAt
             )
         }
 
@@ -230,7 +268,9 @@ enum TimesheetPayrollCollector {
                 day: day,
                 details: booking.scheduleLabel(policy: policy),
                 labels: managerBookingLabels(for: booking, projectsById: projectsById, smallWorksById: smallWorksById),
-                operative: matchedOperatives.first
+                operative: matchedOperatives.first,
+                createdAt: booking.createdAt,
+                updatedAt: booking.updatedAt
             )
         }
 
@@ -299,6 +339,49 @@ enum TimesheetPayrollCollector {
             scheduleOptions: scheduleOptions,
             relatedUsers: relatedUsers
         )
+    }
+
+    /// RULEBOOK 1.43.0 §8: a standard line's details — the standard-window times (`payrollLineClockRanges.standardText`,
+    /// " · no break" when the booking removes the break), else `fallback` (the booking's own label: its times, or a named
+    /// slot's name). Web `timesheetPayrollCollector` `standardDetails`.
+    static func standardLineDetails(clockRanges: RulebookPayrollLineClockRanges?, isBreakRemoved: Bool, fallback: String) -> String {
+        guard let text = clockRanges?.standardText, !text.isEmpty else { return fallback }
+        return isBreakRemoved ? "\(text) · no break" : text
+    }
+
+    /// RULEBOOK 1.43.0 §8: an overtime line's details — the overtime times (`payrollLineClockRanges.overtimeText`), with
+    /// " · OT <multipliedHoursText>" only when an unpaid break came off the multiplied hours; with no overtime times the
+    /// 1.20.4 text (`overtimeDetails`). Web `timesheetPayrollCollector` `overtimeDetails`.
+    static func overtimeLineDetails(
+        clockRanges: RulebookPayrollLineClockRanges?,
+        multiplied: RulebookMultipliedHours?,
+        otHours: Double
+    ) -> String {
+        let multipliedText: String? = {
+            guard let multiplied, multiplied.breakHours > 0 else { return nil }
+            return "OT \(multiplied.text)"
+        }()
+        guard let text = clockRanges?.overtimeText, !text.isEmpty else {
+            return overtimeDetails(multiplied: multiplied, otHours: otHours)
+        }
+        return multipliedText.map { "\(text) · \($0)" } ?? text
+    }
+
+    /// RULEBOOK 1.43.0 §8 (review r318): the live lines as `timesheetSnapshotNeedsRebuild` reads them — PAYE flag and
+    /// the booking's creation time. A mapping only.
+    static func snapshotRebuildLines(
+        _ lines: [TimesheetPayrollLineItem]
+    ) -> [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)] {
+        lines.map { (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt, bookingUpdatedAt: $0.bookingUpdatedAt) }
+    }
+
+    /// RULEBOOK 1.43.0 §8: what a timesheet line shows beside its rate line — `timesheetLineClockText(details)`, the clock
+    /// part only, so the multiplied text (which the rate line shows) is never printed twice. Nil when nothing is left, or
+    /// when the details are only the multiplied text (an older line stored as "OT 6.5h × 2 − 0.5h break = 12.5h").
+    nonisolated static func lineClockLabel(_ details: String) -> String? {
+        let clock = CanonicalBusinessEngine.timesheetLineClockText(details)
+        guard !clock.isEmpty, CanonicalBusinessEngine.parseMultipliedHoursText(clock) == nil else { return nil }
+        return clock
     }
 
     /// RULEBOOK 1.20.4: an overtime line's text — `multipliedHoursText` when an unpaid break came off the multiplied

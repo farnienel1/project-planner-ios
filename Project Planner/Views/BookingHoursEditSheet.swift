@@ -1579,8 +1579,9 @@ struct OperativeCustomHoursSheet: View {
     }
 
     /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday (not when
-    /// the times are not a valid same-day window). `weekendBookingBreakdown` takes no overtime multiplier override, so
-    /// with one typed the rows stay (priced at the organisation's multiplier) and `overrideNote` says so.
+    /// the times are not a valid same-day window). RULEBOOK 1.43.0 §25: the rows and the weekday explanation price the
+    /// booking's own overtime rate on screen (`resolvedOtMultiplierOverride`; nil = the organisation's), so the preview is
+    /// what the booking is paid and no "shown at the organisation rate" note is needed.
     private func refreshWeekendBreakdown() {
         guard endMinutes > startMinutes else {
             weekendBreakdownLines = []
@@ -1592,7 +1593,8 @@ struct OperativeCustomHoursSheet: View {
             start: startText,
             end: endText,
             isBreakRemoved: !breakIncluded,
-            fallbackPolicy: policy
+            fallbackPolicy: policy,
+            otMultiplierOverride: resolvedOtMultiplierOverride
         )
         weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
             CanonicalBusinessEngine.weekendBookingBreakdown(
@@ -1600,35 +1602,23 @@ struct OperativeCustomHoursSheet: View {
                 start: startText,
                 end: endText,
                 isBreakRemoved: !breakIncluded,
-                fallbackPolicy: policy
+                fallbackPolicy: policy,
+                otMultiplierOverride: resolvedOtMultiplierOverride
             )
         )
     }
 
-    /// RULEBOOK 1.39.0: the weekday rule and the steps behind the hours (`bookingHoursExplanation`).
+    /// RULEBOOK 1.39.0: the weekday rule and the steps behind the hours (`bookingHoursExplanation`, 1.43.0: at the
+    /// booking's own rate).
     private var weekdayExplanationCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             WeekendBookingBreakdownView(sections: weekdayExplanationSections, title: "How the hours add up")
-            if let override = resolvedOtMultiplierOverride {
-                Text("Shown at the organisation rate. This booking's overtime hours are paid at ×\(ScheduleCoverageFormat.hours(override)) instead.")
-                    .font(.footnote)
-                    .foregroundStyle(PPChipTone.amber.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
         }
     }
 
     private var weekendBreakdownCard: some View {
         VStack(alignment: .leading, spacing: 6) {
             WeekendBookingBreakdownView(sections: weekendBreakdownLines, title: "Breakdown")
-            if let override = resolvedOtMultiplierOverride {
-                // 1.18 gap: the per-day rows are the organisation's rule; the typed rate applies to this booking.
-                Text("Rows show the organisation rate. This booking's overtime hours are paid at ×\(ScheduleCoverageFormat.hours(override)) instead.")
-                    .font(.footnote)
-                    .foregroundStyle(PPChipTone.amber.ink)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("operativeCustomHours.overrideNote")
-            }
         }
     }
 

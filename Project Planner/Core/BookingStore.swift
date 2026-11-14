@@ -8,6 +8,44 @@
 import Foundation
 import Combine
 
+/// RULEBOOK 1.43.0 §8 (review r318): a live booking listener's last report — its organisation and window, and whether
+/// its whole query is a server answer with no pending local writes.
+struct BookingListenerAuthority: Equatable {
+    let organizationId: String
+    let fromDate: Date?
+    let authoritative: Bool
+}
+
+/// RULEBOOK 1.43.0 §8: what a server-answered booking read covered — the open organisation and the read's lower bound
+/// (nil = the whole archive).
+struct BookingServerCoverage: Equatable {
+    let organizationId: String
+    let fromDate: Date?
+
+    /// The coverage after a one-off read of `fromDate`'s window: the read's own server answer, else the same window's
+    /// listener having a server answer (a cache read never covers a period on its own).
+    static func afterRead(
+        organizationId: String,
+        fromDate: Date?,
+        readAuthoritative: Bool,
+        listener: BookingListenerAuthority?
+    ) -> BookingServerCoverage? {
+        if readAuthoritative { return BookingServerCoverage(organizationId: organizationId, fromDate: fromDate) }
+        if let listener, listener.authoritative, listener.organizationId == organizationId, listener.fromDate == fromDate {
+            return BookingServerCoverage(organizationId: organizationId, fromDate: fromDate)
+        }
+        return nil
+    }
+
+    /// The read reaches back to `periodStart` (nil = the whole archive is needed) for `organizationId`.
+    func covers(organizationId: String, from periodStart: Date?) -> Bool {
+        guard self.organizationId == organizationId else { return false }
+        guard let fromDate else { return true }
+        guard let periodStart else { return false }
+        return fromDate <= periodStart
+    }
+}
+
 @MainActor
 class BookingStore: ObservableObject {
     @Published var bookings: [Booking] = [] {
@@ -30,6 +68,15 @@ class BookingStore: ObservableObject {
     /// The organisation whose bookings load last finished (read or failed). Warnings wait for it
     /// (`WarningInputsReadiness`) so an empty list before the first read is never "nobody booked".
     private(set) var finishedLoadOrganizationId: String?
+    /// RULEBOOK 1.43.0 §8 (review r318): the organisation and lower bound (nil = every date) of the last read whose
+    /// every query the server answered — never a cache fallback or a partial plan. Sign-off waits for it to reach the
+    /// period (`PayInputsLoad.periodBookings`). Cleared when a read fails or answers from cache.
+    @Published private(set) var serverCoverage: BookingServerCoverage?
+    /// RULEBOOK 1.43.0 §8 (review r318): the live listener's last authority report (its window and whether its whole
+    /// query is a server answer with no pending writes).
+    private var listenerAuthority: BookingListenerAuthority?
+    /// The organisation and window the live listener was last asked for (review r318: stale listeners are ignored).
+    private var liveWindow: BookingServerCoverage?
     
     private let persistenceService: PersistenceService
     private var firebaseBackend: FirebaseBackend?
@@ -251,6 +298,9 @@ class BookingStore: ObservableObject {
         }
         isLoading = true
         errorMessage = nil
+        // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a new read (window or plan may change) clears the period gate
+        // until it answers from the server.
+        serverCoverage = nil
         let loadingOrganizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId
         
         Task { @MainActor in
@@ -284,9 +334,18 @@ class BookingStore: ObservableObject {
                     let queryStart = firebaseBackend.scheduleBookingQueryStart()
                     
                     // Launch reads from the warning window / current week forward, not the whole archive.
-                    let firebaseBookings = try await firebaseBackend.loadBookings(
+                    let read = try await firebaseBackend.loadBookingsReportingAuthority(
                         organizationId: organizationId,
                         startingOn: queryStart
+                    )
+                    let firebaseBookings = read.bookings
+                    // A read that came from cache still counts when this window's listener has a server answer
+                    // (review r318: the listener is not re-attached for the same window, so it may stay quiet).
+                    self.serverCoverage = BookingServerCoverage.afterRead(
+                        organizationId: organizationId,
+                        fromDate: queryStart,
+                        readAuthoritative: read.authoritative,
+                        listener: self.listenerAuthority
                     )
                     if firebaseBackend.suppressStaleOrganizationCache {
                         self.bookings = firebaseBookings
@@ -330,6 +389,7 @@ class BookingStore: ObservableObject {
             } catch {
                 self.errorMessage = error.localizedDescription
                 self.lastLoadFailed = true
+                self.serverCoverage = nil
                 NSLog("BOOKINGS_LOAD_FAILED error=%@", error.localizedDescription)
                 if firebaseBackend?.suppressStaleOrganizationCache == true {
                     self.bookings = []
@@ -1201,6 +1261,9 @@ class BookingStore: ObservableObject {
     func discardInMemoryForOrganizationSwitch() {
         bookings = []
         finishedLoadOrganizationId = nil
+        serverCoverage = nil
+        listenerAuthority = nil
+        liveWindow = nil
         lastLoadFailed = false
         listenerFailed = false
         isLoading = false
@@ -1216,7 +1279,23 @@ class BookingStore: ObservableObject {
     }
 
     func startLiveUpdates(organizationId: String, startingOn start: Date? = nil) {
-        firebaseBackend?.listenBookings(organizationId: organizationId, startingOn: start) { [weak self] remote, fromCache in
+        // Review r318: the window the live listener now serves; a report from a listener of another window is ignored.
+        liveWindow = BookingServerCoverage(organizationId: organizationId, fromDate: start)
+        firebaseBackend?.listenBookings(
+            organizationId: organizationId,
+            startingOn: start,
+            // RULEBOOK 1.43.0 §8 (review r318): every snapshot of the listener (metadata-only ones included) says whether
+            // the server answered its whole query with no pending local writes; the period gate follows it.
+            onAuthority: { [weak self] authoritative in
+                guard let self,
+                      self.firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId,
+                      self.liveWindow == BookingServerCoverage(organizationId: organizationId, fromDate: start) else { return }
+                self.listenerAuthority = BookingListenerAuthority(
+                    organizationId: organizationId, fromDate: start, authoritative: authoritative
+                )
+                self.serverCoverage = authoritative ? BookingServerCoverage(organizationId: organizationId, fromDate: start) : nil
+            }
+        ) { [weak self] remote, fromCache in
             guard let self else { return }
             guard WarningsBookingScanScheduler.acceptsListener(
                 listenerOrganizationId: organizationId,

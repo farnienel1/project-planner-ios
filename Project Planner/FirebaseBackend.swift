@@ -8122,15 +8122,24 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [Booking] {
+        try await loadBookingsReportingAuthority(organizationId: organizationId, startingOn: start).bookings
+    }
+
+    /// `loadBookings`, and whether every query of the plan answered from the server (RULEBOOK 1.43.0 §8: sign-off
+    /// waits for an authoritative read of the period's bookings, never cache or a partial plan).
+    func loadBookingsReportingAuthority(
+        organizationId: String,
+        startingOn start: Date? = nil
+    ) async throws -> (bookings: [Booking], authoritative: Bool) {
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId)
         // RULEBOOK 1.10.0 §17: the booking queries `bookingQueryPlan` names (with `date >= start`), merged by id.
         let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
-        let documents = try await readPlannedQueryDocuments(plan.sources)
-        let bookings = bookingsFromFirestoreDocuments(documents)
+        let read = try await readPlannedQueryDocumentsReportingAuthority(plan.sources)
+        let bookings = bookingsFromFirestoreDocuments(read.documents)
         if bookings.isEmpty {
             NSLog("BOOKINGS_EMPTY org=%@ start=%@ plan=%@ — no booking documents in range", orgId, start.map { CanonicalBusinessEngine.isoString(from: $0) } ?? "all", plan.signature)
         }
-        return bookings
+        return (bookings, read.authoritative)
     }
 
     func getQueryPreferringServer(_ query: Query) async throws -> QuerySnapshot {
@@ -8340,6 +8349,7 @@ class FirebaseBackend: ObservableObject {
     func listenBookings(
         organizationId: String,
         startingOn start: Date? = nil,
+        onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
         onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -8348,7 +8358,7 @@ class FirebaseBackend: ObservableObject {
         // a new plan (visible jobs or own ids changed, `jobReadPlanDidChange`) re-attaches and the same plan is free.
         let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
         let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
-        bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onAuthority: onAuthority, onChange: onChange) }
         dataParityBookingsListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: bookingsLiveListenerTarget,
@@ -8368,7 +8378,8 @@ class FirebaseBackend: ObservableObject {
                 guard let self, self.bookingsLiveListenerTarget == target else { return }
                 self.bookingsLiveListenerTarget = nil
             },
-            parity: (key: "bookings", organizationId: orgId)
+            parity: (key: "bookings", organizationId: orgId),
+            onAuthority: onAuthority
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8524,9 +8535,18 @@ class FirebaseBackend: ObservableObject {
     }
 
     func loadManagerSiteBookings(organizationId: String, startingOn start: Date? = nil) async throws -> [ManagerSiteBooking] {
+        try await loadManagerSiteBookingsReportingAuthority(organizationId: organizationId, startingOn: start).bookings
+    }
+
+    /// `loadManagerSiteBookings`, and whether every query of the plan answered from the server (RULEBOOK 1.43.0 §8).
+    func loadManagerSiteBookingsReportingAuthority(
+        organizationId: String,
+        startingOn start: Date? = nil
+    ) async throws -> (bookings: [ManagerSiteBooking], authoritative: Bool) {
         // RULEBOOK 1.33.0 §17: `bookingQueryPlan` (whole collection for admins and every manager; none for operatives).
         let plan = bookingReadSources(organizationId: organizationId, collection: "managerSiteBookings", startingOn: start)
-        return managerSiteBookingsFromFirestoreDocuments(try await readPlannedQueryDocuments(plan.sources))
+        let read = try await readPlannedQueryDocumentsReportingAuthority(plan.sources)
+        return (managerSiteBookingsFromFirestoreDocuments(read.documents), read.authoritative)
     }
 
     func managerSiteBookingFromFirestoreDocument(_ doc: QueryDocumentSnapshot) -> ManagerSiteBooking? {
@@ -8570,14 +8590,15 @@ class FirebaseBackend: ObservableObject {
     func listenManagerSiteBookings(
         organizationId: String,
         startingOn start: Date? = nil,
-        onChange: @escaping ([ManagerSiteBooking]) -> Void
+        onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
+        onChange: @escaping (_ bookings: [ManagerSiteBooking], _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
         // RULEBOOK 1.10.0 §17: one listener per `bookingQueryPlan` query (see `listenBookings`).
         let plan = bookingReadSources(organizationId: orgId, collection: "managerSiteBookings", startingOn: start)
         let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
-        managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onAuthority: onAuthority, onChange: onChange) }
         dataParityManagerScheduleListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: managerScheduleLiveListenerTarget,
@@ -8596,7 +8617,8 @@ class FirebaseBackend: ObservableObject {
                 guard let self, self.managerScheduleLiveListenerTarget == target else { return }
                 self.managerScheduleLiveListenerTarget = nil
             },
-            parity: (key: "managerSiteBookings", organizationId: orgId)
+            parity: (key: "managerSiteBookings", organizationId: orgId),
+            onAuthority: onAuthority
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8613,7 +8635,7 @@ class FirebaseBackend: ObservableObject {
                 return
             }
             let list = self.managerSiteBookingsFromFirestoreDocuments(documents)
-            onChange(list)
+            onChange(list, fromCache)
         }
     }
 
@@ -11136,11 +11158,25 @@ extension FirebaseBackend {
         // Query by userId only, then sort/limit in memory.
         // Ordering by weekStart requires a composite index that may not exist yet and was
         // crashing/failing My Timesheets history loads in Simulator.
-        let snapshot = try await db.collection("organizations")
-            .document(organizationId)
-            .collection("settings")
-            .whereField("userId", isEqualTo: userId)
-            .getDocuments()
+        // RULEBOOK 1.43.0: an operative's own `userId ==` query is allowed once the 1.43.0 rules are published. A refused
+        // or failed query is logged (never swallowed without a trace) and thrown; callers read nothing from it, and a
+        // period still opens from its direct document read (`loadTimesheetState`) — as a new sheet when it has none.
+        let snapshot: QuerySnapshot
+        do {
+            snapshot = try await db.collection("organizations")
+                .document(organizationId)
+                .collection("settings")
+                .whereField("userId", isEqualTo: userId)
+                .getDocuments()
+        } catch {
+            NSLog(
+                "TIMESHEET_HISTORY_QUERY_FAILED org=%@ user=%@ %@ — periods open from their direct reads",
+                organizationId,
+                userId,
+                error.localizedDescription
+            )
+            throw error
+        }
         let rows: [[String: Any]] = snapshot.documents.map { doc in
             var row = doc.data()
             row["__documentId"] = doc.documentID

@@ -62,6 +62,9 @@ struct TimesheetDraft: Codable {
     var managerSignedByUserId: String?
     var managerSignatureImageBase64: String?
     var exportedAt: Date?
+    /// RULEBOOK 1.43.0 §8: the older approval field as stored (`approvedAt`), read for `timesheetOwnerCanAddExtras` (the
+    /// security rules test it with `managerSignedAt`). Read only; the save writes `approvedAt` from `managerSignedAt`.
+    var approvedAt: Date?
     /// Agreed labour / price-work / expenses snapshot written when the timesheet
     /// is fully approved (line-manager counter-sign, or the person's own sign when
     /// they have no line manager). Weekly Report and the web app read this field

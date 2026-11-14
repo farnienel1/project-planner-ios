@@ -1305,30 +1305,40 @@ struct ProjectDetailView: View {
                 // RULEBOOK 1.41.0 §21: every booking of the firm that day on one tile (iOS showed only the first).
                 let firmBookings = subcontractorBookingsForDate(day).filter { $0.subcontractorId == subId }
                 if let booking = firmBookings.first {
-                    var figures: [RulebookScheduleDayBooking] = []
-                    var choices: [SchedulingGridBookingChoice] = []
-                    for entry in firmBookings {
-                        let mirror = entry.payrollMirrorBooking()
-                        let p = firebaseBackend.payrollPolicy(for: entry.date)
-                        let result = mirror.payrollHoursResult(policy: p)
-                        figures.append(.from(result, timeSlot: entry.timeSlot.rawValue))
-                        choices.append(SchedulingGridBookingChoice(
-                            id: "s:\(entry.id.uuidString)",
-                            label: "\(mirror.scheduleLabel(policy: p)) · \(SchedulingV2CellKindBuilder.hoursLabel(result.totalPaidHours))",
-                            operativeBooking: nil, managerBooking: nil, subcontractorBooking: entry
-                        ))
-                    }
-                    let dayCell = CanonicalBusinessEngine.scheduleDayCell(bookings: figures, onLeave: false)
+                    // RULEBOOK 1.43.0 §21 `subcontractorScheduleCell` (owner rule, 14 Nov): a firm's day shows only its
+                    // working window(s), start to finish, and the number of bookings — never paid hours, Std / OT or
+                    // overtime lines (a firm's booking is not priced by the organisation's working hours). One plain
+                    // colour. The chooser lists each booking's times only.
                     let p = firebaseBackend.payrollPolicy(for: booking.date)
-                    let cell = dayCell.map(SchedulingV2CellKindBuilder.fromDayCell) ?? SchedulingV2CellKindBuilder.fromBooking(
-                        paidHours: booking.payrollMirrorBooking().paidBookedHours(policy: p),
-                        overtimeHours: CanonicalBusinessEngine.scheduleCellHours(booking.payrollMirrorBooking().payrollHoursResult(policy: p).scheduleCellHoursInput)?.overtimeHours ?? 0,
-                        timeSlot: booking.timeSlot
+                    let dayKey = CanonicalBusinessEngine.bookingDayKey(day)
+                    func times(_ entry: SubcontractorBooking) -> (timeSlot: String?, workStartTime: String?, workEndTime: String?) {
+                        (entry.timeSlot.rawValue, entry.workStartTime, entry.workEndTime)
+                    }
+                    let subCell = CanonicalBusinessEngine.subcontractorScheduleCell(
+                        bookings: firmBookings.map(times),
+                        policy: p,
+                        dayKey: dayKey
                     )
+                    // When the script does not answer: the stored start–finish (or the slot's name), never "0h".
+                    func storedTimes(_ entry: SubcontractorBooking) -> String {
+                        let start = entry.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let end = entry.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        return start.isEmpty || end.isEmpty ? entry.timeSlot.displayName : "\(start)–\(end)"
+                    }
+                    let choices: [SchedulingGridBookingChoice] = firmBookings.map { entry in
+                        let single = CanonicalBusinessEngine.subcontractorScheduleCell(bookings: [times(entry)], policy: p, dayKey: dayKey)
+                        return SchedulingGridBookingChoice(
+                            id: "s:\(entry.id.uuidString)",
+                            label: single?.timesText.isEmpty == false ? (single?.timesText ?? "") : storedTimes(entry),
+                            operativeBooking: nil, managerBooking: nil, subcontractorBooking: entry
+                        )
+                    }
+                    let dayCell = subCell?.dayCell
+                        ?? RulebookSubcontractorScheduleCell.fallbackDayCell(storedTimes: firmBookings.map(storedTimes))
                     return SchedulingGridDayCell(
                         id: dayId,
                         date: day,
-                        kind: cell,
+                        kind: .standard(hours: 0),
                         operativeBooking: nil,
                         managerBooking: nil,
                         subcontractorBooking: booking,

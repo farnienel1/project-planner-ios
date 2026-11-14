@@ -804,6 +804,7 @@ enum TimesheetApprovalPolicy {
         draft.managerSignedByUserId = nil
         draft.managerSignatureImageBase64 = nil
         draft.exportedAt = nil
+        draft.approvedAt = nil
         draft.weeklyReportOverride = nil
         draft.payrollLineReviews = [:]
         for index in draft.expenseEntries.indices {
@@ -823,6 +824,10 @@ enum TimesheetApprovalPolicy {
 
 enum TimesheetDraftStore {
     private static let defaults = UserDefaults.standard
+    /// RULEBOOK 1.43.0 (review r318): the period's sheet could not be read, so it is not opened as a new one.
+    static let periodReadFailedMessage = "Couldn't check older timesheets — try again."
+    /// RULEBOOK 1.43.0 (review r318, 3rd round): the bookings gate closed during a bulk export (web `EXPORT_STOPPED_MESSAGE`).
+    static let exportStoppedMessage = "Export stopped: the bookings are reloading. Try again in a moment."
 
     static func load(userId: String, weekStart: Date, organizationId: String? = nil) -> TimesheetDraft {
         guard let storageKey = key(userId: userId, weekStart: weekStart, organizationId: organizationId),
@@ -969,6 +974,24 @@ enum TimesheetDraftStore {
         firebaseBackend: FirebaseBackend,
         organizationId: String
     ) async -> TimesheetDraft? {
+        await refreshFromCloudReporting(
+            userId: userId,
+            weekStart: weekStart,
+            firebaseBackend: firebaseBackend,
+            organizationId: organizationId
+        ).draft
+    }
+
+    /// RULEBOOK 1.43.0 (review r318): the period's sheet read at its expected document id. `failed` is true when that
+    /// read did not answer — the screen then shows an error instead of opening the period as a new sheet. Only a read
+    /// that answered "missing" opens it as new, and a new sheet is saved at that same expected id
+    /// (`timesheetStateDocumentRef`), never over another document.
+    static func refreshFromCloudReporting(
+        userId: String,
+        weekStart: Date,
+        firebaseBackend: FirebaseBackend,
+        organizationId: String
+    ) async -> (draft: TimesheetDraft?, failed: Bool) {
         let raw: [String: Any]?
         do {
             raw = try await firebaseBackend.loadTimesheetState(
@@ -977,15 +1000,16 @@ enum TimesheetDraftStore {
                 weekStart: weekStart
             )
         } catch {
-            return nil
+            NSLog("TIMESHEET_PERIOD_READ_FAILED org=%@ %@", organizationId, error.localizedDescription)
+            return (nil, true)
         }
         guard let raw else {
             // The server has no sheet for this organisation, person and period: the local copy is stale
             // (or another company's) and is never shown or saved back.
             clear(userId: userId, weekStart: weekStart, organizationId: organizationId)
-            return nil
+            return (nil, false)
         }
-        guard let decoded = fromFirestoreMap(raw) else { return nil }
+        guard let decoded = fromFirestoreMap(raw) else { return (nil, false) }
         let endKey = (raw["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let startKey = (raw["weekStartKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let startKey, let endKey, !startKey.isEmpty, !endKey.isEmpty {
@@ -997,7 +1021,7 @@ enum TimesheetDraftStore {
         }
         save(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
         rememberLoadedCopy(decoded, userId: userId, weekStart: weekStart, organizationId: organizationId)
-        return decoded
+        return (decoded, false)
     }
 
     /// Manager counter-sign and export fields. The owner never sends them (firestore.rules
@@ -1252,6 +1276,7 @@ enum TimesheetDraftStore {
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = firestoreDate(map["exportedAt"])
+        output.approvedAt = firestoreDate(map["approvedAt"])
         if output.managerSignedAt == nil {
             output.managerSignedAt = firestoreDate(map["approvedAt"])
         }
@@ -1890,6 +1915,8 @@ private struct MyTimesheetsHubView: View {
 private struct MyTimesheetView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
+    /// RULEBOOK 1.43.0 §8 (review r318): the period's bookings are asked for again when the app becomes active.
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -1918,7 +1945,34 @@ private struct MyTimesheetView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        if periodLoadFailed { return TimesheetDraftStore.periodReadFailedMessage }
+        return PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: periodBookingsState
+        )
+    }
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's labour and manager site bookings have arrived
+    /// (`PayInputsLoad.periodBookings`). Sign-off, the counter-signature, the agreed snapshot and invoices wait for them.
+    private var periodBookingsState: (loaded: Bool, failed: Bool) {
+        PayInputsLoad.periodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start
+        )
+    }
+
+    /// Asks for the period's bookings when the download does not reach it, or when the last read failed (Retry).
+    private func ensurePeriodBookings() {
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start,
+            retryFailed: true
+        )
     }
     @State private var showInvoiceUTRWarning = false
     /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
@@ -1930,6 +1984,24 @@ private struct MyTimesheetView: View {
     @State private var invoiceErrorMessage: String?
     /// Shown when the cloud save failed (it used to fail silently).
     @State private var saveErrorMessage: String?
+    /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
+    @State private var snapshotRebuildTried = false
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
+    /// invoiced and no blank sheet is opened until a Retry reads it.
+    @State private var periodLoadFailed = false
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
+    /// bookings (loaded) have some, and the sheet was not exported.
+    private var snapshotNeedsRebuild: Bool {
+        guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
+        return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+            storedOverrideLineCount: stored.lines.count,
+            overrideApprovedAt: stored.approvedAt,
+            exportedAt: draft.exportedAt,
+            managerSignedAt: draft.managerSignedAt,
+            liveLabourLines: TimesheetPayrollCollector.snapshotRebuildLines(payrollLines)
+        )
+    }
 
     private enum TimesheetExtraMode {
         case priceWork, expense
@@ -2067,10 +2139,14 @@ private struct MyTimesheetView: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .strikethrough(removed)
-                                Text(row.details)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .strikethrough(removed)
+                                // RULEBOOK 1.43.0 §8 `timesheetLineClockText`: the line's own clock times only (standard
+                                // or overtime part); the hours and any multiplied text are on the rate line below.
+                                if let clock = TimesheetPayrollCollector.lineClockLabel(row.details) {
+                                    Text(clock)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .strikethrough(removed)
+                                }
                                 Text(timesheetHoursRateLine(for: row))
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
@@ -2214,6 +2290,16 @@ private struct MyTimesheetView: View {
                 }
 
                 sectionHeader("Add to this timesheet")
+                // RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras`: nothing is added once the line manager has signed
+                // (a self-signed sheet stays open; adding asks the person to sign again).
+                let extras = extrasPermission
+                if !extras.allowed, let message = extras.message {
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(PPColor.warningAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("timesheets.extrasLocked")
+                }
                 HStack(spacing: 10) {
                     Button {
                         beginAddingExtra(.priceWork)
@@ -2222,6 +2308,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.priceWork")
                     .buttonStyle(.plain)
+                    .disabled(!extras.allowed)
+                    .opacity(extras.allowed ? 1 : 0.5)
                     Button {
                         beginAddingExtra(.expense)
                     } label: {
@@ -2229,6 +2317,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.expenses")
                     .buttonStyle(.plain)
+                    .disabled(!extras.allowed)
+                    .opacity(extras.allowed ? 1 : 0.5)
                 }
 
                 // RULEBOOK §8: no "note to manager" on a self-signed sheet (`timesheetSelfSigned`).
@@ -2455,8 +2545,32 @@ private struct MyTimesheetView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Timesheet")
         .navigationBarTitleDisplayMode(.inline)
+        // RULEBOOK 1.43.0 (review r318, 3rd round): while the sheet cannot be read, only the message and Retry — no
+        // blank sheet to edit, sign or add to.
+        .overlay {
+            if periodLoadFailed {
+                TimesheetPeriodLoadFailedView { Task { await refreshDraftFromCloud() } }
+            }
+        }
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
+        // RULEBOOK 1.43.0 §8 (review r318): the period gate re-checks (and reloads the bookings if no server answer
+        // covers the period) when the app comes back to the foreground or the connection returns.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { ensurePeriodBookings() }
+        }
+        .onChange(of: smartCache.isOnline) { _, online in
+            if online { ensurePeriodBookings() }
+        }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a self-signed sheet whose snapshot froze empty is rebuilt
+        // from the live bookings once they have loaded (signatures unchanged), once per visit.
+        .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
+            guard needs, !snapshotRebuildTried, !isEditingTimesheet,
+                  let user = userStore.displayUser,
+                  !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) else { return }
+            snapshotRebuildTried = true
+            saveDraft()
+        }
         // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the whole collection while `privatePay` is
         // off, else this person's rows.
         .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.myTimesheet",
@@ -2480,6 +2594,12 @@ private struct MyTimesheetView: View {
             titleVisibility: .visible
         ) {
             Button("Accept — add anyway") {
+                // RULEBOOK 1.43.0: never once the line manager has signed (that left the sheet half signed).
+                guard extrasPermission.allowed else {
+                    pendingExtraMode = nil
+                    saveErrorMessage = extrasPermission.message
+                    return
+                }
                 TimesheetApprovalPolicy.clearSignatures(draft: &draft)
                 saveDraft()
                 openPendingExtraSheet()
@@ -2501,6 +2621,7 @@ private struct MyTimesheetView: View {
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
             }
         }
         .sheet(isPresented: $showExpenseSheet) {
@@ -2512,6 +2633,7 @@ private struct MyTimesheetView: View {
                 }
                 .environmentObject(userStore)
                 .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
             }
         }
         .sheet(isPresented: $showInvoiceUTRWarning) {
@@ -2591,7 +2713,24 @@ private struct MyTimesheetView: View {
         return "You have already signed your timesheet. If you add price work or expenses, you will need to sign it again before generating an invoice."
     }
 
+    /// RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras(sheet, { selfSigned: timesheetSelfSigned })`: whether the person
+    /// may still add price work or expenses (not once their line manager has signed).
+    private var extrasPermission: RulebookTimesheetExtrasPermission {
+        let selfSigned = userStore.displayUser.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+        return CanonicalBusinessEngine.timesheetOwnerCanAddExtras(
+            managerSignedAt: draft.managerSignedAt,
+            approvedAt: draft.approvedAt,
+            selfSigned: selfSigned
+        )
+    }
+
     private func beginAddingExtra(_ mode: TimesheetExtraMode) {
+        // RULEBOOK 1.43.0: no add control and no signature cleared once the line manager has signed.
+        let extras = extrasPermission
+        guard extras.allowed else {
+            saveErrorMessage = extras.message
+            return
+        }
         guard let user = userStore.displayUser else {
             pendingExtraMode = mode
             openPendingExtraSheet()
@@ -2765,6 +2904,9 @@ private struct MyTimesheetView: View {
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
+        // RULEBOOK 1.43.0 §8 (review r318): signing re-checks the period's bookings (reloads them when no server answer
+        // covers the period), as the counter-signature does.
+        ensurePeriodBookings()
         // Nothing is signed (or frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
@@ -2798,6 +2940,11 @@ private struct MyTimesheetView: View {
     }
 
     private func saveDraft() {
+        // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
+        guard !periodLoadFailed else {
+            saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
@@ -2821,7 +2968,9 @@ private struct MyTimesheetView: View {
                     writer: current,
                     subjectUserId: current.id,
                     subject: current
-                )
+                ),
+                // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
+                snapshotInputsReady: payInputsBlockMessage == nil
             )
         }
         TimesheetDraftStore.save(draft, userId: currentUserId, weekStart: week.start, weekEnd: week.end)
@@ -2854,12 +3003,25 @@ private struct MyTimesheetView: View {
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
+        let read = await TimesheetDraftStore.refreshFromCloudReporting(
             userId: currentUserId,
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else {
+        )
+        // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
+        if read.failed {
+            await MainActor.run {
+                periodLoadFailed = true
+                saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            }
+            return
+        }
+        await MainActor.run {
+            if periodLoadFailed { saveErrorMessage = nil }
+            periodLoadFailed = false
+        }
+        guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a change is open.
             await MainActor.run {
                 guard !isEditingTimesheet,
@@ -2884,6 +3046,9 @@ private struct MyTimesheetView: View {
 
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
+        ensurePeriodBookings()
+        // The Retry of a failed period read reads the sheet again.
+        if periodLoadFailed { await refreshDraftFromCloud() }
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }
@@ -2893,12 +3058,9 @@ private struct MyTimesheetView: View {
 
     /// RULEBOOK 1.20.4: an overtime line with a break shows "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`,
     /// a signed line's stored text read back with `parseMultipliedHoursText`), never the back-calculated 6.25h.
-    /// The row's details line already reads "OT 6.5h × 2 − 0.5h break = 12.5h" then, so the hours are not repeated
-    /// beside the rate (it used to show the multiplied text twice).
+    /// RULEBOOK 1.43.0: the details line above now shows only the clock part (`timesheetLineClockText`), so the
+    /// multiplied text is shown here, once.
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
-        if row.isOvertimeLine, CanonicalBusinessEngine.parseMultipliedHoursText(row.details) != nil {
-            return row.timesheetRateAnnotation
-        }
         let hours = CanonicalBusinessEngine.payLineHoursText(
             details: row.details, paidHours: row.paidHours, isOvertimeLine: row.isOvertimeLine
         )
@@ -3107,6 +3269,22 @@ private struct PreviousTimesheetsView: View {
         guard !isGeneratingInvoice else { return }
         if payInputsState != .loaded { await loadDayRateHistory() }
         if let blocked = payInputsBlockMessage {
+            invoiceErrorMessage = blocked
+            return
+        }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: period.startDate, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: period.startDate
+            )
+        ) {
             invoiceErrorMessage = blocked
             return
         }
@@ -3380,6 +3558,9 @@ struct OperativeTimesheetsView: View {
         PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
     }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
+    /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF.
+    @State private var exportedShareFile: ExportedPDFShareFile?
+    @State private var rebuiltExportConfirmRow: ExportedTimesheetHistoryRow?
     @State private var isLoadingExportedHistory = false
     @State private var exportedSearch = ""
     @State private var exportedSort = "dateNewest"
@@ -3541,6 +3722,30 @@ struct OperativeTimesheetsView: View {
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
                                 .buttonStyle(PPMenuRowButtonStyle())
+                                // RULEBOOK 1.43.0 (review r318): rebuild this exported sheet's PDF from its saved
+                                // snapshot (never re-stamped), so an undelivered sheet is always recoverable.
+                                .contextMenu {
+                                    Button {
+                                        Task { await downloadExportedPDF(row, confirmedRebuild: false) }
+                                    } label: {
+                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                    }
+                                    .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDF")
+                                }
+                                // Review r318: the same action, visible on every row (not long-press only).
+                                HStack {
+                                    Spacer()
+                                    Button {
+                                        Task { await downloadExportedPDF(row, confirmedRebuild: false) }
+                                    } label: {
+                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDFButton")
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 8)
                                 if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 66)
                                 }
@@ -3701,6 +3906,24 @@ struct OperativeTimesheetsView: View {
         .navigationTitle("User Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
+        // RULEBOOK 1.43.0 (review r318): Exported → Download PDF shares the PDF rebuilt from the stored, exported sheet.
+        .sheet(item: $exportedShareFile) { file in
+            InvoicingShareSheet(items: [file.url])
+        }
+        .alert("Rebuild this PDF?", isPresented: Binding(
+            get: { rebuiltExportConfirmRow != nil },
+            set: { if !$0 { rebuiltExportConfirmRow = nil } }
+        )) {
+            Button("Rebuild PDF") {
+                if let row = rebuiltExportConfirmRow {
+                    rebuiltExportConfirmRow = nil
+                    Task { await downloadExportedPDF(row, confirmedRebuild: true) }
+                }
+            }
+            Button("Cancel", role: .cancel) { rebuiltExportConfirmRow = nil }
+        } message: {
+            Text(TimesheetExportMessages.rebuiltExportConfirmMessage)
+        }
         .navigationDestination(item: $autoOpenReview) { target in
             if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: operative.id, weekStart: target.weekStart)
@@ -4022,61 +4245,65 @@ struct OperativeTimesheetsView: View {
             return
         }
         let recipientEmail = exporter.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !recipientEmail.isEmpty else {
-            exportMessage = "Failed: your account has no email address for the timesheet export."
-            return
-        }
 
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let targets = filteredReports
-        var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
-        for target in targets {
-            if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
-                subject: target,
-                requested: includeTaxIdsInExport,
-                userStore: userStore
-            ) {
-                taxIdsByUserId[target.id] = ids
-            }
-        }
-        let result = await TimesheetExportHelper.exportAndEmail(
-            operatives: targets,
-            week: week,
-            draftForUser: { TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
-            bookingStore: bookingStore,
-            managerScheduleStore: managerScheduleStore,
-            operativeStore: operativeStore,
-            projectStore: projectStore,
-            dayRateHistory: dayRateHistoryCollection,
-            payrollPolicy: policy,
-            organization: firebaseBackend.currentOrganization,
-            organizationName: orgName,
-            scheduleOptions: scheduleOptions,
-            organizationUsers: userStore.organizationUsers,
-            recipientEmail: recipientEmail,
-            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
-            firebaseBackend: firebaseBackend,
-            taxIdsByUserId: taxIdsByUserId
+        // RULEBOOK 1.43.0 §8 (review r318): an export waits for the same server-confirmed bookings gate as sign-off.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: week.start, retryFailed: true
         )
-
-        guard result.emailSent else {
-            exportMessage = result.failed.isEmpty
-                ? "Failed to send timesheet export email to \(recipientEmail)."
-                : "Failed to send timesheet export email. \(result.failed.joined(separator: ", "))."
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: week.start
+            )
+        ) {
+            exportMessage = blocked
             return
         }
-
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            exportMessage = "Emailed \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s") to \(recipientEmail), but could not mark them exported (no organization)."
+        guard let exportOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            exportMessage = "Failed: no organisation."
             return
         }
+        func gateReady() -> Bool {
+            PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: week.start
+            ).loaded
+        }
+        func name(_ user: AppUser) -> String { user.fullName.isEmpty ? user.email : user.fullName }
 
-        var markFailures: [String] = []
-        for op in targets where result.emailedUserIds.contains(op.id) {
-            var d = TimesheetDraftStore.load(userId: op.id, weekStart: week.start)
-            guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
+        // Review r318 (web `runTimesheetExport`). 1. Prepare every sheet — fresh read, snapshot built (an empty frozen one
+        // rebuilt) BEFORE `exportedAt` — checking the gate before each person. Nothing is written here, so a gate that
+        // closes stops the export with nobody stamped. A sheet exported elsewhere, or not signed in its fresh copy, is left.
+        var prepared: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var skippedElsewhere: [String] = []
+        for op in targets {
+            guard gateReady() else {
+                exportMessage = TimesheetDraftStore.exportStoppedMessage
+                return
+            }
+            let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
+                userId: op.id,
+                weekStart: week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: exportOrgId
+            )
+            if fresh.failed {
+                exportMessage = TimesheetDraftStore.periodReadFailedMessage
+                return
+            }
+            guard var d = fresh.draft else { continue }
+            if d.exportedAt != nil {
+                skippedElsewhere.append(name(op))
+                continue
+            }
+            guard d.operativeSignedAt != nil else { continue }
             TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
                 user: op,
@@ -4091,35 +4318,159 @@ struct OperativeTimesheetsView: View {
                 organization: firebaseBackend.currentOrganization,
                 scheduleOptions: scheduleOptions,
                 viewer: exporter,
-                relatedUsers: userStore.organizationUsers
+                relatedUsers: userStore.organizationUsers,
+                snapshotInputsReady: true
             )
-            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
-            let snapshot = d
+            guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
+            prepared.append((operative: op, draft: d))
+        }
+        // The gate once more after the last read, still before anything is written.
+        if !prepared.isEmpty && !gateReady() {
+            exportMessage = TimesheetDraftStore.exportStoppedMessage
+            return
+        }
+
+        // 2. Stamp the prepared sheets exported, one by one; a failure stops the rest (those already stamped are kept).
+        var stamped: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var stampError: String?
+        for row in prepared {
             if let failure = await TimesheetDraftStore.saveToCloud(
-                snapshot,
-                userId: op.id,
+                row.draft,
+                userId: row.operative.id,
                 weekStart: week.start,
                 weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
-                organizationId: orgId,
+                organizationId: exportOrgId,
                 writer: exporter,
-                subject: op
+                subject: row.operative
             ) {
-                markFailures.append("\(op.fullName.isEmpty ? op.email : op.fullName): \(failure)")
+                stampError = failure
+                break
             }
+            TimesheetDraftStore.save(row.draft, userId: row.operative.id, weekStart: week.start, weekEnd: week.end)
+            stamped.append(row)
         }
 
-        refreshVersion += 1
-        rebuildAwaitingRows()
-        await loadExportedHistory()
-        selectedTab = .exported
-        if result.failed.isEmpty {
-            exportMessage = "Emailed \(result.emailed) timesheet PDF\(result.emailed == 1 ? "" : "s") to \(recipientEmail) for filing."
-        } else {
-            exportMessage = "Emailed \(result.emailed) to \(recipientEmail). Skipped: \(result.failed.joined(separator: ", "))."
+        // 3. Deliver every stamped sheet — PDF from the copy that was saved, backup, then one email — each person on
+        // their own: one failure never skips the rest. Tax ids only for the people being delivered.
+        var delivery = TimesheetExportHelper.Delivery()
+        if !stamped.isEmpty {
+            var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
+            for row in stamped {
+                if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
+                    subject: row.operative,
+                    requested: includeTaxIdsInExport,
+                    userStore: userStore
+                ) {
+                    taxIdsByUserId[row.operative.id] = ids
+                }
+            }
+            delivery = await TimesheetExportHelper.deliver(
+                stamped: stamped,
+                week: week,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                operativeStore: operativeStore,
+                projectStore: projectStore,
+                dayRateHistory: dayRateHistoryCollection,
+                payrollPolicy: policy,
+                organization: firebaseBackend.currentOrganization,
+                organizationName: orgName,
+                scheduleOptions: scheduleOptions,
+                organizationUsers: userStore.organizationUsers,
+                recipientEmail: recipientEmail,
+                recipientName: name(exporter),
+                firebaseBackend: firebaseBackend,
+                taxIdsByUserId: taxIdsByUserId
+            )
+            refreshVersion += 1
+            rebuildAwaitingRows()
+            await loadExportedHistory()
+            selectedTab = .exported
         }
-        if !markFailures.isEmpty {
-            exportMessage = (exportMessage ?? "") + " Not marked exported: \(markFailures.joined(separator: "; "))."
+        exportMessage = TimesheetExportMessages.summaryMessage(
+            stamped: stamped.map { name($0.operative) },
+            notSent: delivery.notSent,
+            emailProblem: delivery.emailProblem,
+            recipientEmail: recipientEmail.isEmpty ? nil : recipientEmail,
+            sentCount: delivery.sentCount,
+            backupSkipped: delivery.backupSkipped,
+            skipped: skippedElsewhere,
+            stampError: stampError
+        )
+    }
+
+    /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
+    /// stored, exported sheet (a fresh read when it answers) — never re-stamps it. A sheet exported before signed copies
+    /// were kept (no stored `weeklyReportOverride`) is rebuilt from today's bookings and rates, so the person confirms
+    /// first and the PDF says so.
+    private func downloadExportedPDF(_ row: ExportedTimesheetHistoryRow, confirmedRebuild: Bool) async {
+        if payInputsState != .loaded { await loadDayRateHistory() }
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: row.week.start, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: row.week.start
+            )
+        ) {
+            exportMessage = blocked
+            return
+        }
+        var sheet = row.draft
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
+                userId: row.user.id,
+                weekStart: row.week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            )
+            if let draft = fresh.draft, draft.exportedAt != nil { sheet = draft }
+        }
+        let rebuilt = sheet.weeklyReportOverride == nil
+        if rebuilt && !confirmedRebuild {
+            rebuiltExportConfirmRow = row
+            return
+        }
+        let taxIds = await InvoicePDFGenerationSupport.taxIdsForExport(
+            subject: row.user,
+            requested: includeTaxIdsInExport,
+            userStore: userStore
+        )
+        let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
+        let attachment: TimesheetExportHelper.PDFAttachment
+        do {
+            attachment = try TimesheetExportHelper.makeSheetPDF(
+            operative: row.user,
+            week: row.week,
+            draft: sheet,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            dayRateHistory: dayRateHistoryCollection,
+            payrollPolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
+            organization: firebaseBackend.currentOrganization,
+            organizationName: firebaseBackend.currentOrganization?.name ?? "Organization",
+            scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
+            organizationUsers: userStore.organizationUsers,
+            taxIds: taxIds,
+            rebuiltNote: rebuilt ? TimesheetExportMessages.rebuiltExportNote() : nil
+            )
+        } catch {
+            exportMessage = "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
+            return
+        }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.fileName)
+        do {
+            try attachment.data.write(to: url, options: .atomic)
+            exportedShareFile = ExportedPDFShareFile(url: url)
+        } catch {
+            exportMessage = "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
         }
     }
 
@@ -4260,6 +4611,12 @@ struct OperativeTimesheetsView: View {
     }
 }
 
+/// A PDF to share from the Exported tab.
+private struct ExportedPDFShareFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 private struct ExportedTimesheetHistoryRow: Identifiable {
     let id: String
     let user: AppUser
@@ -4287,6 +4644,8 @@ private enum ManagerTimesheetListTab {
 private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
+    /// RULEBOOK 1.43.0 §8 (review r318): the period's bookings are asked for again when the app becomes active.
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -4304,11 +4663,37 @@ private struct OperativeTimesheetReviewView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        if let blocked = PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization) {
+        if periodLoadFailed { return TimesheetDraftStore.periodReadFailedMessage }
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: periodBookingsState
+        ) {
             return blocked
         }
         // A script call that did not answer is "could not calculate", never £0 (money audit #15).
         return payrollSummary.calculationFailed ? TimesheetPayrollSummary.calculationFailedMessage : nil
+    }
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's labour and manager site bookings have arrived
+    /// (`PayInputsLoad.periodBookings`). Sign-off, the counter-signature, the agreed snapshot and invoices wait for them.
+    private var periodBookingsState: (loaded: Bool, failed: Bool) {
+        PayInputsLoad.periodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start
+        )
+    }
+
+    /// Asks for the period's bookings when the download does not reach it, or when the last read failed (Retry).
+    private func ensurePeriodBookings() {
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            from: week.start,
+            retryFailed: true
+        )
     }
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?
@@ -4318,6 +4703,24 @@ private struct OperativeTimesheetReviewView: View {
     @State private var showExtrasReviewRequiredAlert = false
     /// Shown when the cloud save failed.
     @State private var saveErrorMessage: String?
+    /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
+    @State private var snapshotRebuildTried = false
+    /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
+    /// invoiced and no blank sheet is opened until a Retry reads it.
+    @State private var periodLoadFailed = false
+
+    /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
+    /// bookings (loaded) have some, and the sheet was not exported.
+    private var snapshotNeedsRebuild: Bool {
+        guard payInputsBlockMessage == nil, let stored = draft.weeklyReportOverride, stored.lines.isEmpty else { return false }
+        return CanonicalBusinessEngine.timesheetSnapshotNeedsRebuild(
+            storedOverrideLineCount: stored.lines.count,
+            overrideApprovedAt: stored.approvedAt,
+            exportedAt: draft.exportedAt,
+            managerSignedAt: draft.managerSignedAt,
+            liveLabourLines: TimesheetPayrollCollector.snapshotRebuildLines(payrollSummary.lineItems)
+        )
+    }
 
     /// RULEBOOK 1.30.2 `timesheetWriterIsReviewer`: the viewer reviews this sheet only as the subject's line manager
     /// or an admin, never their own under any of their ids (admins and the Super Admin included). Their own sheet is
@@ -4365,11 +4768,32 @@ private struct OperativeTimesheetReviewView: View {
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Review Timesheet")
             .navigationBarTitleDisplayMode(.inline)
+            // RULEBOOK 1.43.0 (review r318, 3rd round): while the sheet cannot be read, only the message and Retry.
+            .overlay {
+                if periodLoadFailed {
+                    TimesheetPeriodLoadFailedView { Task { await refreshDraftFromCloud() } }
+                }
+            }
             .onAppear {
                 draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
+            // RULEBOOK 1.43.0 §8 (review r318): the period gate re-checks (and reloads the bookings if no server answer
+            // covers the period) when the app comes back to the foreground or the connection returns.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { ensurePeriodBookings() }
+            }
+            .onChange(of: smartCache.isOnline) { _, online in
+                if online { ensurePeriodBookings() }
+            }
+            // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (counter-signed
+            // before the bookings loaded) is rebuilt by the reviewer once they have, signatures unchanged, once per visit.
+            .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
+                guard needs, !snapshotRebuildTried, viewerIsReviewer, !serverTimesheetChangedWhileEditing else { return }
+                snapshotRebuildTried = true
+                saveDraft()
+            }
             // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.rateHistoryQueryPlan`: the subject's rows while `privatePay` is on.
             .listensWhileOpen("operativeDayRateHistory", key: "operativeDayRateHistory.review",
                               targetSuffix: firebaseBackend.rateHistoryListenSuffix, firebaseBackend: firebaseBackend,
@@ -4610,6 +5034,9 @@ private struct OperativeTimesheetReviewView: View {
     private func handleSignOffTapped() {
         // RULEBOOK 1.30.2: nobody counter-signs their own sheet (`timesheetWriterIsReviewer`).
         guard viewerIsReviewer else { return }
+        // RULEBOOK 1.43.0 §8 (review r318): tapping re-checks the period's bookings (reloads them when no server answer
+        // covers the period), so a stuck "Loading bookings…" recovers.
+        ensurePeriodBookings()
         // Nothing is counter-signed (and frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
@@ -4864,6 +5291,11 @@ private struct OperativeTimesheetReviewView: View {
     }
 
     private func saveDraft() {
+        // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
+        guard !periodLoadFailed else {
+            saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
         TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
@@ -4888,7 +5320,9 @@ private struct OperativeTimesheetReviewView: View {
                     subjectUserId: operative.id,
                     subject: operative
                 )
-            }
+            },
+            // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
+            snapshotInputsReady: payInputsBlockMessage == nil
         )
         }
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
@@ -4935,12 +5369,25 @@ private struct OperativeTimesheetReviewView: View {
 
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let remote = await TimesheetDraftStore.refreshFromCloud(
+        let read = await TimesheetDraftStore.refreshFromCloudReporting(
             userId: operative.id,
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
-        ) else {
+        )
+        // RULEBOOK 1.43.0 (review r318): a read that did not answer is an error, never a new sheet.
+        if read.failed {
+            await MainActor.run {
+                periodLoadFailed = true
+                saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            }
+            return
+        }
+        await MainActor.run {
+            if periodLoadFailed { saveErrorMessage = nil }
+            periodLoadFailed = false
+        }
+        guard let remote = read.draft else {
             // No server sheet clears the local copy; show what is left (nothing) unless a review is open.
             await MainActor.run {
                 guard !isEditingReview,
@@ -4962,6 +5409,9 @@ private struct OperativeTimesheetReviewView: View {
 
     /// A failed read is a failure (`PayInputsLoad`), never an empty history.
     private func loadDayRateHistory() async {
+        ensurePeriodBookings()
+        // The Retry of a failed period read reads the sheet again.
+        if periodLoadFailed { await refreshDraftFromCloud() }
         let result = await PayInputsLoad.loadHistory(firebaseBackend)
         await MainActor.run {
             if let history = result.history { dayRateHistoryCollection = history }
@@ -5226,6 +5676,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 private struct TimesheetMoneyEntrySheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var projectStore: ProjectStore
     let mode: Mode
     let onSaveExpense: (TimesheetExpenseEntry) -> Void
@@ -5246,21 +5697,18 @@ private struct TimesheetMoneyEntrySheet: View {
         Double(amountText.replacingOccurrences(of: OrgMoney.symbol(), with: "").trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// RULEBOOK 1.43.0 §8 `agreedManagerSuggestions`: the price work approvers' rule (`priceWorkApproverCandidates`:
+    /// active admins and managers of this organisation, one per person, never the person), name containing the text, at
+    /// most 6. The roster rows carry each users document's stored organisation (`PayeClaimPeople.approverRow`), as web
+    /// passes `homeOrganizationId`. The field stays free text.
     private var managerSuggestions: [String] {
-        let query = managerName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return [] }
-        var seen = Set<String>()
-        var names: [String] = []
-        for user in userStore.organizationUsers where user.isActive {
-            let isManager = user.permissions.manager || user.role == .manager || user.permissions.adminAccess || user.role == .admin || user.isSuperAdmin
-            guard isManager else { continue }
-            let haystack = "\(user.fullName) \(user.firstName) \(user.surname) \(user.email)"
-            guard haystack.localizedCaseInsensitiveContains(query) else { continue }
-            let name = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !name.isEmpty, name.caseInsensitiveCompare(query) != .orderedSame, seen.insert(name.lowercased()).inserted else { continue }
-            names.append(name)
-        }
-        return Array(names.prefix(6))
+        guard let person = userStore.displayUser else { return [] }
+        return CanonicalBusinessEngine.agreedManagerSuggestions(
+            query: managerName,
+            person: PayeClaimPeople.approverRow(person),
+            roster: PayeClaimPeople.approverRoster(userStore.organizationUsers),
+            organizationId: firebaseBackend.payeClaimsOrganizationId
+        )
     }
 
     private var jobSuggestions: [String] {
@@ -6253,6 +6701,22 @@ private struct GenerateInvoiceView: View {
             errorMessage = blocked
             return
         }
+        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: period.startDate, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: period.startDate
+            )
+        ) {
+            errorMessage = blocked
+            return
+        }
 
         let pdfURL = InvoicePDFGenerationSupport.generatePDF(
             period: period,
@@ -6552,7 +7016,21 @@ private enum TimesheetInvoiceRows {
             let fromOverride = (row["source"] as? String) == "override"
             switch row["kind"] as? String {
             case "labour":
-                if let live = liveById[key(id)] {
+                // RULEBOOK 1.43.0 (review r318): a row the script took from the signed snapshot is shown as stored in it
+                // (Export and the Exported tab's Download PDF), never re-read from the live line; the snapshot stores no
+                // rate, so the rate label still comes from the live line when there is one.
+                if fromOverride, let line = overrideLines[key(id)] {
+                    let live = liveById[key(id)]
+                    var item = InvoiceLineItem(
+                        lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
+                        details: line.details, paidHours: line.paidHours, payrollBasis: live?.payrollBasis ?? .dayRate,
+                        dayRate: live?.dayRate ?? 0, hourlyRate: live?.hourlyRate, amount: amount,
+                        isPayeDay: false, isOvertimeLine: line.isOvertime
+                    )
+                    item.isOverlapping = live?.isOverlapping ?? false
+                    item.bookingId = line.bookingId ?? live?.bookingId
+                    rows.append(item)
+                } else if let live = liveById[key(id)] {
                     var item = InvoiceLineItem(
                         lineId: live.id, date: live.date, jobNumber: live.jobNumber, projectName: live.projectName,
                         details: live.details, paidHours: live.paidHours, payrollBasis: live.payrollBasis,
@@ -6562,12 +7040,6 @@ private enum TimesheetInvoiceRows {
                     item.isOverlapping = live.isOverlapping
                     item.bookingId = live.bookingId
                     rows.append(item)
-                } else if fromOverride, let line = overrideLines[key(id)] {
-                    rows.append(InvoiceLineItem(
-                        lineId: line.id, date: line.date, jobNumber: line.jobNumber, projectName: line.projectName,
-                        details: line.details, paidHours: line.paidHours, payrollBasis: .dayRate, dayRate: 0,
-                        hourlyRate: nil, amount: amount, isPayeDay: false, isOvertimeLine: line.isOvertime
-                    ))
                 }
             case "priceWork":
                 if fromOverride, let line = overridePriceWork[key(id)] {
@@ -6972,10 +7444,11 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            // RULEBOOK 1.20.4: an overtime line whose text is already `multipliedHoursText` is not repeated as hours.
-            let detail = item.isOvertimeLine && CanonicalBusinessEngine.parseMultipliedHoursText(item.details) != nil
-                ? "\(item.details) · \(item.timesheetRateAnnotation)"
-                : "\(item.details) · \(CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)) · \(item.timesheetRateAnnotation)"
+            // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
+            // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
+            let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
+            let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
+            let detail = [clockPart, hoursPart, item.timesheetRateAnnotation].filter { !$0.isEmpty }.joined(separator: " · ")
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
@@ -7061,11 +7534,13 @@ private enum InvoicePDFBuilder {
 }
 
 private enum TimesheetExportHelper {
-    struct Result {
-        let emailedUserIds: Set<String>
-        let failed: [String]
-        let emailSent: Bool
-        var emailed: Int { emailedUserIds.count }
+    /// RULEBOOK 1.43.0 (review r318): what the delivery of the stamped sheets did — the per-person PDFs that were built
+    /// (and so sent), the people whose PDF could not be built (with the reason), backups skipped, and an email problem.
+    struct Delivery {
+        var sentCount = 0
+        var notSent: [String] = []
+        var backupSkipped: [String] = []
+        var emailProblem: String?
     }
 
     struct PDFAttachment {
@@ -7073,10 +7548,82 @@ private enum TimesheetExportHelper {
         let data: Data
     }
 
-    static func exportAndEmail(
-        operatives: [AppUser],
+    /// Why a sheet's PDF could not be built (its text is shown, as web shows the error message).
+    struct PDFBuildError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// One sheet's PDF from the copy that was saved (its stored snapshot) — the same builder for Export and for the
+    /// Exported tab's Download. Throws with the reason when it could not be built.
+    static func makeSheetPDF(
+        operative: AppUser,
         week: WeekRange,
-        draftForUser: (AppUser) -> TimesheetDraft,
+        draft: TimesheetDraft,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        dayRateHistory: OperativeDayRateHistoryCollection,
+        payrollPolicy: OrgPayrollTimePolicy,
+        organization: Organization?,
+        organizationName: String,
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        organizationUsers: [AppUser] = [],
+        taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile? = nil,
+        rebuiltNote: String? = nil
+    ) throws -> PDFAttachment {
+        let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
+        let paymentRunStamp = paymentRunDateStamp(for: week)
+        let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
+        let rows = buildLineItems(
+            for: operative,
+            week: week,
+            draft: draft,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            dayRateHistory: dayRateHistory,
+            payrollPolicy: payrollPolicy,
+            organization: organization,
+            scheduleOptions: scheduleOptions,
+            relatedUsers: organizationUsers
+        )
+        let grandTotal = rows.reduce(0) { $0 + $1.amount }
+        let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
+        var notes = signatureNotes(for: draft)
+        if let rebuiltNote { notes.insert(rebuiltNote, at: 0) }
+        guard let pdfURL = InvoicePDFBuilder.makePDF(
+            context: InvoicePDFBuilder.Context(
+                organizationName: organizationName,
+                userName: userName,
+                vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+                utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
+                generatedAt: Date(),
+                periodTitle: "Signed timesheet",
+                periodDateRange: periodRangeText,
+                lineItems: rows,
+                totalAmount: grandTotal,
+                rateChangeNotes: notes,
+                documentTitle: "Timesheet",
+                preferredFileName: fileName,
+                periodMetaLabel: "PAYMENT RUN",
+                totalLabel: "Total timesheet amount",
+                emptyStateMessage: "No work entries were found for this timesheet period."
+            )
+        ) else {
+            throw PDFBuildError(message: "the PDF could not be drawn")
+        }
+        return PDFAttachment(fileName: fileName, data: try Data(contentsOf: pdfURL))
+    }
+
+    /// RULEBOOK 1.43.0 (review r318, web `runTimesheetExport` deliver): every STAMPED sheet gets its PDF (from the copy
+    /// that was saved) and storage backup, each person on their own — one failure never skips the rest — then one email
+    /// with every PDF that was built.
+    static func deliver(
+        stamped: [(operative: AppUser, draft: TimesheetDraft)],
+        week: WeekRange,
         bookingStore: BookingStore,
         managerScheduleStore: ManagerScheduleStore,
         operativeStore: OperativeStore,
@@ -7091,20 +7638,20 @@ private enum TimesheetExportHelper {
         recipientName: String,
         firebaseBackend: FirebaseBackend? = nil,
         taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
-    ) async -> Result {
-        var emailedUserIds = Set<String>()
-        var failed: [String] = []
+    ) async -> Delivery {
+        var delivery = Delivery()
         var attachments: [PDFAttachment] = []
+        var downloadLinks: [(fileName: String, url: String)] = []
         let paymentRunStamp = paymentRunDateStamp(for: week)
-        let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
 
-        for operative in operatives {
-            let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
-            let draft = draftForUser(operative)
-            let rows = buildLineItems(
-                for: operative,
+        for row in stamped {
+            let userName = row.operative.fullName.isEmpty ? row.operative.email : row.operative.fullName
+            let attachment: PDFAttachment
+            do {
+                attachment = try makeSheetPDF(
+                operative: row.operative,
                 week: week,
-                draft: draft,
+                draft: row.draft,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
                 operativeStore: operativeStore,
@@ -7112,46 +7659,17 @@ private enum TimesheetExportHelper {
                 dayRateHistory: dayRateHistory,
                 payrollPolicy: payrollPolicy,
                 organization: organization,
+                organizationName: organizationName,
                 scheduleOptions: scheduleOptions,
-                relatedUsers: organizationUsers
-            )
-            let grandTotal = rows.reduce(0) { $0 + $1.amount }
-            let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
-
-            guard let pdfURL = InvoicePDFBuilder.makePDF(
-                context: InvoicePDFBuilder.Context(
-                    organizationName: organizationName,
-                    userName: userName,
-                    vatNumber: taxIdsByUserId[operative.id].flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
-                    utrNumber: taxIdsByUserId[operative.id].flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
-                    generatedAt: Date(),
-                    periodTitle: "Signed timesheet",
-                    periodDateRange: periodRangeText,
-                    lineItems: rows,
-                    totalAmount: grandTotal,
-                    rateChangeNotes: signatureNotes(for: draft),
-                    documentTitle: "Timesheet",
-                    preferredFileName: fileName,
-                    periodMetaLabel: "PAYMENT RUN",
-                    totalLabel: "Total timesheet amount",
-                    emptyStateMessage: "No work entries were found for this timesheet period."
+                organizationUsers: organizationUsers,
+                taxIds: taxIdsByUserId[row.operative.id]
                 )
-            ), let pdfData = try? Data(contentsOf: pdfURL) else {
-                failed.append(userName)
+            } catch {
+                delivery.notSent.append("\(userName) (\(error.localizedDescription))")
                 continue
             }
-
-            attachments.append(PDFAttachment(fileName: fileName, data: pdfData))
-            emailedUserIds.insert(operative.id)
-        }
-
-        guard !attachments.isEmpty else {
-            return Result(emailedUserIds: [], failed: failed.isEmpty ? ["No timesheet PDFs could be built"] : failed, emailSent: false)
-        }
-
-        var downloadLinks: [(fileName: String, url: String)] = []
-        if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
-            for attachment in attachments {
+            attachments.append(attachment)
+            if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
                 do {
                     let url = try await firebaseBackend.uploadTimesheetExportPDF(
                         attachment.data,
@@ -7160,17 +7678,17 @@ private enum TimesheetExportHelper {
                     )
                     downloadLinks.append((attachment.fileName, url))
                 } catch {
-                    let refused = (error as NSError).domain == "FirebaseBackend" && (error as NSError).code == 413
-                    if refused {
-                        return Result(
-                            emailedUserIds: [],
-                            failed: failed + [error.localizedDescription],
-                            emailSent: false
-                        )
-                    }
+                    delivery.backupSkipped.append(userName)
                 }
             }
         }
+        delivery.sentCount = attachments.count
+
+        guard !recipientEmail.isEmpty else {
+            delivery.emailProblem = "no email address on your account"
+            return delivery
+        }
+        guard !attachments.isEmpty else { return delivery }
 
         let html = managerExportEmailHTML(
             recipientName: recipientName,
@@ -7203,17 +7721,9 @@ private enum TimesheetExportHelper {
                 fromName: emailFromName
             )
         }
-
-        if sent {
-            return Result(emailedUserIds: emailedUserIds, failed: failed, emailSent: true)
-        }
-        return Result(
-            emailedUserIds: [],
-            failed: failed + ["Email delivery to \(recipientEmail) failed"],
-            emailSent: false
-        )
+        if !sent { delivery.emailProblem = resend.errorMessage ?? "email delivery failed" }
+        return delivery
     }
-
     static func paymentRunDateStamp(for week: WeekRange) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
