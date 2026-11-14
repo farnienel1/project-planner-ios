@@ -190,6 +190,12 @@ extension CanonicalBusinessEngine {
         return RulebookJSON.decode([PayeClaimEvidencePage].self, from: callJSON("timesheetEvidencePages", arguments: [input])) ?? []
     }
 
+    /// `timesheetEntryFingerprintMap(entries)`: `{ normalisedId: fingerprint }` for `entryFingerprints`. Entries are
+    /// `{ id, reviewFingerprint }`. Empty when the script did not answer.
+    nonisolated static func timesheetEntryFingerprintMap(_ entries: [[String: Any]]) -> [String: Any] {
+        callJSON("timesheetEntryFingerprintMap", arguments: [entries]) as? [String: Any] ?? [:]
+    }
+
     // MARK: PAYE items (payeClaims.ts 1.45.0)
 
     /// `canEditPayeClaim(viewerId, item)`: only the person edits or deletes their own item.

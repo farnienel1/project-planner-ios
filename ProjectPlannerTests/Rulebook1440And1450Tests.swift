@@ -2,7 +2,7 @@ import XCTest
 @testable import Project_Planner
 
 /// RULEBOOK 1.44.0 and 1.45.0 through `CanonicalBusinessEngine` (owner decisions 14 Nov). Expected values were checked
-/// in node against the packed `canonical-business.js` (sha256 e3a4722f…65cb17b6) and match web
+/// in node against the packed `canonical-business.js` (sha256 5b80d57d…9a51d441) and match web
 /// `lib/canonical/canonical.test.ts`:
 ///   - 1.44.0: the Monday–Friday paid day is always derived; a weekend day with no stored "counts as" falls back to
 ///     `weekendCountsAsHours` (8h); a booking nobody resolves keeps its scheduling row (`scheduleRowPerson`); a person
@@ -131,8 +131,10 @@ final class Rulebook1440And1450Tests: XCTestCase {
         // Review #322: the stored row's fingerprint is kept on the model for the review rules and never written back.
         XCTAssertNotNil(read.expenseEntries.first?.reviewFingerprint)
         XCTAssertNil(againExpenses.first?["reviewFingerprint"])
-        let forRules = try XCTUnwrap(TimesheetDraftStore.asRulebookSheetMap(read)["expenseEntries"] as? [[String: Any]])
-        XCTAssertEqual(forRules.first?["reviewFingerprint"] as? String, read.expenseEntries.first?.reviewFingerprint)
+        // 38a1be7: handed to the rules explicitly (`timesheetEntryFingerprintMap` → `entryFingerprints`).
+        let fingerprints = TimesheetDraftStore.entryFingerprints(read)
+        XCTAssertEqual(fingerprints.count, 1)
+        XCTAssertEqual(fingerprints.values.first as? String, read.expenseEntries.first?.reviewFingerprint)
     }
 
     func testANewExpenseNeedsEvidenceAndAnOlderReceiptOnlyEntryNeverBlocks() {

@@ -1264,20 +1264,18 @@ enum TimesheetDraftStore {
         }
     }
 
-    /// The sheet as the rulebook reads it for decisions, totals and invoice rows: `asFirestoreMap` plus each entry's
-    /// stored-row `reviewFingerprint` (RULEBOOK 1.45.0 §8, review #322). Never written to Firestore.
-    static func asRulebookSheetMap(_ draft: TimesheetDraft) -> [String: Any] {
-        var map = asFirestoreMap(draft)
-        func tagged(_ key: String, _ fingerprints: [String?]) {
-            guard var rows = map[key] as? [[String: Any]] else { return }
-            for index in rows.indices where index < fingerprints.count {
-                if let fingerprint = fingerprints[index], !fingerprint.isEmpty { rows[index]["reviewFingerprint"] = fingerprint }
+    /// RULEBOOK 1.45.0 §8 (review #322) `timesheetEntryFingerprintMap`: each entry's stored-row fingerprint (as
+    /// `parseTimesheetEntries` computed it when the sheet was read), keyed for `entryFingerprints` on `timesheetTotals`
+    /// / `timesheetInvoiceRows`. The rulebook never reads a fingerprint off a row, and none is ever written to Firestore.
+    static func entryFingerprints(_ draft: TimesheetDraft) -> [String: Any] {
+        let rows: [[String: Any]] =
+            draft.expenseEntries.compactMap { entry in
+                entry.reviewFingerprint.map { ["id": entry.storedId ?? WorkDocumentKeys.storedId(for: entry.id), "reviewFingerprint": $0] }
+            } + draft.priceWorkEntries.compactMap { entry in
+                entry.reviewFingerprint.map { ["id": entry.storedId ?? WorkDocumentKeys.storedId(for: entry.id), "reviewFingerprint": $0] }
             }
-            map[key] = rows
-        }
-        tagged("expenseEntries", draft.expenseEntries.map(\.reviewFingerprint))
-        tagged("priceWorkEntries", draft.priceWorkEntries.map(\.reviewFingerprint))
-        return map
+        guard !rows.isEmpty else { return [:] }
+        return CanonicalBusinessEngine.timesheetEntryFingerprintMap(rows)
     }
 
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
@@ -7421,12 +7419,15 @@ private enum TimesheetInvoiceRows {
         extrasMode: ExtrasMode,
         period: ClosedRange<Date>
     ) -> [[String: Any]]? {
-        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asRulebookSheetMap(draft))
+        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
         let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
         var input: [String: Any] = [
             "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
         ]
+        // RULEBOOK 1.45.0 §8: the loaded copy's stored-row fingerprints, handed over explicitly (`entryFingerprints`).
+        let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
+        if !fingerprints.isEmpty { input["entryFingerprints"] = fingerprints }
         // RULEBOOK 1.11.0 / 1.22.0 §8: `timesheetDays` (`CanonicalBusinessEngine.timesheetDaysForPerson`) leaves out
         // labour, price work and expenses dated on a PAYE day, as web does (`timesheetDayKeysForPeriod`).
         if let days = TimesheetTotalsSource.timesheetDays(for: user, period: period) { input["timesheetDays"] = days }

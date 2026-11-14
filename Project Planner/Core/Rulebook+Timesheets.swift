@@ -260,11 +260,14 @@ extension CanonicalBusinessEngine {
     /// Nil when the script did not answer.
     nonisolated static func timesheetEntryDecision(
         sheet: [String: Any],
-        entry: [String: Any]
+        entry: [String: Any],
+        trustedFingerprint: String? = nil
     ) -> (decision: String, revisedAmount: Double?, source: String)? {
+        // RULEBOOK 1.45.0 §8: a loaded copy hands the stored row's fingerprint over explicitly (`trustedFingerprint`).
         guard let sheetJSON = timesheetJSONSafe(sheet),
-              let entryJSON = timesheetJSONSafe(entry),
-              let result = callJSON("timesheetEntryDecision", arguments: [sheetJSON, entryJSON]) as? [String: Any],
+              let entryJSON = timesheetJSONSafe(entry) else { return nil }
+        let arguments: [Any] = [sheetJSON, entryJSON, NSNull(), RulebookJSON.orNull(trustedFingerprint)]
+        guard let result = callJSON("timesheetEntryDecision", arguments: arguments) as? [String: Any],
               let decision = result["decision"] as? String else { return nil }
         return (decision, (result["revisedAmount"] as? NSNumber)?.doubleValue, result["source"] as? String ?? "")
     }

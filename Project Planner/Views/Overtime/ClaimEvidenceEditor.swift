@@ -12,6 +12,7 @@
 
 import FirebaseStorage
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 /// The evidence card: saved files (`existing`, kept as they are) and picked ones (`pending`, uploaded on save).
