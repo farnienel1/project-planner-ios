@@ -85,6 +85,27 @@ nonisolated struct RulebookSubcontractorScheduleCell: Equatable, Hashable, Senda
         self.headline = headline
     }
 
+    /// RULEBOOK 1.43.0 (review r318): the tile when the script did not answer — the bookings' stored start–finish (or
+    /// the slot's name), never hours ("0h"). Display only: it reads the stored text, it computes nothing.
+    static func fallbackDayCell(storedTimes: [String]) -> RulebookScheduleDayCell {
+        var unique: [String] = []
+        for text in storedTimes where !text.isEmpty && !unique.contains(text) { unique.append(text) }
+        let timesText = unique.isEmpty ? "Booked" : unique.joined(separator: " + ")
+        let countText: String? = storedTimes.count > 1 ? "\(storedTimes.count) bookings" : nil
+        return RulebookScheduleDayCell(
+            cell: RulebookScheduleCellKind(tone: "standard", standardHours: 0, overtimeHours: 0, halfLabel: nil),
+            totalHours: 0,
+            bookingCount: storedTimes.count,
+            hoursText: timesText,
+            countText: countText,
+            headline: countText.map { "\(timesText) · \($0)" } ?? timesText,
+            caption: nil,
+            standardText: nil,
+            overtimeText: nil,
+            overtimeLines: []
+        )
+    }
+
     /// The tile in the shape the person-day chip draws (`RulebookScheduleDayCell`): the times as its main line, the
     /// count under it, one plain colour, no hours, no Std / OT and no overtime lines. A mapping only.
     var dayCell: RulebookScheduleDayCell {

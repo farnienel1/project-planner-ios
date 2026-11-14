@@ -1319,15 +1319,22 @@ struct ProjectDetailView: View {
                         policy: p,
                         dayKey: dayKey
                     )
+                    // When the script does not answer: the stored start–finish (or the slot's name), never "0h".
+                    func storedTimes(_ entry: SubcontractorBooking) -> String {
+                        let start = entry.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        let end = entry.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                        return start.isEmpty || end.isEmpty ? entry.timeSlot.displayName : "\(start)–\(end)"
+                    }
                     let choices: [SchedulingGridBookingChoice] = firmBookings.map { entry in
                         let single = CanonicalBusinessEngine.subcontractorScheduleCell(bookings: [times(entry)], policy: p, dayKey: dayKey)
                         return SchedulingGridBookingChoice(
                             id: "s:\(entry.id.uuidString)",
-                            label: single?.timesText.isEmpty == false ? (single?.timesText ?? "") : entry.timeSlot.displayName,
+                            label: single?.timesText.isEmpty == false ? (single?.timesText ?? "") : storedTimes(entry),
                             operativeBooking: nil, managerBooking: nil, subcontractorBooking: entry
                         )
                     }
                     let dayCell = subCell?.dayCell
+                        ?? RulebookSubcontractorScheduleCell.fallbackDayCell(storedTimes: firmBookings.map(storedTimes))
                     return SchedulingGridDayCell(
                         id: dayId,
                         date: day,

@@ -804,6 +804,7 @@ enum TimesheetApprovalPolicy {
         draft.managerSignedByUserId = nil
         draft.managerSignatureImageBase64 = nil
         draft.exportedAt = nil
+        draft.approvedAt = nil
         draft.weeklyReportOverride = nil
         draft.payrollLineReviews = [:]
         for index in draft.expenseEntries.indices {
@@ -1275,6 +1276,7 @@ enum TimesheetDraftStore {
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = firestoreDate(map["exportedAt"])
+        output.approvedAt = firestoreDate(map["approvedAt"])
         if output.managerSignedAt == nil {
             output.managerSignedAt = firestoreDate(map["approvedAt"])
         }
@@ -1913,6 +1915,8 @@ private struct MyTimesheetsHubView: View {
 private struct MyTimesheetView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
+    /// RULEBOOK 1.43.0 §8 (review r318): the period's bookings are asked for again when the app becomes active.
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -2550,6 +2554,14 @@ private struct MyTimesheetView: View {
         }
         .onAppear { loadDraft() }
         .task { await loadDayRateHistory() }
+        // RULEBOOK 1.43.0 §8 (review r318): the period gate re-checks (and reloads the bookings if no server answer
+        // covers the period) when the app comes back to the foreground or the connection returns.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { ensurePeriodBookings() }
+        }
+        .onChange(of: smartCache.isOnline) { _, online in
+            if online { ensurePeriodBookings() }
+        }
         // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a self-signed sheet whose snapshot froze empty is rebuilt
         // from the live bookings once they have loaded (signatures unchanged), once per visit.
         .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
@@ -2707,7 +2719,7 @@ private struct MyTimesheetView: View {
         let selfSigned = userStore.displayUser.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
         return CanonicalBusinessEngine.timesheetOwnerCanAddExtras(
             managerSignedAt: draft.managerSignedAt,
-            approvedAt: nil,
+            approvedAt: draft.approvedAt,
             selfSigned: selfSigned
         )
     }
@@ -3543,6 +3555,9 @@ struct OperativeTimesheetsView: View {
         PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
     }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
+    /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF.
+    @State private var exportedShareFile: ExportedPDFShareFile?
+    @State private var rebuiltExportConfirmRow: ExportedTimesheetHistoryRow?
     @State private var isLoadingExportedHistory = false
     @State private var exportedSearch = ""
     @State private var exportedSort = "dateNewest"
@@ -3704,6 +3719,16 @@ struct OperativeTimesheetsView: View {
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
                                 .buttonStyle(PPMenuRowButtonStyle())
+                                // RULEBOOK 1.43.0 (review r318): rebuild this exported sheet's PDF from its saved
+                                // snapshot (never re-stamped), so an undelivered sheet is always recoverable.
+                                .contextMenu {
+                                    Button {
+                                        Task { await downloadExportedPDF(row, confirmedRebuild: false) }
+                                    } label: {
+                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                    }
+                                    .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDF")
+                                }
                                 if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 66)
                                 }
@@ -3864,6 +3889,24 @@ struct OperativeTimesheetsView: View {
         .navigationTitle("User Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
+        // RULEBOOK 1.43.0 (review r318): Exported → Download PDF shares the PDF rebuilt from the stored, exported sheet.
+        .sheet(item: $exportedShareFile) { file in
+            InvoicingShareSheet(items: [file.url])
+        }
+        .alert("Rebuild this PDF?", isPresented: Binding(
+            get: { rebuiltExportConfirmRow != nil },
+            set: { if !$0 { rebuiltExportConfirmRow = nil } }
+        )) {
+            Button("Rebuild PDF") {
+                if let row = rebuiltExportConfirmRow {
+                    rebuiltExportConfirmRow = nil
+                    Task { await downloadExportedPDF(row, confirmedRebuild: true) }
+                }
+            }
+            Button("Cancel", role: .cancel) { rebuiltExportConfirmRow = nil }
+        } message: {
+            Text(TimesheetExportMessages.rebuiltExportConfirmMessage)
+        }
         .navigationDestination(item: $autoOpenReview) { target in
             if let operative = userStore.organizationUsers.first(where: { $0.id == target.userId }) {
                 let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: operative.id, weekStart: target.weekStart)
@@ -4185,18 +4228,12 @@ struct OperativeTimesheetsView: View {
             return
         }
         let recipientEmail = exporter.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !recipientEmail.isEmpty else {
-            exportMessage = "Failed: your account has no email address for the timesheet export."
-            return
-        }
 
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
         let targets = filteredReports
-        // RULEBOOK 1.43.0 §8 (review r318, 2nd round): an export waits for the same server-confirmed bookings gate as
-        // sign-off, and each sheet's snapshot is built (an empty frozen one rebuilt) BEFORE `exportedAt` is stamped —
-        // an exported snapshot is never rebuilt. The emailed PDF reads the same sheets.
+        // RULEBOOK 1.43.0 §8 (review r318): an export waits for the same server-confirmed bookings gate as sign-off.
         PayInputsLoad.ensurePeriodBookings(
             firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
             from: week.start, retryFailed: true
@@ -4212,22 +4249,25 @@ struct OperativeTimesheetsView: View {
             exportMessage = blocked
             return
         }
-        // Review r318 (3rd round): each sheet is re-read fresh; one another device exported meanwhile is skipped (never
-        // rebuilt or re-stamped); the gate is re-checked before each person, and the export stops while the bookings
-        // reload. The emailed PDF and the stamped copy are the same prepared sheet.
         guard let exportOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             exportMessage = "Failed: no organisation."
             return
         }
-        var preparedDrafts: [String: TimesheetDraft] = [:]
-        var exportTargets: [AppUser] = []
-        var skippedElsewhere: [String] = []
-        for op in targets {
-            let gate = PayInputsLoad.periodBookings(
+        func gateReady() -> Bool {
+            PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: week.start
-            )
-            guard gate.loaded else {
+            ).loaded
+        }
+        func name(_ user: AppUser) -> String { user.fullName.isEmpty ? user.email : user.fullName }
+
+        // Review r318 (web `runTimesheetExport`). 1. Prepare every sheet — fresh read, snapshot built (an empty frozen one
+        // rebuilt) BEFORE `exportedAt` — checking the gate before each person. Nothing is written here, so a gate that
+        // closes stops the export with nobody stamped. A sheet exported elsewhere, or not signed in its fresh copy, is left.
+        var prepared: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var skippedElsewhere: [String] = []
+        for op in targets {
+            guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
             }
@@ -4243,7 +4283,7 @@ struct OperativeTimesheetsView: View {
             }
             guard var d = fresh.draft else { continue }
             if d.exportedAt != nil {
-                skippedElsewhere.append(op.fullName.isEmpty ? op.email : op.fullName)
+                skippedElsewhere.append(name(op))
                 continue
             }
             guard d.operativeSignedAt != nil else { continue }
@@ -4264,93 +4304,153 @@ struct OperativeTimesheetsView: View {
                 relatedUsers: userStore.organizationUsers,
                 snapshotInputsReady: true
             )
-            preparedDrafts[op.id] = d
-            exportTargets.append(op)
+            guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
+            prepared.append((operative: op, draft: d))
         }
-        guard !exportTargets.isEmpty else {
-            exportMessage = skippedElsewhere.isEmpty
-                ? "Nothing to export."
-                : "Already exported on another device, left as it was: \(skippedElsewhere.joined(separator: ", "))."
+        // The gate once more after the last read, still before anything is written.
+        if !prepared.isEmpty && !gateReady() {
+            exportMessage = TimesheetDraftStore.exportStoppedMessage
             return
         }
-        let prepared = preparedDrafts
-        var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
-        for target in targets {
-            if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
-                subject: target,
-                requested: includeTaxIdsInExport,
-                userStore: userStore
+
+        // 2. Stamp the prepared sheets exported, one by one; a failure stops the rest (those already stamped are kept).
+        var stamped: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var stampError: String?
+        for row in prepared {
+            if let failure = await TimesheetDraftStore.saveToCloud(
+                row.draft,
+                userId: row.operative.id,
+                weekStart: week.start,
+                weekEnd: week.end,
+                firebaseBackend: firebaseBackend,
+                organizationId: exportOrgId,
+                writer: exporter,
+                subject: row.operative
             ) {
-                taxIdsByUserId[target.id] = ids
+                stampError = failure
+                break
             }
+            TimesheetDraftStore.save(row.draft, userId: row.operative.id, weekStart: week.start, weekEnd: week.end)
+            stamped.append(row)
         }
-        let result = await TimesheetExportHelper.exportAndEmail(
-            operatives: exportTargets,
-            week: week,
-            draftForUser: { prepared[$0.id] ?? TimesheetDraftStore.load(userId: $0.id, weekStart: week.start) },
+
+        // 3. Deliver every stamped sheet — PDF from the copy that was saved, backup, then one email — each person on
+        // their own: one failure never skips the rest. Tax ids only for the people being delivered.
+        var delivery = TimesheetExportHelper.Delivery()
+        if !stamped.isEmpty {
+            var taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
+            for row in stamped {
+                if let ids = await InvoicePDFGenerationSupport.taxIdsForExport(
+                    subject: row.operative,
+                    requested: includeTaxIdsInExport,
+                    userStore: userStore
+                ) {
+                    taxIdsByUserId[row.operative.id] = ids
+                }
+            }
+            delivery = await TimesheetExportHelper.deliver(
+                stamped: stamped,
+                week: week,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                operativeStore: operativeStore,
+                projectStore: projectStore,
+                dayRateHistory: dayRateHistoryCollection,
+                payrollPolicy: policy,
+                organization: firebaseBackend.currentOrganization,
+                organizationName: orgName,
+                scheduleOptions: scheduleOptions,
+                organizationUsers: userStore.organizationUsers,
+                recipientEmail: recipientEmail,
+                recipientName: name(exporter),
+                firebaseBackend: firebaseBackend,
+                taxIdsByUserId: taxIdsByUserId
+            )
+            refreshVersion += 1
+            rebuildAwaitingRows()
+            await loadExportedHistory()
+            selectedTab = .exported
+        }
+        exportMessage = TimesheetExportMessages.summaryMessage(
+            stamped: stamped.map { name($0.operative) },
+            notSent: delivery.notSent,
+            emailProblem: delivery.emailProblem,
+            recipientEmail: recipientEmail.isEmpty ? nil : recipientEmail,
+            sentCount: delivery.sentCount,
+            backupSkipped: delivery.backupSkipped,
+            skipped: skippedElsewhere,
+            stampError: stampError
+        )
+    }
+
+    /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
+    /// stored, exported sheet (a fresh read when it answers) — never re-stamps it. A sheet exported before signed copies
+    /// were kept (no stored `weeklyReportOverride`) is rebuilt from today's bookings and rates, so the person confirms
+    /// first and the PDF says so.
+    private func downloadExportedPDF(_ row: ExportedTimesheetHistoryRow, confirmedRebuild: Bool) async {
+        if payInputsState != .loaded { await loadDayRateHistory() }
+        PayInputsLoad.ensurePeriodBookings(
+            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+            from: row.week.start, retryFailed: true
+        )
+        if let blocked = PayInputsLoad.blockMessage(
+            state: payInputsState,
+            organization: firebaseBackend.currentOrganization,
+            bookings: PayInputsLoad.periodBookings(
+                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
+                from: row.week.start
+            )
+        ) {
+            exportMessage = blocked
+            return
+        }
+        var sheet = row.draft
+        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+            let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
+                userId: row.user.id,
+                weekStart: row.week.start,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            )
+            if let draft = fresh.draft, draft.exportedAt != nil { sheet = draft }
+        }
+        let rebuilt = sheet.weeklyReportOverride == nil
+        if rebuilt && !confirmedRebuild {
+            rebuiltExportConfirmRow = row
+            return
+        }
+        let taxIds = await InvoicePDFGenerationSupport.taxIdsForExport(
+            subject: row.user,
+            requested: includeTaxIdsInExport,
+            userStore: userStore
+        )
+        let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
+        guard let attachment = TimesheetExportHelper.makeSheetPDF(
+            operative: row.user,
+            week: row.week,
+            draft: sheet,
             bookingStore: bookingStore,
             managerScheduleStore: managerScheduleStore,
             operativeStore: operativeStore,
             projectStore: projectStore,
             dayRateHistory: dayRateHistoryCollection,
-            payrollPolicy: policy,
+            payrollPolicy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
             organization: firebaseBackend.currentOrganization,
-            organizationName: orgName,
-            scheduleOptions: scheduleOptions,
+            organizationName: firebaseBackend.currentOrganization?.name ?? "Organization",
+            scheduleOptions: firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions(),
             organizationUsers: userStore.organizationUsers,
-            recipientEmail: recipientEmail,
-            recipientName: exporter.fullName.isEmpty ? exporter.email : exporter.fullName,
-            firebaseBackend: firebaseBackend,
-            taxIdsByUserId: taxIdsByUserId
-        )
-
-        guard result.emailSent else {
-            exportMessage = result.failed.isEmpty
-                ? "Failed to send timesheet export email to \(recipientEmail)."
-                : "Failed to send timesheet export email. \(result.failed.joined(separator: ", "))."
+            taxIds: taxIds,
+            rebuiltNote: rebuilt ? TimesheetExportMessages.rebuiltExportNote() : nil
+        ) else {
+            exportMessage = "Couldn't build the PDF for \(name)."
             return
         }
-
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            exportMessage = "Emailed \(result.emailed) timesheet\(result.emailed == 1 ? "" : "s") to \(recipientEmail), but could not mark them exported (no organization)."
-            return
-        }
-
-        var markFailures: [String] = []
-        for op in exportTargets where result.emailedUserIds.contains(op.id) {
-            // The snapshot was built (or an empty one rebuilt) above, before the stamp; it is not touched after it.
-            guard var d = prepared[op.id] else { continue }
-            guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
-            TimesheetDraftStore.save(d, userId: op.id, weekStart: week.start, weekEnd: week.end)
-            let snapshot = d
-            if let failure = await TimesheetDraftStore.saveToCloud(
-                snapshot,
-                userId: op.id,
-                weekStart: week.start,
-                weekEnd: week.end,
-                firebaseBackend: firebaseBackend,
-                organizationId: orgId,
-                writer: exporter,
-                subject: op
-            ) {
-                markFailures.append("\(op.fullName.isEmpty ? op.email : op.fullName): \(failure)")
-            }
-        }
-
-        refreshVersion += 1
-        rebuildAwaitingRows()
-        await loadExportedHistory()
-        selectedTab = .exported
-        if result.failed.isEmpty {
-            exportMessage = "Emailed \(result.emailed) timesheet PDF\(result.emailed == 1 ? "" : "s") to \(recipientEmail) for filing."
-        } else {
-            exportMessage = "Emailed \(result.emailed) to \(recipientEmail). Skipped: \(result.failed.joined(separator: ", "))."
-        }
-        if !markFailures.isEmpty {
-            exportMessage = (exportMessage ?? "") + " Not marked exported: \(markFailures.joined(separator: "; "))."
-        }
-        if !skippedElsewhere.isEmpty {
-            exportMessage = (exportMessage ?? "") + " Already exported on another device, left as it was: \(skippedElsewhere.joined(separator: ", "))."
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(attachment.fileName)
+        do {
+            try attachment.data.write(to: url, options: .atomic)
+            exportedShareFile = ExportedPDFShareFile(url: url)
+        } catch {
+            exportMessage = "Couldn't build the PDF for \(name) (\(error.localizedDescription))."
         }
     }
 
@@ -4491,6 +4591,12 @@ struct OperativeTimesheetsView: View {
     }
 }
 
+/// A PDF to share from the Exported tab.
+private struct ExportedPDFShareFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
 private struct ExportedTimesheetHistoryRow: Identifiable {
     let id: String
     let user: AppUser
@@ -4518,6 +4624,8 @@ private enum ManagerTimesheetListTab {
 private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject private var smartCache: SmartCacheService
+    /// RULEBOOK 1.43.0 §8 (review r318): the period's bookings are asked for again when the app becomes active.
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
@@ -4651,6 +4759,14 @@ private struct OperativeTimesheetReviewView: View {
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
+            // RULEBOOK 1.43.0 §8 (review r318): the period gate re-checks (and reloads the bookings if no server answer
+            // covers the period) when the app comes back to the foreground or the connection returns.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { ensurePeriodBookings() }
+            }
+            .onChange(of: smartCache.isOnline) { _, online in
+                if online { ensurePeriodBookings() }
+            }
             // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (counter-signed
             // before the bookings loaded) is rebuilt by the reviewer once they have, signatures unchanged, once per visit.
             .onChange(of: snapshotNeedsRebuild, initial: true) { _, needs in
@@ -4898,6 +5014,9 @@ private struct OperativeTimesheetReviewView: View {
     private func handleSignOffTapped() {
         // RULEBOOK 1.30.2: nobody counter-signs their own sheet (`timesheetWriterIsReviewer`).
         guard viewerIsReviewer else { return }
+        // RULEBOOK 1.43.0 §8 (review r318): tapping re-checks the period's bookings (reloads them when no server answer
+        // covers the period), so a stuck "Loading bookings…" recovers.
+        ensurePeriodBookings()
         // Nothing is counter-signed (and frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
@@ -7387,11 +7506,13 @@ private enum InvoicePDFBuilder {
 }
 
 private enum TimesheetExportHelper {
-    struct Result {
-        let emailedUserIds: Set<String>
-        let failed: [String]
-        let emailSent: Bool
-        var emailed: Int { emailedUserIds.count }
+    /// RULEBOOK 1.43.0 (review r318): what the delivery of the stamped sheets did — the per-person PDFs that were built
+    /// (and so sent), the people whose PDF could not be built (with the reason), backups skipped, and an email problem.
+    struct Delivery {
+        var sentCount = 0
+        var notSent: [String] = []
+        var backupSkipped: [String] = []
+        var emailProblem: String?
     }
 
     struct PDFAttachment {
@@ -7399,10 +7520,76 @@ private enum TimesheetExportHelper {
         let data: Data
     }
 
-    static func exportAndEmail(
-        operatives: [AppUser],
+    /// One sheet's PDF from the copy that was saved (its stored snapshot) — the same builder for Export and for the
+    /// Exported tab's Download. Nil when it could not be built.
+    static func makeSheetPDF(
+        operative: AppUser,
         week: WeekRange,
-        draftForUser: (AppUser) -> TimesheetDraft,
+        draft: TimesheetDraft,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        operativeStore: OperativeStore,
+        projectStore: ProjectStore,
+        dayRateHistory: OperativeDayRateHistoryCollection,
+        payrollPolicy: OrgPayrollTimePolicy,
+        organization: Organization?,
+        organizationName: String,
+        scheduleOptions: MyScheduleOptions = MyScheduleOptions(),
+        organizationUsers: [AppUser] = [],
+        taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile? = nil,
+        rebuiltNote: String? = nil
+    ) -> PDFAttachment? {
+        let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
+        let paymentRunStamp = paymentRunDateStamp(for: week)
+        let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
+        let rows = buildLineItems(
+            for: operative,
+            week: week,
+            draft: draft,
+            bookingStore: bookingStore,
+            managerScheduleStore: managerScheduleStore,
+            operativeStore: operativeStore,
+            projectStore: projectStore,
+            dayRateHistory: dayRateHistory,
+            payrollPolicy: payrollPolicy,
+            organization: organization,
+            scheduleOptions: scheduleOptions,
+            relatedUsers: organizationUsers
+        )
+        let grandTotal = rows.reduce(0) { $0 + $1.amount }
+        let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
+        var notes = signatureNotes(for: draft)
+        if let rebuiltNote { notes.insert(rebuiltNote, at: 0) }
+        guard let pdfURL = InvoicePDFBuilder.makePDF(
+            context: InvoicePDFBuilder.Context(
+                organizationName: organizationName,
+                userName: userName,
+                vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+                utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
+                generatedAt: Date(),
+                periodTitle: "Signed timesheet",
+                periodDateRange: periodRangeText,
+                lineItems: rows,
+                totalAmount: grandTotal,
+                rateChangeNotes: notes,
+                documentTitle: "Timesheet",
+                preferredFileName: fileName,
+                periodMetaLabel: "PAYMENT RUN",
+                totalLabel: "Total timesheet amount",
+                emptyStateMessage: "No work entries were found for this timesheet period."
+            )
+        ), let pdfData = try? Data(contentsOf: pdfURL) else {
+            return nil
+        }
+        return PDFAttachment(fileName: fileName, data: pdfData)
+    }
+
+    /// RULEBOOK 1.43.0 (review r318, web `runTimesheetExport` deliver): every STAMPED sheet gets its PDF (from the copy
+    /// that was saved) and storage backup, each person on their own — one failure never skips the rest — then one email
+    /// with every PDF that was built.
+    static func deliver(
+        stamped: [(operative: AppUser, draft: TimesheetDraft)],
+        week: WeekRange,
         bookingStore: BookingStore,
         managerScheduleStore: ManagerScheduleStore,
         operativeStore: OperativeStore,
@@ -7417,20 +7604,18 @@ private enum TimesheetExportHelper {
         recipientName: String,
         firebaseBackend: FirebaseBackend? = nil,
         taxIdsByUserId: [String: CanonicalBusinessEngine.CanonicalSensitiveProfile] = [:]
-    ) async -> Result {
-        var emailedUserIds = Set<String>()
-        var failed: [String] = []
+    ) async -> Delivery {
+        var delivery = Delivery()
         var attachments: [PDFAttachment] = []
+        var downloadLinks: [(fileName: String, url: String)] = []
         let paymentRunStamp = paymentRunDateStamp(for: week)
-        let periodRangeText = "\(paymentRunStamp.replacingOccurrences(of: " ", with: " – "))"
 
-        for operative in operatives {
-            let userName = operative.fullName.isEmpty ? operative.email : operative.fullName
-            let draft = draftForUser(operative)
-            let rows = buildLineItems(
-                for: operative,
+        for row in stamped {
+            let userName = row.operative.fullName.isEmpty ? row.operative.email : row.operative.fullName
+            guard let attachment = makeSheetPDF(
+                operative: row.operative,
                 week: week,
-                draft: draft,
+                draft: row.draft,
                 bookingStore: bookingStore,
                 managerScheduleStore: managerScheduleStore,
                 operativeStore: operativeStore,
@@ -7438,46 +7623,16 @@ private enum TimesheetExportHelper {
                 dayRateHistory: dayRateHistory,
                 payrollPolicy: payrollPolicy,
                 organization: organization,
+                organizationName: organizationName,
                 scheduleOptions: scheduleOptions,
-                relatedUsers: organizationUsers
-            )
-            let grandTotal = rows.reduce(0) { $0 + $1.amount }
-            let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
-
-            guard let pdfURL = InvoicePDFBuilder.makePDF(
-                context: InvoicePDFBuilder.Context(
-                    organizationName: organizationName,
-                    userName: userName,
-                    vatNumber: taxIdsByUserId[operative.id].flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
-                    utrNumber: taxIdsByUserId[operative.id].flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
-                    generatedAt: Date(),
-                    periodTitle: "Signed timesheet",
-                    periodDateRange: periodRangeText,
-                    lineItems: rows,
-                    totalAmount: grandTotal,
-                    rateChangeNotes: signatureNotes(for: draft),
-                    documentTitle: "Timesheet",
-                    preferredFileName: fileName,
-                    periodMetaLabel: "PAYMENT RUN",
-                    totalLabel: "Total timesheet amount",
-                    emptyStateMessage: "No work entries were found for this timesheet period."
-                )
-            ), let pdfData = try? Data(contentsOf: pdfURL) else {
-                failed.append(userName)
+                organizationUsers: organizationUsers,
+                taxIds: taxIdsByUserId[row.operative.id]
+            ) else {
+                delivery.notSent.append("\(userName) (the PDF could not be built)")
                 continue
             }
-
-            attachments.append(PDFAttachment(fileName: fileName, data: pdfData))
-            emailedUserIds.insert(operative.id)
-        }
-
-        guard !attachments.isEmpty else {
-            return Result(emailedUserIds: [], failed: failed.isEmpty ? ["No timesheet PDFs could be built"] : failed, emailSent: false)
-        }
-
-        var downloadLinks: [(fileName: String, url: String)] = []
-        if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
-            for attachment in attachments {
+            attachments.append(attachment)
+            if let firebaseBackend, let orgId = organization?.firestoreDocumentId {
                 do {
                     let url = try await firebaseBackend.uploadTimesheetExportPDF(
                         attachment.data,
@@ -7486,17 +7641,17 @@ private enum TimesheetExportHelper {
                     )
                     downloadLinks.append((attachment.fileName, url))
                 } catch {
-                    let refused = (error as NSError).domain == "FirebaseBackend" && (error as NSError).code == 413
-                    if refused {
-                        return Result(
-                            emailedUserIds: [],
-                            failed: failed + [error.localizedDescription],
-                            emailSent: false
-                        )
-                    }
+                    delivery.backupSkipped.append(userName)
                 }
             }
         }
+        delivery.sentCount = attachments.count
+
+        guard !recipientEmail.isEmpty else {
+            delivery.emailProblem = "no email address on your account"
+            return delivery
+        }
+        guard !attachments.isEmpty else { return delivery }
 
         let html = managerExportEmailHTML(
             recipientName: recipientName,
@@ -7529,17 +7684,9 @@ private enum TimesheetExportHelper {
                 fromName: emailFromName
             )
         }
-
-        if sent {
-            return Result(emailedUserIds: emailedUserIds, failed: failed, emailSent: true)
-        }
-        return Result(
-            emailedUserIds: [],
-            failed: failed + ["Email delivery to \(recipientEmail) failed"],
-            emailSent: false
-        )
+        if !sent { delivery.emailProblem = "email delivery failed" }
+        return delivery
     }
-
     static func paymentRunDateStamp(for week: WeekRange) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")

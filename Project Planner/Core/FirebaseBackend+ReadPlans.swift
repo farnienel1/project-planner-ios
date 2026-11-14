@@ -30,6 +30,9 @@ nonisolated struct PlannedReadSource {
 nonisolated final class PlannedSnapshotMerge<Doc>: @unchecked Sendable {
     private let lock = NSLock()
     private var latest: [Int: (docs: [Doc], fromCache: Bool)] = [:]
+    /// RULEBOOK 1.43.0 §8 (review r318): per part, whether its last snapshot (data or metadata-only) was a server answer
+    /// with no pending local writes.
+    private var serverAnswered: [Int: Bool] = [:]
     private let sourceCount: Int
     private let documentId: (Doc) -> String
 
@@ -38,9 +41,10 @@ nonisolated final class PlannedSnapshotMerge<Doc>: @unchecked Sendable {
         self.documentId = documentId
     }
 
-    func update(source: Int, docs: [Doc], fromCache: Bool) -> (docs: [Doc], fromCache: Bool) {
+    func update(source: Int, docs: [Doc], fromCache: Bool, pendingWrites: Bool = false) -> (docs: [Doc], fromCache: Bool) {
         lock.lock(); defer { lock.unlock() }
         latest[source] = (docs, fromCache)
+        serverAnswered[source] = !fromCache && !pendingWrites
         var seen = Set<String>()
         var merged: [Doc] = []
         for index in 0..<sourceCount {
@@ -50,6 +54,24 @@ nonisolated final class PlannedSnapshotMerge<Doc>: @unchecked Sendable {
         }
         let complete = latest.count == sourceCount && !latest.values.contains { $0.fromCache }
         return (merged, !complete)
+    }
+
+    /// RULEBOOK 1.43.0 §8 (review r318): records a part's snapshot state (also a metadata-only one) and answers whether
+    /// the whole plan is now a server answer: every part answered by the server with no pending local writes — a
+    /// snapshot carrying this device's unconfirmed writes is not one.
+    func recordAuthority(source: Int, fromCache: Bool, pendingWrites: Bool) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        serverAnswered[source] = !fromCache && !pendingWrites
+        return authoritativeLocked
+    }
+
+    var authoritative: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return authoritativeLocked
+    }
+
+    private var authoritativeLocked: Bool {
+        serverAnswered.count == sourceCount && !serverAnswered.values.contains(false)
     }
 }
 
@@ -287,6 +309,9 @@ extension FirebaseBackend {
         documentId: @escaping (Doc) -> String,
         onRefused: (@MainActor () -> Void)? = nil,
         parity: (key: String, organizationId: String)? = nil,
+        /// RULEBOOK 1.43.0 §8 (review r318): called after every snapshot of any part (metadata-only ones included) with
+        /// whether the whole plan is now a server answer with no pending local writes.
+        onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
@@ -305,13 +330,26 @@ extension FirebaseBackend {
             ledger.markFailed(key: parity.key, generation: generation, source: index)
         }
         guard !sources.isEmpty else {
-            Task { @MainActor in onChange([], false) }
+            Task { @MainActor in
+                onChange([], false)
+                onAuthority?(true)
+            }
             return registration
         }
         let merge = PlannedSnapshotMerge<Doc>(sourceCount: sources.count, documentId: documentId)
-        func deliver(_ index: Int, _ docs: [Doc], _ fromCache: Bool) {
-            let merged = merge.update(source: index, docs: docs, fromCache: fromCache)
-            Task { @MainActor in onChange(merged.docs, merged.fromCache) }
+        func deliver(_ index: Int, _ docs: [Doc], _ fromCache: Bool, pendingWrites: Bool = false) {
+            let merged = merge.update(source: index, docs: docs, fromCache: fromCache, pendingWrites: pendingWrites)
+            let authoritative = merge.authoritative
+            Task { @MainActor in
+                onChange(merged.docs, merged.fromCache)
+                onAuthority?(authoritative)
+            }
+        }
+        /// A snapshot that is not passed on (metadata-only) still tells the gate whether the server answered.
+        func reportAuthority(_ index: Int, fromCache: Bool, pendingWrites: Bool) {
+            guard let onAuthority else { return }
+            let authoritative = merge.recordAuthority(source: index, fromCache: fromCache, pendingWrites: pendingWrites)
+            Task { @MainActor in onAuthority(authoritative) }
         }
         func attach(_ index: Int, _ query: Query, fallback: Query?, attempt: Int = 0) {
             // RULEBOOK 1.38.0 §27: metadata changes only tell the ledger the server answered; they never reach the store.
@@ -351,16 +389,22 @@ extension FirebaseBackend {
                 // RULEBOOK 1.43.0 §8 (review r318, 3rd round): a metadata-only snapshot is still passed on when it is the
                 // server confirming rows last delivered from cache (a network blip), so a store's "server answered"
                 // state (the timesheet bookings gate) comes back without a data change.
-                let serverConfirmsCachedRows = !snapshot.metadata.isFromCache && !snapshot.metadata.hasPendingWrites
+                let pending = snapshot.metadata.hasPendingWrites
+                let serverConfirmsCachedRows = !snapshot.metadata.isFromCache && !pending
                     && lastDeliveredFromCache.value
                 if !serverConfirmsCachedRows, DataParityListenerLedger.isMetadataOnly(
                     documentChangeCount: snapshot.documentChanges.count,
                     deliveredBefore: delivered.wasDelivered,
                     heldIdsChanged: heldIdsChanged
-                ) { return }
+                ) {
+                    reportAuthority(index, fromCache: snapshot.metadata.isFromCache, pendingWrites: pending)
+                    return
+                }
                 _ = delivered.markDelivered()
-                lastDeliveredFromCache.value = snapshot.metadata.isFromCache
-                deliver(index, snapshot.documents.map(fromQueryDocument), snapshot.metadata.isFromCache)
+                // Review r318: a snapshot with this device's unconfirmed writes counts as not yet confirmed, so the
+                // server's later metadata-only confirmation is passed on.
+                lastDeliveredFromCache.value = snapshot.metadata.isFromCache || pending
+                deliver(index, snapshot.documents.map(fromQueryDocument), snapshot.metadata.isFromCache, pendingWrites: pending)
             }
             registration.set(index, listener)
         }
@@ -386,9 +430,12 @@ extension FirebaseBackend {
                     guard let snapshot else { return }
                     ledgerRecord(index, snapshot.exists ? [snapshot.documentID] : [], snapshot.metadata.isFromCache, snapshot.metadata.hasPendingWrites)
                     let data = snapshot.exists ? snapshot.data() : nil
-                    guard deduper.shouldDeliver(data) else { return }
+                    guard deduper.shouldDeliver(data) else {
+                        reportAuthority(index, fromCache: snapshot.metadata.isFromCache, pendingWrites: snapshot.metadata.hasPendingWrites)
+                        return
+                    }
                     let doc = snapshot.exists ? fromDocument(snapshot) : nil
-                    deliver(index, doc.map { [$0] } ?? [], snapshot.metadata.isFromCache)
+                    deliver(index, doc.map { [$0] } ?? [], snapshot.metadata.isFromCache, pendingWrites: snapshot.metadata.hasPendingWrites)
                 }
                 registration.set(index, listener)
             }

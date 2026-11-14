@@ -96,9 +96,50 @@ enum PayInputsLoad {
             || managerScheduleStore.serverCoverage?.covers(organizationId: orgId, from: periodStart) != true {
             reload = true
         }
+        // Review r318: a read already in flight (the launch / bootstrap one, which may ignore a reload request and may
+        // read a narrower window) is waited for, then this check runs again, so an older period still gets covered.
+        if bookingStore.isLoading || managerScheduleStore.isLoading {
+            scheduleRerunAfterLoads(
+                firebaseBackend: firebaseBackend,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                from: periodStart
+            )
+            if !reload { return }
+        }
         guard reload else { return }
         bookingStore.loadData()
         managerScheduleStore.loadData(force: true)
+    }
+
+    /// One queued re-check per screen session at a time (a flag, not a second load).
+    private static var rerunQueued = false
+
+    private static func scheduleRerunAfterLoads(
+        firebaseBackend: FirebaseBackend,
+        bookingStore: BookingStore,
+        managerScheduleStore: ManagerScheduleStore,
+        from periodStart: Date?
+    ) {
+        guard !rerunQueued else { return }
+        rerunQueued = true
+        Task { @MainActor [weak firebaseBackend, weak bookingStore, weak managerScheduleStore] in
+            // At most a minute: a read that never ends is the store's failure state, not this one's.
+            for _ in 0..<120 {
+                guard let bookingStore, let managerScheduleStore else { break }
+                if !bookingStore.isLoading && !managerScheduleStore.isLoading { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            rerunQueued = false
+            guard let firebaseBackend, let bookingStore, let managerScheduleStore,
+                  !bookingStore.isLoading, !managerScheduleStore.isLoading else { return }
+            ensurePeriodBookings(
+                firebaseBackend: firebaseBackend,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                from: periodStart
+            )
+        }
     }
 
     /// `blockMessage` plus RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: sign-off, counter-signature, the agreed snapshot
@@ -168,4 +209,56 @@ struct TimesheetPeriodLoadFailedView: View {
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .accessibilityIdentifier("timesheets.periodLoadFailed")
     }
+}
+
+/// RULEBOOK 1.43.0 (review r318): the wording of a User Timesheets export (web `lib/timesheets/timesheetExportRun.ts`
+/// `exportSummaryMessage`, `EXPORT_RECOVER_HINT`) and of the Exported tab's rebuilt Download PDF. Copy only.
+enum TimesheetExportMessages {
+    /// Web `EXPORT_RECOVER_HINT`.
+    static let exportRecoverHint = "Open Exported to download any timesheet again."
+
+    /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF of a sheet exported before signed copies were kept
+    /// (no stored `weeklyReportOverride`) is rebuilt from today's bookings and rates; asked first and marked on the PDF.
+    static let rebuiltExportConfirmMessage = "This timesheet was exported before signed copies were kept, so this PDF is rebuilt from today's bookings and rates and may differ from the one sent at the time."
+
+    static func rebuiltExportNote(on date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = OrganizationRulebookContext.calendar.timeZone
+        formatter.dateFormat = "d MMM yyyy"
+        return "Rebuilt on \(formatter.string(from: date)) — may differ from the original export."
+    }
+
+    /// Web `exportSummaryMessage`: what was exported, what was sent, what could not be sent and why — never "Export
+    /// failed" once anything was stamped.
+    static func summaryMessage(
+        stamped: [String],
+        notSent: [String],
+        emailProblem: String?,
+        recipientEmail: String?,
+        sentCount: Int,
+        backupSkipped: [String],
+        skipped: [String],
+        stampError: String?
+    ) -> String {
+        var parts: [String] = []
+        let n = stamped.count
+        if n == 0 {
+            parts.append(stampError.map { "Nothing was exported (\($0))." } ?? "Nothing to export.")
+        } else {
+            parts.append("\(n) exported.")
+            if sentCount > 0, emailProblem == nil, let recipientEmail {
+                parts.append("Sent: \(sentCount) emailed to \(recipientEmail) for filing.")
+            }
+            var couldNot = notSent
+            if let emailProblem { couldNot.append("the email (\(emailProblem))") }
+            if !couldNot.isEmpty { parts.append("Couldn't send: \(couldNot.joined(separator: ", "))." ) }
+            if let stampError { parts.append("Export stopped before the rest (\(stampError)); try again for them.") }
+            if !backupSkipped.isEmpty { parts.append("Storage backup skipped: \(backupSkipped.joined(separator: ", "))." ) }
+        }
+        if !skipped.isEmpty { parts.append("Already exported, left as it was: \(skipped.joined(separator: ", "))." ) }
+        if n > 0 && (!notSent.isEmpty || emailProblem != nil || stampError != nil) { parts.append(exportRecoverHint) }
+        return parts.joined(separator: " ")
+    }
+
 }

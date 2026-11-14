@@ -286,4 +286,77 @@ final class Rulebook1430Tests: XCTestCase {
         XCTAssertEqual(fullDay.timesText, "07:00–16:00")
         XCTAssertNil(CanonicalBusinessEngine.subcontractorScheduleCell(bookings: [], policy: nil, dayKey: wednesday))
     }
+
+    // MARK: Review r318 — gate authority, export wording, tile fallback
+
+    /// A snapshot carrying this device's unconfirmed writes is not a server answer; every part must have one.
+    func testPendingWritesAreNotAServerAnswer() {
+        let merge = PlannedSnapshotMerge<String>(sourceCount: 2, documentId: { $0 })
+        _ = merge.update(source: 0, docs: ["a"], fromCache: false)
+        XCTAssertFalse(merge.authoritative, "one part has not answered yet")
+        _ = merge.update(source: 1, docs: ["b"], fromCache: false, pendingWrites: true)
+        XCTAssertFalse(merge.authoritative, "pending local writes")
+        // The server's metadata-only confirmation of the same rows opens it.
+        XCTAssertTrue(merge.recordAuthority(source: 1, fromCache: false, pendingWrites: false))
+        // A cache snapshot closes it again.
+        XCTAssertFalse(merge.recordAuthority(source: 0, fromCache: true, pendingWrites: false))
+    }
+
+    /// A one-off read from cache never covers a period on its own; the same window's listener with a server answer does.
+    func testCoverageAfterACachedReadFollowsTheListener() throws {
+        let start = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-11-01"))
+        let other = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-11-09"))
+        XCTAssertNotNil(BookingServerCoverage.afterRead(organizationId: "org", fromDate: start, readAuthoritative: true, listener: nil))
+        XCTAssertNil(BookingServerCoverage.afterRead(organizationId: "org", fromDate: start, readAuthoritative: false, listener: nil))
+        XCTAssertNotNil(BookingServerCoverage.afterRead(
+            organizationId: "org", fromDate: start, readAuthoritative: false,
+            listener: BookingListenerAuthority(organizationId: "org", fromDate: start, authoritative: true)
+        ))
+        XCTAssertNil(BookingServerCoverage.afterRead(
+            organizationId: "org", fromDate: start, readAuthoritative: false,
+            listener: BookingListenerAuthority(organizationId: "org", fromDate: other, authoritative: true)
+        ), "another window")
+        XCTAssertNil(BookingServerCoverage.afterRead(
+            organizationId: "org", fromDate: start, readAuthoritative: false,
+            listener: BookingListenerAuthority(organizationId: "org", fromDate: start, authoritative: false)
+        ))
+    }
+
+    /// The export summary uses web's wording (`exportSummaryMessage`).
+    func testExportSummaryMatchesWeb() {
+        XCTAssertEqual(
+            TimesheetExportMessages.summaryMessage(
+                stamped: ["Sam", "Ann"], notSent: ["Ann (the PDF could not be built)"], emailProblem: nil,
+                recipientEmail: "boss@x.test", sentCount: 1, backupSkipped: [], skipped: ["Joe"], stampError: nil
+            ),
+            "2 exported. Sent: 1 emailed to boss@x.test for filing. Couldn't send: Ann (the PDF could not be built). Already exported, left as it was: Joe. Open Exported to download any timesheet again."
+        )
+        XCTAssertEqual(
+            TimesheetExportMessages.summaryMessage(
+                stamped: [], notSent: [], emailProblem: nil, recipientEmail: nil, sentCount: 0, backupSkipped: [],
+                skipped: [], stampError: nil
+            ),
+            "Nothing to export."
+        )
+        XCTAssertEqual(
+            TimesheetExportMessages.summaryMessage(
+                stamped: ["Sam"], notSent: [], emailProblem: "email delivery failed", recipientEmail: "boss@x.test",
+                sentCount: 1, backupSkipped: ["Sam"], skipped: [], stampError: "refused"
+            ),
+            "1 exported. Couldn't send: the email (email delivery failed). Export stopped before the rest (refused); try again for them. Storage backup skipped: Sam. Open Exported to download any timesheet again."
+        )
+        XCTAssertTrue(TimesheetExportMessages.rebuiltExportNote().hasPrefix("Rebuilt on "))
+        XCTAssertTrue(TimesheetExportMessages.rebuiltExportNote().hasSuffix("— may differ from the original export."))
+    }
+
+    /// When the script does not answer, a subcontractor tile shows the stored start–finish, never "0h".
+    func testSubcontractorTileFallbackShowsTimes() {
+        let one = RulebookSubcontractorScheduleCell.fallbackDayCell(storedTimes: ["07:30–16:00"])
+        XCTAssertEqual(one.hoursText, "07:30–16:00")
+        XCTAssertNil(one.countText)
+        let two = RulebookSubcontractorScheduleCell.fallbackDayCell(storedTimes: ["07:30–12:00", "13:00–16:00"])
+        XCTAssertEqual(two.hoursText, "07:30–12:00 + 13:00–16:00")
+        XCTAssertEqual(two.countText, "2 bookings")
+        XCTAssertFalse(two.headline.contains("0h"))
+    }
 }

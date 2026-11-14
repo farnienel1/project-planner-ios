@@ -27,6 +27,8 @@ class ManagerScheduleStore: ObservableObject {
     /// RULEBOOK 1.43.0 §8 (review r318): what the last server-answered read covered (organisation, lower bound) — never
     /// the offline copy, a cache fallback or a partial plan. Sign-off waits for it (`PayInputsLoad.periodBookings`).
     @Published private(set) var serverCoverage: BookingServerCoverage?
+    /// RULEBOOK 1.43.0 §8 (review r318): the live listener's last authority report.
+    private var listenerAuthority: BookingListenerAuthority?
 
     private var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -171,6 +173,7 @@ class ManagerScheduleStore: ObservableObject {
         managerSiteBookings = []
         finishedLoadOrganizationId = nil
         serverCoverage = nil
+        listenerAuthority = nil
         lastLoadAt = nil
         errorMessage = nil
     }
@@ -207,16 +210,32 @@ class ManagerScheduleStore: ObservableObject {
                 let read = try await fb.loadManagerSiteBookingsReportingAuthority(organizationId: orgId, startingOn: queryStart)
                 let list = read.bookings
                 // RULEBOOK 1.43.0 §8 (review r318): only a read every query of which the server answered covers a period.
-                self.serverCoverage = read.authoritative
-                    ? BookingServerCoverage(organizationId: orgId, fromDate: queryStart)
-                    : nil
+                self.serverCoverage = BookingServerCoverage.afterRead(
+                    organizationId: orgId,
+                    fromDate: queryStart,
+                    readAuthoritative: read.authoritative,
+                    listener: self.listenerAuthority
+                )
                 let duplicates = self.duplicatesToDelete(from: list)
                 self.managerSiteBookings = self.deduplicated(self.withoutQueuedDeletes(list, organizationId: orgId))
                 OfflineManagerScheduleLocalStore.save(self.managerSiteBookings, organizationId: orgId)
                 self.lastLoadAt = Date()
                 self.lastLoadFailed = false
                 self.smartCache?.markSynced()
-                fb.listenManagerSiteBookings(organizationId: orgId, startingOn: queryStart) { [weak self] remote, fromCache in
+                fb.listenManagerSiteBookings(
+                    organizationId: orgId,
+                    startingOn: queryStart,
+                    // RULEBOOK 1.43.0 §8 (review r318): every snapshot (metadata-only ones included) says whether the
+                    // server answered the whole query with no pending local writes; the period gate follows it.
+                    onAuthority: { [weak self] authoritative in
+                        guard let self,
+                              self.firebaseBackend?.currentOrganization?.firestoreDocumentId == orgId else { return }
+                        self.listenerAuthority = BookingListenerAuthority(
+                            organizationId: orgId, fromDate: queryStart, authoritative: authoritative
+                        )
+                        self.serverCoverage = authoritative ? BookingServerCoverage(organizationId: orgId, fromDate: queryStart) : nil
+                    }
+                ) { [weak self] remote, fromCache in
                     guard let self else { return }
                     guard WarningsBookingScanScheduler.acceptsListener(
                         listenerOrganizationId: orgId,
@@ -225,9 +244,7 @@ class ManagerScheduleStore: ObservableObject {
                     ) else {
                         return
                     }
-                    // RULEBOOK 1.43.0 §8 (review r318, 2nd round): a cache snapshot clears the period gate; a server
-                    // answer of the whole query restores it.
-                    self.serverCoverage = fromCache ? nil : BookingServerCoverage(organizationId: orgId, fromDate: queryStart)
+                    _ = fromCache
                     self.applyRemoteManagerBookings(remote, organizationId: orgId)
                 }
                 if !duplicates.isEmpty {

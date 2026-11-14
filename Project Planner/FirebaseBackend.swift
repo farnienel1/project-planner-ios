@@ -8349,6 +8349,7 @@ class FirebaseBackend: ObservableObject {
     func listenBookings(
         organizationId: String,
         startingOn start: Date? = nil,
+        onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
         onChange: @escaping (_ bookings: [Booking], _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -8357,7 +8358,7 @@ class FirebaseBackend: ObservableObject {
         // a new plan (visible jobs or own ids changed, `jobReadPlanDidChange`) re-attaches and the same plan is free.
         let plan = bookingReadSources(organizationId: orgId, collection: "bookings", startingOn: start)
         let target = "bookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
-        bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        bookingsLiveRequest = { [weak self] in self?.listenBookings(organizationId: organizationId, startingOn: start, onAuthority: onAuthority, onChange: onChange) }
         dataParityBookingsListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: bookingsLiveListenerTarget,
@@ -8377,7 +8378,8 @@ class FirebaseBackend: ObservableObject {
                 guard let self, self.bookingsLiveListenerTarget == target else { return }
                 self.bookingsLiveListenerTarget = nil
             },
-            parity: (key: "bookings", organizationId: orgId)
+            parity: (key: "bookings", organizationId: orgId),
+            onAuthority: onAuthority
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
@@ -8588,6 +8590,7 @@ class FirebaseBackend: ObservableObject {
     func listenManagerSiteBookings(
         organizationId: String,
         startingOn start: Date? = nil,
+        onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
         onChange: @escaping (_ bookings: [ManagerSiteBooking], _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -8595,7 +8598,7 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.10.0 §17: one listener per `bookingQueryPlan` query (see `listenBookings`).
         let plan = bookingReadSources(organizationId: orgId, collection: "managerSiteBookings", startingOn: start)
         let target = "managerSiteBookings:\(orgId)|\(start?.timeIntervalSince1970 ?? -1)|\(plan.signature)"
-        managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onChange: onChange) }
+        managerScheduleLiveRequest = { [weak self] in self?.listenManagerSiteBookings(organizationId: organizationId, startingOn: start, onAuthority: onAuthority, onChange: onChange) }
         dataParityManagerScheduleListenStart = .some(start)
         guard LaunchStartupPolicy.shouldAttachListener(
             activeTarget: managerScheduleLiveListenerTarget,
@@ -8614,7 +8617,8 @@ class FirebaseBackend: ObservableObject {
                 guard let self, self.managerScheduleLiveListenerTarget == target else { return }
                 self.managerScheduleLiveListenerTarget = nil
             },
-            parity: (key: "managerSiteBookings", organizationId: orgId)
+            parity: (key: "managerSiteBookings", organizationId: orgId),
+            onAuthority: onAuthority
         ) { [weak self] documents, fromCache in
             guard let self else { return }
             let currentOrganizationId = self.currentOrganization?.firestoreDocumentId
