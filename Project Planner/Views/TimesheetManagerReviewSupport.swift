@@ -395,15 +395,23 @@ enum TimesheetPayrollLineBookingLookup {
     /// the edited line always, and the booking's other line only when its amount changes or it already has an `edited`
     /// review. Each review is `{ decision, revisedAmount }` (a declined line becomes approved; an unchanged amount is
     /// approved) with the Edit hours fields on an `edited` one; revised amounts in pennies (`roundPennies`).
+    /// Nil (review of #233, fail closed) when a line's current review could not be checked by the rulebook: the edit is
+    /// refused (`TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage`), never saved unchecked — a declined
+    /// line would otherwise become approved, or the booking's other line be skipped.
     static func reviewsAfterEdit(
         _ edit: Edit,
         editedLineId: String,
         draft: TimesheetDraft
-    ) -> [String: TimesheetPayrollLineReview] {
+    ) -> [String: TimesheetPayrollLineReview]? {
         var reviews = draft.payrollLineReviews
         for line in [edit.standardLine, edit.overtimeLine].compactMap({ $0 }) {
             guard let fields = edit.reviewFieldsByLineId[line.id] else { continue }
-            let existing = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)
+            let existing: TimesheetPayrollLineReview?
+            switch TimesheetDraftAdjustments.payrollReviewLookup(in: draft, lineId: line.id, liveJSON: line.rulebookLiveBookingJSON) {
+            case .review(let found): existing = found
+            case .none: existing = nil
+            case .failed: return nil
+            }
             let unchanged = abs(fields.revisedAmount - line.amount) < 0.01
             if line.id != editedLineId && unchanged && existing?.decision != .edited { continue }
             let decision: TimesheetManagerDecision = (existing?.decision == .declined || unchanged) ? .approved : .edited
@@ -430,7 +438,8 @@ struct TimesheetPayrollLineEditHoursSheet: View {
     let initialChoice: OperativeDayBookingChoice?
     /// The person's employment fields (`CanonicalBusinessEngine.timesheetPerson`): a PAYE day pays 0.
     let employment: [String: Any]?
-    let onSave: (TimesheetPayrollLineBookingLookup.Edit) -> Void
+    /// Returns a refusal message (nothing saved; the sheet stays open and shows it), or nil once saved.
+    let onSave: (TimesheetPayrollLineBookingLookup.Edit) -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var refusal: String?
@@ -467,7 +476,11 @@ struct TimesheetPayrollLineEditHoursSheet: View {
                     refusal = error
                     return
                 }
-                onSave(result)
+                // Review of #233: a review the rulebook could not check refuses the edit (fail closed).
+                if let message = onSave(result) {
+                    refusal = message
+                    return
+                }
                 dismiss()
             },
             onCancel: { dismiss() }

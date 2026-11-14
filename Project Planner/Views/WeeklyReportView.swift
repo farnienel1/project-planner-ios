@@ -866,8 +866,6 @@ struct WeeklyReportView: View {
         isGenerating = true
         message = nil
         showGeneratedSuccess = false
-        let range = reportDateRange
-        print("🔥🔥🔥 DEBUG: WEEKLY_REPORT generate \(String(describing: quickRange)) \(range.lowerBound) \(range.upperBound)")
         Task {
             // The report's own range is scanned (§7); the live Warnings window is not used.
             guard await refreshReportWarnings() else {
@@ -902,6 +900,14 @@ struct WeeklyReportView: View {
                 scheduleOptions: appSettings.settings.myScheduleOptions
             )
             timesheetFeed = feed
+            // RULEBOOK 1.46.0: an approved week the rulebook could not check stops the report (never priced live).
+            if let failed = feed.calculationFailedMessage {
+                await MainActor.run {
+                    message = failed
+                    isGenerating = false
+                }
+                return
+            }
             do {
                 let sections = try buildExportSections()
                 let exports = try WeeklyReportExportBuilder.makeExports(
@@ -1794,7 +1800,11 @@ struct WeeklyReportView: View {
         /// One booking priced on its own (`bookingPaySlices`) and added to its row (`mergeBookingPaySlice`). Rows keep
         /// today's keys (person, role, basis and rate, multiplier, standard day, PAYE).
         func addBooking(probe: Booking, day: Date, policy: OrgPayrollTimePolicy, name: String, role: String, resolved: ResolvedPayrollRate, paye: Bool, subject: AppUser?) {
-            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
+            // The paid day a day rate divides by (`orgDayHours` of that day's `weekdayPaidHours`), as web.
+            guard let standardDayHours = CanonicalBusinessEngine.orgDayHours(CanonicalBusinessEngine.weekdayPaidHours(policy)) else {
+                pricingFailed = true
+                return
+            }
             guard let slices = CanonicalBusinessEngine.bookingPaySlices(
                 hoursInput: PayrollHoursEngine.canonicalInput(booking: probe, day: day, policy: policy),
                 standardDayHours: standardDayHours,

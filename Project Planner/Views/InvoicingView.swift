@@ -5894,11 +5894,17 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 
     /// RULEBOOK 1.46.0 §8: an Edit hours save stores, on each line of the booking, the review the rulebook priced
     /// (`revisedPayrollLineAmounts` → `PayrollLineEditReviewFields`, revised amounts in pennies), exactly web's fields.
-    private func applyPayrollReviewSave(lineId: String, edit: TimesheetPayrollLineBookingLookup.Edit) {
-        guard edit.error == nil, edit.amounts != nil else { return }
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: lineId, draft: draft)
+    /// Returns a refusal message when nothing was saved, else nil.
+    private func applyPayrollReviewSave(lineId: String, edit: TimesheetPayrollLineBookingLookup.Edit) -> String? {
+        guard edit.error == nil, edit.amounts != nil else { return edit.error ?? CanonicalBusinessEngine.payrollLineEditTimesMessage }
+        // Review of #233: a line's current review the rulebook could not check refuses the edit (fail closed).
+        guard let reviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: lineId, draft: draft) else {
+            return TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+        }
+        draft.payrollLineReviews = reviews
         editingPayrollLineId = nil
         onSaveDraft()
+        return nil
     }
 
     private func applyExtraReviewSave(

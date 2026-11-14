@@ -236,7 +236,7 @@ final class Rulebook1460Tests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(edit.amounts).total, 426.47, accuracy: 0.001)
 
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))
         let review = try XCTUnwrap(draft.payrollLineReviews[line.id])
         XCTAssertEqual(review.decision, .edited)
         XCTAssertEqual(try XCTUnwrap(review.revisedAmount), 426.47, accuracy: 0.0001)
@@ -285,7 +285,7 @@ final class Rulebook1460Tests: XCTestCase {
             row: std, lines: [std, ot], startTime: "07:00", endTime: "19:00", breakRemoved: false,
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
-        let reviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: std.id, draft: TimesheetDraft())
+        let reviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: std.id, draft: TimesheetDraft()))
         // The standard line's amount is unchanged (250): written because it is the edited line, as approved.
         XCTAssertEqual(reviews[std.id]?.decision, .approved)
         XCTAssertNil(reviews[std.id]?.revisedAmount)
@@ -305,7 +305,7 @@ final class Rulebook1460Tests: XCTestCase {
             )
             XCTAssertEqual(edit.error, message)
             XCTAssertNil(edit.amounts)
-            XCTAssertTrue(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: TimesheetDraft()).isEmpty)
+            XCTAssertEqual(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: TimesheetDraft())?.isEmpty, true)
         }
         XCTAssertNil(CanonicalBusinessEngine.revisedPayrollLineTimesError(startTime: "22:00", endTime: "06:00"), "overnight is allowed")
     }
@@ -319,7 +319,7 @@ final class Rulebook1460Tests: XCTestCase {
         )
         XCTAssertNil(edit.error)
         XCTAssertGreaterThan(try XCTUnwrap(edit.amounts).total, 0)
-        XCTAssertFalse(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: TimesheetDraft()).isEmpty)
+        XCTAssertEqual(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: TimesheetDraft())?.isEmpty, false)
         let support = try source("Project Planner/Views/TimesheetManagerReviewSupport.swift")
         XCTAssertTrue(support.contains(".withAmountPreview(allowsOvernight: true)"), "Edit hours lets a finish before the start")
         let sheet = try source("Project Planner/Views/BookingHoursEditSheet.swift")
@@ -336,7 +336,7 @@ final class Rulebook1460Tests: XCTestCase {
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft))
         let current = TimesheetDraftAdjustments.currentPayrollAdjustments(draft: draft, lines: [original])
         XCTAssertEqual(current.map { $0.line.id }, [original.id])
         XCTAssertEqual(TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: [original]), 1)
@@ -361,7 +361,7 @@ final class Rulebook1460Tests: XCTestCase {
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: original.id, draft: draft))
         draft.managerSignedAt = Date()
 
         let changed = [standardLine(fingerprint: after, hasOvertimeLine: true), overtimeLine(fingerprint: after)]
@@ -410,7 +410,7 @@ final class Rulebook1460Tests: XCTestCase {
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))
         draft.managerSignedAt = Date()
 
         for signed in [signedLine(fingerprint: signedPrint, appliedReviewKey: ""), signedLine(fingerprint: nil, appliedReviewKey: nil)] {
@@ -446,7 +446,7 @@ final class Rulebook1460Tests: XCTestCase {
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))
         draft.managerSignedAt = Date()
         let applied = TimesheetWeeklyReportOverrideBuilder.reapplyReviews(
             to: override([signedLine(fingerprint: booked, appliedReviewKey: "")]), draft: draft, user: subject, viewer: nil
@@ -469,7 +469,7 @@ final class Rulebook1460Tests: XCTestCase {
             typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
         )
         var draft = TimesheetDraft()
-        draft.payrollLineReviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft)
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))
         draft.managerSignedAt = Date()
         let signed = override([signedLine(fingerprint: booked, appliedReviewKey: "")])
 
@@ -485,6 +485,61 @@ final class Rulebook1460Tests: XCTestCase {
         XCTAssertTrue(check.failed, "the caller refuses the save")
         XCTAssertEqual(result.lines.map(\.amount), [250], "the signed line is not re-priced")
         XCTAssertFalse(TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage.isEmpty)
+    }
+
+    /// Review of #233: when the rulebook cannot check the snapshot of an approved week, `applyIfFullyApproved` refuses
+    /// and leaves the stored snapshot exactly as it was; the weekly-report feed passes that refusal on (the report stops)
+    /// instead of pricing the week from live bookings at live rates.
+    func testAnApprovedWeekTheRulebookCannotCheckStopsTheReport() throws {
+        let booked = try XCTUnwrap(fingerprint(start: "07:00", end: "16:00"))
+        let line = standardLine(fingerprint: booked, hasOvertimeLine: false)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: line, lines: [line], startTime: "07:00", endTime: "19:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews = try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))
+        draft.operativeSignedAt = day
+        draft.operativeSignedByName = "TEST Operative"
+        draft.managerSignedAt = day
+        draft.managerSignedByName = "TEST Line Manager"
+        draft.weeklyReportOverride = override([signedLine(fingerprint: booked, appliedReviewKey: "")])
+        XCTAssertTrue(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: subject))
+        let before = draft.weeklyReportOverride
+
+        TimesheetDraftAdjustments.simulateScriptFailureForTesting = true
+        defer { TimesheetDraftAdjustments.simulateScriptFailureForTesting = false }
+        let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
+            to: &draft, user: subject, week: WeekRange(start: day, end: day, title: "TEST"),
+            bookings: [], managerBookings: [], operatives: [], projects: [], smallWorks: [],
+            history: .empty, policy: ownerPolicy, organization: nil, scheduleOptions: MyScheduleOptions(), viewer: nil
+        )
+        XCTAssertEqual(refusal, TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage)
+        XCTAssertEqual(draft.weeklyReportOverride, before, "the stored snapshot is left as it was")
+
+        let feed = try source("Project Planner/Core/WeeklyReportTimesheetFeed.swift")
+        XCTAssertTrue(feed.contains("feed.calculationFailedMessage = refusal"), "the feed passes the refusal on")
+        let weekly = try source("Project Planner/Views/WeeklyReportView.swift")
+        XCTAssertTrue(weekly.contains("if let failed = feed.calculationFailedMessage"), "the report stops on it")
+    }
+
+    /// Review of #233: Edit hours refuses (nil) when a line's current review cannot be checked — a declined line never
+    /// becomes approved unchecked, and the booking's other line is never skipped.
+    func testEditHoursRefusesWhenTheCurrentReviewCannotBeChecked() throws {
+        let booked = try XCTUnwrap(fingerprint(start: "07:00", end: "16:00"))
+        let line = standardLine(fingerprint: booked, hasOvertimeLine: false)
+        var draft = TimesheetDraft()
+        draft.payrollLineReviews[line.id] = TimesheetPayrollLineReview(decision: .declined, revisedAmount: nil)
+        let edit = TimesheetPayrollLineBookingLookup.payrollLineEdit(
+            row: line, lines: [line], startTime: "07:00", endTime: "19:00", breakRemoved: false,
+            typedOvertimeRate: nil, policy: ownerPolicy, employment: nil
+        )
+        // Checked: a declined line edited to new hours becomes approved at the revised amount.
+        XCTAssertEqual(try XCTUnwrap(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft))[line.id]?.decision, .approved)
+
+        TimesheetDraftAdjustments.simulateScriptFailureForTesting = true
+        defer { TimesheetDraftAdjustments.simulateScriptFailureForTesting = false }
+        XCTAssertNil(TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: line.id, draft: draft), "refused, nothing saved")
     }
 
     /// The weekly report never understates pay: a booking the rulebook cannot price stops the report.
