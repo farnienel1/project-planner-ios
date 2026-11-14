@@ -15,7 +15,7 @@ nonisolated struct PayeClaimUpdateWrite: @unchecked Sendable {
     let set: [String: Any]
     let remove: [String]
 
-    var isEmpty: Bool { set.isEmpty && remove.isEmpty }
+    var isEmpty: Bool { self.set.isEmpty && self.remove.isEmpty }
 }
 
 extension CanonicalBusinessEngine {
