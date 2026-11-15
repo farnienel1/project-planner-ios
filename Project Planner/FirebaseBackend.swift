@@ -5132,7 +5132,9 @@ class FirebaseBackend: ObservableObject {
         }
         // RULEBOOK 1.20.0 §4.3: a new company's first working hours are a derived policy
         // (`withDerivedWeekdayPaidHours`: `paidHoursDerived: true`, `standardPaidHours` = finish − start − unpaid break).
-        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(.default) ?? .default).asFirestoreDictionary()
+        // RULEBOOK 1.49.0 §4.3: from `newOrganizationPayrollPolicy()` (Saturday and Sunday on "Same as Monday–Friday").
+        let startPolicy = CanonicalBusinessEngine.newOrganizationPayrollPolicy() ?? .default
+        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(startPolicy) ?? startPolicy).asFirestoreDictionary()
         payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
         payload["annualLeaveDefaults"] = [
             "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,

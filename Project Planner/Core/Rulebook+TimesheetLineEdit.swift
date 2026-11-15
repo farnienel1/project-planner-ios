@@ -63,6 +63,9 @@ nonisolated struct RulebookRevisedPayrollLineAmounts: Hashable, Sendable {
     let overtimeMultiplier: Double
     let totalPaidHours: Double
     let standardDayHours: Double
+    /// RULEBOOK 1.49.0 §8: what the standard part is divided by (`payrollDayRateHours`): a set-window weekend day's
+    /// counts-as, else `standardDayHours`. A standard part's days are `paidHours / standardPartDayHours`.
+    let standardPartDayHours: Double
     let isPayeDay: Bool
     let standardAmount: Double
     let overtimeAmount: Double
@@ -84,6 +87,7 @@ nonisolated struct RulebookRevisedPayrollLineAmounts: Hashable, Sendable {
         overtimeMultiplier = n("overtimeMultiplier")
         totalPaidHours = n("totalPaidHours")
         standardDayHours = n("standardDayHours")
+        standardPartDayHours = (row["standardPartDayHours"] as? NSNumber)?.doubleValue ?? n("standardDayHours")
         isPayeDay = row["isPayeDay"] as? Bool ?? false
         standardAmount = n("standardAmount")
         overtimeAmount = n("overtimeAmount")

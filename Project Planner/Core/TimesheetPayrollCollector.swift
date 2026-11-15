@@ -56,6 +56,10 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     /// RULEBOOK 1.46.0 (never stored): the booking's collection (`bookings` / `managerSiteBookings`), so a labour and a
     /// manager site booking never group (`payrollLineBookingKey`).
     var bookingCollection: String? = nil
+    /// RULEBOOK 1.49.0 §8 (`payrollDayRateHours`, web `standardDayHours`): what a day rate is divided by on this line —
+    /// the standard line of a set-window Saturday / Sunday its counts-as (a full window = 1.00 day), else the weekday
+    /// paid day. Day units are `paidHours / standardDayHours`. Nil on a line built without it.
+    var standardDayHours: Double? = nil
 }
 
 struct TimesheetPayrollSummary {
@@ -153,6 +157,11 @@ enum TimesheetPayrollCollector {
             let otHours = hours?.outsideHours ?? 0
             let otMultiplier = hours?.outsideMultiplier ?? 1
             let normalHours = max(0, hours?.standardHours ?? 0)
+            // RULEBOOK 1.49.0 §8 (`payrollDayRateHours`, on the result): the standard part divides by its own day — a
+            // set-window weekend day's counts-as, so a full window is one day rate; the overtime part by the weekday day.
+            // The divisors come from the rulebook; the 0.01 floor is the existing guard (`orgDayHours`).
+            let standardPartDayHours = max(hours?.standardPartDayHours ?? standardDayHours, 0.01)
+            let overtimePartDayHours = max(hours?.overtimePartDayHours ?? standardDayHours, 0.01)
             // RULEBOOK 1.20.3 / 1.20.4: hours at the multiplier as clock hours, with any unpaid break as plain hours
             // (`CanonicalBusinessEngine.payrollMultipliedHours`). Display only; pay below stays `otHours × otMultiplier`.
             let multiplied = PayrollHoursEngine.compute(booking: probe, day: probe.date, policy: policy).multipliedHours
@@ -200,7 +209,7 @@ enum TimesheetPayrollCollector {
             )
             let otLineDetails = Self.overtimeLineDetails(clockRanges: clockRanges, multiplied: multiplied, otHours: otHours)
 
-            let normalPay = resolved.payForHoursIfCalculated(normalHours, standardDayHours: standardDayHours)
+            let normalPay = resolved.payForHoursIfCalculated(normalHours, standardDayHours: standardPartDayHours)
             if normalPay == nil { calculationFailed = true }
             let normalAmount = normalPay ?? 0
             baseAmount += normalAmount
@@ -228,12 +237,13 @@ enum TimesheetPayrollCollector {
                     bookingUpdatedAt: updatedAt,
                     bookingFingerprint: bookingFingerprint,
                     bookingOtMultiplierOverride: probe.otMultiplierOverride,
-                    bookingCollection: bookingCollection
+                    bookingCollection: bookingCollection,
+                    standardDayHours: standardPartDayHours
                 )
             )
 
             if otHours > CanonicalBusinessEngine.timesheetOvertimeLineMinHours {
-                let otPay = resolved.payForHoursIfCalculated(otHours, standardDayHours: standardDayHours, otMultiplier: otMultiplier)
+                let otPay = resolved.payForHoursIfCalculated(otHours, standardDayHours: overtimePartDayHours, otMultiplier: otMultiplier)
                 if otPay == nil { calculationFailed = true }
                 let otAmount = otPay ?? 0
                 overtimeAmount += otAmount
@@ -264,7 +274,8 @@ enum TimesheetPayrollCollector {
                         bookingUpdatedAt: updatedAt,
                         bookingFingerprint: bookingFingerprint,
                         bookingOtMultiplierOverride: probe.otMultiplierOverride,
-                        bookingCollection: bookingCollection
+                        bookingCollection: bookingCollection,
+                        standardDayHours: overtimePartDayHours
                     )
                 )
             }

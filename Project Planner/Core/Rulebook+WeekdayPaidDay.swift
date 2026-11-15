@@ -53,9 +53,8 @@ extension CanonicalBusinessEngine {
         } ?? policy.standardPaidHours
     }
 
-    /// RULEBOOK 1.44.0 §4.3 `weekendCountsAsHours(weekend)` for a weekend day with no stored "counts as" hours: the
-    /// default (8h, `DEFAULT_WEEKEND_COUNTS_AS_HOURS`) — never the weekday paid day, stored or derived. Every Swift
-    /// fallback for a weekend day's "counts as" (`resolvedCountsAsHours(fallback:)`) passes this.
+    /// RULEBOOK 1.44.0 §4.3 `weekendCountsAsHours(null)`: the default for a weekend day with no stored "counts as" hours
+    /// (8h, `DEFAULT_WEEKEND_COUNTS_AS_HOURS`), used only when the script did not answer `weekendCountsAsHours(_:policy:)`.
     nonisolated static var weekendCountsAsHoursFallback: Double { weekendCountsAsHoursFallbackValue }
 
     /// Asked once: the rulebook default does not change while the app runs.
@@ -63,6 +62,77 @@ extension CanonicalBusinessEngine {
         (callJSON("weekendCountsAsHours", arguments: [NSNull()]) as? NSNumber)?.doubleValue
             ?? constant("DEFAULT_WEEKEND_COUNTS_AS_HOURS", as: Double.self)
             ?? 8
+
+    /// RULEBOOK 1.49.0 §4.3 `weekendCountsAsHours(weekend, policy)`: the one counts-as reader — with "Same as
+    /// Monday–Friday" (`countsAsFollowsWeekday`) the weekday paid day of `policy` (pass the policy in effect that day),
+    /// else the stored number, else 8. Never a Swift fallback of its own beyond the script's default.
+    nonisolated static func weekendCountsAsHours(_ day: OrgWeekendDayPayrollSettings, policy: OrgPayrollTimePolicy?) -> Double {
+        var weekend: [String: Any] = ["countsAsStandardHours": RulebookJSON.orNull(day.countsAsHours)]
+        if day.countsAsFollowsWeekday == true { weekend["countsAsFollowsWeekday"] = true }
+        // Only the four fields the weekday paid day reads (`weekdayPaidHours`), so encoding a policy never loops.
+        let policyArgument: Any = policy.map {
+            [
+                "standardDayStart": $0.standardDayStart,
+                "standardDayEnd": $0.standardDayEnd,
+                "unpaidBreakMinutes": $0.unpaidBreakMinutes,
+                "breakPaid": $0.breakPaid,
+            ] as [String: Any]
+        } ?? NSNull()
+        if let value = (callJSON("weekendCountsAsHours", arguments: [weekend, policyArgument]) as? NSNumber)?.doubleValue {
+            return value
+        }
+        return day.countsAsHours ?? weekendCountsAsHoursFallback
+    }
+
+    /// RULEBOOK 1.49.0 `WEEKEND_COUNTS_AS_STEP_HOURS` (0.5).
+    nonisolated static var weekendCountsAsStepHours: Double {
+        constant("WEEKEND_COUNTS_AS_STEP_HOURS", as: Double.self) ?? 0.5
+    }
+
+    /// RULEBOOK 1.49.0 §4.3 `weekendCountsAsMax(policy)`: the largest counts-as the stepper offers (the weekday paid day
+    /// rounded down to the half hour, at least 1h).
+    nonisolated static func weekendCountsAsMax(_ policy: OrgPayrollTimePolicy) -> Double? {
+        guard let json = payrollPolicyJSON(policy) else { return nil }
+        return (callJSON("weekendCountsAsMax", arguments: [json]) as? NSNumber)?.doubleValue
+    }
+
+    /// RULEBOOK 1.49.0 §4.3 `weekendCountsAsStep(current, direction, policy)`: the value one stepper press gives.
+    nonisolated static func weekendCountsAsStep(_ current: Double, direction: Int, policy: OrgPayrollTimePolicy) -> Double? {
+        guard let json = payrollPolicyJSON(policy) else { return nil }
+        return (callJSON("weekendCountsAsStep", arguments: [current, direction >= 0 ? 1 : -1, json]) as? NSNumber)?.doubleValue
+    }
+
+    /// RULEBOOK 1.49.0 §4.3 `weekendCountsAsSnap(value, policy)`: a typed value on the half-hour grid within the cap.
+    nonisolated static func weekendCountsAsSnap(_ value: Double, policy: OrgPayrollTimePolicy) -> Double? {
+        guard let json = payrollPolicyJSON(policy) else { return nil }
+        return (callJSON("weekendCountsAsSnap", arguments: [value, json]) as? NSNumber)?.doubleValue
+    }
+
+    /// RULEBOOK 1.49.0 `weekendCountsAsCopy(day)`: `{ label, sameAsWeekdayLabel, dayName }`.
+    nonisolated static func weekendCountsAsCopy(_ day: RulebookWeekendDay) -> (label: String, sameAsWeekdayLabel: String, dayName: String)? {
+        guard let row = callJSON("weekendCountsAsCopy", arguments: [day.rawValue]) as? [String: Any],
+              let label = row["label"] as? String,
+              let same = row["sameAsWeekdayLabel"] as? String else { return nil }
+        return (label, same, row["dayName"] as? String ?? "")
+    }
+
+    /// RULEBOOK 1.49.0 `weekdayDayRateNote(policy)`: the Monday–Friday day-rate note.
+    nonisolated static func weekdayDayRateNote(_ policy: OrgPayrollTimePolicy) -> String? {
+        guard let json = payrollPolicyJSON(policy) else { return nil }
+        return callJSON("weekdayDayRateNote", arguments: [json]) as? String
+    }
+
+    /// RULEBOOK 1.49.0 `weekendDayRateNote(policy, day)`: the set-window weekend day-rate note; nil on an every-hour day.
+    nonisolated static func weekendDayRateNote(_ policy: OrgPayrollTimePolicy, day: RulebookWeekendDay) -> String? {
+        guard let json = payrollPolicyJSON(policy) else { return nil }
+        return callJSON("weekendDayRateNote", arguments: [json, day.rawValue]) as? String
+    }
+
+    /// RULEBOOK 1.49.0 §4.3 `newOrganizationPayrollPolicy()`: a new company's working hours (Saturday and Sunday on
+    /// "Same as Monday–Friday"). Nil when the script did not answer.
+    nonisolated static func newOrganizationPayrollPolicy() -> OrgPayrollTimePolicy? {
+        payrollPolicy(fromJSON: callJSON("newOrganizationPayrollPolicy", arguments: []))
+    }
 
     /// RULEBOOK 1.20.0 §4.3 `withDerivedWeekdayPaidHours(policy)`: the policy a 1.20.0 working-hours save writes —
     /// `paidHoursDerived: true` and `standardPaidHours` = the derived day. Nil when the script did not answer.

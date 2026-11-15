@@ -309,6 +309,11 @@ nonisolated struct CanonicalPayrollHours: Codable, Hashable, Sendable {
     let outsideHours: Double
     let outsideMultiplier: Double
     let segments: [CanonicalPayrollSegment]
+    /// RULEBOOK 1.49.0 `payrollDayRateHours`: what a day rate is divided by for the standard part (a set-window weekend
+    /// day's counts-as, else the weekday paid day) and for the overtime part (the weekday paid day). Nil from an older
+    /// answer; optional so a strict decode never refuses one.
+    var standardPartDayHours: Double? = nil
+    var overtimePartDayHours: Double? = nil
 }
 
 /// One weekly-report pay line for `reportPayCell` / `reportPayTotal` (`ReportPayLineInput` in the script).
@@ -1267,8 +1272,17 @@ nonisolated enum CanonicalBusinessEngine {
     }
 
     /// Weekly-report day units: weighted paid hours over the standard paid day, capped at 1.5.
-    static func reportDayValue(totalPaidHours: Double, standardPaidHours: Double) -> Double? {
-        let payload: [String: Any] = ["totalPaidHours": totalPaidHours, "standardPaidHours": standardPaidHours]
+    /// RULEBOOK 1.49.0 §7/§8: with `standardHours` and `standardPartDayHours` (`payrollHoursResult`) a set-window weekend
+    /// day's standard part counts in days of that day's counts-as (the script splits only when the divisor differs).
+    static func reportDayValue(
+        totalPaidHours: Double,
+        standardPaidHours: Double,
+        standardHours: Double? = nil,
+        standardPartDayHours: Double? = nil
+    ) -> Double? {
+        var payload: [String: Any] = ["totalPaidHours": totalPaidHours, "standardPaidHours": standardPaidHours]
+        if let standardHours { payload["standardHours"] = standardHours }
+        if let standardPartDayHours { payload["standardPartDayHours"] = standardPartDayHours }
         guard let json = jsonObjectFragment(payload) else { return nil }
         return decodeExpression(Double.self, "ProjectPlannerCanonical.reportDayValue(\(json))")
     }

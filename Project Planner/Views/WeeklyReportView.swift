@@ -1822,11 +1822,14 @@ struct WeeklyReportView: View {
             let rateKey = resolved.basis == .hourly
                 ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
                 : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
-            let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", standardDayHours))|\(paye ? "paye" : "")"
-            var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: standardDayHours, isPaye: paye)
-            acc.subject = acc.subject ?? subject
             for slice in slices {
+                // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
+                // 1.49.0 §7/§8: each slice's own divisor (`bookingPaySlices` `standardDayHours`, `payrollDayRateHours`) is in
+                // the key, so a set-window weekend day on its counts-as is its own row ("2.00 days at £240/day").
+                let divisor = slice.standardDayHours >= 1 ? slice.standardDayHours : standardDayHours
+                let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", divisor))|\(paye ? "paye" : "")"
+                var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: divisor, isPaye: paye)
+                acc.subject = acc.subject ?? subject
                 let held = slice.isOvertime ? acc.overtime : acc.normal
                 let merged: RulebookBookingPaySlice
                 if let held {
@@ -1839,8 +1842,8 @@ struct WeeklyReportView: View {
                     merged = slice
                 }
                 if slice.isOvertime { acc.overtime = merged } else { acc.normal = merged }
+                byKey[key] = acc
             }
-            byKey[key] = acc
         }
 
         let operativeBookings = bookingStore.bookings.filter {
