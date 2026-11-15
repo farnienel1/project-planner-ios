@@ -16,6 +16,9 @@ struct VariationsListView: View {
     @State private var showingEditor = false
     @State private var editingVariation: Variation?
     @State private var materialNames: [String] = []
+    /// RULEBOOK 1.52.0 §22: the workbook to share (`variationExportRows`).
+    @State private var exportFile: IdentifiableURL?
+    @State private var exportError: String?
 
     private var parentType: VariationParentType {
         project.isSmallWorksDocument ? .smallWork : .project
@@ -107,6 +110,17 @@ struct VariationsListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button {
+                    exportWorkbook()
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .foregroundStyle(.white)
+                }
+                .accessibilityIdentifier("variationsList.export")
+                .accessibilityLabel("Export variations to Excel")
+                .disabled(store.visibleVariations.isEmpty)
+            }
             if store.tracker.enabled {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {
@@ -132,6 +146,17 @@ struct VariationsListView: View {
             store.start(firebaseBackend: firebaseBackend)
         }
         .onDisappear { store.stop() }
+        .sheet(item: $exportFile) { file in
+            HSDocumentActivityView(activityItems: [file.url])
+        }
+        .alert("Could not export", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(exportError ?? "")
+        }
         .sheet(isPresented: $showingEditor) {
             VariationEditorSheet(
                 project: project,
@@ -168,7 +193,9 @@ struct VariationsListView: View {
         let submitted = Double(count(for: .submitted))
         let closed = Double(count(for: .closed))
         let total = max(open + submitted + closed, 1)
-        let hours = store.visibleVariations.reduce(0) { $0 + $1.totalLabourHours }
+        // RULEBOOK 1.52.0 §22 `variationListTotals` (deleted ones left out).
+        let listTotals = CanonicalBusinessEngine.variationListTotals(store.visibleVariations.map(\.rulebookInput)) ?? .zero
+        let hours = listTotals.labourHours
         return VStack(alignment: .leading, spacing: 0) {
             PPNavyPageTitle(
                 eyebrow: project.jobNumber.isEmpty ? project.siteName : VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName),
@@ -179,7 +206,11 @@ struct VariationsListView: View {
             HStack(alignment: .top, spacing: 12) {
                 PPStat(value: "\(store.visibleVariations.count)", label: "Variations")
                 PPStatDivider()
-                PPStat(value: String(format: hours.truncatingRemainder(dividingBy: 1) == 0 ? "%.0f" : "%.1f", hours), label: "Hours logged")
+                PPStat(value: formatHours(hours), label: "Hours logged")
+                if canSeeCosts, listTotals.customCount + listTotals.subcontractorCount > 0 {
+                    PPStatDivider()
+                    PPStat(value: OrgMoney.format(listTotals.costTotal), label: "Cost")
+                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 18)
@@ -220,11 +251,10 @@ struct VariationsListView: View {
     }
 
     private func variationCard(_ variation: Variation) -> some View {
-        let previous = variation.numberHistory.last
-        let recentRenumber = previous.flatMap { entry -> String? in
-            guard Date().timeIntervalSince(entry.at) < 7 * 24 * 3600 else { return nil }
-            return "was \(entry.from)"
-        }
+        // RULEBOOK 1.52.0 §22 `variationPreviousNumbers`: "was VO-003, VO-005".
+        let previous = CanonicalBusinessEngine.variationPreviousNumbers(voNumber: variation.voNumber, history: variation.numberHistory.map(\.from))
+        let recentRenumber: String? = previous.isEmpty ? nil : "was " + previous.joined(separator: ", ")
+        let totals = variation.totals ?? .zero
         return VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(variation.voNumber)
@@ -258,23 +288,23 @@ struct VariationsListView: View {
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            // RULEBOOK 1.52.0 §22 `variationTotals`: hours, counts, cost (staff) and a paperclip with the evidence count.
             HStack(spacing: 8) {
-                chip("\(formatHours(variation.totalLabourHours)) hrs")
-                chip("\(variation.materialLineCount) materials")
-                if variation.evidenceCount == 0 {
-                    Text("No evidence")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.red.opacity(0.14))
-                        .foregroundStyle(.red)
-                        .clipShape(Capsule())
-                } else {
-                    chip("\(variation.evidenceCount) evidence")
+                chip("\(formatHours(totals.labourHours)) hrs")
+                chip("\(totals.materialsCount) materials")
+                if canSeeCosts, totals.customCount + totals.subcontractorCount > 0 {
+                    chip(OrgMoney.format(totals.costTotal))
                 }
+                Label("\(totals.evidenceCount)", systemImage: "paperclip")
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(PPColor.well, in: Capsule())
+                    .accessibilityLabel("\(totals.evidenceCount) evidence file\(totals.evidenceCount == 1 ? "" : "s")")
                 Spacer(minLength: 0)
             }
-            Text("Raised by \(variation.createdByName) · \(variation.createdAt.formatted(date: .abbreviated, time: .omitted))")
+            // RULEBOOK 1.52.0 §22 `variationDateText`: the organisation zone, never the device.
+            Text("Raised by \(variation.createdByName) · \(CanonicalBusinessEngine.variationDateText(variation.createdAt, timeZone: OrganizationRulebookContext.timeZoneIdentifier))")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -283,6 +313,38 @@ struct VariationsListView: View {
         .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .opacity(variation.status.listOpacity)
         .saturation(variation.status == .open ? 1 : 0.85)
+    }
+
+    /// RULEBOOK 1.52.0 §22 `canSeeVariationCosts`.
+    private var canSeeCosts: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.canSeeVariationCosts(UserStore.staffAccountRole(for: user))
+    }
+
+    /// RULEBOOK 1.52.0 §22: the variations workbook from `variationExportRows` (every variation not removed), written
+    /// by `VariationWorkbookBuilder` with the company logo, shared with the share sheet.
+    private func exportWorkbook() {
+        let org = firebaseBackend.currentOrganization
+        let generatedBy = userStore.displayUser.map { $0.fullName.isEmpty ? $0.email : $0.fullName } ?? ""
+        let input = VariationWorkbookBuilder.Input(
+            variations: store.variations.map(\.rulebookInput),
+            companyName: org?.name ?? "",
+            jobNumber: project.jobNumber,
+            jobName: project.siteName,
+            generatedBy: generatedBy,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            currency: OrganizationRulebookContext.currencyCode,
+            includeCost: canSeeCosts,
+            logoURL: org?.companyLogoURL
+        )
+        Task {
+            do {
+                let url = try await VariationWorkbookBuilder.writeFile(input)
+                exportFile = IdentifiableURL(url)
+            } catch {
+                exportError = error.localizedDescription
+            }
+        }
     }
 
     private func statusTag(_ status: VariationStatus) -> some View {

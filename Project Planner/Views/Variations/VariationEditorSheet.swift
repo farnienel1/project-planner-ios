@@ -3,7 +3,10 @@
 //  Project Planner
 //
 //  New variation form. Visual and behaviour spec: new-variation-redesign.html.
-//  Saved documents stay labour[{trade, hours}] and materials[{name, quantity}].
+//  RULEBOOK 1.52.0 §22: a labour line is a crew (operatives × hours each), a material a number with its unit, plus
+//  custom and subcontractor lines with costs (staff only). Every figure comes from `CanonicalBusinessEngine`
+//  (`variationLabourLineFields`, `variationTotals`, `variationLineTotal`, the line checks); an untouched old line is
+//  written back exactly as stored.
 //
 
 import SwiftUI
@@ -91,28 +94,89 @@ private enum VariationFormColors {
     )
 }
 
+/// RULEBOOK 1.52.0 §22: the hours of a crew line, `variationLabourLineFields(...).hours` (operatives × hours each,
+/// rounded by the rule). 0 when the script did not answer.
+private enum VariationCrewHours {
+    static func hours(operatives: Int, hoursEach: Double) -> Double {
+        let fields = CanonicalBusinessEngine.variationLabourLineFields(id: "", trade: "", operatives: operatives, hoursEach: hoursEach)
+        return (fields?["hours"] as? NSNumber)?.doubleValue ?? 0
+    }
+
+    /// `variationTotals({ labour }).labourHours` of the given line hours.
+    static func total(_ lines: [Double]) -> Double {
+        CanonicalBusinessEngine.variationTotals(["labour": lines.map { ["hours": $0] }])?.labourHours ?? 0
+    }
+}
+
 private struct LabourDraft: Identifiable, Equatable {
     var id: String
     var trade: String
     var operatives: Int
     var hoursEach: Double
+    /// The stored row had no crew fields and the line is untouched: saved back as `{ id, trade, hours }`.
+    var legacyShape: Bool = false
+    /// The stored hours of an untouched old line (kept exactly).
+    var storedHours: Double? = nil
 
-    var lineHours: Double { Double(max(operatives, 1)) * hoursEach }
+    var lineHours: Double {
+        if legacyShape, let storedHours { return storedHours }
+        return VariationCrewHours.hours(operatives: operatives, hoursEach: hoursEach)
+    }
 }
 
 private struct MaterialDraft: Identifiable, Equatable {
     var id: String
     var name: String
+    /// The number as typed (or, for an untouched old line that is not a number, the stored text).
     var quantity: String
     var unit: String
+    /// The stored text of an untouched old line (written back exactly).
+    var storedText: String? = nil
+    var legacyShape: Bool = false
 
-    var storedQuantity: String {
-        let qty = quantity.trimmingCharacters(in: .whitespacesAndNewlines)
-        let amount = qty.isEmpty ? "1" : qty
-        // "no" is the untyped count, so the saved string stays "9". m/box/kg become "9m".
-        if unit == "no" || unit.isEmpty { return amount }
-        return amount + unit
+    /// The typed number ("2,5" reads as 2.5); nil when it is not a number.
+    var quantityValue: Double? {
+        Double(quantity.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))
     }
+
+    /// `variationMaterialQuantityText(value, unit)` ("100m", "9"); an old line that is not a number as stored.
+    var displayText: String {
+        if legacyShape, let storedText, quantityValue == nil { return storedText }
+        if let value = quantityValue, let text = CanonicalBusinessEngine.variationMaterialQuantityText(value, unit: unit) {
+            return text
+        }
+        return storedText ?? quantity
+    }
+}
+
+/// RULEBOOK 1.52.0 §22: a custom line being edited (quantity and cost as typed).
+private struct CustomLineDraft: Identifiable, Equatable {
+    var id: String
+    var name: String
+    var description: String
+    var quantity: String
+    var cost: String
+}
+
+/// RULEBOOK 1.52.0 §22: a subcontractor line being edited.
+private struct SubcontractorLineDraft: Identifiable, Equatable {
+    var id: String
+    var subcontractorId: String
+    var name: String
+    var quoteNumber: String
+    var quantity: String
+    var cost: String
+}
+
+private func variationDecimal(_ text: String) -> Double? {
+    Double(text.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: ",", with: "."))
+}
+
+/// A stored number as an input text ("8", "2.5", "0.125").
+private func variationNumberText(_ value: Double) -> String {
+    var text = String(format: "%.3f", value)
+    while text.contains(".") && (text.hasSuffix("0") || text.hasSuffix(".")) { text.removeLast() }
+    return text
 }
 
 private struct LabourComposerState: Equatable {
@@ -123,7 +187,7 @@ private struct LabourComposerState: Equatable {
     var editId: String?
     var duplicateOf: String?
 
-    var total: Double { Double(max(operatives, 1)) * hoursEach }
+    var total: Double { VariationCrewHours.hours(operatives: operatives, hoursEach: hoursEach) }
     var canCommit: Bool {
         !trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && operatives >= 1 && hoursEach > 0
     }
@@ -144,7 +208,11 @@ private struct VariationUndoNotice: Equatable {
 
 struct VariationEditorSheet: View {
     static let maxEvidence = 10
-    private static let units = ["no", "m", "box", "kg"]
+    /// `VARIATION_MATERIAL_UNITS`.
+    private static var units: [String] {
+        let units = CanonicalBusinessEngine.variationMaterialUnits
+        return units.isEmpty ? ["no"] : units
+    }
 
     let project: Project
     let existing: Variation?
@@ -164,6 +232,11 @@ struct VariationEditorSheet: View {
     @State private var labour: [LabourDraft]
     @State private var materials: [MaterialDraft]
     @State private var evidence: [VariationEvidenceItem]
+    @State private var customLines: [CustomLineDraft]
+    @State private var subcontractorLines: [SubcontractorLineDraft]
+    @State private var customComposer = CustomLineDraft(id: "", name: "", description: "", quantity: "1", cost: "")
+    @State private var subcontractorComposer = SubcontractorLineDraft(id: "", subcontractorId: "", name: "", quoteNumber: "", quantity: "1", cost: "")
+    @State private var firms: [(id: String, name: String)] = []
     @State private var labourComposer: LabourComposerState
     @State private var materialComposer = MaterialComposerState()
     @State private var extraTrades: [String] = []
@@ -210,14 +283,38 @@ struct VariationEditorSheet: View {
         _voNumber = State(initialValue: existing?.voNumber ?? store.nextVoNumber())
         _heading = State(initialValue: existing?.heading ?? "")
         _descriptionText = State(initialValue: existing?.description ?? "")
+        // RULEBOOK 1.52.0 §22: the crew from the reader (`operatives`, `hoursEach`; an old line is 1 × its hours).
         _labour = State(initialValue: (existing?.labour ?? []).map {
-            LabourDraft(id: $0.id, trade: $0.trade, operatives: 1, hoursEach: $0.hours)
+            LabourDraft(
+                id: $0.id,
+                trade: $0.trade,
+                operatives: max(1, $0.operatives),
+                hoursEach: $0.hoursEach,
+                legacyShape: $0.legacyShape,
+                storedHours: $0.hours
+            )
         })
+        // The reader's number and unit (`variationMaterialQuantity`); a stored text that is not a number is kept.
         _materials = State(initialValue: (existing?.materials ?? []).map { line in
-            let parsed = Self.parseQuantity(line.quantity)
-            return MaterialDraft(id: line.id, name: line.name, quantity: parsed.quantity, unit: parsed.unit)
+            MaterialDraft(
+                id: line.id,
+                name: line.name,
+                quantity: line.quantityValue.map(variationNumberText) ?? line.quantity,
+                unit: line.unit.isEmpty ? "no" : line.unit,
+                storedText: line.quantity,
+                legacyShape: line.legacyShape
+            )
         })
         _evidence = State(initialValue: existing?.evidence ?? [])
+        _customLines = State(initialValue: (existing?.customLines ?? []).map {
+            CustomLineDraft(id: $0.id, name: $0.name, description: $0.description, quantity: variationNumberText($0.quantity), cost: variationNumberText($0.cost))
+        })
+        _subcontractorLines = State(initialValue: (existing?.subcontractorLines ?? []).map {
+            SubcontractorLineDraft(
+                id: $0.id, subcontractorId: $0.subcontractorId, name: $0.name, quoteNumber: $0.quoteNumber,
+                quantity: variationNumberText($0.quantity), cost: variationNumberText($0.cost)
+            )
+        })
         var composer = LabourComposerState()
         composer.hoursEach = 8
         _labourComposer = State(initialValue: composer)
@@ -227,7 +324,17 @@ struct VariationEditorSheet: View {
     private var parentName: String {
         VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName)
     }
-    private var totalHours: Double { labour.reduce(0) { $0 + $1.lineHours } }
+    /// RULEBOOK 1.52.0 §22 `variationTotals(...).labourHours`.
+    private var totalHours: Double { VariationCrewHours.total(labour.map(\.lineHours)) }
+    /// RULEBOOK 1.52.0 §22 `canSeeVariationCosts`: admins, super admins and managers; never operative mode.
+    private var canSeeCosts: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.canSeeVariationCosts(UserStore.staffAccountRole(for: user))
+    }
+    /// A variation once created keeps its number on iOS (renumbering is the web tracker's).
+    private var voNumberEditable: Bool {
+        existing == nil && persistedVariation == nil && !trackerOn
+    }
     private var canSave: Bool {
         !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
     }
@@ -279,6 +386,10 @@ struct VariationEditorSheet: View {
                     detailsCard
                     labourCard
                     materialsCard
+                    if canSeeCosts {
+                        customLinesCard
+                        subcontractorLinesCard
+                    }
                     evidenceCard
                     if let evidenceNotice, !evidenceNotice.isEmpty {
                         Text(evidenceNotice)
@@ -399,6 +510,7 @@ struct VariationEditorSheet: View {
             }
             .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId) {
                 await loadCatalogue()
+                await loadFirms()
             }
         }
     }
@@ -406,11 +518,11 @@ struct VariationEditorSheet: View {
     private var detailsCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                guard !trackerOn else { return }
+                guard voNumberEditable else { return }
                 voDraft = voNumber
                 showingVOEdit = true
             } label: {
-                Text("\(voNumber) · \(trackerOn ? "from tracker" : "auto")")
+                Text("\(voNumber) · \(trackerOn ? "from tracker" : (voNumberEditable ? "auto" : "fixed"))")
                     .font(.system(size: 12, weight: .heavy))
                     .foregroundStyle(VariationFormColors.violet)
                     .padding(.horizontal, 12)
@@ -420,7 +532,7 @@ struct VariationEditorSheet: View {
             }
             .accessibilityIdentifier("variationEditor.voNumber2")
             .buttonStyle(.plain)
-            .disabled(trackerOn)
+            .disabled(!voNumberEditable)
             .accessibilityLabel("VO number \(voNumber)")
 
             TextField("Heading", text: $heading)
@@ -502,8 +614,9 @@ struct VariationEditorSheet: View {
                     .font(.system(size: 15.5, weight: .bold))
                     .foregroundStyle(VariationFormColors.ink)
                     .lineLimit(1)
-                if line.operatives > 1 {
-                    Text("\(line.operatives) operatives × \(formatHours(line.hoursEach)) hrs each")
+                if line.operatives > 1,
+                   let text = CanonicalBusinessEngine.variationLabourText(operatives: line.operatives, hoursEach: line.hoursEach, hours: line.lineHours) {
+                    Text(text)
                         .font(.system(size: 12.5))
                         .foregroundStyle(VariationFormColors.ink3)
                 }
@@ -740,7 +853,7 @@ struct VariationEditorSheet: View {
                 .foregroundStyle(VariationFormColors.ink)
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(line.quantity) \(line.unit)")
+            Text(line.displayText)
                 .font(.system(size: 15.5, weight: .heavy))
                 .foregroundStyle(VariationFormColors.ink)
                 .padding(.horizontal, 11)
@@ -870,6 +983,262 @@ struct VariationEditorSheet: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .padding(.top, 10)
+    }
+
+    // MARK: - Custom and subcontractor lines (RULEBOOK 1.52.0 §22; costs for `canSeeVariationCosts` only)
+
+    /// `variationLineTotal({ quantity, cost })`.
+    private func lineTotal(quantity: String, cost: String) -> Double {
+        CanonicalBusinessEngine.variationLineTotal(quantity: quantity, cost: cost) ?? 0
+    }
+
+    private var customTotal: Double {
+        CanonicalBusinessEngine.variationTotals([
+            "customLines": customLines.map { ["quantity": $0.quantity, "cost": $0.cost] },
+        ])?.customTotal ?? 0
+    }
+
+    private var subcontractorTotal: Double {
+        CanonicalBusinessEngine.variationTotals([
+            "subcontractorLines": subcontractorLines.map { ["quantity": $0.quantity, "cost": $0.cost] },
+        ])?.subcontractorTotal ?? 0
+    }
+
+    private var customLinesCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("Custom items", pill: OrgMoney.format(customTotal), active: !customLines.isEmpty)
+            VStack(alignment: .leading, spacing: 0) {
+                if customLines.isEmpty {
+                    Text("No custom items added yet.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .padding(.bottom, 2)
+                }
+                ForEach(customLines) { line in
+                    extraLineRow(
+                        title: line.name,
+                        detail: line.description,
+                        figure: "\(line.quantity) × \(OrgMoney.format(variationDecimal(line.cost) ?? 0)) = \(OrgMoney.format(lineTotal(quantity: line.quantity, cost: line.cost)))",
+                        isLast: customLines.last?.id == line.id,
+                        onEdit: { customComposer = line },
+                        onRemove: { removeCustomLine(line) }
+                    )
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(customComposer.id.isEmpty ? "New custom item" : "Editing line item")
+                        .formMicroLabel()
+                    composerField("Name", text: $customComposer.name, id: "customName")
+                    composerField("Description", text: $customComposer.description, id: "customDescription")
+                    HStack(spacing: 8) {
+                        composerField("Quantity", text: $customComposer.quantity, id: "customQuantity", decimal: true)
+                        composerField("Cost each (\(OrgMoney.symbol()))", text: $customComposer.cost, id: "customCost", decimal: true)
+                    }
+                    Text("Line total \(OrgMoney.format(lineTotal(quantity: customComposer.quantity, cost: customComposer.cost)))")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(VariationFormColors.ink2)
+                    HStack(spacing: 8) {
+                        if !customComposer.id.isEmpty {
+                            composerButton("Cancel", primary: false) { customComposer = Self.freshCustom }
+                        }
+                        composerButton(customComposer.id.isEmpty ? "Add custom item" : "Update line item", primary: true) {
+                            commitCustomLine()
+                        }
+                    }
+                }
+                .padding(12)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.top, 10)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+        .formCard()
+    }
+
+    private var subcontractorLinesCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("Subcontractors", pill: OrgMoney.format(subcontractorTotal), active: !subcontractorLines.isEmpty)
+            VStack(alignment: .leading, spacing: 0) {
+                if subcontractorLines.isEmpty {
+                    Text("No subcontractors added yet.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .padding(.bottom, 2)
+                }
+                ForEach(subcontractorLines) { line in
+                    extraLineRow(
+                        title: line.name,
+                        detail: line.quoteNumber.isEmpty ? "" : "Quote \(line.quoteNumber)",
+                        figure: "\(line.quantity) × \(OrgMoney.format(variationDecimal(line.cost) ?? 0)) = \(OrgMoney.format(lineTotal(quantity: line.quantity, cost: line.cost)))",
+                        isLast: subcontractorLines.last?.id == line.id,
+                        onEdit: { subcontractorComposer = line },
+                        onRemove: { removeSubcontractorLine(line) }
+                    )
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(subcontractorComposer.id.isEmpty ? "New subcontractor line" : "Editing line item")
+                        .formMicroLabel()
+                    if !firms.isEmpty {
+                        Menu {
+                            ForEach(firms, id: \.id) { firm in
+                                Button(firm.name) {
+                                    subcontractorComposer.subcontractorId = firm.id
+                                    subcontractorComposer.name = firm.name
+                                }
+                            }
+                        } label: {
+                            Label("Pick a subcontractor", systemImage: "person.2")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(VariationFormColors.blue)
+                        }
+                        .accessibilityIdentifier("variationEditor.pickSubcontractor")
+                    }
+                    composerField("Subcontractor name", text: Binding(
+                        get: { subcontractorComposer.name },
+                        set: { value in
+                            // A typed name is not the picked firm any more.
+                            if value != subcontractorComposer.name { subcontractorComposer.subcontractorId = "" }
+                            subcontractorComposer.name = value
+                        }
+                    ), id: "subcontractorName")
+                    composerField("Quote number", text: $subcontractorComposer.quoteNumber, id: "subcontractorQuote")
+                    HStack(spacing: 8) {
+                        composerField("Quantity", text: $subcontractorComposer.quantity, id: "subcontractorQuantity", decimal: true)
+                        composerField("Cost (\(OrgMoney.symbol()))", text: $subcontractorComposer.cost, id: "subcontractorCost", decimal: true)
+                    }
+                    Text("Line total \(OrgMoney.format(lineTotal(quantity: subcontractorComposer.quantity, cost: subcontractorComposer.cost)))")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(VariationFormColors.ink2)
+                    HStack(spacing: 8) {
+                        if !subcontractorComposer.id.isEmpty {
+                            composerButton("Cancel", primary: false) { subcontractorComposer = Self.freshSubcontractor }
+                        }
+                        composerButton(subcontractorComposer.id.isEmpty ? "Add subcontractor" : "Update line item", primary: true) {
+                            commitSubcontractorLine()
+                        }
+                    }
+                }
+                .padding(12)
+                .background(VariationFormColors.soft)
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .padding(.top, 10)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
+        }
+        .formCard()
+    }
+
+    private static let freshCustom = CustomLineDraft(id: "", name: "", description: "", quantity: "1", cost: "")
+    private static let freshSubcontractor = SubcontractorLineDraft(id: "", subcontractorId: "", name: "", quoteNumber: "", quantity: "1", cost: "")
+
+    private func composerField(_ title: String, text: Binding<String>, id: String, decimal: Bool = false) -> some View {
+        TextField(title, text: text)
+            .accessibilityIdentifier("variationEditor.\(id)")
+            .font(.system(size: 16))
+            .keyboardType(decimal ? .decimalPad : .default)
+            .padding(13)
+            .background(VariationFormColors.card)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .accessibilityLabel(title)
+    }
+
+    private func extraLineRow(
+        title: String,
+        detail: String,
+        figure: String,
+        isLast: Bool,
+        onEdit: @escaping () -> Void,
+        onRemove: @escaping () -> Void
+    ) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 15.5, weight: .bold))
+                    .foregroundStyle(VariationFormColors.ink)
+                    .lineLimit(1)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(VariationFormColors.ink3)
+                        .lineLimit(2)
+                }
+                Text(figure)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(VariationFormColors.ink2)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            iconButton(systemImage: "gearshape", label: "Edit \(title)", destructive: false, action: onEdit)
+            iconButton(systemImage: "xmark", label: "Remove \(title)", destructive: true, action: onRemove)
+        }
+        .padding(.vertical, 12)
+        .overlay(alignment: .bottom) {
+            if !isLast {
+                Rectangle().fill(VariationFormColors.line).frame(height: 1)
+            }
+        }
+    }
+
+    /// `variationCustomLineError` before the line is added or updated.
+    private func commitCustomLine() {
+        let draft = customComposer
+        if let refusal = CanonicalBusinessEngine.variationCustomLineError(name: draft.name, quantity: draft.quantity, cost: draft.cost) {
+            errorMessage = refusal
+            return
+        }
+        errorMessage = nil
+        if !draft.id.isEmpty, let index = customLines.firstIndex(where: { $0.id == draft.id }) {
+            customLines[index] = draft
+        } else {
+            var line = draft
+            line.id = UUID().uuidString
+            customLines.append(line)
+        }
+        customComposer = Self.freshCustom
+    }
+
+    /// `variationSubcontractorLineError` before the line is added or updated.
+    private func commitSubcontractorLine() {
+        let draft = subcontractorComposer
+        if let refusal = CanonicalBusinessEngine.variationSubcontractorLineError(name: draft.name, quantity: draft.quantity, cost: draft.cost) {
+            errorMessage = refusal
+            return
+        }
+        errorMessage = nil
+        if !draft.id.isEmpty, let index = subcontractorLines.firstIndex(where: { $0.id == draft.id }) {
+            subcontractorLines[index] = draft
+        } else {
+            var line = draft
+            line.id = UUID().uuidString
+            subcontractorLines.append(line)
+        }
+        subcontractorComposer = Self.freshSubcontractor
+    }
+
+    private func removeCustomLine(_ line: CustomLineDraft) {
+        guard let index = customLines.firstIndex(where: { $0.id == line.id }) else { return }
+        let removed = customLines.remove(at: index)
+        showUndo("\(removed.name) removed") {
+            customLines.insert(removed, at: min(index, customLines.count))
+        }
+    }
+
+    private func removeSubcontractorLine(_ line: SubcontractorLineDraft) {
+        guard let index = subcontractorLines.firstIndex(where: { $0.id == line.id }) else { return }
+        let removed = subcontractorLines.remove(at: index)
+        showUndo("\(removed.name) removed") {
+            subcontractorLines.insert(removed, at: min(index, subcontractorLines.count))
+        }
+    }
+
+    /// The organisation's subcontractors for the picker (picker suggestions, read when the editor opens).
+    private func loadFirms() async {
+        guard canSeeCosts, let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return }
+        guard let loaded = try? await firebaseBackend.loadSubcontractors(organizationId: orgId) else { return }
+        firms = loaded
+            .map { (id: WorkDocumentKeys.storedId(for: $0.id), name: $0.name) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private var evidenceCard: some View {
@@ -1252,9 +1621,10 @@ struct VariationEditorSheet: View {
         guard labourComposer.canCommit else { return }
         if mode == .merge, let targetId = labourComposer.duplicateOf,
            let index = labour.firstIndex(where: { $0.id == targetId }) {
-            let merged = labour[index].lineHours + labourComposer.total
+            let merged = VariationCrewHours.total([labour[index].lineHours, labourComposer.total])
             labour[index].operatives = 1
             labour[index].hoursEach = merged
+            labour[index].legacyShape = false
             showUndo("\(labour[index].trade) merged — \(formatHours(merged)) hrs", restore: nil)
             labourComposer = freshComposer(open: false)
             return
@@ -1263,6 +1633,7 @@ struct VariationEditorSheet: View {
             labour[index].trade = labourComposer.trade
             labour[index].operatives = labourComposer.operatives
             labour[index].hoursEach = labourComposer.hoursEach
+            labour[index].legacyShape = false
             showUndo("\(labourComposer.trade) updated", restore: nil)
             labourComposer = freshComposer(open: false)
             return
@@ -1311,10 +1682,19 @@ struct VariationEditorSheet: View {
         guard !name.isEmpty else { return }
         let quantity = materialComposer.quantity.trimmingCharacters(in: .whitespacesAndNewlines)
         let amount = quantity.isEmpty ? "1" : quantity
+        // RULEBOOK 1.52.0 §22 `variationMaterialQuantityError`: a number of at least 0.001 (three decimals).
+        if let refusal = CanonicalBusinessEngine.variationMaterialQuantityError(amount) {
+            errorMessage = refusal
+            focusedField = .materialQuantity
+            return
+        }
+        errorMessage = nil
         if let editId = materialComposer.editId, let index = materials.firstIndex(where: { $0.id == editId }) {
             materials[index].name = name
             materials[index].quantity = amount
             materials[index].unit = materialComposer.unit
+            materials[index].legacyShape = false
+            materials[index].storedText = nil
             showUndo("\(name) updated", restore: nil)
         } else {
             materials.append(MaterialDraft(id: UUID().uuidString, name: name, quantity: amount, unit: materialComposer.unit))
@@ -1404,26 +1784,6 @@ struct VariationEditorSheet: View {
         case .length: return "m"
         default: return "no"
         }
-    }
-
-    private static func parseQuantity(_ raw: String) -> (quantity: String, unit: String) {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let units = ["box", "kg", "no", "m"]
-        let lower = trimmed.lowercased()
-        for unit in units {
-            if lower.hasSuffix(" " + unit) {
-                let qty = String(trimmed.dropLast(unit.count + 1)).trimmingCharacters(in: .whitespacesAndNewlines)
-                return (qty.isEmpty ? "1" : qty, unit)
-            }
-            if lower.hasSuffix(unit), trimmed.count > unit.count {
-                let prefix = trimmed.dropLast(unit.count)
-                if prefix.last?.isNumber == true || prefix.last == "." || prefix.last == " " {
-                    let qty = String(prefix).trimmingCharacters(in: .whitespacesAndNewlines)
-                    return (qty.isEmpty ? "1" : qty, unit)
-                }
-            }
-        }
-        return (trimmed.isEmpty ? "1" : trimmed, "no")
     }
 
     private func formatHours(_ value: Double) -> String {
@@ -1631,17 +1991,37 @@ struct VariationEditorSheet: View {
             isSaving = false
             return
         }
-        if !trackerOn, store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
+        if voNumberEditable, store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
             errorMessage = "This VO number is already used on this job."
             isSaving = false
             return
         }
+        // RULEBOOK 1.52.0 §22: lines in the rule's shapes; an untouched old line keeps its stored shape.
         let savedLabour = labour
-            .filter { $0.hoursEach > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .map { VariationLabourLine(id: $0.id, trade: $0.trade, hours: $0.lineHours) }
+            .filter { $0.lineHours > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map {
+                VariationLabourLine(
+                    id: $0.id, trade: $0.trade, hours: $0.lineHours,
+                    operatives: max(1, $0.operatives), hoursEach: $0.hoursEach, legacyShape: $0.legacyShape
+                )
+            }
         let savedMaterials = materials
             .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            .map { VariationMaterialLine(id: $0.id, name: $0.name, quantity: $0.storedQuantity) }
+            .map { line -> VariationMaterialLine in
+                if line.legacyShape, let stored = line.storedText {
+                    return VariationMaterialLine(id: line.id, name: line.name, quantity: stored, quantityValue: line.quantityValue, unit: line.unit, legacyShape: true)
+                }
+                return VariationMaterialLine(id: line.id, name: line.name, quantity: line.displayText, quantityValue: line.quantityValue, unit: line.unit, legacyShape: false)
+            }
+        let savedCustom = customLines.map {
+            VariationCustomLine(id: $0.id, name: $0.name, description: $0.description, quantity: variationDecimal($0.quantity) ?? 1, cost: variationDecimal($0.cost) ?? 0)
+        }
+        let savedSubcontractors = subcontractorLines.map {
+            VariationSubcontractorLine(
+                id: $0.id, subcontractorId: $0.subcontractorId, name: $0.name, quoteNumber: $0.quoteNumber,
+                quantity: variationDecimal($0.quantity) ?? 1, cost: variationDecimal($0.cost) ?? 0
+            )
+        }
         let user = userStore.displayUser
         let uid = user?.id ?? firebaseBackend.currentUser?.uid ?? ""
         let name = (user?.fullName.isEmpty == false ? user?.fullName : user?.email) ?? "Unknown"
@@ -1651,12 +2031,15 @@ struct VariationEditorSheet: View {
         let creating = baseline == nil
         var variation: Variation
         if var baseline {
-            baseline.voNumber = trackerOn ? baseline.voNumber : voNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+            // RULEBOOK 1.52.0 §22: the number never changes after create on iOS. Evidence is linked and unlinked by
+            // its own transactions (`variationEvidenceAddWriteFields`, `variationEvidenceRemovalWriteFields`), never
+            // by this save, so it stays as opened.
             baseline.heading = heading.trimmingCharacters(in: .whitespacesAndNewlines)
             baseline.description = descriptionText
             baseline.labour = savedLabour
             baseline.materials = savedMaterials
-            baseline.evidence = evidence.filter { !$0.isPending }
+            baseline.customLines = canSeeCosts ? savedCustom : baseline.customLines
+            baseline.subcontractorLines = canSeeCosts ? savedSubcontractors : baseline.subcontractorLines
             baseline.updatedByUid = uid
             baseline.updatedAt = now
             baseline.recomputeCounts()
@@ -1679,7 +2062,9 @@ struct VariationEditorSheet: View {
                 status: .open,
                 labour: savedLabour,
                 materials: savedMaterials,
-                evidence: evidence.filter { !$0.isPending },
+                customLines: canSeeCosts ? savedCustom : [],
+                subcontractorLines: canSeeCosts ? savedSubcontractors : [],
+                evidence: [],
                 totalLabourHours: 0,
                 materialLineCount: 0,
                 evidenceCount: 0,
@@ -1696,7 +2081,7 @@ struct VariationEditorSheet: View {
             variation.recomputeCounts()
         }
         do {
-            try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+            try await firebaseBackend.saveVariation(variation, opened: baseline, organizationId: orgId)
             persistedVariation = variation
             store.upsert(variation)
             if creating {
@@ -1715,19 +2100,11 @@ struct VariationEditorSheet: View {
             return
         }
         let uploadError = await uploadQueuedEvidence(orgId: orgId)
-        let attached = evidence.filter { !$0.isPending }
-        if attached.map(\.id) != variation.evidence.map(\.id) {
-            variation.evidence = attached
-            variation.recomputeCounts()
-            do {
-                try await firebaseBackend.saveVariation(variation, organizationId: orgId)
-                persistedVariation = variation
-                store.upsert(variation)
-            } catch {
-                errorMessage = error.localizedDescription
-                isSaving = false
-                return
-            }
+        if var saved = persistedVariation {
+            saved.evidence = evidence.filter { !$0.isPending }
+            saved.recomputeCounts()
+            persistedVariation = saved
+            store.upsert(saved)
         }
         if let uploadError {
             errorMessage = uploadError
@@ -1737,16 +2114,21 @@ struct VariationEditorSheet: View {
         dismiss()
     }
 
-    /// Uploads files queued on this variation. A storage failure leaves the saved variation in place.
+    /// Uploads files queued on this variation, then links them (RULEBOOK 1.52.0 §24
+    /// `variationEvidenceAddWriteFields`, in a transaction). A file the variation already holds counts as linked and is
+    /// never deleted; only a file refused for the 10-file limit, or one a fresh server read shows is not on the
+    /// variation after every link attempt failed, is deleted again (this device uploaded it, inside the undo window).
+    /// When that read fails every file is kept. A storage failure leaves the saved variation in place.
     private func uploadQueuedEvidence(orgId: String) async -> String? {
         let queued = evidence.filter(\.isPending)
         var failed = 0
         var refusal: String?
+        var uploaded: [VariationEvidenceItem] = []
         for item in queued {
             guard let data = pendingEvidenceBytes[item.id] else { continue }
             inFlightUploads += 1
             do {
-                let uploaded = try await firebaseBackend.uploadVariationEvidence(
+                let result = try await firebaseBackend.uploadVariationEvidence(
                     data: data,
                     fileName: item.fileName,
                     contentType: item.contentType,
@@ -1755,11 +2137,11 @@ struct VariationEditorSheet: View {
                     variationId: variationId,
                     evidenceId: item.id
                 )
-                if let idx = evidence.firstIndex(where: { $0.id == item.id }) {
-                    evidence[idx].storagePath = uploaded.storagePath
-                    evidence[idx].downloadURL = uploaded.downloadURL
-                    evidence[idx].isPending = false
-                }
+                var done = item
+                done.storagePath = result.storagePath
+                done.downloadURL = result.downloadURL
+                done.isPending = false
+                uploaded.append(done)
                 pendingEvidenceBytes[item.id] = nil
             } catch {
                 failed += 1
@@ -1768,6 +2150,48 @@ struct VariationEditorSheet: View {
                 }
             }
             inFlightUploads = max(0, inFlightUploads - 1)
+        }
+        if !uploaded.isEmpty {
+            func key(_ item: VariationEvidenceItem) -> String { item.storagePath.isEmpty ? item.id : item.storagePath }
+            var outcome: (linked: Set<String>, refused: Set<String>)?
+            var linkError: Error?
+            for attempt in 0..<2 {
+                do {
+                    outcome = try await firebaseBackend.linkVariationEvidence(variationId: variationId, entries: uploaded, organizationId: orgId)
+                    break
+                } catch {
+                    linkError = error
+                    if attempt == 0 { try? await Task.sleep(nanoseconds: 1_000_000_000) }
+                }
+            }
+            var linked: Set<String> = []
+            var toDelete: Set<String> = []
+            if let outcome {
+                linked = outcome.linked
+                toDelete = outcome.refused
+                if !outcome.refused.isEmpty {
+                    refusal = refusal ?? "Up to \(Self.maxEvidence) files per variation. \(outcome.refused.count) file\(outcome.refused.count == 1 ? " was" : "s were") not added."
+                }
+            } else if let onServer = await firebaseBackend.storedVariationEvidenceKeys(variationId: variationId, organizationId: orgId) {
+                linked = onServer.intersection(uploaded.map(key))
+                toDelete = Set(uploaded.map(key)).subtracting(onServer)
+                refusal = refusal ?? linkError?.localizedDescription
+            } else {
+                // The link and the check both failed: keep every file (nothing deleted on a guess).
+                refusal = refusal ?? linkError?.localizedDescription
+            }
+            for item in uploaded {
+                let itemKey = key(item)
+                if linked.contains(itemKey) {
+                    if let idx = evidence.firstIndex(where: { $0.id == item.id }) { evidence[idx] = item }
+                } else if toDelete.contains(itemKey) {
+                    failed += 1
+                    evidence.removeAll { $0.id == item.id }
+                    await firebaseBackend.deleteUnlinkedVariationEvidence(storagePath: item.storagePath)
+                } else {
+                    failed += 1
+                }
+            }
         }
         if failed == 0 { return nil }
         if let refusal {

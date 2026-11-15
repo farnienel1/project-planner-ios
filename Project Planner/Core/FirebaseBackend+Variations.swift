@@ -222,7 +222,11 @@ extension FirebaseBackend {
             }
     }
 
-    func saveVariation(_ variation: Variation, organizationId: String) async throws {
+    /// RULEBOOK 1.52.0 §22 (review of web #330): `opened` is the copy the editor opened (nil for a new variation). The
+    /// save writes only the fields that differ from it (`variationWriteFields(opened, edited)`), never from the server
+    /// copy, so a renumber, a status change or evidence linked meanwhile on another device is never written back. The
+    /// settings copy and the log entry get the same changed fields only.
+    func saveVariation(_ variation: Variation, opened: Variation? = nil, organizationId: String) async throws {
         guard currentUser != nil else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -257,6 +261,23 @@ extension FirebaseBackend {
         payload.orgId = orgId
         payload.recomputeCounts()
         let map = VariationCodec.firestoreMap(from: payload)
+        let openedMap: [String: Any]? = opened.map { copy -> [String: Any] in
+            var base = copy
+            base.orgId = orgId
+            base.recomputeCounts()
+            return VariationCodec.firestoreMap(from: base)
+        }
+        // The fields this edit changed (all of them for a new variation).
+        var changedKeys: Set<String>? = nil
+        if let openedMap {
+            guard let write = CanonicalBusinessEngine.peopleDocumentWrite("variationWriteFields", before: openedMap, next: map) else {
+                throw CanonicalWriteUnavailableError(function: "variationWriteFields")
+            }
+            changedKeys = Set(write.setKeys).union(write.removeKeys)
+            changedKeys?.remove("updatedAt")
+            changedKeys?.remove("updatedByUid")
+            if changedKeys?.isEmpty == true { return }
+        }
 
         // Production still denies `variations/{id}` until those rules are published.
         // H&S / deadlines already persist on `settings/{docId}` — that is the success path.
@@ -264,7 +285,7 @@ extension FirebaseBackend {
         var wrote = false
 
         do {
-            try await saveVariationToSettingsFallback(payload, map: map, organizationId: orgId)
+            try await saveVariationToSettingsFallback(payload, map: map, changedKeys: changedKeys, organizationId: orgId)
             wrote = true
         } catch {
             lastError = error
@@ -272,7 +293,7 @@ extension FirebaseBackend {
         }
 
         do {
-            try await saveVariationItemDocument(payload, map: map, organizationId: orgId)
+            try await saveVariationItemDocument(payload, map: map, openedMap: openedMap, organizationId: orgId)
             wrote = true
         } catch {
             lastError = lastError ?? error
@@ -285,7 +306,8 @@ extension FirebaseBackend {
             // parent never rewritten). A new variation is created whole.
             try await writeOperationsDocument(
                 variationsCollection(organizationId: orgId).document(payload.id),
-                writeFields: "variationWriteFields"
+                writeFields: "variationWriteFields",
+                base: openedMap
             ) { _ in map }
             wrote = true
         } catch {
@@ -305,6 +327,7 @@ extension FirebaseBackend {
     private func saveVariationToSettingsFallback(
         _ variation: Variation,
         map: [String: Any],
+        changedKeys: Set<String>?,
         organizationId: String
     ) async throws {
         let ref = variationsFallbackDocument(organizationId: organizationId, parentId: variation.parentId)
@@ -313,7 +336,11 @@ extension FirebaseBackend {
         // RULEBOOK 1.9.0 §1: `variationLogWriteFields` — the stored entries (each with its id from `variationLogItems`,
         // never random), this entry laid over the one with the same id or appended; never another entry removed and
         // never the log rewritten from a local copy. A new log also carries its parent fields.
+        // RULEBOOK 1.52.0 §22: only the changed fields of an existing entry (the whole entry for a new variation).
         var map = map
+        if let changedKeys {
+            map = map.filter { changedKeys.contains($0.key) || $0.key == "updatedAt" || $0.key == "updatedByUid" }
+        }
         map["id"] = variation.id
         guard let set = CanonicalBusinessEngine.variationLogWriteFields(
             stored: stored,
@@ -337,17 +364,23 @@ extension FirebaseBackend {
     private func saveVariationItemDocument(
         _ variation: Variation,
         map: [String: Any],
+        openedMap: [String: Any]?,
         organizationId: String
     ) async throws {
-        var data = map
-        data["recordType"] = "variationItem"
-        data["parentId"] = variation.parentId
-        data["parentType"] = variation.parentType.rawValue
-        data["organizationId"] = organizationId
-        // RULEBOOK 1.8.0 §1: the settings copy is saved with `variationWriteFields` too.
+        func itemCopy(_ fields: [String: Any]) -> [String: Any] {
+            var data = fields
+            data["recordType"] = "variationItem"
+            data["parentId"] = variation.parentId
+            data["parentType"] = variation.parentType.rawValue
+            data["organizationId"] = organizationId
+            return data
+        }
+        let data = itemCopy(map)
+        // RULEBOOK 1.8.0 §1: the settings copy is saved with `variationWriteFields` too (1.52.0: against the opened copy).
         try await writeOperationsDocument(
             variationItemDocument(organizationId: organizationId, variationId: variation.id),
-            writeFields: "variationWriteFields"
+            writeFields: "variationWriteFields",
+            base: openedMap.map(itemCopy)
         ) { _ in data }
     }
 
@@ -551,6 +584,10 @@ extension FirebaseBackend {
         )
     }
 
+    /// RULEBOOK 1.52.0 §24: one upload with a timeout — cancelled after `variationUploadStallSeconds` without
+    /// progress or `variationUploadTotalSeconds` in all — and the download URL read with a bounded retry. A `gs://`
+    /// address is never stored: when no download URL can be read the object just uploaded is deleted again (its
+    /// uploader, inside the undo window) and the upload fails with the real error.
     private func putVariationEvidenceData(
         _ data: Data,
         path: String,
@@ -559,9 +596,17 @@ extension FirebaseBackend {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
         metadata.contentType = contentType
+        let watch = VariationUploadWatch()
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(data, metadata: metadata) { metadata, error in
-                if let error {
+            let task = storageRef.putData(data, metadata: metadata) { metadata, error in
+                guard watch.finish() else { return }
+                if watch.timedOut {
+                    continuation.resume(throwing: NSError(
+                        domain: "FirebaseBackend",
+                        code: 408,
+                        userInfo: [NSLocalizedDescriptionKey: "The upload timed out. Check the connection and try again."]
+                    ))
+                } else if let error {
                     continuation.resume(throwing: error)
                 } else if let metadata {
                     continuation.resume(returning: metadata)
@@ -569,14 +614,130 @@ extension FirebaseBackend {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
                 }
             }
+            task.observe(.progress) { _ in watch.touch() }
+            Task {
+                while !watch.isFinished {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if watch.shouldGiveUp(stallSeconds: Self.variationUploadStallSeconds, totalSeconds: Self.variationUploadTotalSeconds) {
+                        task.cancel()
+                        break
+                    }
+                }
+            }
         }
-        let url: String
+        var lastError: Error?
+        for attempt in 0..<3 {
+            do {
+                let url = try await storageRef.downloadURL().absoluteString
+                return (path, url)
+            } catch {
+                lastError = error
+                try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+            }
+        }
+        // No download URL: never store `gs://`. Remove the object just uploaded and fail the upload.
+        try? await storageRef.delete()
+        throw lastError ?? NSError(
+            domain: "FirebaseBackend",
+            code: 500,
+            userInfo: [NSLocalizedDescriptionKey: "The file uploaded but its link could not be read. Please try again."]
+        )
+    }
+
+    static let variationUploadStallSeconds: TimeInterval = 60
+    static let variationUploadTotalSeconds: TimeInterval = 300
+
+    /// RULEBOOK 1.52.0 §24 `CanonicalBusinessEngine.variationEvidenceAddWriteFields`: links uploaded files to the
+    /// variation in a transaction on `variations/{id}` (the stored list plus each new entry, up to 10 files; a file
+    /// someone else linked meanwhile is kept), then on its `settings/variationItem_{id}` copy (also a transaction, best
+    /// effort). Returns the keys (storage path, else id) the variation now holds of `entries` — added or already
+    /// linked — and the refused ones (the 10-file limit). Throws when the link on `variations/{id}` failed.
+    func linkVariationEvidence(
+        variationId: String,
+        entries: [VariationEvidenceItem],
+        organizationId: String
+    ) async throws -> (linked: Set<String>, refused: Set<String>) {
+        let orgId = normalizedOrganizationId(organizationId)
+        let uid = currentUser?.uid ?? ""
+        let rows: [[String: Any]] = entries.map { item in
+            let stamp = Timestamp(date: item.uploadedAt)
+            return [
+                "id": item.id,
+                "fileName": item.fileName,
+                "contentType": item.contentType,
+                "sizeBytes": item.sizeBytes,
+                "storagePath": item.storagePath,
+                "downloadURL": item.downloadURL,
+                "uploadedByUid": item.uploadedByUid,
+                "uploadedAt": ["seconds": stamp.seconds, "nanoseconds": stamp.nanoseconds],
+            ]
+        }
+        let main = variationsCollection(organizationId: orgId).document(variationId)
+        let outcome = try await Self.runVariationEvidenceLink(db: db, ref: main, entries: rows, userId: uid)
         do {
-            url = try await storageRef.downloadURL().absoluteString
+            _ = try await Self.runVariationEvidenceLink(
+                db: db,
+                ref: variationItemDocument(organizationId: orgId, variationId: variationId),
+                entries: rows,
+                userId: uid
+            )
         } catch {
-            url = "gs://\(storageRef.bucket)/\(storageRef.fullPath)"
+            print("⚠️ [Variations] evidence link on the settings copy skipped: \(error.localizedDescription)")
         }
-        return (path, url)
+        return (Set(outcome.added + outcome.alreadyLinked), Set(outcome.refused))
+    }
+
+    /// One document of `linkVariationEvidence`: read, `variationEvidenceAddWriteFields`, partial update, in one
+    /// transaction. A missing document links nothing.
+    nonisolated private static func runVariationEvidenceLink(
+        db: Firestore,
+        ref: DocumentReference,
+        entries: [[String: Any]],
+        userId: String
+    ) async throws -> (added: [String], alreadyLinked: [String], refused: [String]) {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let stored = snapshot.data() else { return ["added": [String](), "alreadyLinked": [String](), "refused": [String]()] as [String: Any] }
+            guard let result = CanonicalBusinessEngine.variationEvidenceAddWriteFields(stored: stored, entries: entries) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationEvidenceAddWriteFields") as NSError
+                return nil
+            }
+            if let set = result.set {
+                var fields: [String: Any] = [:]
+                for (key, value) in set { fields[key] = ScriptFirestoreValue.native(value) }
+                if !userId.isEmpty { fields["updatedByUid"] = userId }
+                transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: ref)
+            }
+            return ["added": result.added, "alreadyLinked": result.alreadyLinked, "refused": result.refused] as [String: Any]
+        }
+        let map = answer as? [String: Any] ?? [:]
+        func strings(_ key: String) -> [String] { (map[key] as? [String]) ?? [] }
+        return (strings("added"), strings("alreadyLinked"), strings("refused"))
+    }
+
+    /// RULEBOOK 1.52.0 §24: the evidence keys (storage path, else id) on the stored variation, read from the server
+    /// (never the cache). Nil when the read failed — then no uploaded file may be deleted.
+    func storedVariationEvidenceKeys(variationId: String, organizationId: String) async -> Set<String>? {
+        let orgId = normalizedOrganizationId(organizationId)
+        do {
+            let snapshot = try await variationsCollection(organizationId: orgId).document(variationId).getDocument(source: .server)
+            guard let keys = CanonicalBusinessEngine.variationEvidenceKeys(stored: snapshot.data()) else { return nil }
+            return Set(keys)
+        } catch {
+            return nil
+        }
+    }
+
+    /// Deletes an evidence object this device just uploaded and could not link (its uploader, inside the undo window).
+    func deleteUnlinkedVariationEvidence(storagePath: String) async {
+        guard !storagePath.isEmpty else { return }
+        try? await storage.reference().child(storagePath).delete()
     }
 
     /// RULEBOOK 1.25.0 §24 `CanonicalBusinessEngine.fileDeletePermission`: deletes the evidence object only for an admin of
@@ -626,7 +787,56 @@ extension FirebaseBackend {
         viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole,
         uploadedAt: Date?
     ) async -> StoredFileRemoval { .kept }
+
+    func linkVariationEvidence(
+        variationId: String,
+        entries: [VariationEvidenceItem],
+        organizationId: String
+    ) async throws -> (linked: Set<String>, refused: Set<String>) {
+        throw NSError(domain: "FirebaseBackend", code: 501, userInfo: [NSLocalizedDescriptionKey: "Firebase Storage is not available in this build."])
+    }
+
+    func storedVariationEvidenceKeys(variationId: String, organizationId: String) async -> Set<String>? { nil }
+
+    func deleteUnlinkedVariationEvidence(storagePath: String) async {}
     #endif
+}
+
+/// RULEBOOK 1.52.0 §24: progress and finish of one evidence upload, for its timeout.
+nonisolated final class VariationUploadWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private let started = Date()
+    private var lastProgress = Date()
+    private var finished = false
+    private(set) var timedOut = false
+
+    func touch() {
+        lock.lock(); lastProgress = Date(); lock.unlock()
+    }
+
+    /// True the first time only (the upload's completion runs once).
+    func finish() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if finished { return false }
+        finished = true
+        return true
+    }
+
+    var isFinished: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return finished
+    }
+
+    func shouldGiveUp(stallSeconds: TimeInterval, totalSeconds: TimeInterval) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !finished else { return false }
+        let now = Date()
+        if now.timeIntervalSince(lastProgress) > stallSeconds || now.timeIntervalSince(started) > totalSeconds {
+            timedOut = true
+            return true
+        }
+        return false
+    }
 }
 
 /// RULEBOOK 1.8.0 §1 "Job keys": variations name the job by its stored document id. iOS builds before 1.8.0 wrote

@@ -10318,9 +10318,12 @@ extension FirebaseBackend {
     /// gets the server copy (nil when the document is missing) and returns the native fields the save would write
     /// (`NSNull` / `FieldValue.delete()` for "no value"). A missing document is created whole; otherwise only the
     /// fields `writeFields` names are written, with `WriteMetadata`. Never a whole-document overwrite.
+    /// `base` (1.52.0): the copy the editor opened. When given and the document exists, the save writes only what
+    /// differs from that copy (never every difference from the server copy).
     func writeOperationsDocument(
         _ ref: DocumentReference,
         writeFields: String,
+        base: [String: Any]? = nil,
         makePayload: ([String: Any]?) throws -> [String: Any]
     ) async throws {
         let uid = auth.currentUser?.uid
@@ -10332,7 +10335,7 @@ extension FirebaseBackend {
             try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
             return
         }
-        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: stored, next: payload) else {
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: base ?? stored, next: payload) else {
             throw CanonicalWriteUnavailableError(function: writeFields)
         }
         var changes = write.firestoreFields(from: payload)
