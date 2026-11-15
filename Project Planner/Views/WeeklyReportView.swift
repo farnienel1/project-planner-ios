@@ -2093,6 +2093,8 @@ private struct ManagerAdditionalScheduleRow {
 /// added to its row (`mergeBookingPaySlice`), rows keyed by person, role, basis and rate, multiplier, the slice's own
 /// divisor and PAYE. The screen passes its bookings; the tests drive the same code (review of #234 item 1).
 enum WeeklyReportPayRows {
+    typealias PayCalculationError = WeeklyReportView.PayCalculationError
+
     /// One booking to price, as the screen chose it (person, role, rate and PAYE on its day).
     struct Booked {
         var probe: Booking
@@ -2184,7 +2186,7 @@ enum WeeklyReportPayRows {
                 resolved: entry.resolved, paye: entry.paye, subject: entry.subject
             )
         }
-        if pricingFailed { throw WeeklyReportView.PayCalculationError() }
+        if pricingFailed { throw PayCalculationError() }
 
         let groupedByPerson = Dictionary(grouping: byKey.values) { "\($0.name)|\($0.role)" }
         var summaries: [PayrollPersonSummary] = []
