@@ -191,6 +191,37 @@ enum PayInputsLoad {
     }
 }
 
+/// RULEBOOK 1.47.0 §8 (review of #234, B): a signed sheet's booking-change check needs the pay run's bookings and the
+/// operatives list. When a read failed (offline) or the operatives load stopped without finishing, the screen says so
+/// with Retry — never "Checking…" for ever. Screen state only; the rule is still `signedTimesheetBookingChanges`.
+enum SignedTimesheetCheckAvailability {
+    static let unavailableMessage = "Can't check the bookings on this timesheet right now — you may be offline. Check your connection and tap Retry."
+    static let checkingMessage = "Checking the bookings on this timesheet…"
+
+    /// The operatives list will not finish on its own: not loading and never finished for this organisation, or its
+    /// load gave up (`OperativeStore`'s own timeout sets `errorMessage`).
+    static func operativesStalled(isLoading: Bool, finishedLoadOrganizationId: String?, errorMessage: String?, organizationId: String?) -> Bool {
+        guard let organizationId, !isLoading else { return false }
+        return errorMessage != nil || finishedLoadOrganizationId != organizationId
+    }
+
+    @MainActor
+    static func operativesStalled(_ store: OperativeStore, organizationId: String?) -> Bool {
+        operativesStalled(
+            isLoading: store.isLoading,
+            finishedLoadOrganizationId: store.finishedLoadOrganizationId,
+            errorMessage: store.errorMessage,
+            organizationId: organizationId
+        )
+    }
+
+    /// Whether to show `unavailableMessage` (with Retry) instead of `checkingMessage`: the bookings read failed, or the
+    /// operatives list is not loaded and will not finish without a retry.
+    static func unavailable(bookingsFailed: Bool, operativesLoaded: Bool, operativesStalled: Bool) -> Bool {
+        bookingsFailed || (!operativesLoaded && operativesStalled)
+    }
+}
+
 /// The "pay could not be worked out" notice with a Retry button.
 struct PayInputsFailureBanner: View {
     let message: String

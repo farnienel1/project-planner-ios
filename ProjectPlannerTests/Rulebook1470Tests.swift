@@ -639,4 +639,23 @@ final class Rulebook1470Tests: XCTestCase {
         options.settings.myScheduleOptions.showOffice.toggle()
         XCTAssertNotEqual(hoursBefore, SignedTimesheetChangeContext.organizationStamp(options))
     }
+
+    /// Re-review of #234 (B): a signed sheet whose bookings failed to load, or whose operatives list stopped without
+    /// finishing, says it cannot check right now (with Retry) — never "Checking…" for ever.
+    func testTheCheckSaysUnavailableWhenTheBookingsFailOrTheOperativesStall() {
+        typealias A = SignedTimesheetCheckAvailability
+        XCTAssertTrue(A.unavailable(bookingsFailed: true, operativesLoaded: true, operativesStalled: false), "offline bookings read")
+        XCTAssertFalse(A.unavailable(bookingsFailed: false, operativesLoaded: false, operativesStalled: false), "still loading: checking")
+        XCTAssertTrue(A.unavailable(bookingsFailed: false, operativesLoaded: false, operativesStalled: true))
+        XCTAssertFalse(A.unavailable(bookingsFailed: false, operativesLoaded: true, operativesStalled: true))
+        // The operatives list: loading is not stalled; finished for another organisation, never finished, or timed out is.
+        XCTAssertFalse(A.operativesStalled(isLoading: true, finishedLoadOrganizationId: nil, errorMessage: nil, organizationId: org))
+        XCTAssertFalse(A.operativesStalled(isLoading: false, finishedLoadOrganizationId: org, errorMessage: nil, organizationId: org))
+        XCTAssertTrue(A.operativesStalled(isLoading: false, finishedLoadOrganizationId: nil, errorMessage: nil, organizationId: org))
+        XCTAssertTrue(A.operativesStalled(isLoading: false, finishedLoadOrganizationId: "TEST-other", errorMessage: nil, organizationId: org))
+        XCTAssertTrue(A.operativesStalled(isLoading: false, finishedLoadOrganizationId: org, errorMessage: "Loading timed out.", organizationId: org))
+        XCTAssertFalse(A.operativesStalled(isLoading: false, finishedLoadOrganizationId: nil, errorMessage: nil, organizationId: nil))
+        XCTAssertTrue(A.unavailableMessage.contains("Can't check the bookings"))
+        XCTAssertFalse(A.unavailableMessage.contains("Checking"))
+    }
 }

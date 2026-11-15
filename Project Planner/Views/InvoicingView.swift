@@ -2411,6 +2411,31 @@ private struct MyTimesheetView: View {
         return periodBookingsState.loaded && operativesLoaded && bookingChange != nil
     }
 
+    /// Review of #234 (B): the check cannot run right now — the bookings read failed (offline) or the operatives list
+    /// stopped without finishing. The screen then says so with Retry instead of "Checking…".
+    private var bookingCheckUnavailable: Bool {
+        guard SignedTimesheetChanges.isSigned(draft), !bookingCheckReady else { return false }
+        return SignedTimesheetCheckAvailability.unavailable(
+            bookingsFailed: periodBookingsState.failed,
+            operativesLoaded: operativesLoaded,
+            operativesStalled: SignedTimesheetCheckAvailability.operativesStalled(
+                operativeStore, organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+            )
+        )
+    }
+
+    /// Retry: the pay run's bookings (a failed read is asked again), the operatives list when it stalled, and the pay
+    /// inputs.
+    private func retryBookingCheck() {
+        ensurePeriodBookings()
+        if SignedTimesheetCheckAvailability.operativesStalled(
+            operativeStore, organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+        ) {
+            operativeStore.loadData()
+        }
+        Task { await loadDayRateHistory() }
+    }
+
     /// The operatives list of the open organisation has loaded (the person's booking ids depend on it).
     private var operativesLoaded: Bool {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return false }
@@ -2740,9 +2765,15 @@ private struct MyTimesheetView: View {
                 if mustSignAgain {
                     SignedTimesheetChangedBanner(message: bookingChange?.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage)
                 }
-                if let blocked = payInputsBlockMessage, draft.operativeSignedAt == nil || mustSignAgain {
+                if bookingCheckUnavailable {
+                    // Review of #234 (B): a signed sheet whose bookings cannot be read says so, with Retry.
+                    PayInputsFailureBanner(message: SignedTimesheetCheckAvailability.unavailableMessage) {
+                        retryBookingCheck()
+                    }
+                } else if let blocked = payInputsBlockMessage,
+                          draft.operativeSignedAt == nil || mustSignAgain || periodBookingsState.failed {
                     PayInputsFailureBanner(message: blocked) {
-                        Task { await loadDayRateHistory() }
+                        retryBookingCheck()
                     }
                 }
                 if (draft.operativeSignedAt == nil || mustSignAgain) && payInputsBlockMessage == nil {
@@ -2859,10 +2890,10 @@ private struct MyTimesheetView: View {
                     .disabled(isGeneratingInvoice || !bookingCheckReady)
                     .opacity(bookingCheckReady ? 1 : 0.5)
 
-                    if !bookingCheckReady {
+                    if !bookingCheckReady && !bookingCheckUnavailable {
                         HStack(spacing: 8) {
                             ProgressView()
-                            Text("Checking the bookings on this timesheet…")
+                            Text(SignedTimesheetCheckAvailability.checkingMessage)
                         }
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -3124,7 +3155,7 @@ private struct MyTimesheetView: View {
         // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).mayGenerateInvoice`: never invoice a reopened sheet, and
         // never before the check could run (review of #234 item 5).
         if !bookingCheckReady {
-            await MainActor.run { invoiceErrorMessage = "Still checking the bookings on this timesheet. Try again in a moment." }
+            await MainActor.run { invoiceErrorMessage = (bookingCheckUnavailable ? SignedTimesheetCheckAvailability.unavailableMessage : "Still checking the bookings on this timesheet. Try again in a moment.") }
             return
         }
         if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
@@ -4980,6 +5011,31 @@ private struct OperativeTimesheetReviewView: View {
         return periodBookingsState.loaded && operativesLoaded && bookingChange != nil
     }
 
+    /// Review of #234 (B): the check cannot run right now — the bookings read failed (offline) or the operatives list
+    /// stopped without finishing. The screen then says so with Retry instead of "Checking…".
+    private var bookingCheckUnavailable: Bool {
+        guard SignedTimesheetChanges.isSigned(draft), !bookingCheckReady else { return false }
+        return SignedTimesheetCheckAvailability.unavailable(
+            bookingsFailed: periodBookingsState.failed,
+            operativesLoaded: operativesLoaded,
+            operativesStalled: SignedTimesheetCheckAvailability.operativesStalled(
+                operativeStore, organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+            )
+        )
+    }
+
+    /// Retry: the pay run's bookings (a failed read is asked again), the operatives list when it stalled, and the pay
+    /// inputs.
+    private func retryBookingCheck() {
+        ensurePeriodBookings()
+        if SignedTimesheetCheckAvailability.operativesStalled(
+            operativeStore, organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+        ) {
+            operativeStore.loadData()
+        }
+        Task { await loadDayRateHistory() }
+    }
+
     /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot.
     private var draftForFigures: TimesheetDraft {
         guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
@@ -5105,9 +5161,14 @@ private struct OperativeTimesheetReviewView: View {
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("operativeTimesheetReview.saveError")
             }
-            if let blocked = payInputsBlockMessage {
+            if bookingCheckUnavailable {
+                // Review of #234 (B): the bookings or the operatives list could not be read — say so, with Retry.
+                PayInputsFailureBanner(message: SignedTimesheetCheckAvailability.unavailableMessage) {
+                    retryBookingCheck()
+                }
+            } else if let blocked = payInputsBlockMessage {
                 PayInputsFailureBanner(message: blocked) {
-                    Task { await loadDayRateHistory() }
+                    retryBookingCheck()
                 }
             }
         }
@@ -5305,10 +5366,10 @@ private struct OperativeTimesheetReviewView: View {
             .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) && bookingCheckReady ? 1 : 0.5)
             // RULEBOOK §2: timesheet signing is online only.
             .onlineOnly(isOnline: smartCache.isOnline)
-            if TimesheetApprovalPolicy.operativeHasSigned(draft), !bookingCheckReady {
+            if TimesheetApprovalPolicy.operativeHasSigned(draft), !bookingCheckReady, !bookingCheckUnavailable {
                 HStack(spacing: 8) {
                     ProgressView()
-                    Text("Checking the bookings on this timesheet…")
+                    Text(SignedTimesheetCheckAvailability.checkingMessage)
                 }
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -5327,7 +5388,7 @@ private struct OperativeTimesheetReviewView: View {
     /// `signedTimesheetActions(change).lineManagerMayCounterSign`; the reason is shown when it may not.
     private func counterSignAllowedNow() -> Bool {
         guard bookingCheckReady else {
-            saveErrorMessage = "Still checking the bookings on this timesheet. Try again in a moment."
+            saveErrorMessage = (bookingCheckUnavailable ? SignedTimesheetCheckAvailability.unavailableMessage : "Still checking the bookings on this timesheet. Try again in a moment.")
             return false
         }
         guard CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign else {

@@ -166,8 +166,12 @@ class FirebaseBackend: ObservableObject {
     @Published var currentUser: FirebaseAuth.User?
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// Bumped on every change to `currentOrganization` (settings, working hours, schedule options), so answers built
+    /// from it can be memoised per revision.
+    private(set) var organizationRevision = 0
     @Published var currentOrganization: Organization? {
         didSet {
+            organizationRevision &+= 1
             if currentOrganization != nil { sessionHasNoOrganization = false }
             OrganizationDocumentAbbreviation.update(from: currentOrganization)
             OrganizationRulebookContext.update(from: currentOrganization)

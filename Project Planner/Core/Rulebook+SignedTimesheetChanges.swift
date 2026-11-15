@@ -543,6 +543,13 @@ final class SignedTimesheetChangeContext {
     static func peopleStamp(user: AppUser, operatives: [Operative], users: [AppUser]) -> Int {
         var hasher = Hasher()
         hasher.combine(user)
+        hasher.combine(rosterStamp(operatives: operatives, users: users))
+        return hasher.finalize()
+    }
+
+    /// The roster part of `peopleStamp` (every users document, every operatives row's id and email).
+    static func rosterStamp(operatives: [Operative], users: [AppUser]) -> Int {
+        var hasher = Hasher()
         hasher.combine(users.count)
         for person in users { hasher.combine(person) }
         hasher.combine(operatives.count)
@@ -551,6 +558,27 @@ final class SignedTimesheetChangeContext {
             hasher.combine(row.email)
         }
         return hasher.finalize()
+    }
+
+    /// Review of #234 (A): the roster and organisation stamps are hashed once per store revision, not on every call
+    /// (a cache hit no longer pays for hashing the whole roster). The revisions change whenever the content does.
+    private var rosterStampCache: (users: Int, operatives: Int, stamp: Int)?
+    private var organizationStampCache: (revision: Int, stamp: Int)?
+
+    private func cachedRosterStamp(userStore: UserStore, operativeStore: OperativeStore) -> Int {
+        if let held = rosterStampCache, held.users == userStore.revision, held.operatives == operativeStore.revision {
+            return held.stamp
+        }
+        let stamp = Self.rosterStamp(operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+        rosterStampCache = (userStore.revision, operativeStore.revision, stamp)
+        return stamp
+    }
+
+    private func cachedOrganizationStamp(_ firebaseBackend: FirebaseBackend) -> Int {
+        if let held = organizationStampCache, held.revision == firebaseBackend.organizationRevision { return held.stamp }
+        let stamp = Self.organizationStamp(firebaseBackend.currentOrganization)
+        organizationStampCache = (firebaseBackend.organizationRevision, stamp)
+        return stamp
     }
 
     /// The organisation content the collector prices with (review of #234 item 2): the settings (working hours, schedule
@@ -589,8 +617,9 @@ final class SignedTimesheetChangeContext {
             String(managerScheduleStore.revision),
             String(operativeStore.revision),
             String(projectStore.revision),
-            String(Self.peopleStamp(user: user, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)),
-            String(Self.organizationStamp(firebaseBackend.currentOrganization)),
+            String(user.hashValue),
+            String(cachedRosterStamp(userStore: userStore, operativeStore: operativeStore)),
+            String(cachedOrganizationStamp(firebaseBackend)),
             firebaseBackend.currentOrganization?.firestoreDocumentId ?? "",
         ].joined(separator: "#")
         if let held = memo[key] { return held }

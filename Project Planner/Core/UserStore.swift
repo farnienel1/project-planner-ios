@@ -22,6 +22,7 @@ class UserStore: ObservableObject {
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
         didSet {
+            revision &+= 1
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
             RulebookRosterSnapshot.update(organizationUsers)
@@ -57,6 +58,8 @@ class UserStore: ObservableObject {
     /// Throttle `lastSeenAt` writes (foreground heartbeats).
     private var lastSeenAtWriteTime: Date?
     /// Single-flight + short cooldown to prevent duplicate org user roster fetches.
+    /// Bumped on every change to `organizationUsers`, so answers built from the roster can be memoised per revision.
+    private(set) var revision = 0
     private var organizationUsersLoadInProgress = false
     /// The organisation whose roster load last finished (read or failed). Warnings wait for it
     /// (`WarningInputsReadiness`).
