@@ -114,7 +114,9 @@ final class Rulebook1510Tests: XCTestCase {
         XCTAssertEqual(section.rows[6][3], "Timesheet: Not started · no timesheet yet")
         XCTAssertTrue(section.spanRows.contains(6))
         XCTAssertEqual(section.totalRow?.last, "£3,141.76")
-        XCTAssertNil(section.note)
+        // RULEBOOK 1.53.0 (A9, owner confirmed 15 Nov): `weeklyReportPaySummaryNote` under the Pay Summary while labour
+        // rows are shown (no pay is hidden here, so no `PAY_HIDDEN_NOTE`). Before 1.53.0 there was no note.
+        XCTAssertEqual(section.note, "Days are rounded; Pay is worked out from the exact hours.")
     }
 
     func testAPayePersonHasNoRows() throws {
