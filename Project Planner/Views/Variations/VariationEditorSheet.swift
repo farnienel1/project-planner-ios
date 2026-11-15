@@ -95,16 +95,20 @@ private enum VariationFormColors {
 }
 
 /// RULEBOOK 1.52.0 §22: the hours of a crew line, `variationLabourLineFields(...).hours` (operatives × hours each,
-/// rounded by the rule). 0 when the script did not answer.
+/// rounded by the rule). Nil when the script did not answer — the screen shows "—" and a save is refused.
 private enum VariationCrewHours {
-    static func hours(operatives: Int, hoursEach: Double) -> Double {
+    static let unavailableMessage = "The labour hours could not be worked out. Nothing was saved — please try again."
+
+    static func hours(operatives: Int, hoursEach: Double) -> Double? {
         let fields = CanonicalBusinessEngine.variationLabourLineFields(id: "", trade: "", operatives: operatives, hoursEach: hoursEach)
-        return (fields?["hours"] as? NSNumber)?.doubleValue ?? 0
+        return (fields?["hours"] as? NSNumber)?.doubleValue
     }
 
-    /// `variationTotals({ labour }).labourHours` of the given line hours.
-    static func total(_ lines: [Double]) -> Double {
-        CanonicalBusinessEngine.variationTotals(["labour": lines.map { ["hours": $0] }])?.labourHours ?? 0
+    /// `variationTotals({ labour }).labourHours` of the given line hours; nil when any is unknown or the script did
+    /// not answer.
+    static func total(_ lines: [Double?]) -> Double? {
+        guard !lines.contains(where: { $0 == nil }) else { return nil }
+        return CanonicalBusinessEngine.variationTotals(["labour": lines.compactMap { $0 }.map { ["hours": $0] }])?.labourHours
     }
 }
 
@@ -118,7 +122,7 @@ private struct LabourDraft: Identifiable, Equatable {
     /// The stored hours of an untouched old line (kept exactly).
     var storedHours: Double? = nil
 
-    var lineHours: Double {
+    var lineHours: Double? {
         if legacyShape, let storedHours { return storedHours }
         return VariationCrewHours.hours(operatives: operatives, hoursEach: hoursEach)
     }
@@ -187,7 +191,7 @@ private struct LabourComposerState: Equatable {
     var editId: String?
     var duplicateOf: String?
 
-    var total: Double { VariationCrewHours.hours(operatives: operatives, hoursEach: hoursEach) }
+    var total: Double? { VariationCrewHours.hours(operatives: operatives, hoursEach: hoursEach) }
     var canCommit: Bool {
         !trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && operatives >= 1 && hoursEach > 0
     }
@@ -325,7 +329,9 @@ struct VariationEditorSheet: View {
         VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName)
     }
     /// RULEBOOK 1.52.0 §22 `variationTotals(...).labourHours`.
-    private var totalHours: Double { VariationCrewHours.total(labour.map(\.lineHours)) }
+    private var totalHours: Double? { VariationCrewHours.total(labour.map(\.lineHours)) }
+    /// "8" or "—" when the rulebook did not answer.
+    private func hoursText(_ value: Double?) -> String { value.map { formatHours($0) } ?? "—" }
     /// RULEBOOK 1.52.0 §22 `canSeeVariationCosts`: admins, super admins and managers; never operative mode.
     private var canSeeCosts: Bool {
         guard let user = userStore.displayUser else { return false }
@@ -340,8 +346,8 @@ struct VariationEditorSheet: View {
     }
     private var hourPresets: [(label: String, hours: Double)] {
         // RULEBOOK 1.20.0 §8: today's weekday paid day (`weekdayPaidHours` of the policy in effect today).
-        let day = CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date()))
-        let full = day > 0 ? day : 8
+        // Review of #235: no preset when the rulebook did not answer (the hours are typed), never a made-up 8h day.
+        guard let full = CanonicalBusinessEngine.weekdayPaidHours(firebaseBackend.payrollPolicy(for: Date())), full > 0 else { return [] }
         return [("Half day", full / 2), ("Full day", full), ("Day + 2", full + 2)]
     }
     private var tradeChips: [String] {
@@ -564,7 +570,7 @@ struct VariationEditorSheet: View {
 
     private var labourCard: some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionHeader("Labour", pill: formatHours(totalHours) + " hrs", active: totalHours > 0)
+            sectionHeader("Labour", pill: hoursText(totalHours) + " hrs", active: (totalHours ?? 0) > 0)
             VStack(alignment: .leading, spacing: 0) {
                 if labour.isEmpty {
                     Text("No labour added yet.")
@@ -615,14 +621,15 @@ struct VariationEditorSheet: View {
                     .foregroundStyle(VariationFormColors.ink)
                     .lineLimit(1)
                 if line.operatives > 1,
-                   let text = CanonicalBusinessEngine.variationLabourText(operatives: line.operatives, hoursEach: line.hoursEach, hours: line.lineHours) {
+                   let lineHours = line.lineHours,
+                   let text = CanonicalBusinessEngine.variationLabourText(operatives: line.operatives, hoursEach: line.hoursEach, hours: lineHours) {
                     Text(text)
                         .font(.system(size: 12.5))
                         .foregroundStyle(VariationFormColors.ink3)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("\(formatHours(line.lineHours)) hrs")
+            Text("\(hoursText(line.lineHours)) hrs")
                 .font(.system(size: 15.5, weight: .heavy))
                 .foregroundStyle(VariationFormColors.ink)
                 .padding(.horizontal, 11)
@@ -815,7 +822,7 @@ struct VariationEditorSheet: View {
 
     private var addLabourTitle: String {
         if labourComposer.editId != nil { return "Update line item" }
-        if labourComposer.total > 0 { return "Add · \(formatHours(labourComposer.total)) hrs" }
+        if let total = labourComposer.total, total > 0 { return "Add · \(formatHours(total)) hrs" }
         return "Add"
     }
 
@@ -1336,7 +1343,7 @@ struct VariationEditorSheet: View {
     private var footer: some View {
         VStack(spacing: 9) {
             HStack(spacing: 6) {
-                footerPill("\(formatHours(totalHours)) hrs", on: totalHours > 0)
+                footerPill("\(hoursText(totalHours)) hrs", on: (totalHours ?? 0) > 0)
                 footerPill("\(materials.count) material\(materials.count == 1 ? "" : "s")", on: !materials.isEmpty)
                 footerPill("\(evidence.count) evidence file\(evidence.count == 1 ? "" : "s")", on: !evidence.isEmpty)
             }
@@ -1593,7 +1600,7 @@ struct VariationEditorSheet: View {
     private func freshComposer(open: Bool) -> LabourComposerState {
         var composer = LabourComposerState()
         composer.isOpen = open
-        composer.hoursEach = hourPresets.first(where: { $0.label == "Full day" })?.hours ?? 8
+        composer.hoursEach = hourPresets.first(where: { $0.label == "Full day" })?.hours ?? 0
         return composer
     }
 
@@ -1621,7 +1628,10 @@ struct VariationEditorSheet: View {
         guard labourComposer.canCommit else { return }
         if mode == .merge, let targetId = labourComposer.duplicateOf,
            let index = labour.firstIndex(where: { $0.id == targetId }) {
-            let merged = VariationCrewHours.total([labour[index].lineHours, labourComposer.total])
+            guard let merged = VariationCrewHours.total([labour[index].lineHours, labourComposer.total]) else {
+                errorMessage = VariationCrewHours.unavailableMessage
+                return
+            }
             labour[index].operatives = 1
             labour[index].hoursEach = merged
             labour[index].legacyShape = false
@@ -1996,12 +2006,18 @@ struct VariationEditorSheet: View {
             isSaving = false
             return
         }
-        // RULEBOOK 1.52.0 §22: lines in the rule's shapes; an untouched old line keeps its stored shape.
+        // RULEBOOK 1.52.0 §22: lines in the rule's shapes; an untouched old line keeps its stored shape. When the rule
+        // cannot work out a line's hours the save is refused (review of #235), never the line dropped.
+        if labour.contains(where: { $0.lineHours == nil }) {
+            errorMessage = VariationCrewHours.unavailableMessage
+            isSaving = false
+            return
+        }
         let savedLabour = labour
-            .filter { $0.lineHours > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .filter { ($0.lineHours ?? 0) > 0 && !$0.trade.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .map {
                 VariationLabourLine(
-                    id: $0.id, trade: $0.trade, hours: $0.lineHours,
+                    id: $0.id, trade: $0.trade, hours: $0.lineHours ?? 0,
                     operatives: max(1, $0.operatives), hoursEach: $0.hoursEach, legacyShape: $0.legacyShape
                 )
             }

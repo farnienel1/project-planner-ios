@@ -97,7 +97,10 @@ struct DailyOverviewView: View {
         }
     }
     
-    private var dayHolidays: [HolidayBooking] {
+    private var dayHolidays: [HolidayBooking] { dayLeave ?? [] }
+
+    /// Review of #235: nil when `dailyOverviewLeaveRows` did not answer — the leave section says so.
+    private var dayLeave: [HolidayBooking]? {
         let scope = overviewScope
         // RULEBOOK 1.53.0 (A7) `dailyOverviewLeaveRows`: approved records whose leave days include this day (a weekend
         // or bank holiday inside a multi-day record is not a leave day).
@@ -111,7 +114,8 @@ struct DailyOverviewView: View {
             timeZone: OrganizationRulebookContext.timeZoneIdentifier,
             bankHolidayDayKeys: OrganizationBankHolidays.dayKeys
         ) else {
-            return holidayStore.approvedBookings(covering: overviewDate).filter { holidayInScope($0, scope: scope) }
+            // Review of #235: no Swift leave filter — the section says the leave could not be worked out.
+            return nil
         }
         return candidates.filter { ids.contains($0.documentId) && holidayInScope($0, scope: scope) }
     }
@@ -447,7 +451,7 @@ struct DailyOverviewView: View {
                             .padding(.top, 20)
                     }
 
-                    if !dayHolidays.isEmpty {
+                    if dayLeave == nil || !dayHolidays.isEmpty {
                         annualLeaveRevampBlock
                     }
 
@@ -844,6 +848,12 @@ struct DailyOverviewView: View {
         VStack(alignment: .leading, spacing: 0) {
             revampSectionHeader(title: "Annual leave", trailing: nil)
             VStack(alignment: .leading, spacing: 0) {
+                if dayLeave == nil {
+                    Text("Annual leave for this day could not be worked out. Pull to refresh or try again shortly.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("dailyOverview.leaveUnavailable")
+                }
                 ForEach(Array(dayHolidays.enumerated()), id: \.element.id) { idx, booking in
                     OnHolidayRowView(booking: booking, slotLabel: Self.leaveRowSlotLabel(booking, policy: payrollTimePolicy))
                     if idx < dayHolidays.count - 1 {

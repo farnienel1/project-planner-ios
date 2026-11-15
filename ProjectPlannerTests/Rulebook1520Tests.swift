@@ -65,7 +65,7 @@ final class Rulebook1520Tests: XCTestCase {
         XCTAssertEqual(variation.subcontractorLines.first?.quoteNumber, "Q1")
         XCTAssertEqual(variation.totals?.costTotal, 450)
 
-        let map = VariationCodec.firestoreMap(from: variation)
+        let map = try VariationCodec.firestoreMap(from: variation)
         let labour = try XCTUnwrap(map["labour"] as? [[String: Any]])
         XCTAssertEqual(Set(labour[0].keys), ["id", "trade", "hours"])
         XCTAssertEqual(labour[1]["operatives"] as? Int, 2)

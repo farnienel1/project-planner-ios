@@ -1392,7 +1392,7 @@ private struct EditUserDialogModifier: ViewModifier {
                     .accessibilityIdentifier("editUserDialogModifier.cancel5")
             }
             .sheet(isPresented: $showingProfileImagePicker) {
-                ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource)
+                ProfileImagePicker(image: $pickedProfileImage, sourceType: profilePhotoPickerSource, onRefused: { profilePhotoUploadMessage = $0 })
             }
             .onChange(of: pickedProfileImage) { _, newImage in
                 guard let newImage else { return }

@@ -2159,8 +2159,11 @@ struct BookLabourFlowView: View {
     ) -> Bool {
         // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way).
         let keys = BookingClashWindow.dayKeys(around: date)
+        // The booking's `userId` without case (`normalizeDocumentId`, review of #235).
+        let personKey = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let existing = managerScheduleStore.managerSiteBookings.filter {
-            $0.userId == userId && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+            $0.userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == personKey
+                && keys.contains(OrganizationRulebookContext.dayKey($0.date))
         }
         if existing.isEmpty { return false }
         let probe = ManagerSiteBooking(

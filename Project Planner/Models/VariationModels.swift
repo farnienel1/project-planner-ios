@@ -404,7 +404,58 @@ nonisolated enum VariationCodec {
         )
     }
 
-    static func firestoreMap(from variation: Variation) -> [String: Any] {
+    /// RULEBOOK 1.52.0 §22, review of #235: every new or changed line is shaped by the rulebook; when the script does
+    /// not answer for a line the save is refused (`CanonicalWriteUnavailableError`), never a line dropped or written
+    /// in another shape.
+    static func firestoreMap(from variation: Variation) throws -> [String: Any] {
+        var labourRows: [[String: Any]] = []
+        for line in variation.labour {
+            // An untouched old line, or one built without a crew (`hoursEach` 0), keeps its stored shape and hours.
+            if line.legacyShape || line.hoursEach <= 0 {
+                labourRows.append(["id": line.id, "trade": line.trade, "hours": line.hours])
+                continue
+            }
+            guard let fields = CanonicalBusinessEngine.variationLabourLineFields(
+                id: line.id, trade: line.trade, operatives: line.operatives, hoursEach: line.hoursEach
+            ) else { throw CanonicalWriteUnavailableError(function: "variationLabourLineFields") }
+            labourRows.append(fields)
+        }
+        var materialRows: [[String: Any]] = []
+        for line in variation.materials {
+            guard !line.legacyShape, let value = line.quantityValue else {
+                materialRows.append(["id": line.id, "name": line.name, "quantity": line.quantity])
+                continue
+            }
+            guard let fields = CanonicalBusinessEngine.variationMaterialLineFields(
+                id: line.id, name: line.name, quantity: value, unit: line.unit.isEmpty ? "no" : line.unit
+            ) else { throw CanonicalWriteUnavailableError(function: "variationMaterialLineFields") }
+            materialRows.append(fields)
+        }
+        var customRows: [[String: Any]] = []
+        for line in variation.customLines {
+            guard let fields = CanonicalBusinessEngine.variationCustomLineFields(
+                id: line.id, name: line.name, description: line.description, quantity: line.quantity, cost: line.cost
+            ) else { throw CanonicalWriteUnavailableError(function: "variationCustomLineFields") }
+            customRows.append(fields)
+        }
+        var subcontractorRows: [[String: Any]] = []
+        for line in variation.subcontractorLines {
+            guard let fields = CanonicalBusinessEngine.variationSubcontractorLineFields(
+                id: line.id, subcontractorId: line.subcontractorId, name: line.name,
+                quoteNumber: line.quoteNumber, quantity: line.quantity, cost: line.cost
+            ) else { throw CanonicalWriteUnavailableError(function: "variationSubcontractorLineFields") }
+            subcontractorRows.append(fields)
+        }
+        return firestoreMap(from: variation, labour: labourRows, materials: materialRows, customLines: customRows, subcontractorLines: subcontractorRows)
+    }
+
+    private static func firestoreMap(
+        from variation: Variation,
+        labour labourRows: [[String: Any]],
+        materials materialRows: [[String: Any]],
+        customLines customRows: [[String: Any]],
+        subcontractorLines subcontractorRows: [[String: Any]]
+    ) -> [String: Any] {
         var map: [String: Any] = [
             "id": variation.id,
             "orgId": variation.orgId,
@@ -426,39 +477,11 @@ nonisolated enum VariationCodec {
             "heading": variation.heading,
             "description": variation.description,
             "status": variation.status.rawValue,
-            // RULEBOOK 1.52.0 §22: an untouched old line exactly as stored; a line added or changed through the rule's
-            // shape (`variationLabourLineFields`, `variationMaterialLineFields`). Custom and subcontractor lines are their
-            // own arrays (`variationCustomLineFields`, `variationSubcontractorLineFields`).
-            "labour": variation.labour.map { line -> [String: Any] in
-                // A line built without a crew (`hoursEach` 0) keeps its own hours.
-                if !line.legacyShape, line.hoursEach > 0,
-                   let fields = CanonicalBusinessEngine.variationLabourLineFields(
-                       id: line.id, trade: line.trade, operatives: line.operatives, hoursEach: line.hoursEach
-                   ) {
-                    return fields
-                }
-                return ["id": line.id, "trade": line.trade, "hours": line.hours]
-            },
-            "materials": variation.materials.map { line -> [String: Any] in
-                if !line.legacyShape, let value = line.quantityValue,
-                   let fields = CanonicalBusinessEngine.variationMaterialLineFields(
-                       id: line.id, name: line.name, quantity: value, unit: line.unit.isEmpty ? "no" : line.unit
-                   ) {
-                    return fields
-                }
-                return ["id": line.id, "name": line.name, "quantity": line.quantity]
-            },
-            "customLines": variation.customLines.compactMap { line in
-                CanonicalBusinessEngine.variationCustomLineFields(
-                    id: line.id, name: line.name, description: line.description, quantity: line.quantity, cost: line.cost
-                )
-            },
-            "subcontractorLines": variation.subcontractorLines.compactMap { line in
-                CanonicalBusinessEngine.variationSubcontractorLineFields(
-                    id: line.id, subcontractorId: line.subcontractorId, name: line.name,
-                    quoteNumber: line.quoteNumber, quantity: line.quantity, cost: line.cost
-                )
-            },
+            // RULEBOOK 1.52.0 §22: lines shaped above (an untouched old line exactly as stored).
+            "labour": labourRows,
+            "materials": materialRows,
+            "customLines": customRows,
+            "subcontractorLines": subcontractorRows,
             "evidence": variation.evidence.filter { !$0.isPending }.map { item in
                 [
                     "id": item.id,

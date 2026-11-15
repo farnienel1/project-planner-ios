@@ -88,6 +88,9 @@ struct WarningsComputationSnapshot: Sendable {
         /// RULEBOOK 1.34.0 §5, §11: a ghost operative (no login by design) counts as signed up for unbooked labour and
         /// is never an unverified account (`LabourPerson.ghost`, `unverifiedOperativeRows`).
         var isGhost: Bool = false
+        /// RULEBOOK 1.53.0: `rosterPeople` inputs (the newer write, a stored name) for the one-per-email fold.
+        var updatedAtMs: Double? = nil
+        var hasName: Bool = false
     }
 
     struct ProjectSnapshot: Sendable {
@@ -294,7 +297,9 @@ enum WarningsComputation {
                 sameEmailUserIds: user.sameEmailUserIds,
                 formerUserIds: user.formerUserIds,
                 status: user.status,
-                isGhost: user.isGhost
+                isGhost: user.isGhost,
+                updatedAtMs: user.documentUpdatedAt.map { ($0.timeIntervalSince1970 * 1000).rounded() },
+                hasName: !user.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             )
         }
 
@@ -412,7 +417,9 @@ enum WarningsComputation {
             managerSiteBookings: managerSiteBookings,
             holidayBookings: holidayBookings,
             payrollTimePolicy: .init(
-                standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(input.payrollTimePolicy),
+                // The scan reads each day from the working-hours state (`payrollPolicy`); this flat figure is only the
+                // script's legacy fallback, so 0 when the rulebook did not answer.
+                standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(input.payrollTimePolicy) ?? 0,
                 standardDayStart: input.payrollTimePolicy.standardDayStart,
                 standardDayEnd: input.payrollTimePolicy.standardDayEnd,
                 breakWindowStart: input.payrollTimePolicy.breakWindowStart,
@@ -915,57 +922,47 @@ enum WarningsComputation {
         Array(Set(excluded.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }))
     }
 
-    /// RULEBOOK 1.53.0 §5 (web #331): the people of an unbooked-labour scan, one per email, with every other id that
-    /// email goes by (other users documents on it, their former ids and the roster fold's `sameEmailUserIds`) in
-    /// `formerIds` — the rule matches bookings, leave and exclusions under every id without case, so nothing is
-    /// copied onto other ids any more (the old `shareCoverageAcrossEmail` is gone). The account kept for an email is
-    /// one that is not excluded, then active, then signed up, then the smaller id, so every phone sends the same list.
-    /// People without an email are one row each.
-    nonisolated static func unbookedPeopleOnePerEmail(
-        _ people: [[String: Any]],
-        excludedUserIds: Set<String> = []
-    ) -> [[String: Any]] {
+    /// RULEBOOK 1.53.0 §5 (web #331), review of #235: the people of an unbooked-labour scan, one per email, folded by
+    /// the rulebook's `rosterPeople` exactly as web's roster (`rosterKeeps`: admin, signed in, newer write, active,
+    /// rank, id) — never a Swift pick — and each kept person's `formerIds` = their former ids plus every same-email id
+    /// (web `labourPersonFromUser`). The rule matches bookings, leave and exclusions under every id without case.
+    /// Each input row carries the person's fields plus `formerIds`, `sameEmailUserIds`, `updatedAtMs` and `hasName`
+    /// (roster inputs only, removed from the output). Nil when the script did not answer — the scan then has no rows.
+    nonisolated static func unbookedPeopleOnePerEmail(_ people: [[String: Any]]) -> [[String: Any]]? {
         func text(_ value: Any?) -> String {
             (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         }
         func flag(_ value: Any?) -> Bool { (value as? Bool) ?? (value as? NSNumber)?.boolValue ?? false }
-        func ids(_ value: Any?) -> [String] { ((value as? [Any]) ?? []).compactMap { $0 as? String }.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
-        let excluded = Set(excludedUserIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
-        var groups: [String: [[String: Any]]] = [:]
-        var withoutEmail: [[String: Any]] = []
-        for person in people {
-            let email = text(person["email"]).lowercased()
-            if email.isEmpty { withoutEmail.append(person) } else { groups[email, default: []].append(person) }
+        func ids(_ value: Any?) -> [String] { ((value as? [Any]) ?? []).compactMap { $0 as? String } }
+        let documents: [[String: Any]] = people.map { row in
+            let admin = flag(row["isAdmin"]) || flag(row["isSuperAdmin"])
+            return [
+                "id": text(row["id"]),
+                "email": text(row["email"]),
+                "passwordSet": flag(row["passwordSet"]),
+                "isActive": flag(row["isActive"]),
+                "firstName": flag(row["hasName"]) ? "named" : "",
+                "admin": admin,
+                "listed": admin || flag(row["isManager"]) || flag(row["isOperativeMode"]),
+                "updatedAtMs": row["updatedAtMs"] ?? NSNull(),
+                "formerUserIds": ids(row["formerIds"]),
+                "sameEmailUserIds": ids(row["sameEmailUserIds"]),
+            ]
         }
-        func merged(_ kept: [String: Any], with others: [[String: Any]]) -> [String: Any] {
-            var row = kept
-            let keptId = text(kept["id"]).lowercased()
-            var seen = Set([keptId])
+        guard let folded = CanonicalBusinessEngine.rosterPeople(documents) else { return nil }
+        var byId: [String: [String: Any]] = [:]
+        for row in people where byId[text(row["id"])] == nil { byId[text(row["id"])] = row }
+        return folded.people.compactMap { person -> [String: Any]? in
+            guard let id = person["id"] as? String, var row = byId[id] else { return nil }
+            var seen = Set([id.lowercased()])
             var formerIds: [String] = []
-            let candidates = ids(kept["formerIds"]) + ids(kept["sameEmailUserIds"])
-                + others.flatMap { [text($0["id"])] + ids($0["formerIds"]) + ids($0["sameEmailUserIds"]) }
-            for id in candidates where !id.isEmpty && seen.insert(id.lowercased()).inserted {
-                formerIds.append(id)
+            for other in ids(person["formerUserIds"]) + ids(person["sameEmailUserIds"]) where seen.insert(other.lowercased()).inserted {
+                formerIds.append(other)
             }
             row["formerIds"] = formerIds
-            row.removeValue(forKey: "sameEmailUserIds")
+            for key in ["sameEmailUserIds", "updatedAtMs", "hasName"] { row.removeValue(forKey: key) }
             return row
         }
-        var out: [[String: Any]] = []
-        for email in groups.keys.sorted() {
-            let sorted = (groups[email] ?? []).sorted { lhs, rhs in
-                let lhsExcluded = excluded.contains(text(lhs["id"]).lowercased())
-                let rhsExcluded = excluded.contains(text(rhs["id"]).lowercased())
-                if lhsExcluded != rhsExcluded { return !lhsExcluded }
-                if flag(lhs["isActive"]) != flag(rhs["isActive"]) { return flag(lhs["isActive"]) }
-                if flag(lhs["passwordSet"]) != flag(rhs["passwordSet"]) { return flag(lhs["passwordSet"]) }
-                return text(lhs["id"]) < text(rhs["id"])
-            }
-            guard let kept = sorted.first else { continue }
-            out.append(merged(kept, with: Array(sorted.dropFirst())))
-        }
-        out.append(contentsOf: withoutEmail.map { merged($0, with: []) })
-        return out
     }
 
     /// Whose scope `unbookedLabourRowsOnDay` applies: the viewer's warnings (Book labour, Warnings) or their Daily
@@ -1013,11 +1010,13 @@ enum WarningsComputation {
             ]
             // `users/{uid}.status`: a pending invitee is not unbooked (the script's `hasFinishedSignup`).
             if let status = user.status { row["status"] = status }
-            // RULEBOOK 1.53.0: the roster fold's same-email ids go with the person (into `formerIds`).
+            // RULEBOOK 1.53.0: the roster fold's inputs (`rosterPeople`); same-email ids go into `formerIds`.
             row["sameEmailUserIds"] = user.sameEmailUserIds
+            row["updatedAtMs"] = user.documentUpdatedAt.map { ($0.timeIntervalSince1970 * 1000).rounded() as Any } ?? NSNull()
+            row["hasName"] = !user.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             peopleRows.append(row)
         }
-        let people = unbookedPeopleOnePerEmail(peopleRows, excludedUserIds: excluded)
+        let people = unbookedPeopleOnePerEmail(peopleRows) ?? []
         let operativeRows: [[String: Any]] = operatives.map { operative in
             let foldedName = operative.name.lowercased()
             let foldedEmail = operative.email.lowercased()
@@ -1063,12 +1062,14 @@ enum WarningsComputation {
                 "approved": holiday.isApproved,
             ]
         }
+        // Review of #235: no paid day from the rulebook → no rows (the screen shows nothing rather than a guess).
+        guard let paidDay = CanonicalBusinessEngine.weekdayPaidHours(policy) else { return [] }
         let input = CanonicalUnbookedLabourDayInput(
             timeZone: OrganizationRulebookContext.timeZoneIdentifier,
             dayKey: dayKey,
             includeWeekends: includeWeekends,
             excludedUserIds: storedExcludedUserIds(excluded),
-            standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
+            standardPaidHours: paidDay,
             // RULEBOOK 1.49.0: counts-as through the one reader (`weekendCountsAsHours`), with this policy.
             saturdayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(policy.saturday, policy: policy),
             sundayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(
@@ -1242,12 +1243,14 @@ enum WarningsComputation {
             ]
             // `users/{uid}.status`: a pending invitee is not unbooked (the script's `hasFinishedSignup`).
             if let status = user.status { row["status"] = status }
-            // RULEBOOK 1.53.0: the roster fold's same-email ids go with the person (into `formerIds`).
+            // RULEBOOK 1.53.0: the roster fold's inputs (`rosterPeople`); same-email ids go into `formerIds`.
             row["sameEmailUserIds"] = user.sameEmailUserIds
+            row["updatedAtMs"] = user.updatedAtMs.map { $0 as Any } ?? NSNull()
+            row["hasName"] = user.hasName
             peopleRows.append(row)
         }
         let excludedIds = input.warningDetection.excludedUserIdsFromUnbookedWarnings
-        let people: [[String: Any]] = unbookedPeopleOnePerEmail(peopleRows, excludedUserIds: Set(excludedIds))
+        guard let people = unbookedPeopleOnePerEmail(peopleRows) else { return nil }
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
                 "id": Booking.storedOperativeId(for: operative.id),

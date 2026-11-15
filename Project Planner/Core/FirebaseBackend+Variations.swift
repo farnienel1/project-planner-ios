@@ -259,13 +259,15 @@ extension FirebaseBackend {
 
         var payload = variation
         payload.orgId = orgId
+        // Review of #235: the counters come from `variationTotals`; when the rule does not answer nothing is saved.
+        guard payload.totals != nil else { throw CanonicalWriteUnavailableError(function: "variationTotals") }
         payload.recomputeCounts()
-        let map = VariationCodec.firestoreMap(from: payload)
-        let openedMap: [String: Any]? = opened.map { copy -> [String: Any] in
-            var base = copy
+        let map = try VariationCodec.firestoreMap(from: payload)
+        var openedMap: [String: Any]? = nil
+        if var base = opened {
             base.orgId = orgId
             base.recomputeCounts()
-            return VariationCodec.firestoreMap(from: base)
+            openedMap = try VariationCodec.firestoreMap(from: base)
         }
         // The fields this edit changed (all of them for a new variation).
         var changedKeys: Set<String>? = nil
@@ -673,28 +675,39 @@ extension FirebaseBackend {
             ]
         }
         let main = variationsCollection(organizationId: orgId).document(variationId)
-        let outcome = try await Self.runVariationEvidenceLink(db: db, ref: main, entries: rows, userId: uid)
+        let mainOutcome = try await Self.runVariationEvidenceLink(db: db, ref: main, entries: rows, userId: uid)
+        // The settings copy: best effort when `variations/{id}` exists; the answer when only the copy exists (review of
+        // #235: a variation saved only as its settings copy reports what was linked there, not "did not upload").
+        var copyOutcome: (added: [String], alreadyLinked: [String], refused: [String])?
         do {
-            _ = try await Self.runVariationEvidenceLink(
+            copyOutcome = try await Self.runVariationEvidenceLink(
                 db: db,
                 ref: variationItemDocument(organizationId: orgId, variationId: variationId),
                 entries: rows,
                 userId: uid
             )
         } catch {
+            if mainOutcome == nil { throw error }
             print("⚠️ [Variations] evidence link on the settings copy skipped: \(error.localizedDescription)")
+        }
+        guard let outcome = mainOutcome ?? copyOutcome else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 404,
+                userInfo: [NSLocalizedDescriptionKey: "This variation was not found, so the files could not be added. Save it and try again."]
+            )
         }
         return (Set(outcome.added + outcome.alreadyLinked), Set(outcome.refused))
     }
 
     /// One document of `linkVariationEvidence`: read, `variationEvidenceAddWriteFields`, partial update, in one
-    /// transaction. A missing document links nothing.
+    /// transaction. Nil when the document is missing.
     nonisolated private static func runVariationEvidenceLink(
         db: Firestore,
         ref: DocumentReference,
         entries: [[String: Any]],
         userId: String
-    ) async throws -> (added: [String], alreadyLinked: [String], refused: [String]) {
+    ) async throws -> (added: [String], alreadyLinked: [String], refused: [String])? {
         let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
             let snapshot: DocumentSnapshot
             do {
@@ -703,7 +716,7 @@ extension FirebaseBackend {
                 errorPointer?.pointee = error as NSError
                 return nil
             }
-            guard let stored = snapshot.data() else { return ["added": [String](), "alreadyLinked": [String](), "refused": [String]()] as [String: Any] }
+            guard let stored = snapshot.data() else { return ["missing": true] as [String: Any] }
             guard let result = CanonicalBusinessEngine.variationEvidenceAddWriteFields(stored: stored, entries: entries) else {
                 errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationEvidenceAddWriteFields") as NSError
                 return nil
@@ -717,6 +730,7 @@ extension FirebaseBackend {
             return ["added": result.added, "alreadyLinked": result.alreadyLinked, "refused": result.refused] as [String: Any]
         }
         let map = answer as? [String: Any] ?? [:]
+        if map["missing"] as? Bool == true { return nil }
         func strings(_ key: String) -> [String] { (map[key] as? [String]) ?? [] }
         return (strings("added"), strings("alreadyLinked"), strings("refused"))
     }
@@ -726,8 +740,14 @@ extension FirebaseBackend {
     func storedVariationEvidenceKeys(variationId: String, organizationId: String) async -> Set<String>? {
         let orgId = normalizedOrganizationId(organizationId)
         do {
-            let snapshot = try await variationsCollection(organizationId: orgId).document(variationId).getDocument(source: .server)
-            guard let keys = CanonicalBusinessEngine.variationEvidenceKeys(stored: snapshot.data()) else { return nil }
+            var snapshot = try await variationsCollection(organizationId: orgId).document(variationId).getDocument(source: .server)
+            if !snapshot.exists {
+                // A variation saved only as its settings copy: its evidence is there.
+                snapshot = try await variationItemDocument(organizationId: orgId, variationId: variationId).getDocument(source: .server)
+            }
+            // Neither document: no answer, so no file is deleted.
+            guard snapshot.exists,
+                  let keys = CanonicalBusinessEngine.variationEvidenceKeys(stored: snapshot.data()) else { return nil }
             return Set(keys)
         } catch {
             return nil
@@ -808,7 +828,13 @@ nonisolated final class VariationUploadWatch: @unchecked Sendable {
     private let started = Date()
     private var lastProgress = Date()
     private var finished = false
-    private(set) var timedOut = false
+    private var didTimeOut = false
+
+    /// Read under the lock (review of #235).
+    var timedOut: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return didTimeOut
+    }
 
     func touch() {
         lock.lock(); lastProgress = Date(); lock.unlock()
@@ -832,7 +858,7 @@ nonisolated final class VariationUploadWatch: @unchecked Sendable {
         guard !finished else { return false }
         let now = Date()
         if now.timeIntervalSince(lastProgress) > stallSeconds || now.timeIntervalSince(started) > totalSeconds {
-            timedOut = true
+            didTimeOut = true
             return true
         }
         return false

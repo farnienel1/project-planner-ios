@@ -1001,7 +1001,7 @@ struct WeeklyReportView: View {
         )
 
         var subcontractorTotal = 0.0
-        let subRows = subcontractorRows().map { row -> [String] in
+        let subRows = try subcontractorRows().map { row -> [String] in
             subcontractorTotal += row.days
             return [row.projectName, row.jobNumber, row.subcontractorName, row.subcontractorType, row.timeSlotLabel, daysText(row.days)]
         }
@@ -1247,7 +1247,8 @@ struct WeeklyReportView: View {
         return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
     }
 
-    private func subcontractorRows() -> [SubcontractorWorkRow] {
+    /// Throws `PayCalculationError` when a booking's day value could not be worked out (review of #235: never a guessed 0.5).
+    private func subcontractorRows() throws -> [SubcontractorWorkRow] {
         let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = subcontractorStore.bookings.filter {
             let day = cal.startOfDay(for: $0.date)
@@ -1256,7 +1257,7 @@ struct WeeklyReportView: View {
                 && $0.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
         }
         // RULEBOOK 1.53.0: a booking whose job or firm was deleted still counts, under `bookingJobLabel` ("Deleted job").
-        return filtered.map { booking in
+        return try filtered.map { booking in
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let subcontractor = subcontractorStore.subcontractors.first(where: { $0.id == booking.subcontractorId })
@@ -1267,7 +1268,7 @@ struct WeeklyReportView: View {
                 subcontractorName: subcontractor?.name ?? "Sub contractor",
                 subcontractorType: subcontractor.map { $0.subcontractorType.isEmpty ? "—" : $0.subcontractorType } ?? "—",
                 timeSlotLabel: booking.timeSlot.displayName,
-                days: subcontractorDayValue(booking)
+                days: try subcontractorDayValue(booking)
             )
         }
         .sorted {
@@ -1280,7 +1281,7 @@ struct WeeklyReportView: View {
 
     /// RULEBOOK 1.51.0 §7 (Q4c) `subcontractorDayValue(timeSlot, { hours, standardDayHours })`: custom hours are the hours
     /// worked (`payrollHoursResult` under that day's working hours) ÷ that day's paid day (`weekdayPaidHours`).
-    private func subcontractorDayValue(_ booking: SubcontractorBooking) -> Double {
+    private func subcontractorDayValue(_ booking: SubcontractorBooking) throws -> Double {
         let policy = firebaseBackend.payrollPolicy(for: booking.date)
         let hours = CanonicalBusinessEngine.payrollHoursResult(RulebookPayrollHoursInput(
             booking: CanonicalPayrollBooking(
@@ -1293,11 +1294,13 @@ struct WeeklyReportView: View {
             dayKey: OrganizationRulebookContext.dayKey(booking.date),
             policy: policy
         ))
-        return CanonicalBusinessEngine.subcontractorDayValue(
-            booking.timeSlot.rawValue,
-            workedHours: hours?.workedHours,
-            standardDayHours: CanonicalBusinessEngine.weekdayPaidHours(policy)
-        ) ?? 0
+        guard let paidDay = CanonicalBusinessEngine.weekdayPaidHours(policy),
+              let days = CanonicalBusinessEngine.subcontractorDayValue(
+                booking.timeSlot.rawValue,
+                workedHours: hours?.workedHours,
+                standardDayHours: paidDay
+              ) else { throw PayCalculationError() }
+        return days
     }
 
     /// RULEBOOK 1.29.0 §7 `weeklyReportPayeOvertime`: one row per PAYE person per job with their overtime hours in the

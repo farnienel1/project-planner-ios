@@ -373,7 +373,9 @@ struct OrganisationSettingsHubView: View {
     private var hoursSubtitle: String {
         let p = policy
         let wk = formatMult(p.weekdayOutsideStandardMultiplier)
-        return "\(p.standardDayStart)–\(p.standardDayEnd) · \(ScheduleCoverageFormat.hours(CanonicalBusinessEngine.weekdayPaidHours(p)))h · weekday OT \(wk)×"
+        // Review of #235: "paid day unavailable" when the rulebook did not answer, never "0h".
+        let paidDay = CanonicalBusinessEngine.weekdayPaidHours(p).map { "\(ScheduleCoverageFormat.hours($0))h" } ?? "paid day unavailable"
+        return "\(p.standardDayStart)–\(p.standardDayEnd) · \(paidDay) · weekday OT \(wk)×"
     }
 
     private var annualLeaveDefaultsSubtitle: String {

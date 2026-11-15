@@ -501,7 +501,8 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
         } else {
             let ot = segments.otReported
             let paidSum = segments.totalPaidHours
-            let paidStd = CanonicalBusinessEngine.weekdayPaidHours(policy)
+            // Review of #235: "paid day unavailable" when the rulebook did not answer, never "0 hrs".
+            let paidStdText = CanonicalBusinessEngine.weekdayPaidHours(policy).map { ScheduleCoverageFormat.hours($0) + " hrs" } ?? "paid day unavailable"
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .center, spacing: 13) {
                     PPIconTile(symbol: "clock.fill", family: .plan, size: PPMetrics.menuIcon)
@@ -509,7 +510,7 @@ fileprivate struct MyScheduleTodaysHoursCard: View {
                         Text("Total hours")
                             .font(.headline)
                             .foregroundStyle(.primary)
-                        Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd) · \(ScheduleCoverageFormat.hours(paidStd)) hrs")
+                        Text("Standard \(timeline.standardWindowStart ?? policy.standardDayStart)–\(timeline.standardWindowEnd ?? policy.standardDayEnd) · \(paidStdText)")
                             .font(.footnote)
                             .monospacedDigit()
                             .foregroundStyle(.secondary)

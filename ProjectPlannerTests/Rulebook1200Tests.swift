@@ -69,12 +69,12 @@ final class Rulebook1200Tests: XCTestCase {
         )
     }
 
-    func testEveryPolicyPaysTheDerivedDay() {
-        XCTAssertEqual(CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: true)), 7.25, accuracy: 0.0001)
+    func testEveryPolicyPaysTheDerivedDay() throws {
+        XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: true))), 7.25, accuracy: 0.0001)
         // RULEBOOK 1.44.0 §4.3 (owner decision 14 Nov, question A option 1): the Monday–Friday paid day is always derived
         // from the working hours in effect that day — a policy saved before 1.20.0 no longer keeps its stored 8h.
         XCTAssertEqual(
-            CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: false)), 7.25, accuracy: 0.0001,
+            try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy(derived: false))), 7.25, accuracy: 0.0001,
             "1.44.0: the stored standardPaidHours of an older policy is ignored for pay"
         )
     }
@@ -89,7 +89,7 @@ final class Rulebook1200Tests: XCTestCase {
         // Read back from Firestore it stays derived.
         let read = OrgPayrollTimePolicy.fromFirestore(stored)
         XCTAssertEqual(read.paidHoursDerived, true)
-        XCTAssertEqual(CanonicalBusinessEngine.weekdayPaidHours(read), 7.25, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidHours(read)), 7.25, accuracy: 0.0001)
     }
 
     func testAnOldPolicyDoesNotWriteTheFlag() {

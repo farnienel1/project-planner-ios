@@ -285,7 +285,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
             if checkedParts.failed { check?.failed = true }
             if let parts = checkedParts.parts {
                 // The paid day a day's hours divide by (`orgDayHours` of that day's `weekdayPaidHours`), as web.
-                guard let standard = CanonicalBusinessEngine.orgDayHours(CanonicalBusinessEngine.weekdayPaidHours(linePolicy)) else {
+                guard let paidDay = CanonicalBusinessEngine.weekdayPaidHours(linePolicy),
+                      let standard = CanonicalBusinessEngine.orgDayHours(paidDay) else {
                     check?.failed = true
                     continue
                 }
@@ -317,7 +318,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 }
                 continue
             }
-            let days = scaledDays(line: line, originalAmount: line.amount, effectiveAmount: amount, policy: linePolicy)
+            // Review of #235: the paid day comes from the rulebook; without it nothing is signed or saved.
+            guard let days = scaledDays(line: line, originalAmount: line.amount, effectiveAmount: amount, policy: linePolicy) else {
+                check?.failed = true
+                continue
+            }
             push(signed(
                 labourLine(
                     from: line,
@@ -571,9 +576,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
         originalAmount: Double,
         effectiveAmount: Double,
         policy: OrgPayrollTimePolicy
-    ) -> Double {
+    ) -> Double? {
         // RULEBOOK 1.49.0 §8: days against the line's own divisor (the collector sets it per part, `payrollDayRateHours`).
-        let standard = max(line.standardDayHours ?? CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
+        // Nil when neither the line nor the rulebook gives a paid day (the snapshot is then refused, never clamped).
+        guard let divisor = line.standardDayHours ?? CanonicalBusinessEngine.weekdayPaidHours(policy), divisor > 0 else { return nil }
+        let standard = max(divisor, 0.01)
         let baseDays = max(0, line.paidHours) / standard
         guard originalAmount > 0.0001 else { return baseDays }
         return baseDays * (effectiveAmount / originalAmount)

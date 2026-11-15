@@ -139,7 +139,10 @@ enum TimesheetPayrollCollector {
             updatedAt: Date?
         ) {
             let policy = dayPolicy(for: day)
-            let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
+            // Review of #235: no paid day from the rulebook → the sheet is marked as not calculated (never a guess).
+            let paidDay = CanonicalBusinessEngine.weekdayPaidHours(policy)
+            if paidDay == nil { calculationFailed = true }
+            let standardDayHours = max(paidDay ?? 0, 0.01)
             // RULEBOOK 1.53.0: a PAYE day is no shift on a timesheet (no line, no pay), so it is not counted.
             if user.employmentType(on: day) != .paye { shiftCount += 1 }
             let resolved = PayrollRateResolver.resolveForTimesheetDay(

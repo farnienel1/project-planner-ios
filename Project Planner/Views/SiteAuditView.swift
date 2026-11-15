@@ -1281,6 +1281,13 @@ struct SiteAuditCreateFlowView: View {
         guard !Task.isCancelled,
               let data = try? await entry.loadTransferable(type: Data.self),
               !Task.isCancelled else { return nil }
+        // RULEBOOK 1.50.0 §24 (review of #235): over 40 MB / 50 MP is refused before the photo is decoded; it is
+        // counted with the photos that could not be added.
+        let refusal = await MainActor.run { StorageUploadPolicy.photoPrepareRefusal(data: data) }
+        if let refusal {
+            print("⚠️ [SiteAudit] photo refused: \(refusal)")
+            return nil
+        }
         return await Task.detached(priority: .userInitiated) {
             SiteAuditMediaProcessor.draftImage(from: data, capturedAt: capturedAt)
         }.value
