@@ -227,7 +227,10 @@ extension FirebaseBackend {
     private func putPayeClaimData(_ data: Data, path: String, contentType: String) async throws {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = contentType
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(data, metadata: metadata) { metadata, error in
                 if let error {

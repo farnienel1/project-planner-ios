@@ -1220,7 +1220,7 @@ struct SiteAuditCreateFlowView: View {
         for item in saved {
             if Task.isCancelled { return }
             guard let urlString = item.imageURL,
-                  let url = URL(string: urlString),
+                  let url = CanonicalBusinessEngine.safeExternalURL(urlString),
                   let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
             let normalized = await Task.detached(priority: .utility) {
                 SiteAuditMediaProcessor.displayImage(from: data)
@@ -2190,7 +2190,7 @@ struct SiteAuditDetailView: View {
                 set: { if !$0 { selectedImageURL = nil } }
             )) {
                 NavigationStack {
-                    AsyncImage(url: URL(string: selectedImageURL ?? "")) { image in
+                    AsyncImage(url: CanonicalBusinessEngine.safeExternalURL(selectedImageURL)) { image in
                         image.resizable().scaledToFit()
                     } placeholder: { ProgressView() }
                     .padding()
@@ -2265,7 +2265,7 @@ struct SiteAuditDetailView: View {
                 if !item.comments.isEmpty {
                     Text(item.comments).font(.subheadline)
                 }
-                if let url = item.imageURL, let imageURL = URL(string: url) {
+                if let url = item.imageURL, let imageURL = CanonicalBusinessEngine.safeExternalURL(url) {
                     Button { selectedImageURL = url } label: {
                         AsyncImage(url: imageURL) { phase in
                             switch phase {
@@ -2321,7 +2321,7 @@ struct SiteAuditDetailView: View {
         var drafts: [SiteAuditDraftItem] = []
         for item in displayAudit.items {
             var image: UIImage?
-            if let urlString = item.imageURL, let url = URL(string: urlString),
+            if let urlString = item.imageURL, let url = CanonicalBusinessEngine.safeExternalURL(urlString),
                let (data, _) = try? await URLSession.shared.data(from: url),
                let loaded = UIImage(data: data) {
                 image = await Task.detached(priority: .utility) {
@@ -2359,8 +2359,7 @@ struct SiteAuditDetailView: View {
 
     private func loadLogo() async -> UIImage? {
         guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = URL(string: logoURL),
-              url.scheme?.hasPrefix("http") == true,
+              let url = CanonicalBusinessEngine.safeExternalURL(logoURL),
               let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
         return UIImage(data: data)
     }

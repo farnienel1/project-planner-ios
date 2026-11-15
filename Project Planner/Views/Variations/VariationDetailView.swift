@@ -308,7 +308,7 @@ struct VariationDetailView: View {
 
     private func evidenceThumb(_ item: VariationEvidenceItem) -> some View {
         Button {
-            if let url = URL(string: item.downloadURL) { fullscreenURL = url }
+            if let url = CanonicalBusinessEngine.safeExternalURL(item.downloadURL) { fullscreenURL = url }
         } label: {
             VStack(spacing: 6) {
                 PPIconTile(symbol: item.contentType.contains("pdf") ? "doc.fill" : "photo", family: .plan, size: 36)

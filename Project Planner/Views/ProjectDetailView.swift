@@ -6040,7 +6040,8 @@ private struct TaskCompletionFileRow: View {
     
     var body: some View {
         Button(action: {
-            if let url = URL(string: urlString) {
+            // RULEBOOK 1.50.0 §24: a stored link opens only when `safeExternalUrl` allows it (https).
+            if let url = CanonicalBusinessEngine.safeExternalURL(urlString) {
                 UIApplication.shared.open(url)
             }
         }) {
@@ -6096,7 +6097,7 @@ private struct TaskCompletionImageView: View {
             }
         }
         .task(id: urlString) {
-            guard let url = URL(string: urlString), image == nil else { return }
+            guard let url = CanonicalBusinessEngine.safeExternalURL(urlString), image == nil else { return }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 if let uiImage = UIImage(data: data) {
@@ -6660,7 +6661,7 @@ struct CompletedTaskDetailView: View {
     private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, reportFileName: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
-                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
             } label: {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -6718,7 +6719,7 @@ struct CompletedTaskDetailView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
                         ForEach(Array(displayTask.completionImages.enumerated()), id: \.offset) { _, url in
                             Button {
-                                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
                             } label: {
                                 TaskCompletionImageView(urlString: url)
                                     .frame(height: 90)

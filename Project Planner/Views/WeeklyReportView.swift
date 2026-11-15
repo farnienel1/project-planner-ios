@@ -766,7 +766,7 @@ struct WeeklyReportView: View {
 
     private func loadOrganizationLogo() async {
         guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = URL(string: logoURL) else { return }
+              let url = CanonicalBusinessEngine.safeExternalURL(logoURL) else { return }
         if let (data, _) = try? await URLSession.shared.data(from: url),
            let image = UIImage(data: data) {
             await MainActor.run { logoImage = image }

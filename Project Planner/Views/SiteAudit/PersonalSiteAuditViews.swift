@@ -327,6 +327,11 @@ struct PersonalSiteAuditCreateView: View {
     }
 
     private func addPhoto(_ image: UIImage) {
+        // RULEBOOK 1.50.0 §24: a photo over 50 megapixels is refused (`photoPrepareRefusal`).
+        if let refusal = StorageUploadPolicy.photoPrepareRefusal(image: image) {
+            error = refusal
+            return
+        }
         do {
             let data = try StorageUploadPolicy.jpegDataFittingUploadLimit(
                 image,

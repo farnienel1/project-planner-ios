@@ -5,7 +5,8 @@
 //  How the app opens a stored file reference (health & safety RAMS and other documents, uploaded toolbox talks,
 //  deadline attachments). Same behaviour as web `lib/healthSafety/storedFile.ts` / `openStoredFile.ts` (PR #227):
 //
-//  - `.url`: an http(s) address that already carries its access token (or any non-Firebase http(s) URL): open as is.
+//  - `.url`: an https address that already carries its access token (or any non-Firebase https URL), only as
+//    `safeExternalUrl` allows it (RULEBOOK 1.50.0: https, or http to localhost for the emulator).
 //  - `.storage`: a Storage object path — from a `gs://` URL (what older iOS builds stored when `downloadURL()` failed
 //    after an upload), a bare `organizations/...` path, or a Firebase download URL without a token. The app asks
 //    Storage for a fresh download URL (the signed-in member's read rule) before opening it.
@@ -35,7 +36,9 @@ enum StoredFileTarget: Equatable {
             if isFirebaseObject, !hasToken, let path = CanonicalBusinessEngine.fileReportStoragePath(raw), !path.isEmpty {
                 return .storage(path)
             }
-            guard let url = URL(string: raw) else { return nil }
+            // RULEBOOK 1.50.0 §24 `safeExternalUrl`: https only (http to localhost for the emulator); a plain http address
+            // is no link.
+            guard let url = CanonicalBusinessEngine.safeExternalURL(raw) else { return nil }
             return .url(url)
         }
         guard let path = CanonicalBusinessEngine.fileReportStoragePath(raw), !path.isEmpty else { return nil }
@@ -60,7 +63,10 @@ enum StoredFileLink {
             return url
         case .storage(let path):
             #if canImport(FirebaseStorage)
-            return try await Storage.storage().reference(withPath: path).downloadURL()
+            let url = try await Storage.storage().reference(withPath: path).downloadURL()
+            // RULEBOOK 1.50.0 §24: the download address is opened only when `safeExternalUrl` allows it.
+            guard let safe = CanonicalBusinessEngine.safeExternalURL(url) else { throw Unopenable() }
+            return safe
             #else
             throw Unopenable()
             #endif

@@ -528,19 +528,20 @@ extension FirebaseBackend {
             "organizations/\(orgId)/variations/\(variationId)/\(prepared.objectName)"
         ]
         var lastError: Error?
-        let contentTypes = prepared.contentType == "application/octet-stream"
-            ? [prepared.contentType]
-            : [prepared.contentType, "application/octet-stream"]
-        for type in contentTypes {
-            for path in paths {
-                do {
-                    let result = try await putVariationEvidenceData(prepared.data, path: path, contentType: type)
-                    print("✅ [Variations] Evidence uploaded to \(path)")
-                    return result
-                } catch {
-                    lastError = error
-                    print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
-                }
+        // RULEBOOK 1.50.0 §24: one type per upload — the type `uploadAllowed` read from the bytes. The retry with
+        // `application/octet-stream` is gone (the rules refuse it, and so does the rulebook). A refusal by the
+        // rulebook is final: it is the same for both paths.
+        for path in paths {
+            let contentType = try StorageUploadPolicy.checkedUploadContentType(
+                storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
+            )
+            do {
+                let result = try await putVariationEvidenceData(prepared.data, path: path, contentType: contentType)
+                print("✅ [Variations] Evidence uploaded to \(path)")
+                return result
+            } catch {
+                lastError = error
+                print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
             }
         }
         throw lastError ?? NSError(
@@ -713,7 +714,7 @@ nonisolated private final class VariationListenerBag: NSObject, ListenerRegistra
 }
 
 enum VariationEvidenceProcessor {
-    static let maxBytes = StorageUploadPolicy.variationMaxBytes
+    static var maxBytes: Int { StorageUploadPolicy.variationMaxBytes }
 
     static func isAllowed(fileName: String, contentType: String, byteCount: Int) -> Bool {
         StorageUploadPolicy.refusal(
@@ -730,7 +731,7 @@ enum VariationEvidenceProcessor {
             maxBytes: maxBytes,
             initialQuality: 0.7,
             encodeFailedMessage: "Failed to process image",
-            oversizedMessage: "That file is too large. Evidence must be 20 MB or smaller."
+            oversizedMessage: CanonicalBusinessEngine.uploadRefusalMessage(kind: "variation_evidence", reason: "too_large")
         )
     }
 }

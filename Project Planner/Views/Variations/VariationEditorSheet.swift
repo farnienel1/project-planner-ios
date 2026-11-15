@@ -1466,23 +1466,41 @@ struct VariationEditorSheet: View {
     }
 
     private func suggestedFileName(for item: PhotosPickerItem) -> String {
+        // RULEBOOK 1.50.0: never invent an extension ("bin"); with none, the first bytes decide (`uploadAllowed`).
         let type = item.supportedContentTypes.first
-        let ext = type?.preferredFilenameExtension ?? "bin"
-        if type?.conforms(to: .image) == true { return "photo.\(ext)" }
-        if type?.conforms(to: .movie) == true { return "video.\(ext)" }
-        return "evidence.\(ext)"
+        let base = type?.conforms(to: .image) == true ? "photo" : "evidence"
+        guard let ext = type?.preferredFilenameExtension, !ext.isEmpty else { return base }
+        return "\(base).\(ext)"
     }
 
     private func uploadPickedPayload(_ data: Data, fileName: String, contentType: String) async {
         let type = contentType.lowercased()
-        if type.hasPrefix("image/") || UTType(mimeType: contentType)?.conforms(to: .image) == true,
-           let image = UIImage(data: data),
-           let jpeg = VariationEvidenceProcessor.preparedImageData(image) {
-            let displayName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-            await uploadData(jpeg, fileName: displayName.isEmpty ? "photo.jpg" : displayName, contentType: "image/jpeg")
-            return
+        // The bytes say whether it is a photo even when the picker gave no name or type (`uploadAllowed`).
+        let readType = CanonicalBusinessEngine.uploadAllowed(
+            kind: "variation_evidence", fileName: fileName, contentType: contentType,
+            sizeBytes: data.isEmpty ? 0 : 1, headBytes: data
+        ).contentType ?? ""
+        if readType.hasPrefix("image/") || type.hasPrefix("image/") || UTType(mimeType: contentType)?.conforms(to: .image) == true {
+            // RULEBOOK 1.50.0 §24: a photo over 40 MB / 50 MP is refused before it is decoded (`photoPrepareRefusal`).
+            do {
+                let image = try StorageUploadPolicy.preparablePhoto(from: data)
+                if let jpeg = VariationEvidenceProcessor.preparedImageData(image) {
+                    await uploadData(jpeg, fileName: Self.jpegFileName(fileName), contentType: "image/jpeg")
+                    return
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
         }
         await uploadData(data, fileName: fileName, contentType: contentType.isEmpty ? mime(for: fileName) : contentType)
+    }
+
+    /// The redrawn photo is a JPEG: its name says so, so `uploadAllowed` (name vs bytes) agrees.
+    private static func jpegFileName(_ fileName: String) -> String {
+        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = (trimmed as NSString).deletingPathExtension
+        return (base.isEmpty ? "photo" : base) + ".jpg"
     }
 
     @MainActor
@@ -1505,13 +1523,15 @@ struct VariationEditorSheet: View {
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
         guard let data = try? Data(contentsOf: url) else { return }
         let name = url.lastPathComponent
-        if data.count > VariationEvidenceProcessor.maxBytes {
-            errorMessage = "That file is too large. Evidence must be 20 MB or smaller."
-            return
-        }
         let type = UTType(filenameExtension: url.pathExtension)
-        if type?.conforms(to: .image) == true, let image = UIImage(data: data) {
-            await addImage(image, fileName: name)
+        if type?.conforms(to: .image) == true {
+            // RULEBOOK 1.50.0 §24: refused before decoding when over 40 MB / 50 MP; the cap applies to the redrawn copy.
+            do {
+                let image = try StorageUploadPolicy.preparablePhoto(from: data)
+                await addImage(image, fileName: name)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
             return
         }
         await uploadData(data, fileName: name, contentType: mime(for: name))
@@ -1519,20 +1539,24 @@ struct VariationEditorSheet: View {
 
     private func addImage(_ image: UIImage, fileName: String) async {
         guard let data = VariationEvidenceProcessor.preparedImageData(image) else { return }
-        let displayName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
-        await uploadData(data, fileName: displayName.isEmpty ? "photo.jpg" : displayName, contentType: "image/jpeg")
+        await uploadData(data, fileName: Self.jpegFileName(fileName), contentType: "image/jpeg")
     }
 
     private func uploadData(_ data: Data, fileName: String, contentType: String) async {
-        if let message = StorageUploadPolicy.refusal(
-            family: .variationEvidence,
-            fileExtension: (fileName as NSString).pathExtension,
+        // RULEBOOK 1.50.0 §24: the rulebook's check on the bytes as they will be uploaded (`uploadAllowed`): photo or
+        // PDF, at most 10 MB, the name and claimed type matching the bytes. The type it reads is what is stored.
+        let decision = CanonicalBusinessEngine.uploadAllowed(
+            kind: "variation_evidence",
+            fileName: fileName,
             contentType: contentType,
-            byteCount: data.count
-        ) {
-            errorMessage = message
+            sizeBytes: data.count,
+            headBytes: data
+        )
+        guard decision.allowed, let checkedType = decision.contentType else {
+            errorMessage = decision.message ?? CanonicalBusinessEngine.uploadNoAnswerMessage
             return
         }
+        let contentType = checkedType
         guard evidence.count < Self.maxEvidence else {
             showUndo("Up to \(Self.maxEvidence) files per variation", restore: nil)
             return
@@ -1759,7 +1783,8 @@ struct VariationEditorSheet: View {
         if !ext.isEmpty, let type = UTType(filenameExtension: ext), let mime = type.preferredMIMEType {
             return mime
         }
-        return "application/octet-stream"
+        // RULEBOOK 1.50.0: never `application/octet-stream`; a blank type lets the first bytes decide.
+        return ""
     }
 
     private func typeBadge(_ item: VariationEvidenceItem) -> String {

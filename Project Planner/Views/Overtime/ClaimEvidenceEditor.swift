@@ -139,6 +139,11 @@ struct ClaimEvidenceEditor: View {
 
     /// Every photo becomes a JPEG (`jpegDataFittingUploadLimit`) so the report and invoice can draw it full size.
     private func addPhoto(_ image: UIImage) {
+        // RULEBOOK 1.50.0 §24: a photo over 50 megapixels is refused (`photoPrepareRefusal`).
+        if let refusal = StorageUploadPolicy.photoPrepareRefusal(image: image) {
+            message = refusal
+            return
+        }
         do {
             let data = try StorageUploadPolicy.jpegDataFittingUploadLimit(
                 image,
@@ -165,10 +170,29 @@ struct ClaimEvidenceEditor: View {
             message = "This file could not be read."
             return
         }
-        let type = UTType(filenameExtension: url.pathExtension.lowercased())
-        if type?.conforms(to: .pdf) == true {
-            guard data.count <= StorageUploadPolicy.standardMaxBytes else {
-                message = "This file is larger than 10 MB."
+        // RULEBOOK 1.50.0 §24: the rulebook reads the file's name, size and first bytes (`uploadAllowed`): a PDF is kept
+        // as a PDF, a photo is redrawn as a JPEG, anything else (SVG, GIF, Office, a renamed file) is refused.
+        let picked = CanonicalBusinessEngine.uploadAllowed(
+            kind: "paye_claim_evidence",
+            fileName: url.lastPathComponent,
+            contentType: nil,
+            sizeBytes: data.isEmpty ? 0 : 1,
+            headBytes: data
+        )
+        guard picked.allowed, let type = picked.contentType else {
+            message = picked.message ?? CanonicalBusinessEngine.uploadNoAnswerMessage
+            return
+        }
+        if type == "application/pdf" {
+            let sized = CanonicalBusinessEngine.uploadAllowed(
+                kind: "paye_claim_evidence",
+                fileName: url.lastPathComponent,
+                contentType: type,
+                sizeBytes: data.count,
+                headBytes: data
+            )
+            guard sized.allowed else {
+                message = sized.message ?? CanonicalBusinessEngine.uploadNoAnswerMessage
                 return
             }
             pending.append(PendingPayeClaimEvidence(
@@ -176,10 +200,13 @@ struct ClaimEvidenceEditor: View {
                 source: .file(data: data, contentType: "application/pdf", kind: "file")
             ))
             message = nil
-        } else if type?.conforms(to: .image) == true, type?.conforms(to: .svg) != true, let image = UIImage(data: data) {
-            addPhoto(image)
         } else {
-            message = "Evidence must be a photo or a PDF."
+            do {
+                let image = try StorageUploadPolicy.preparablePhoto(from: data)
+                addPhoto(image)
+            } catch {
+                message = error.localizedDescription
+            }
         }
     }
 }

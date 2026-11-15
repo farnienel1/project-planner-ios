@@ -152,7 +152,7 @@ enum SiteAuditLogoLoader {
     private static var cache: [String: UIImage] = [:]
 
     static func logo(urlString: String?) async -> UIImage? {
-        guard let urlString, let url = URL(string: urlString), url.scheme?.hasPrefix("http") == true else { return nil }
+        guard let urlString, let url = CanonicalBusinessEngine.safeExternalURL(urlString) else { return nil }
         if let cached = cache[urlString] { return cached }
         var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 2.5)
         request.httpMethod = "GET"
