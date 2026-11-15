@@ -122,9 +122,23 @@ final class Rulebook1190Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
             policy: paidSaturday, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
         ))
-        XCTAssertNotNil(CanonicalBusinessEngine.customHoursBreakWarning(
+        // RULEBOOK 1.49.0 §4.3: on a set-window weekend day the warning shows only when the break falls in the outside
+        // hours (inside the window it is allowed for in "counts as", so turning it off changes nothing).
+        XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
             policy: unpaidSaturday, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
-        ))
+        ), "break inside the 07:30–14:00 window")
+        var shortWindowPaid = paidSaturday
+        shortWindowPaid.saturday.customStandardEnd = "11:00"
+        shortWindowPaid.saturday.countsAsHours = 4
+        var shortWindowUnpaid = unpaidSaturday
+        shortWindowUnpaid.saturday.customStandardEnd = "11:00"
+        shortWindowUnpaid.saturday.countsAsHours = 4
+        XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
+            policy: shortWindowPaid, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
+        ), "a paid break never warns")
+        XCTAssertNotNil(CanonicalBusinessEngine.customHoursBreakWarning(
+            policy: shortWindowUnpaid, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
+        ), "an unpaid break in the outside hours warns")
         let windows = CanonicalBusinessEngine.payrollDayWindows(policy: unpaidSaturday, dayKey: saturday, timeZone: zone)
         XCTAssertEqual(windows?.paidWindow, CanonicalMinuteInterval(start: 450, end: 840))
         XCTAssertEqual(windows?.unpaidBreak, CanonicalMinuteInterval(start: 720, end: 750))
