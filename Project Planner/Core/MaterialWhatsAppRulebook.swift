@@ -27,12 +27,17 @@ enum MaterialWhatsAppRulebook {
 
     struct Line: Equatable {
         var material: String
-        var quantity: Int
+        /// RULEBOOK 1.48.0: a Metre line may be 12.5.
+        var quantity: Double
         var unit: String
         var brand: String?
         var productCode: String?
         var notes: String?
         var lengthDisplay: String?
+        /// RULEBOOK 1.48.0: the order unit and what is in one; the message prints `materialLineText` from them.
+        var orderUnit: String? = nil
+        var contentAmount: Double? = nil
+        var contentMeasure: String? = nil
     }
 
     struct Input: Equatable {
@@ -81,7 +86,10 @@ enum MaterialWhatsAppRulebook {
                     "brand": optional(line.brand),
                     "productCode": optional(line.productCode),
                     "notes": optional(line.notes),
-                    "lengthDisplay": optional(line.lengthDisplay)
+                    "lengthDisplay": optional(line.lengthDisplay),
+                    "orderUnit": optional(line.orderUnit),
+                    "contentAmount": RulebookJSON.orNull(line.contentAmount),
+                    "contentMeasure": optional(line.contentMeasure)
                 ]
             },
             "recipients": input.recipients.map { recipient -> [String: Any] in

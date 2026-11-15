@@ -9,7 +9,7 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
 
     private func item(
         _ name: String,
-        quantity: Int = 2,
+        quantity: Double = 2,
         unit: MaterialUnit = .box,
         brand: String? = nil,
         productCode: String? = nil,
@@ -156,7 +156,8 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         ])
         XCTAssertEqual(lines.count, 2)
         XCTAssertEqual(lines[0]["material"] as? String, "Plasterboard 12.5mm")
-        XCTAssertEqual(lines[0]["quantity"] as? Int, 4)
+        // RULEBOOK 1.48.0: the quantity is a number that may have decimals for Metre.
+        XCTAssertEqual(lines[0]["quantity"] as? Double, 4)
         XCTAssertEqual(lines[0]["unit"] as? String, "Box")
         XCTAssertEqual(lines[0]["brand"] as? String, "Gyproc")
         XCTAssertEqual(lines[0]["productCode"] as? String, "GB125")
@@ -167,7 +168,16 @@ final class MaterialRequestEmailPayloadTests: XCTestCase {
         XCTAssertNil(lines[1]["productCode"])
         XCTAssertNil(lines[1]["notes"])
         XCTAssertEqual(lines[1]["lengthDisplay"] as? String, item("x", length: "3", lengthUnit: .metres).formattedLengthSpecification)
-        let allowed: Set<String> = ["material", "quantity", "unit", "brand", "productCode", "notes", "lengthDisplay"]
+        // RULEBOOK 1.48.0: each line also carries the order unit and what is in one (`materialLineText` in the function).
+        XCTAssertEqual(lines[0]["orderUnit"] as? String, "Box")
+        XCTAssertNil(lines[0]["contentAmount"])
+        XCTAssertEqual(lines[1]["orderUnit"] as? String, "Length")
+        XCTAssertEqual(lines[1]["contentAmount"] as? Double, 3)
+        XCTAssertEqual(lines[1]["contentMeasure"] as? String, "m")
+        let allowed: Set<String> = [
+            "material", "quantity", "unit", "brand", "productCode", "notes", "lengthDisplay",
+            "orderUnit", "contentAmount", "contentMeasure",
+        ]
         for line in lines { XCTAssertTrue(Set(line.keys).isSubset(of: allowed), "\(line.keys)") }
     }
 

@@ -62,17 +62,20 @@ final class Rulebook1190Tests: XCTestCase {
         XCTAssertEqual(result.unpaidBreakHours, 0, accuracy: 0.001)
     }
 
-    func testSaturdayWindowWithAnUnpaidBreakTakesHalfAnHourOff() throws {
+    /// RULEBOOK 1.49.0 §4.3 (owner answer 15 Nov, 3): the unpaid break is allowed for in "counts as" — a full window
+    /// credits exactly 8h (7.5h before 1.49.0) and no break comes off the window.
+    func testSaturdayWindowWithAnUnpaidBreakIsAllowedForInCountsAs() throws {
         let result = try paid(ownerPolicy(saturdayBreakPaid: false), day: saturday, "07:30", "14:00")
-        XCTAssertEqual(result.hours.totalPaidHours, 7.5, accuracy: 0.001)
-        XCTAssertEqual(result.unpaidBreakHours, 0.5, accuracy: 0.001)
+        XCTAssertEqual(result.hours.totalPaidHours, 8, accuracy: 0.001)
+        XCTAssertEqual(result.unpaidBreakHours, 0, accuracy: 0.001)
     }
 
-    func testSaturdaysOwnFortyFiveMinuteBreakTakesThreeQuartersOff() throws {
+    /// RULEBOOK 1.49.0 §4.3: whatever the day's own break, a full window is the counts-as (7.25h before 1.49.0).
+    func testSaturdaysOwnFortyFiveMinuteBreakIsAllowedForInAFullWindow() throws {
         let policy = ownerPolicy(saturdayBreakPaid: false, saturdayBreakMinutes: 45, saturdayBreakWindow: ("11:30", "12:15"))
         let result = try paid(policy, day: saturday, "07:30", "14:00")
-        XCTAssertEqual(result.hours.totalPaidHours, 7.25, accuracy: 0.001)
-        XCTAssertEqual(result.unpaidBreakHours, 0.75, accuracy: 0.001)
+        XCTAssertEqual(result.hours.totalPaidHours, 8, accuracy: 0.001)
+        XCTAssertEqual(result.unpaidBreakHours, 0, accuracy: 0.001)
         let dayBreak = try XCTUnwrap(CanonicalBusinessEngine.payrollBreakOnDay(policy: policy, dayKey: saturday, timeZone: zone))
         XCTAssertEqual(dayBreak, RulebookDayBreak(start: 690, end: 735, minutes: 45, paid: false))
         XCTAssertEqual(
@@ -97,13 +100,15 @@ final class Rulebook1190Tests: XCTestCase {
             policy: ownerPolicy(saturdayBreakPaid: false, sundayBreakPaid: false),
             dayKeys: [saturday, sunday], start: "07:30", end: "14:00", isBreakRemoved: false, timeZone: zone
         ))
+        // RULEBOOK 1.49.0 §4.3: Saturday's full window is the counts-as with the unpaid break allowed for (was
+        // "8h − 0.5h unpaid break = 7.5h"); Sunday every hour at ×2 keeps the 1.20.3 break rule.
         XCTAssertEqual(rows.map(\.line), [
-            "Saturday 07:30–14:00 = 8h − 0.5h unpaid break = 7.5h",
+            "Saturday 07:30–14:00 = 8h (counts as a full day)",
             "Sunday 07:30–14:00 = 6.5h × 2 = 13h − 0.5h unpaid break = 12.5h",
         ])
-        XCTAssertEqual(rows.map(\.unpaidBreakHours), [0.5, 0.5])
-        XCTAssertEqual(rows[0].lines.map(\.label), ["Set hours", "Unpaid break", "Total paid hours"])
-        XCTAssertEqual(rows[0].lines.map(\.value), ["8h", "−0.5h", "7.5h"])
+        XCTAssertEqual(rows.map(\.unpaidBreakHours), [0, 0.5])
+        XCTAssertEqual(rows[0].lines.map(\.label), ["Set hours", "Total paid hours"])
+        XCTAssertEqual(rows[0].lines.map(\.value), ["8h", "8h"])
         XCTAssertEqual(rows[1].lines.map(\.label), ["Every hour", "Unpaid break", "Total paid hours"])
         XCTAssertEqual(rows[1].lines.map(\.value), ["6.5h × 2", "−0.5h", "12.5h"])
     }
@@ -117,9 +122,23 @@ final class Rulebook1190Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
             policy: paidSaturday, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
         ))
-        XCTAssertNotNil(CanonicalBusinessEngine.customHoursBreakWarning(
+        // RULEBOOK 1.49.0 §4.3: on a set-window weekend day the warning shows only when the break falls in the outside
+        // hours (inside the window it is allowed for in "counts as", so turning it off changes nothing).
+        XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
             policy: unpaidSaturday, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
-        ))
+        ), "break inside the 07:30–14:00 window")
+        var shortWindowPaid = paidSaturday
+        shortWindowPaid.saturday.customStandardEnd = "11:00"
+        shortWindowPaid.saturday.countsAsHours = 4
+        var shortWindowUnpaid = unpaidSaturday
+        shortWindowUnpaid.saturday.customStandardEnd = "11:00"
+        shortWindowUnpaid.saturday.countsAsHours = 4
+        XCTAssertNil(CanonicalBusinessEngine.customHoursBreakWarning(
+            policy: shortWindowPaid, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
+        ), "a paid break never warns")
+        XCTAssertNotNil(CanonicalBusinessEngine.customHoursBreakWarning(
+            policy: shortWindowUnpaid, dayKey: saturday, workStartTime: "07:30", workEndTime: "14:00", isBreakRemoved: false, timeZone: zone
+        ), "an unpaid break in the outside hours warns")
         let windows = CanonicalBusinessEngine.payrollDayWindows(policy: unpaidSaturday, dayKey: saturday, timeZone: zone)
         XCTAssertEqual(windows?.paidWindow, CanonicalMinuteInterval(start: 450, end: 840))
         XCTAssertEqual(windows?.unpaidBreak, CanonicalMinuteInterval(start: 720, end: 750))

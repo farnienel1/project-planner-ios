@@ -418,11 +418,13 @@ enum WarningsComputation {
                 breakWindowStart: input.payrollTimePolicy.breakWindowStart,
                 breakWindowEnd: input.payrollTimePolicy.breakWindowEnd,
                 standardUnpaidBreakHours: input.payrollTimePolicy.standardUnpaidBreakHours,
-                saturdayCountsAsHours: input.payrollTimePolicy.saturday.resolvedCountsAsHours(
-                    fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback
+                // RULEBOOK 1.49.0: counts-as through the one reader (`weekendCountsAsHours`), with this policy.
+                saturdayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(
+                    input.payrollTimePolicy.saturday, policy: input.payrollTimePolicy
                 ),
-                sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: input.payrollTimePolicy)
-                    .resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
+                sundayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(
+                    PayrollTimePolicyCatalog.resolvedSundaySettings(from: input.payrollTimePolicy), policy: input.payrollTimePolicy
+                )
             ),
             warningDetection: .init(
                 detectClashes: input.warningDetection.detectClashes,
@@ -1155,9 +1157,11 @@ enum WarningsComputation {
             includeWeekends: includeWeekends,
             excludedUserIds: storedExcludedUserIds(excluded),
             standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
-            saturdayCountsAsHours: policy.saturday.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback),
-            sundayCountsAsHours: PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy)
-                .resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback),
+            // RULEBOOK 1.49.0: counts-as through the one reader (`weekendCountsAsHours`), with this policy.
+            saturdayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(policy.saturday, policy: policy),
+            sundayCountsAsHours: CanonicalBusinessEngine.weekendCountsAsHours(
+                PayrollTimePolicyCatalog.resolvedSundaySettings(from: policy), policy: policy
+            ),
             standardDayStart: policy.standardDayStart,
             standardDayEnd: policy.standardDayEnd,
             breakWindowStart: policy.breakWindowStart,

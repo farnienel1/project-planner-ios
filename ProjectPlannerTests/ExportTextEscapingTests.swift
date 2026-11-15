@@ -42,16 +42,18 @@ final class ExportTextEscapingTests: XCTestCase {
         XCTAssertEqual(ExportTextEscaping.csvField("say \"hi\""), "\"say \"\"hi\"\"\"")
     }
 
-    func testCatalogueHeaderIsUnchangedAndFormulaNamesArePrefixed() {
+    /// RULEBOOK 1.48.0: the header is `MATERIAL_CATALOGUE_CSV_HEADER` (new columns, then the old ones, so old files and
+    /// older tools still read it) and every cell comes from `materialCatalogueCsvExport` (formula guard included).
+    func testCatalogueHeaderIsTheRulebooksAndFormulaNamesArePrefixed() throws {
         XCTAssertEqual(
             MaterialCatalogCSV.headerLine,
-            "Catalogue ID,Name,Category,Manufacturer/Brand,Product Code,Default Type (Length Drum Box Pallet or Number),Size,Length,Length Unit (M or MM)"
+            "Catalogue ID,Name,Category,Manufacturer/Brand,Product Code,Order unit,Contents amount,Contents measure,Size,Default Type (Length Drum Box Pallet or Number),Length,Length Unit (M or MM)"
         )
-        let csv = MaterialCatalogCSV.csvString(for: [
+        let csv = try XCTUnwrap(MaterialCatalogCSV.csvString(for: [
             catalogueItem(name: "=1+1"),
             catalogueItem(name: "Tray"),
             catalogueItem(name: "Smith, Ada")
-        ])
+        ]))
         let lines = csv.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         XCTAssertEqual(lines.first, MaterialCatalogCSV.headerLine)
         XCTAssertTrue(csv.contains(",'=1+1,"))

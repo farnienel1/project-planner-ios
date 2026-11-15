@@ -495,16 +495,13 @@ struct MaterialItemRow: View {
                 Text(material.material)
                     .font(.body)
                     .fontWeight(.medium)
-                Text("\(material.quantity) \(material.unit.quantityLabel(for: material.quantity))")
+                // RULEBOOK 1.48.0 `materialLineText` ("2no 50m drums"); Size through `materialSizeText`.
+                Text(material.quantityText)
                     .font(.caption)
                     .foregroundColor(.secondary)
-                if let size = material.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
+                let size = CanonicalBusinessEngine.materialSizeText(material.size).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !size.isEmpty {
                     Text("Size: \(size)")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                if !material.formattedLengthSpecification.isEmpty {
-                    Text("Length: \(material.formattedLengthSpecification)")
                         .font(.caption2)
                         .foregroundColor(.secondary)
                 }
@@ -587,12 +584,10 @@ struct AddMaterialView: View {
     struct MaterialEntryForm: Identifiable {
         let id = UUID()
         var selectedDate: Date
-        var quantity: Int = 1
-        var unit: MaterialUnit = .number
+        /// RULEBOOK 1.48.0: quantity, order unit and what is in one.
+        var quantity = MaterialQuantityDraft.newLine
         var materialDescription: String = ""
         var size: String = ""
-        var length: String = ""
-        var lengthUnit: MaterialLengthUnit?
 
         init(selectedDate: Date) {
             self.selectedDate = selectedDate
@@ -692,6 +687,12 @@ struct AddMaterialView: View {
     private func saveAllMaterials() {
         let validEntries = materialEntries.filter { !$0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         guard !validEntries.isEmpty else { return }
+        // RULEBOOK 1.48.0 `materialQuantityError` / `materialContentError` for every new line.
+        if let error = validEntries.lazy.compactMap({ $0.quantity.validationError(comparedWith: nil) }).first {
+            saveErrorMessage = error
+            showingSaveErrorAlert = true
+            return
+        }
         
         isSaving = true
         let addedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
@@ -710,9 +711,9 @@ struct AddMaterialView: View {
             for entry in validEntries {
                 let normalizedDate = calendar.startOfDay(for: entry.selectedDate)
                 
-                let material = MaterialItem(
-                    quantity: entry.quantity,
-                    unit: entry.unit,
+                var material = MaterialItem(
+                    quantity: entry.quantity.quantity ?? 1,
+                    unit: .number,
                     material: entry.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines),
                     addedBy: addedBy,
                     addedByUserId: firebaseBackend.currentUser?.uid,
@@ -720,14 +721,10 @@ struct AddMaterialView: View {
                     date: normalizedDate,
                     size: entry.size.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         ? nil
-                        : entry.size.trimmingCharacters(in: .whitespacesAndNewlines),
-                    length: entry.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? nil
-                        : entry.length.trimmingCharacters(in: .whitespacesAndNewlines),
-                    lengthUnit: entry.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? nil
-                        : entry.lengthUnit
+                        : entry.size.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
+                // RULEBOOK 1.48.0: the rulebook writer writes the old `unit` / length fields from the order unit.
+                entry.quantity.apply(to: &material)
                 
                 do {
                     _ = try await MaterialOfflineService.saveMaterial(
@@ -832,61 +829,17 @@ private struct MaterialEntrySection: View {
             .accessibilityIdentifier("materialEntrySection.date")
             .datePickerStyle(.compact)
             
-            Picker("Quantity", selection: Binding(
+            // RULEBOOK 1.48.0: quantity, order unit and "What's in one" (replaces Type + Length + Length unit).
+            MaterialsOrderUnitRow(draft: Binding(
                 get: { entry.quantity },
                 set: { newValue in
                     if let index = entries.firstIndex(where: { $0.id == entry.id }) {
                         entries[index].quantity = newValue
                     }
                 }
-            )) {
-                ForEach(1...100, id: \.self) { num in
-                    Text("\(num)").tag(num)
-                }
-            }
+            ))
                 .accessibilityIdentifier("materialEntrySection.quantity")
-            
-            Picker(MaterialUnit.typePickerTitle, selection: Binding(
-                get: { entry.unit },
-                set: { newValue in
-                    if let index = entries.firstIndex(where: { $0.id == entry.id }) {
-                        entries[index].unit = newValue
-                    }
-                }
-            )) {
-                ForEach(MaterialUnit.allCases, id: \.self) { unit in
-                    Text(unit.displayName).tag(unit)
-                }
-            }
-                .accessibilityIdentifier("materialEntrySection.picker")
 
-            HStack(spacing: 8) {
-                TextField("Length (optional)", text: Binding(
-                    get: { entry.length },
-                    set: { newValue in
-                        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
-                            entries[index].length = newValue
-                        }
-                    }
-                ))
-                    .accessibilityIdentifier("materialEntrySection.lengthOptional")
-                Picker("Unit", selection: Binding(
-                    get: { entry.lengthUnit ?? .metres },
-                    set: { newValue in
-                        if let index = entries.firstIndex(where: { $0.id == entry.id }) {
-                            let trimmed = entries[index].length.trimmingCharacters(in: .whitespacesAndNewlines)
-                            entries[index].lengthUnit = trimmed.isEmpty ? nil : newValue
-                        }
-                    }
-                )) {
-                    ForEach(MaterialLengthUnit.allCases, id: \.self) { u in
-                        Text(u.displayName).tag(u)
-                    }
-                }
-                .accessibilityIdentifier("materialEntrySection.unit")
-                .pickerStyle(.menu)
-            }
-            
             TextField("Material Description", text: Binding(
                 get: { entry.materialDescription },
                 set: { newValue in

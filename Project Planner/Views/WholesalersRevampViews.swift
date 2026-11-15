@@ -972,7 +972,7 @@ struct WholesalerSendHistoryView: View {
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(record.lines, id: \.materialId) { line in
-                        Text("· \(line.name) × \(line.quantity) \(line.unit.rawValue)")
+                        Text("· \(line.name) — \(line.historyText)")
                             .font(.system(size: 12))
                     }
                 }

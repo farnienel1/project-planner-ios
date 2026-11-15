@@ -40,7 +40,12 @@ enum TimesheetWeeklyReportOverrideBuilder {
         writerIsReviewer: Bool? = nil,
         /// RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the period's bookings and pay inputs have loaded. An empty
         /// frozen snapshot is rebuilt only then, never from a partial download.
-        snapshotInputsReady: Bool = false
+        snapshotInputsReady: Bool = false,
+        /// RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).rebuildSnapshot`: the sheet was reopened by a booking
+        /// change and this signature completes it again, so the snapshot is built fresh from the live bookings (as at
+        /// first approval, with the new signatures) instead of re-applying reviews to the stored lines. Never on an
+        /// exported sheet.
+        rebuildSnapshot: Bool = false
     ) -> String? {
         // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when the sheet is self-signed
         // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`; 1.28.0: Timesheet self-sign on, or the Super Admin). An owner save (writerIsReviewer == false) with a line manager leaves the
@@ -51,6 +56,31 @@ enum TimesheetWeeklyReportOverrideBuilder {
             return nil
         }
         let check = RulebookCheck()
+        if rebuildSnapshot, draft.weeklyReportOverride != nil, !TimesheetApprovalPolicy.isExported(draft) {
+            var fresh = draft
+            fresh.weeklyReportOverride = nil
+            let made = make(
+                user: user,
+                week: week,
+                draft: fresh,
+                bookings: bookings,
+                managerBookings: managerBookings,
+                operatives: operatives,
+                projects: projects,
+                smallWorks: smallWorks,
+                history: history,
+                policy: policy,
+                organization: organization,
+                scheduleOptions: scheduleOptions,
+                viewer: viewer,
+                relatedUsers: relatedUsers,
+                check: check
+            )
+            // The stored snapshot stays exactly as it was when the rebuild could not be checked.
+            if check.failed { return rulebookCheckFailedMessage }
+            draft.weeklyReportOverride = made
+            return nil
+        }
         if let existing = draft.weeklyReportOverride {
             // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (signed before
             // the period's bookings had loaded) is rebuilt from the live bookings when they hold labour lines and nobody
@@ -259,13 +289,21 @@ enum TimesheetWeeklyReportOverrideBuilder {
                     check?.failed = true
                     continue
                 }
+                // RULEBOOK 1.49.0 §8: a standard part divides by the live standard line's own day (a set-window weekend
+                // day's counts-as, `payrollDayRateHours`); an overtime part by the weekday paid day.
+                let standardPart: Double = {
+                    if !line.isOvertimeLine, let own = line.standardDayHours {
+                        return CanonicalBusinessEngine.orgDayHours(own) ?? standard
+                    }
+                    return standard
+                }()
                 for part in parts {
                     if part.id != line.id && liveIds.contains(part.id.lowercased()) { continue }
                     var row = signed(labourLine(
                         from: line,
                         decision: .edited,
                         amount: part.amount,
-                        days: part.paidHours / standard,
+                        days: part.paidHours / (part.isOvertime ? standard : standardPart),
                         managerBookings: managerBookings
                     ))
                     row.id = part.id
@@ -534,7 +572,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
         effectiveAmount: Double,
         policy: OrgPayrollTimePolicy
     ) -> Double {
-        let standard = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
+        // RULEBOOK 1.49.0 §8: days against the line's own divisor (the collector sets it per part, `payrollDayRateHours`).
+        let standard = max(line.standardDayHours ?? CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
         let baseDays = max(0, line.paidHours) / standard
         guard originalAmount > 0.0001 else { return baseDays }
         return baseDays * (effectiveAmount / originalAmount)

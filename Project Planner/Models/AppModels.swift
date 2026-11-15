@@ -1429,8 +1429,13 @@ nonisolated struct OrgWeekendDayPayrollSettings: Codable, Hashable, Sendable {
     var useCustomStandardDayWindow: Bool
     var customStandardStart: String?
     var customStandardEnd: String?
-    /// Paid hours credited when the booking covers the defined window (e.g. 8h for 07:30–13:00).
+    /// Paid hours credited when the booking covers the defined window (e.g. 8h for 07:30–13:00), as stored. Read only
+    /// through `CanonicalBusinessEngine.weekendCountsAsHours(_:policy:)` (RULEBOOK 1.49.0: "Same as Monday–Friday", the
+    /// stored number, else 8).
     var countsAsHours: Double?
+    /// RULEBOOK 1.49.0 §4.3: "Same as Monday–Friday" — the day's counts-as follows the weekday paid day of the policy in
+    /// effect that day. Only a stored `true` turns it on (nil = off, and the key is left out on save).
+    var countsAsFollowsWeekday: Bool? = nil
     /// Hours outside the custom standard window (weekend only, when not in all-multiplier mode).
     var outsideStandardWindowMultiplier: Double
     /// RULEBOOK 1.19.0 §4.3: that day's lunch break is paid. `nil` (never saved) and anything but `false` read as paid
@@ -1445,12 +1450,9 @@ nonisolated struct OrgWeekendDayPayrollSettings: Codable, Hashable, Sendable {
     /// `breakPaid !== false` (missing = paid).
     var isBreakPaid: Bool { breakPaid != false }
 
-    func resolvedCountsAsHours(fallback: Double) -> Double {
-        countsAsHours ?? fallback
-    }
-
-    /// True when two weekend day configs can be batch-booked together (Sat+Sun).
-    func equivalentForBatchBooking(_ other: OrgWeekendDayPayrollSettings, fallbackCountsAs: Double) -> Bool {
+    /// True when two weekend day configs can be batch-booked together (Sat+Sun). Counts-as read through the rulebook
+    /// (`weekendCountsAsHours`) with `policy`.
+    func equivalentForBatchBooking(_ other: OrgWeekendDayPayrollSettings, policy: OrgPayrollTimePolicy) -> Bool {
         guard allHoursAtMultiplierMode == other.allHoursAtMultiplierMode else { return false }
         if allHoursAtMultiplierMode {
             return abs(allHoursMultiplier - other.allHoursMultiplier) < 0.001
@@ -1458,7 +1460,8 @@ nonisolated struct OrgWeekendDayPayrollSettings: Codable, Hashable, Sendable {
         return useCustomStandardDayWindow == other.useCustomStandardDayWindow
             && customStandardStart == other.customStandardStart
             && customStandardEnd == other.customStandardEnd
-            && abs(resolvedCountsAsHours(fallback: fallbackCountsAs) - other.resolvedCountsAsHours(fallback: fallbackCountsAs)) < 0.001
+            && abs(CanonicalBusinessEngine.weekendCountsAsHours(self, policy: policy)
+                - CanonicalBusinessEngine.weekendCountsAsHours(other, policy: policy)) < 0.001
             && abs(outsideStandardWindowMultiplier - other.outsideStandardWindowMultiplier) < 0.001
     }
 
@@ -1537,8 +1540,8 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
             "breakWindowStart": breakWindowStart,
             "breakWindowEnd": breakWindowEnd,
             "weekdayOutsideStandardMultiplier": weekdayOutsideStandardMultiplier,
-            "saturday": saturday.asFirestoreDictionary(),
-            "sunday": sunday.asFirestoreDictionary(),
+            "saturday": saturday.asFirestoreDictionary(policy: self),
+            "sunday": sunday.asFirestoreDictionary(policy: self),
             "sundaySameAsSaturday": sundaySameAsSaturday,
         ]
         // RULEBOOK 1.20.0 (`payrollPolicyToFirestore`): the flag only when set, so a pre-1.20.0 policy reads unchanged.
@@ -1613,16 +1616,19 @@ nonisolated struct OrgPayrollTimePolicy: Codable, Hashable, Sendable {
 }
 
 private extension OrgWeekendDayPayrollSettings {
-    nonisolated func asFirestoreDictionary() -> [String: Any] {
+    nonisolated func asFirestoreDictionary(policy: OrgPayrollTimePolicy) -> [String: Any] {
         var out: [String: Any] = [
             "allHoursAtMultiplierMode": allHoursAtMultiplierMode,
             "allHoursMultiplier": allHoursMultiplier,
             "useCustomStandardDayWindow": !allHoursAtMultiplierMode,
             "customStandardStart": customStandardStart ?? "07:30",
             "customStandardEnd": customStandardEnd ?? "16:00",
-            "countsAsHours": countsAsHours ?? 8,
+            // RULEBOOK 1.49.0 (`weekendToFirestore`): the rulebook's counts-as — with "Same as Monday–Friday" the derived
+            // value, so older builds read the right number — and the flag only when on.
+            "countsAsHours": CanonicalBusinessEngine.weekendCountsAsHours(self, policy: policy),
             "outsideStandardWindowMultiplier": outsideStandardWindowMultiplier,
         ]
+        if countsAsFollowsWeekday == true { out["countsAsFollowsWeekday"] = true }
         // RULEBOOK 1.19.0 §4.3 (`weekendToFirestore`): `breakPaid` always (missing reads as paid); the day's own length
         // and window only when set, so a missing field keeps reading as the weekday break.
         out["breakPaid"] = breakPaid != false
@@ -1648,7 +1654,9 @@ private extension OrgWeekendDayPayrollSettings {
             useCustomStandardDayWindow: custom,
             customStandardStart: OrgPayrollTimePolicy.firstText(data, keys: ["customStandardStart", "definedWindowStart"]) ?? "07:30",
             customStandardEnd: OrgPayrollTimePolicy.firstText(data, keys: ["customStandardEnd", "definedWindowEnd"]) ?? "16:00",
-            countsAsHours: OrgPayrollTimePolicy.firstNumber(data, keys: ["countsAsHours", "countsAsStandardHours"]) ?? 8,
+            // RULEBOOK 1.49.0: as stored (nil when missing); the one fallback is the rulebook's (`weekendCountsAsHours`).
+            countsAsHours: OrgPayrollTimePolicy.firstNumber(data, keys: ["countsAsHours", "countsAsStandardHours"]),
+            countsAsFollowsWeekday: Self.storedBreakPaid(data["countsAsFollowsWeekday"]) == true ? true : nil,
             outsideStandardWindowMultiplier: OrgPayrollTimePolicy.firstNumber(
                 data,
                 keys: ["outsideStandardWindowMultiplier", "outsideWindowMultiplier"]

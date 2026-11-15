@@ -112,15 +112,27 @@ enum MaterialRequestEmailPayload {
     /// The material lines, same keys as web `MaterialsSendListSheet` / the function's `parseMaterialLines`.
     static func materialLines(_ items: [MaterialItem]) -> [[String: Any]] {
         items.map { item in
+            let quantityFields = item.quantityFieldsForScript
             var line: [String: Any] = [
                 "material": item.material,
                 "quantity": item.quantity,
-                "unit": item.unit.rawValue,
+                // RULEBOOK 1.48.0: the old unit that goes with the order unit (`materialQuantityWriteFields`), so the
+                // function never reads the line as an older build's edit.
+                "unit": (quantityFields["unit"] as? String) ?? item.unit.rawValue,
             ]
             if let brand = trimmed(item.brand) { line["brand"] = brand }
             if let productCode = trimmed(item.productCode) { line["productCode"] = productCode }
             if let notes = trimmed(item.notes) { line["notes"] = notes }
+            // Kept for an older `sendEmail` function; 1.48.0 renders `materialLineText` from the three fields below.
             if let length = trimmed(item.formattedLengthSpecification) { line["lengthDisplay"] = length }
+            let model = item.effectiveQuantityModel
+            line["orderUnit"] = model.orderUnit
+            if line["lengthDisplay"] == nil, let length = quantityFields["length"] as? String,
+               let unit = (quantityFields["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)) {
+                line["lengthDisplay"] = MaterialLengthSpecification.format(value: length, unit: unit)
+            }
+            if let amount = model.contentAmount { line["contentAmount"] = amount }
+            if let measure = model.contentMeasure { line["contentMeasure"] = measure }
             return line
         }
     }

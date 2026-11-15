@@ -254,6 +254,10 @@ struct MaterialsSendListSheet: View {
                                 Text(item.material)
                                     .font(.system(size: 12, weight: .medium))
                                     .foregroundStyle(isSelected ? MaterialsOrderingTheme.ink : MaterialsOrderingTheme.muted)
+                                // RULEBOOK 1.48.0 `materialLineText`: what is being sent ("2no 50m drums").
+                                Text(item.quantityText)
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(MaterialsOrderingTheme.primary)
                                 HStack(spacing: 6) {
                                     MaterialsStatusPill(status: item.status)
                                     if let sentAt = item.lastSentAt {
@@ -985,6 +989,10 @@ private struct MaterialsResendIncludeExcludeSheet: View {
                     .font(.subheadline.weight(.medium))
                     .strikethrough(isExcluded, color: .secondary)
                     .foregroundStyle(isExcluded ? .secondary : .primary)
+                // RULEBOOK 1.48.0 `materialLineText`.
+                Text(item.quantityText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
                 Text(item.status.displayLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)

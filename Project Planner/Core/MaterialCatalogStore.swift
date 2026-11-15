@@ -376,6 +376,10 @@ final class MaterialCatalogStore: ObservableObject {
             brand: row.brand,
             productCode: row.productCode,
             defaultUnit: row.defaultUnit,
+            // RULEBOOK 1.48.0: the row's order unit and what is in one (the rulebook writer writes the old fields).
+            orderUnit: row.orderUnit,
+            contentAmount: row.contentAmount,
+            contentMeasure: row.contentMeasure,
             size: row.size,
             length: row.length,
             lengthUnit: row.lengthUnit,
@@ -390,10 +394,9 @@ final class MaterialCatalogStore: ObservableObject {
         lhs.name != rhs.name
             || lhs.brand != rhs.brand
             || normalizedOptional(lhs.productCode) != normalizedOptional(rhs.productCode)
-            || lhs.defaultUnit != rhs.defaultUnit
+            // RULEBOOK 1.48.0: the quantity meaning (`effectiveQuantityModel`), not the old unit / length spelling.
+            || lhs.effectiveQuantityModel != rhs.effectiveQuantityModel
             || normalizedOptional(lhs.size) != normalizedOptional(rhs.size)
-            || normalizedOptional(lhs.length) != normalizedOptional(rhs.length)
-            || lhs.lengthUnit != rhs.lengthUnit
             || normalizedCategory(lhs.category) != normalizedCategory(rhs.category)
     }
 
@@ -430,8 +433,11 @@ final class MaterialCatalogStore: ObservableObject {
                 brand: (brand?.isEmpty == false) ? brand! : "Custom",
                 productCode: line.productCode,
                 defaultUnit: line.unit,
+                orderUnit: line.effectiveQuantityModel.orderUnit,
+                contentAmount: line.effectiveQuantityModel.contentAmount,
+                contentMeasure: line.effectiveQuantityModel.contentMeasure,
                 size: line.size,
-                length: line.length ?? line.sizeOrLength,
+                length: line.length,
                 lengthUnit: line.lengthUnit,
                 category: category,
                 createdByUserId: creatorId,

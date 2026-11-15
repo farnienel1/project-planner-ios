@@ -268,7 +268,9 @@ final class Rulebook1200Tests: XCTestCase {
         XCTAssertFalse(CanonicalBusinessEngine.payrollBreakMinutesOnStep(20))
 
         let saved = ownerPolicy(derived: false)
-        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(saved), "10:00–10:45, 45 min is valid")
+        // RULEBOOK 1.49.0 §4.3: the default Saturday counts as 8h, above this 7.25h weekday day, so it passes only as a
+        // stored value left unchanged (`previous`); a fresh check without `previous` refuses it on the cap.
+        XCTAssertNil(CanonicalBusinessEngine.validateDerivedPayrollTimePolicy(saved, previous: saved), "10:00–10:45, 45 min is valid")
         var dayOff = saved
         dayOff.standardDayStart = "06:45"
         XCTAssertEqual(
@@ -325,7 +327,7 @@ final class Rulebook1200Tests: XCTestCase {
     }
 
     /// Owner check (3 Nov): the Working hours weekend preview follows Paid ↔ Unpaid. Saturday 07:30–14:00 counting 8h,
-    /// break 12:00–12:30: paid 8h, unpaid 7.5h; Sunday every hour ×2: paid 13h, unpaid less (the packed rule's figure). The preview is memoised by
+    /// break 12:00–12:30: paid 8h, unpaid 8h from 1.49.0 (7.5h before); Sunday every hour ×2: paid 13h, unpaid less (the packed rule's figure). The preview is memoised by
     /// the whole draft policy, so a changed weekend break is a new answer.
     func testWeekendPreviewFollowsTheWeekendBreakPaidOrUnpaid() throws {
         func totals(saturdayPaid: Bool, sundayPaid: Bool) throws -> [Double] {
@@ -341,7 +343,9 @@ final class Rulebook1200Tests: XCTestCase {
         let paid = try totals(saturdayPaid: true, sundayPaid: true)
         let unpaid = try totals(saturdayPaid: false, sundayPaid: false)
         XCTAssertEqual(paid, [8, 13])
-        XCTAssertEqual(unpaid.first ?? -1, 7.5, accuracy: 0.001)
+        // RULEBOOK 1.49.0 §4.3: a full Saturday window credits exactly "counts as" whether the break is paid or unpaid
+        // (it is allowed for in "counts as"; was 7.5h).
+        XCTAssertEqual(unpaid.first ?? -1, 8, accuracy: 0.001)
         // Sunday's unpaid figure is the packed rule's (1.20.3 changes whether the break is multiplied); only assert that
         // the preview moved when the break became unpaid.
         XCTAssertLessThan(unpaid.last ?? 99, paid.last ?? 0)
@@ -425,7 +429,8 @@ final class Rulebook1200Tests: XCTestCase {
         let unpaid = try XCTUnwrap(CanonicalBusinessEngine.weekendDayPreview(policy: policy, weekday: "saturday", timeZone: zone))
         XCTAssertEqual(
             unpaid.summary,
-            "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — 30 min taken off · 7.5h paid",
+            // RULEBOOK 1.49.0 §4.3: the unpaid break is allowed for in the counts as (was "30 min taken off · 7.5h paid").
+            "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — allowed for in the counts as · 8h paid",
             "switching the draft's break to Unpaid changes the preview at once"
         )
     }

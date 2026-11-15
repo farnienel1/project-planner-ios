@@ -56,6 +56,8 @@ struct PayrollHoursResult: Equatable {
     /// `payrollHoursResult.standardHours` / `outsideHours` (1.20.2 `bookingHoursLabel` reads them).
     var standardHours: Double = 0
     var outsideHours: Double = 0
+    /// RULEBOOK 1.49.0 `payrollDayRateHours`: the standard part's divisor (a set-window weekend day's counts-as).
+    var standardPartDayHours: Double? = nil
 
     /// RULEBOOK 1.20.3 / 1.20.4 `payrollMultipliedHours(result)`: the clock hours at the multiplier with the unpaid
     /// break as plain hours, and `text` ("6.5h × 2 − 0.5h break = 12.5h"). Nil with no hours at a multiplier. Display
@@ -181,7 +183,8 @@ enum PayrollHoursEngine {
             outsideMultiplier: result.outsideMultiplier,
             unpaidBreakHours: answer.unpaidBreakHours,
             standardHours: result.standardHours,
-            outsideHours: result.outsideHours
+            outsideHours: result.outsideHours,
+            standardPartDayHours: result.standardPartDayHours
         )
     }
 

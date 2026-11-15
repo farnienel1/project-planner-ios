@@ -18,8 +18,11 @@ struct EditMaterialView: View {
     @Binding var isPresented: Bool
     
     @State private var selectedDate: Date
-    @State private var quantity: Int
-    @State private var unit: MaterialUnit
+    /// RULEBOOK 1.48.0: quantity, order unit and what is in one (`MaterialsOrderUnitRow`).
+    @State private var quantityDraft: MaterialQuantityDraft
+    /// The line as opened: the quantity checks run only when it changed.
+    private let originalQuantity: MaterialQuantityDraft
+    @State private var quantityError: String?
     @State private var materialDescription: String
     @State private var isSaving = false
     @State private var showingPermissionAlert = false
@@ -44,8 +47,9 @@ struct EditMaterialView: View {
         self.material = material
         self._isPresented = isPresented
         self._selectedDate = State(initialValue: material.date)
-        self._quantity = State(initialValue: material.quantity)
-        self._unit = State(initialValue: material.unit)
+        let draft = MaterialQuantityDraft(quantity: material.quantity, model: material.effectiveQuantityModel)
+        self._quantityDraft = State(initialValue: draft)
+        self.originalQuantity = draft
         self._materialDescription = State(initialValue: material.material)
     }
     
@@ -57,19 +61,14 @@ struct EditMaterialView: View {
                         .accessibilityIdentifier("editMaterial.date")
                         .datePickerStyle(.compact)
                     
-                    Picker("Quantity", selection: $quantity) {
-                        ForEach(1...100, id: \.self) { num in
-                            Text("\(num)").tag(num)
-                        }
-                    }
+                    MaterialsOrderUnitRow(draft: $quantityDraft)
                         .accessibilityIdentifier("editMaterial.quantity")
-                    
-                    Picker(MaterialUnit.typePickerTitle, selection: $unit) {
-                        ForEach(MaterialUnit.allCases, id: \.self) { unit in
-                            Text(unit.displayName).tag(unit)
-                        }
+                    if let quantityError {
+                        Text(quantityError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("editMaterial.quantityError")
                     }
-                        .accessibilityIdentifier("editMaterial.picker")
                     
                     TextField("Material Description", text: $materialDescription, axis: .vertical)
                         .accessibilityIdentifier("editMaterial.materialDescription")
@@ -145,6 +144,12 @@ struct EditMaterialView: View {
     private func saveMaterial() {
         guard canManageMaterial else { return }
         guard !materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // RULEBOOK 1.48.0 `materialQuantityError` / `materialContentError`, only when the quantity changed.
+        if let error = quantityDraft.validationError(comparedWith: originalQuantity) {
+            quantityError = error
+            return
+        }
+        quantityError = nil
         isSaving = true
         
         let editedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
@@ -154,8 +159,9 @@ struct EditMaterialView: View {
         let normalizedDate = calendar.startOfDay(for: selectedDate)
         
         var updatedMaterial = material
-        updatedMaterial.quantity = quantity
-        updatedMaterial.unit = unit
+        if quantityDraft != originalQuantity {
+            quantityDraft.apply(to: &updatedMaterial)
+        }
         updatedMaterial.material = materialDescription.trimmingCharacters(in: .whitespacesAndNewlines)
         updatedMaterial.date = normalizedDate
         updatedMaterial.editedBy = editedBy

@@ -350,7 +350,7 @@ struct OrganisationWorkingHoursView: View {
         }
         let start = sat.customStandardStart ?? draft.standardDayStart
         let end = sat.customStandardEnd ?? "13:00"
-        let flat = sat.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
+        let flat = CanonicalBusinessEngine.weekendCountsAsHours(sat, policy: draft)
         return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sat.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sat))"
     }
 
@@ -369,7 +369,7 @@ struct OrganisationWorkingHoursView: View {
         }
         let start = sun.customStandardStart ?? draft.standardDayStart
         let end = sun.customStandardEnd ?? "13:00"
-        let flat = sun.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
+        let flat = CanonicalBusinessEngine.weekendCountsAsHours(sun, policy: draft)
         return "\(start)–\(end)  ·  \(formatHoursDisplay(flat)) flat  ·  \(formatMultiplier(sun.outsideStandardWindowMultiplier))x\(lunchGlanceSuffix(sun))"
     }
 
@@ -463,6 +463,14 @@ struct OrganisationWorkingHoursView: View {
             Text("Worked out from the start, finish and lunch break.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+            // RULEBOOK 1.49.0: the day-rate note (`weekdayDayRateNote`).
+            if let note = CanonicalBusinessEngine.weekdayDayRateNote(draft) {
+                Text(note)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("organisationWorkingHours.weekdayDayRateNote")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -540,7 +548,7 @@ struct OrganisationWorkingHoursView: View {
             settings.useCustomStandardDayWindow = true
             if settings.customStandardStart == nil { settings.customStandardStart = draft.standardDayStart }
             if settings.customStandardEnd == nil { settings.customStandardEnd = "13:00" }
-            if settings.countsAsHours == nil { settings.countsAsHours = CanonicalBusinessEngine.weekendCountsAsHoursFallback }
+            // RULEBOOK 1.49.0: counts-as is the rulebook's (`weekendCountsAsHours`); nothing is written into it here.
         }
         draft[keyPath: keyPath] = settings
     }
@@ -580,7 +588,7 @@ struct OrganisationWorkingHoursView: View {
                 if draft.saturday.allHoursAtMultiplierMode {
                     saturdayAllHoursContent(settings: $draft.saturday)
                 } else {
-                    saturdayWindowContent(settings: $draft.saturday, title: "Saturday")
+                    saturdayWindowContent(settings: $draft.saturday, title: "Saturday", day: .saturday)
                 }
 
                 cardDivider
@@ -592,7 +600,7 @@ struct OrganisationWorkingHoursView: View {
     }
 
     @ViewBuilder
-    private func saturdayWindowContent(settings: Binding<OrgWeekendDayPayrollSettings>, title: String) -> some View {
+    private func saturdayWindowContent(settings: Binding<OrgWeekendDayPayrollSettings>, title: String, day: RulebookWeekendDay) -> some View {
         HStack(spacing: 12) {
             timeFieldColumn(label: "Window start", text: Binding(
                 get: { settings.wrappedValue.customStandardStart ?? "" },
@@ -604,24 +612,57 @@ struct OrganisationWorkingHoursView: View {
             ))
         }
 
-        tintedInfoBox(
-            text: settings.wrappedValue.breakPaid == false
-                ? "A shift covering \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") (\(formatHoursDisplay(saturdayWindowSpanHours(settings.wrappedValue)))) is paid as a flat day, less the unpaid lunch break it covers — set how many hours that day counts as below."
-                : "A shift covering \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") (\(formatHoursDisplay(saturdayWindowSpanHours(settings.wrappedValue)))) is simply paid as a flat day — set how many hours that day counts as below.",
-            tint: WorkingHoursPalette.amber
-        )
-
-        stepperRow(
-            label: "Counts as",
-            value: Binding(
-                get: { settings.wrappedValue.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback) },
-                set: { settings.wrappedValue.countsAsHours = $0 }
-            ),
-            step: 0.5,
-            min: limits?.paidHours.min ?? 1,
-            max: limits?.paidHours.max ?? 12,
-            suffix: "h"
-        )
+        // RULEBOOK 1.49.0: no counts-as wording of iOS's own — the rulebook's day-rate note follows the stepper.
+        // RULEBOOK 1.49.0 §4.3: "Same as Monday–Friday" (`countsAsFollowsWeekday`), else the Counts as stepper — from 1h to
+        // `weekendCountsAsMax`, each press `weekendCountsAsStep` (a stored 7.25 steps to 7.5 or 7). Labels are the
+        // rulebook's (`weekendCountsAsCopy`).
+        let copy = CanonicalBusinessEngine.weekendCountsAsCopy(day)
+        let follows = settings.wrappedValue.countsAsFollowsWeekday == true
+        HStack(alignment: .center, spacing: 12) {
+            Text(copy?.sameAsWeekdayLabel ?? "Same as Monday–Friday")
+                .font(.body.weight(.semibold))
+            Spacer(minLength: 8)
+            Toggle("", isOn: Binding(
+                get: { settings.wrappedValue.countsAsFollowsWeekday == true },
+                set: { on in
+                    if on {
+                        settings.wrappedValue.countsAsFollowsWeekday = true
+                    } else {
+                        settings.wrappedValue.countsAsFollowsWeekday = nil
+                        // Turning it off starts the number at the cap (`weekendCountsAsMax`).
+                        if let start = CanonicalBusinessEngine.weekendCountsAsMax(draft) {
+                            settings.wrappedValue.countsAsHours = start
+                        }
+                    }
+                }
+            ))
+            .labelsHidden()
+            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).countsAsFollowsWeekday")
+        }
+        if !follows {
+            stepperRow(
+                label: copy?.label ?? "Counts as",
+                value: Binding(
+                    get: { CanonicalBusinessEngine.weekendCountsAsHours(settings.wrappedValue, policy: draft) },
+                    set: { settings.wrappedValue.countsAsHours = $0 }
+                ),
+                step: CanonicalBusinessEngine.weekendCountsAsStepHours,
+                min: limits?.paidHours.min ?? 1,
+                max: CanonicalBusinessEngine.weekendCountsAsMax(draft) ?? (limits?.paidHours.max ?? 12),
+                suffix: "h",
+                stepper: { current, direction in
+                    CanonicalBusinessEngine.weekendCountsAsStep(current, direction: direction, policy: draft)
+                }
+            )
+            .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).countsAs")
+        }
+        if let note = CanonicalBusinessEngine.weekendDayRateNote(draft, day: day) {
+            Text(note)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("organisationWorkingHours.\(day.rawValue).dayRateNote")
+        }
 
         multiplierRow(
             title: "Rate outside the window",
@@ -647,14 +688,6 @@ struct OrganisationWorkingHoursView: View {
             .frame(height: 7)
         }
 
-        gradientSummaryCard(
-            topColor: WorkingHoursPalette.amberGradientTop,
-            bottomColor: WorkingHoursPalette.amberGradientBottom,
-            rows: [],
-            footerLabel: "A \(settings.wrappedValue.customStandardStart ?? draft.standardDayStart)–\(settings.wrappedValue.customStandardEnd ?? "13:00") \(title) pays",
-            footerValue: "\(formatHoursDisplay(settings.wrappedValue.resolvedCountsAsHours(fallback: CanonicalBusinessEngine.weekendCountsAsHoursFallback))) @ 1x",
-            accent: WorkingHoursPalette.amber
-        )
     }
 
     @ViewBuilder
@@ -797,7 +830,7 @@ struct OrganisationWorkingHoursView: View {
                     if draft.sunday.allHoursAtMultiplierMode {
                         sundayAllHoursContent(settings: $draft.sunday)
                     } else {
-                        saturdayWindowContent(settings: $draft.sunday, title: "Sunday")
+                        saturdayWindowContent(settings: $draft.sunday, title: "Sunday", day: .sunday)
                     }
 
                     cardDivider
@@ -978,13 +1011,21 @@ struct OrganisationWorkingHoursView: View {
         }
     }
 
-    private func stepperRow(label: String, value: Binding<Double>, step: Double, min: Double, max: Double, suffix: String) -> some View {
+    private func stepperRow(
+        label: String,
+        value: Binding<Double>,
+        step: Double,
+        min: Double,
+        max: Double,
+        suffix: String,
+        stepper: ((Double, Int) -> Double?)? = nil
+    ) -> some View {
         HStack {
             Text(label)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(WorkingHoursPalette.muted)
             Spacer()
-            WorkingHoursStepper(value: value, step: step, min: min, max: max, suffix: suffix)
+            WorkingHoursStepper(value: value, step: step, min: min, max: max, suffix: suffix, stepper: stepper)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
@@ -1150,12 +1191,12 @@ struct OrganisationWorkingHoursView: View {
         out.unpaidBreakMinutes = Swift.max(Int(breakLimits?.min ?? 0), Swift.min(Int(breakLimits?.max ?? 120), out.unpaidBreakMinutes))
         out.standardPaidHours = Swift.max(paidLimits?.min ?? 1, Swift.min(paidLimits?.max ?? 12, out.standardPaidHours))
         out.weekdayOutsideStandardMultiplier = clampMultiplier(out.weekdayOutsideStandardMultiplier)
-        out.saturday = sanitizeWeekendSettings(out.saturday, fallbackPaid: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
-        out.sunday = sanitizeWeekendSettings(out.sunday, fallbackPaid: CanonicalBusinessEngine.weekendCountsAsHoursFallback)
+        out.saturday = sanitizeWeekendSettings(out.saturday)
+        out.sunday = sanitizeWeekendSettings(out.sunday)
         return out
     }
 
-    private func sanitizeWeekendSettings(_ settings: OrgWeekendDayPayrollSettings, fallbackPaid: Double) -> OrgWeekendDayPayrollSettings {
+    private func sanitizeWeekendSettings(_ settings: OrgWeekendDayPayrollSettings) -> OrgWeekendDayPayrollSettings {
         var out = settings
         out.allHoursMultiplier = clampMultiplier(out.allHoursMultiplier)
         out.outsideStandardWindowMultiplier = clampMultiplier(out.outsideStandardWindowMultiplier)
@@ -1166,15 +1207,13 @@ struct OrganisationWorkingHoursView: View {
         }
         if let start = out.breakWindowStart, !isValidHM(start) { out.breakWindowStart = nil }
         if let end = out.breakWindowEnd, !isValidHM(end) { out.breakWindowEnd = nil }
-        if let counts = out.countsAsHours {
-            out.countsAsHours = Swift.max(limits?.paidHours.min ?? 1, Swift.min(limits?.paidHours.max ?? 12, counts))
-        }
+        // RULEBOOK 1.49.0 §4.3: a stored counts-as number is never clamped on read (`validatePayrollTimePolicy` with
+        // `previous` decides on save).
         if !out.allHoursAtMultiplierMode,
            out.customStandardStart == nil,
            out.customStandardEnd == nil {
             out.customStandardStart = OrgPayrollTimePolicy.default.standardDayStart
             out.customStandardEnd = "13:00"
-            out.countsAsHours = out.countsAsHours ?? fallbackPaid
         }
         return out
     }
@@ -1449,10 +1488,13 @@ private struct WorkingHoursStepper: View {
     let min: Double
     let max: Double
     let suffix: String
+    /// RULEBOOK 1.49.0: the rulebook's press (`weekendCountsAsStep`) when given; nil = the plain step.
+    var stepper: ((Double, Int) -> Double?)? = nil
 
     var body: some View {
         HStack(spacing: 0) {
             Button {
+                if let stepper, let next = stepper(value, -1) { value = next; return }
                 value = Swift.max(min, roundedStep(value - step, step: step))
             } label: {
                 Text("–")
@@ -1468,6 +1510,7 @@ private struct WorkingHoursStepper: View {
                 .frame(minWidth: 52)
 
             Button {
+                if let stepper, let next = stepper(value, 1) { value = next; return }
                 value = Swift.min(max, roundedStep(value + step, step: step))
             } label: {
                 Text("+")
