@@ -19,6 +19,8 @@ nonisolated struct RulebookWeeklyReportPayRow: Hashable, Sendable {
     let line: String
     let hours: Double
     let days: Double
+    /// 1.53.0: the unrounded days (`daysExact`), for `weeklyReportDaysText`.
+    var daysExact: Double? = nil
     let rateText: String
     let pay: Double
     /// `PAY_HIDDEN_CELL_LABEL` ("—") when the viewer may not see this person's pay.
@@ -128,6 +130,7 @@ extension CanonicalBusinessEngine {
                             line: wrText(line["line"]),
                             hours: wrNumber(line["hours"]),
                             days: wrNumber(line["days"]),
+                            daysExact: (line["daysExact"] as? NSNumber)?.doubleValue,
                             rateText: wrText(line["rateText"]),
                             pay: wrNumber(line["pay"]),
                             payLabel: line["payLabel"] as? String,
@@ -255,5 +258,29 @@ extension CanonicalBusinessEngine {
                 scheduled: row["scheduled"] as? Bool ?? false
             )
         }
+    }
+
+    // MARK: - 1.53.0
+
+    /// `weeklyReportDaysText(days, kind)`: the Days cell (`WEEKLY_REPORT_DAYS_DISPLAY`).
+    nonisolated static func weeklyReportDaysText(_ days: Double, kind: String) -> String {
+        (callJSON("weeklyReportDaysText", arguments: [days.isFinite ? days : 0, kind]) as? String) ?? String(format: "%.2f", days)
+    }
+
+    /// `weeklyReportPaySummaryNote(rows)`: "Days are rounded; Pay is worked out from the exact hours." while any labour
+    /// row is shown, '' otherwise.
+    nonisolated static func weeklyReportPaySummaryNote(_ rows: [RulebookWeeklyReportPayRow]) -> String {
+        let input = rows.map { ["source": $0.source] }
+        return (callJSON("weeklyReportPaySummaryNote", arguments: [input]) as? String) ?? ""
+    }
+
+    /// `userLevelLabel(person)`: Admin / Manager / Operative, the Super Admin "Admin (Super Admin)".
+    nonisolated static func userLevelLabel(_ person: [String: Any]) -> String? {
+        callJSON("userLevelLabel", arguments: [person]) as? String
+    }
+
+    /// `bookingJobLabel(projectName)`: the live job name, or `ORPHAN_BOOKING_LABEL` ("Deleted job").
+    nonisolated static func bookingJobLabel(_ projectName: String?) -> String {
+        (callJSON("bookingJobLabel", arguments: [projectName.map { $0 as Any } ?? NSNull()]) as? String) ?? (projectName ?? "")
     }
 }

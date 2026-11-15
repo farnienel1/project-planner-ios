@@ -37,7 +37,10 @@ struct ProfileImagePicker: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let edited = info[.editedImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24 (review of #235): the 40 MB / 50 MP check on the picked file before the photo is used.
+            if let refusal = StorageUploadPolicy.pickerPhotoRefusal(info) {
+                print("⚠️ [Profile] photo refused: \(refusal)")
+            } else if let edited = info[.editedImage] as? UIImage {
                 parent.image = edited
             } else if let original = info[.originalImage] as? UIImage {
                 parent.image = original

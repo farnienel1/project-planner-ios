@@ -816,7 +816,8 @@ struct WeeklyReportView: View {
         let holidays = holidayStore.bookings.filter { $0.endDayKey >= startKey && $0.startDayKey <= endKey }
 
         await service.updateWarningsAsync(
-            operatives: operativeStore.allOperatives.filter(\.isActive),
+            // RULEBOOK 1.53.0 (A5): every operative; the rules skip inactive people themselves (`isActive` passed).
+            operatives: operativeStore.allOperatives,
             bookings: bookings,
             projects: projectStore.projects,
             users: userStore.organizationUsers,
@@ -1133,7 +1134,7 @@ struct WeeklyReportView: View {
                     line.dates,
                     line.line,
                     claim ? "" : reportHoursText(line.hours),
-                    claim ? "" : reportDaysText(line.days),
+                    claim ? "" : CanonicalBusinessEngine.weeklyReportDaysText(line.daysExact ?? line.days, kind: line.kind),
                     line.rateText,
                     line.payLabel ?? OrgMoney.format(line.pay),
                 ])
@@ -1150,21 +1151,29 @@ struct WeeklyReportView: View {
             headers: CanonicalBusinessEngine.weeklyReportPayColumns,
             rows: rows,
             totalRow: ["", "", "", "Grand Total", "", "", "", OrgMoney.format(pay.grandTotal)],
-            note: pay.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : nil
+            note: paySummaryNote(pay)
         )
         section.warnRows = warnRows
         section.spanRows = spanRows
         return section
     }
 
+    /// RULEBOOK 1.53.0 (A9): `weeklyReportPaySummaryNote` ("Days are rounded; Pay is worked out from the exact hours.")
+    /// and, when some pay is hidden from the viewer, `PAY_HIDDEN_NOTE`.
+    static func paySummaryNote(_ pay: RulebookWeeklyReportPay) -> String? {
+        let rounded = CanonicalBusinessEngine.weeklyReportPaySummaryNote(pay.people.flatMap(\.lines))
+        let hidden = pay.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : ""
+        let note = [rounded, hidden].filter { !$0.isEmpty }.joined(separator: " ")
+        return note.isEmpty ? nil : note
+    }
+
     /// The weekly report's `weeklyReportPayRows` answer for the report range, with the people it names. Throws when
     /// the rulebook did not answer (pay is never shown from a partial calculation).
     private func weeklyReportPay() throws -> (result: RulebookWeeklyReportPay, built: WeeklyReportPayInputs.Built) {
         let options = appSettings.settings.myScheduleOptions
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let organization = CanonicalBusinessEngine.openOrganizationPayrollPolicyState
-            ?? CanonicalBusinessEngine.memoisedPayrollPolicyJSON(policy)
-            ?? [:]
+        // The working-hours state with its history (§4.3): never one policy for every day. While it has not loaded the
+        // report fails with its calculation error rather than price days on the wrong rules (review of #235).
+        guard let organization = CanonicalBusinessEngine.openOrganizationPayrollPolicyState else { throw PayCalculationError() }
         let built = WeeklyReportPayInputs.build(WeeklyReportPayInputs.Sources(
             users: userStore.organizationUsers,
             bookingNameUsers: userStore.bookingNameUsers,
@@ -1180,7 +1189,8 @@ struct WeeklyReportView: View {
             timesheetWeeks: timesheetFeed.rulebookWeeksJSON(),
             sheets: timesheetFeed.sheets,
             viewer: userStore.payViewerRow,
-            roleLabel: { user in reportRoleLabel(for: user, fallback: "Operative") },
+            // RULEBOOK 1.53.0: the Role column is the user level (`userLevelLabel`); a person with no account is an operative.
+            roleLabel: { user in Self.userLevelText(user) },
             includesManagerBooking: { options.includesManagerScheduleLocation($0) }
         ))
         guard let result = CanonicalBusinessEngine.weeklyReportPayRows(built.input) else { throw PayCalculationError() }
@@ -1245,16 +1255,17 @@ struct WeeklyReportView: View {
                 && day <= reportEndDay
                 && $0.status.occupiesDay  // RULEBOOK `bookingOccupiesDay`
         }
-        return filtered.compactMap { booking in
+        // RULEBOOK 1.53.0: a booking whose job or firm was deleted still counts, under `bookingJobLabel` ("Deleted job").
+        return filtered.map { booking in
             let project = projectStore.projects.first(where: { $0.id == booking.projectId })
                 ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
             let subcontractor = subcontractorStore.subcontractors.first(where: { $0.id == booking.subcontractorId })
-            guard let project, let subcontractor else { return nil }
+            let jobName = project.map { $0.siteName.isEmpty ? $0.jobNumber : $0.siteName }
             return SubcontractorWorkRow(
-                projectName: project.siteName,
-                jobNumber: project.jobNumber,
-                subcontractorName: subcontractor.name,
-                subcontractorType: subcontractor.subcontractorType,
+                projectName: CanonicalBusinessEngine.bookingJobLabel(jobName),
+                jobNumber: project.map { $0.jobNumber.isEmpty ? "—" : $0.jobNumber } ?? "—",
+                subcontractorName: subcontractor?.name ?? "Sub contractor",
+                subcontractorType: subcontractor.map { $0.subcontractorType.isEmpty ? "—" : $0.subcontractorType } ?? "—",
                 timeSlotLabel: booking.timeSlot.displayName,
                 days: subcontractorDayValue(booking)
             )
@@ -1331,10 +1342,10 @@ struct WeeklyReportView: View {
     }
 
 
-    private func reportRoleLabel(for user: AppUser?, fallback: String) -> String {
-        guard let user else { return fallback }
-        let adminLike = user.isSuperAdmin || user.permissions.adminAccess || user.role == .admin || user.role == .manager || user.permissions.manager
-        return adminLike ? "Admin User" : fallback
+    /// RULEBOOK 1.53.0 `userLevelLabel(person)`: Admin / Manager / Operative, the Super Admin "Admin (Super Admin)".
+    static func userLevelText(_ user: AppUser?) -> String {
+        guard let user else { return CanonicalBusinessEngine.userLevelLabel(["role": "operative", "operativeMode": true]) ?? "Operative" }
+        return CanonicalBusinessEngine.userLevelLabel(RulebookPeople.person(user)) ?? "—"
     }
 
 

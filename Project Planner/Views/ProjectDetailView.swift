@@ -5865,7 +5865,8 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
             picker.dismiss(animated: true)
-            if let img = info[.originalImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24: the 40 MB / 50 MP check before the photo is used.
+            if StorageUploadPolicy.pickerPhotoRefusal(info) == nil, let img = info[.originalImage] as? UIImage {
                 DispatchQueue.main.async {
                     self.parent.images.append(img)
                     self.parent.dismiss()
@@ -5918,12 +5919,13 @@ private struct ImagePicker: UIViewControllerRepresentable {
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
             
+            // RULEBOOK 1.50.0 §24: refused before decoding (40 MB / 50 MP), decoded downsampled.
             for result in results {
-                result.itemProvider.loadObject(ofClass: UIImage.self) { object, error in
-                    if let image = object as? UIImage {
-                        DispatchQueue.main.async {
-                            self.parent.images.append(image)
-                        }
+                StorageUploadPolicy.loadPreparablePhoto(result.itemProvider) { outcome in
+                    if case .success(let image) = outcome {
+                        self.parent.images.append(image)
+                    } else if case .failure(let error) = outcome {
+                        print("⚠️ [Tasks] photo refused: \(error.localizedDescription)")
                     }
                 }
             }
@@ -5961,12 +5963,13 @@ private struct CompletionImagePicker: UIViewControllerRepresentable {
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
             
+            // RULEBOOK 1.50.0 §24: refused before decoding (40 MB / 50 MP), decoded downsampled.
             for result in results {
-                result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
-                    if let image = object as? UIImage {
-                        DispatchQueue.main.async {
-                            self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
-                        }
+                StorageUploadPolicy.loadPreparablePhoto(result.itemProvider) { outcome in
+                    if case .success(let image) = outcome {
+                        self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
+                    } else if case .failure(let error) = outcome {
+                        print("⚠️ [Tasks] completion photo refused: \(error.localizedDescription)")
                     }
                 }
             }
@@ -6019,7 +6022,8 @@ private struct TaskCameraPicker: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let image = info[.originalImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24: the 40 MB / 50 MP check before the photo is used.
+            if StorageUploadPolicy.pickerPhotoRefusal(info) == nil, let image = info[.originalImage] as? UIImage {
                 parent.onCapture(image)
             }
             parent.dismiss()

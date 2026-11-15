@@ -65,6 +65,7 @@ enum WeeklyReportPayInputs {
         let labour = s.bookings.filter { inRange($0.date) }
         let manager = s.managerBookings.filter { inRange($0.date) && s.includesManagerBooking($0) }
         let people = buildPeople(s, labour: labour, manager: manager)
+        let roster = RulebookPeople.roster(s.users)
 
         let jobs = s.projects + s.smallWorks
         let smallWorkKeys = Set(s.smallWorks.flatMap { [$0.documentId.lowercased(), $0.id.uuidString.lowercased()] })
@@ -96,7 +97,7 @@ enum WeeklyReportPayInputs {
         }
 
         var input: [String: Any] = [
-            "people": people.values.sorted { $0.id < $1.id }.map(personJSON),
+            "people": people.values.sorted { $0.id < $1.id }.map { personJSON($0, roster: roster) },
             "bookings": bookingRows,
             "timesheetWeeks": s.timesheetWeeks,
             "sheets": s.sheets,
@@ -142,7 +143,7 @@ enum WeeklyReportPayInputs {
 
     // MARK: - People
 
-    private static func personJSON(_ person: Person) -> [String: Any] {
+    private static func personJSON(_ person: Person, roster: [[String: Any]]) -> [String: Any] {
         var row: [String: Any] = [
             "id": person.id,
             "name": person.name,
@@ -158,7 +159,8 @@ enum WeeklyReportPayInputs {
             userRow["hourlyRate"] = RulebookJSON.orNull(user.hourlyRate)
             row["user"] = userRow
             row["ghost"] = user.isGhost
-            row["hasLineManager"] = !user.canonicalLineManagerIds.isEmpty
+            // `hasActiveLineManager(person, roster)`: only an active line manager counts (review of #235).
+            row["hasLineManager"] = CanonicalBusinessEngine.overtimeHasActiveLineManager(person: RulebookPeople.person(user), roster: roster)
             row["paySubject"] = user.payAccessSubject
         } else {
             row["user"] = NSNull()
@@ -194,9 +196,9 @@ enum WeeklyReportPayInputs {
         func addUser(_ user: AppUser) -> String {
             let keptUser = kept(user)
             if people[keptUser.id] == nil {
-                let linkedOperative = s.operatives.first { accountFor($0)?.id == keptUser.id }
                 var ids = OvertimeScreenSupport.personIds(for: keptUser, users: s.users, operatives: s.operatives)
                 ids.append(contentsOf: StaffEmailIdentity.userIds(sharing: keptUser.email, in: s.users).sorted())
+                let linkedOperative = payOperative(personIds: ids, operatives: s.operatives)
                 people[keptUser.id] = Person(
                     id: keptUser.id,
                     name: displayName(keptUser),
@@ -249,9 +251,13 @@ enum WeeklyReportPayInputs {
         let formerAliases = CanonicalBusinessEngine.formerIdAliases(
             s.users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
         ) ?? [:]
+        // Manager site bookings match `userId` without case (`normalizeDocumentId`, review of #235 / web B11).
+        let usersByKey = Dictionary(s.users.map { (normalizedId($0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        let formerByKey = Dictionary(formerAliases.map { (normalizedId($0.key), $0.value) }, uniquingKeysWith: { first, _ in first })
         for booking in manager {
-            let currentId = s.users.contains { $0.id == booking.userId } ? booking.userId : (formerAliases[booking.userId] ?? booking.userId)
-            guard let user = s.users.first(where: { $0.id == currentId }) else { continue }
+            let key = normalizedId(booking.userId)
+            let currentKey = usersByKey[key] != nil ? key : normalizedId(formerByKey[key] ?? booking.userId)
+            guard let user = usersByKey[currentKey] else { continue }
             let personId = addUser(user)
             extraIds[personId, default: []].insert(booking.userId)
         }
@@ -262,6 +268,23 @@ enum WeeklyReportPayInputs {
             people[personId] = person
         }
         return people
+    }
+
+    /// `normalizeDocumentId` (trimmed, lower case) for an id match.
+    private static func normalizedId(_ id: String) -> String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Guardrail 1 (review of #235): the person's `operatives` row for the live-rate fallback is chosen from the rows
+    /// the person-ids rule gives them (`overtimePersonIds`: their own, former and same-email ids and the rows on their
+    /// email), never "the first row on the email": the row linked to one of their ids first, else one with a rate.
+    private static func payOperative(personIds: [String], operatives: [Operative]) -> Operative? {
+        let keys = Set(personIds.map(normalizedId))
+        let rows = operatives.filter { keys.contains(normalizedId($0.documentId)) || keys.contains(normalizedId($0.id.uuidString)) }
+        if let linked = rows.first(where: { row in row.linkedUserId.map { keys.contains(normalizedId($0)) } ?? false }) {
+            return linked
+        }
+        return rows.first { $0.dayRate != nil || $0.hourlyRate != nil } ?? rows.first
     }
 
     private static func displayName(_ user: AppUser) -> String {

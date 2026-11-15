@@ -207,6 +207,39 @@ enum StorageUploadPolicy {
         return image
     }
 
+    /// RULEBOOK 1.50.0 §24 (review of #235): a photo from `UIImagePickerController` is checked before the app uses it.
+    /// A library pick is read from its file (`imageURL`, memory-mapped, never decoded here) for the 40 MB / 50 MP
+    /// refusal; a camera capture has no file, so its pixel size is checked. Nil when the photo may be used.
+    static func pickerPhotoRefusal(_ info: [UIImagePickerController.InfoKey: Any]) -> String? {
+        if let url = info[.imageURL] as? URL, let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
+            return photoPrepareRefusal(data: data)
+        }
+        if let image = (info[.editedImage] as? UIImage) ?? (info[.originalImage] as? UIImage) {
+            return photoPrepareRefusal(image: image)
+        }
+        return nil
+    }
+
+    /// A `PHPickerViewController` result as an image ready to redraw, refused before it is decoded: the bytes are
+    /// loaded (`loadDataRepresentation`), checked (`photoPrepareRefusal(data:)`) and decoded downsampled
+    /// (`preparablePhoto(from:)`). The completion runs on the main queue.
+    static func loadPreparablePhoto(_ provider: NSItemProvider, completion: @escaping (Result<UIImage, Error>) -> Void) {
+        provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, error in
+            let loadError = error
+            DispatchQueue.main.async {
+                guard let data else {
+                    completion(.failure(loadError ?? failure(photoReadFailedMessage, oversize: false)))
+                    return
+                }
+                do {
+                    completion(.success(try preparablePhoto(from: data)))
+                } catch {
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+
     // MARK: - Preparing the bytes
 
     static func prepareImage(
