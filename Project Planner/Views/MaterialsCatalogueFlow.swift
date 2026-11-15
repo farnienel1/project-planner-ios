@@ -341,24 +341,17 @@ struct MaterialCatalogueRootView: View {
                             .background(MaterialsOrderingTheme.primaryTint)
                             .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
-                    Text(item.defaultUnit.rawValue)
+                    // RULEBOOK 1.48.0: "Drum · 50m in one" (`MATERIAL_ORDER_UNIT_DETAILS` label + `materialContentText`).
+                    Text(item.orderUnitSummary)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 1)
                         .background(PPColor.well)
                         .clipShape(RoundedRectangle(cornerRadius: 3))
-                    if let size = item.size?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty {
-                        Text("Size: \(size)")
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundStyle(MaterialsOrderingTheme.muted)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .background(PPColor.well)
-                            .clipShape(RoundedRectangle(cornerRadius: 3))
-                    }
-                    if !item.formattedLengthSpecification.isEmpty {
-                        Text("Length: \(item.formattedLengthSpecification)")
+                    // RULEBOOK 1.48.0: Size through `materialSizeText` (the "1.0" placeholder hidden); no "Length:".
+                    if !item.sizeDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("Size: \(item.sizeDisplay)")
                             .font(.system(size: 9, weight: .medium))
                             .foregroundStyle(MaterialsOrderingTheme.muted)
                             .padding(.horizontal, 6)
@@ -420,10 +413,12 @@ private struct MaterialCatalogueEditorSheet: View {
     @State private var name = ""
     @State private var brand = ""
     @State private var productCode = ""
-    @State private var unit: MaterialUnit = .number
+    /// RULEBOOK 1.48.0: the default order unit and what is in one (the quantity is not used for a catalogue item).
+    @State private var quantityDraft = MaterialQuantityDraft.newLine
+    /// The item as opened: what is in one is checked only when the unit or it changed.
+    @State private var originalQuantity: MaterialQuantityDraft?
+    @State private var contentError: String?
     @State private var sizeValue = ""
-    @State private var lengthValue = ""
-    @State private var lengthUnit: MaterialLengthUnit?
     @State private var category = ""
     @State private var showingDuplicateAlert = false
     @State private var duplicateMatch: MaterialCatalogItem?
@@ -464,35 +459,60 @@ private struct MaterialCatalogueEditorSheet: View {
                             category = selected
                         }
                     }
-                    Text("DEFAULT TYPE")
+                    Text("ORDER UNIT")
                         .font(.footnote.weight(.semibold))
                         .tracking(0.8)
                         .foregroundStyle(.secondary)
-                    HStack(spacing: 6) {
-                        ForEach(MaterialUnit.allCases, id: \.self) { u in
-                            Button { unit = u } label: {
-                                VStack(spacing: 2) {
-                                    Text(u.rawValue)
-                                        .font(.system(size: 11, weight: .medium))
-                                    Text(unitHint(u))
-                                        .font(.system(size: 9))
-                                        .foregroundStyle(MaterialsOrderingTheme.muted)
-                                }
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 10)
-                                .background(unit == u ? MaterialsOrderingTheme.primaryTint : MaterialsOrderingTheme.cardBackground)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 11)
-                                        .stroke(unit == u ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.border, lineWidth: unit == u ? 1.5 : 0.5)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                    // RULEBOOK 1.48.0 `MATERIAL_ORDER_UNITS` / `MATERIAL_ORDER_UNIT_DETAILS` (label and hint).
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 6) {
+                        ForEach(CanonicalBusinessEngine.materialOrderUnits, id: \.self) { u in
+                            let detail = CanonicalBusinessEngine.materialOrderUnitDetails[u]
+                            Button {
+                                quantityDraft.orderUnit = u
+                                quantityDraft.fitMeasureToUnit()
+                            } label: {
+                                Text(detail?.label ?? u)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(quantityDraft.orderUnit == u ? MaterialsOrderingTheme.primaryTint : MaterialsOrderingTheme.cardBackground)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 11)
+                                            .stroke(quantityDraft.orderUnit == u ? MaterialsOrderingTheme.primary : MaterialsOrderingTheme.border, lineWidth: quantityDraft.orderUnit == u ? 1.5 : 0.5)
+                                    )
+                                    .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
                             }
                             .accessibilityIdentifier("materialCatalogueEditor.row.\(u)")
                             .buttonStyle(.plain)
                         }
                     }
+                    if let hint = CanonicalBusinessEngine.materialOrderUnitDetails[quantityDraft.orderUnit]?.hint {
+                        Text(hint)
+                            .font(.system(size: 11))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !quantityDraft.measures.isEmpty {
+                        HStack(spacing: 8) {
+                            textFieldRow(label: "What's in one", text: $quantityDraft.contentAmountText, required: false, placeholder: "Optional, e.g. 50")
+                            Picker("Measure", selection: Binding(
+                                get: { quantityDraft.contentMeasure ?? quantityDraft.measures.first ?? "" },
+                                set: { quantityDraft.contentMeasure = $0 }
+                            )) {
+                                ForEach(quantityDraft.measures, id: \.self) { measure in
+                                    Text(measure).tag(measure)
+                                }
+                            }
+                            .accessibilityIdentifier("materialCatalogueEditor.contentMeasure")
+                            .pickerStyle(.menu)
+                        }
+                    }
+                    if let contentError {
+                        Text(contentError)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                     textFieldRow(label: "Size", text: $sizeValue, required: false, placeholder: "Optional")
-                    MaterialsLengthInputRow(lengthValue: $lengthValue, lengthUnit: $lengthUnit)
                 }
                 .padding(16)
             }
@@ -520,10 +540,10 @@ private struct MaterialCatalogueEditorSheet: View {
                     name = item.name
                     brand = item.brand
                     productCode = item.productCode ?? ""
-                    unit = item.defaultUnit
+                    let opened = MaterialQuantityDraft(quantity: 1, model: item.effectiveQuantityModel)
+                    quantityDraft = opened
+                    originalQuantity = opened
                     sizeValue = item.size ?? ""
-                    lengthValue = item.length ?? item.sizeOrLength ?? ""
-                    lengthUnit = item.lengthUnit
                     category = item.category ?? "Other"
                 }
             }
@@ -553,23 +573,23 @@ private struct MaterialCatalogueEditorSheet: View {
         return "New material"
     }
 
-    private func unitHint(_ unit: MaterialUnit) -> String {
-        switch unit {
-        case .number: return "Each / piece"
-        case .length: return "Metres / runs"
-        case .box: return "Pack of 100"
-        case .drum: return "Cable drum"
-        case .pallet: return "Pallet load"
-        }
-    }
-
     private func attemptSave() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedBrand = brand.trimmingCharacters(in: .whitespacesAndNewlines)
         let code = productCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let size = sizeValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let length = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let cat = category.trimmingCharacters(in: .whitespacesAndNewlines)
+        // RULEBOOK 1.48.0 `materialContentError`, only when the unit or what is in one changed.
+        if originalQuantity.map({ quantityDraft.model != $0.model }) ?? true,
+           let error = CanonicalBusinessEngine.materialContentError(
+            amount: quantityDraft.contentAmountText.trimmingCharacters(in: .whitespacesAndNewlines),
+            measure: quantityDraft.contentMeasure ?? quantityDraft.measures.first,
+            orderUnit: quantityDraft.orderUnit
+           ) {
+            contentError = error
+            return
+        }
+        contentError = nil
 
         let uid = firebaseBackend.currentUser?.uid ?? Auth.auth().currentUser?.uid ?? ""
         let creator = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
@@ -581,15 +601,24 @@ private struct MaterialCatalogueEditorSheet: View {
             existingId = UUID()
         }
 
+        let model = quantityDraft.model
+        let editedItem: MaterialCatalogItem? = {
+            if case .edit(let existing) = mode { return existing }
+            return nil
+        }()
         let item = MaterialCatalogItem(
             id: existingId,
             name: trimmedName,
             brand: trimmedBrand.isEmpty ? "Custom" : trimmedBrand,
             productCode: code.isEmpty ? nil : code,
-            defaultUnit: unit,
+            // The old fields are written by `materialCatalogueItemFields` from the order unit; kept as stored here.
+            defaultUnit: editedItem?.defaultUnit ?? .number,
+            orderUnit: model.orderUnit,
+            contentAmount: model.contentAmount,
+            contentMeasure: model.contentMeasure,
             size: size.isEmpty ? nil : size,
-            length: length.isEmpty ? nil : length,
-            lengthUnit: length.isEmpty ? nil : lengthUnit,
+            length: editedItem?.length,
+            lengthUnit: editedItem?.lengthUnit,
             category: cat.isEmpty ? "Other" : cat,
             createdAt: {
                 if case .edit(let existing) = mode { return existing.createdAt }
@@ -718,9 +747,9 @@ private struct MaterialCatalogueDetailView: View {
                     .background(PPColor.card)
                     .clipShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
 
-                    specRow(label: "Default unit", value: unitLabel)
-                    specRow(label: "Size", value: item.size?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? item.size! : "—")
-                    specRow(label: "Length", value: item.length?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? item.length! : "—")
+                    // RULEBOOK 1.48.0: "Drum · 50m in one"; Size through `materialSizeText`; no separate Length.
+                    specRow(label: "Order unit", value: item.orderUnitSummary)
+                    specRow(label: "Size", value: item.sizeDisplay.isEmpty ? "—" : item.sizeDisplay)
                     specRow(label: "Category", value: item.category ?? "—")
                     specRow(label: "Added", value: "\(item.createdAt.formatted(date: .abbreviated, time: .omitted)) by \(item.createdByName)")
 
@@ -764,13 +793,6 @@ private struct MaterialCatalogueDetailView: View {
         }
     }
 
-    private var unitLabel: String {
-        if let size = item.length?.trimmingCharacters(in: .whitespacesAndNewlines), !size.isEmpty, item.defaultUnit == .box {
-            return "Box · \(size)"
-        }
-        return item.defaultUnit.rawValue
-    }
-
     private func specRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
@@ -799,6 +821,9 @@ struct MaterialCatalogueBulkImportView: View {
     @State private var pendingImportMode: MaterialCatalogueCSVImportMode = .updateExisting
     @State private var showReplaceConfirm = false
     @State private var importError: String?
+    /// RULEBOOK 1.48.0: rows the rulebook refused ("Row N: …"), shown before the other rows are imported.
+    @State private var pendingRowErrors: [String] = []
+    @State private var pendingRows: [MaterialCatalogCSVRow] = []
     @State private var isImporting = false
     @State private var importResult: MaterialCatalogueCSVImportResult?
     @State private var shareURL: URL?
@@ -939,7 +964,8 @@ struct MaterialCatalogueBulkImportView: View {
             .interactiveDismissDisabled(isBusy)
             .fileImporter(
                 isPresented: $showingFilePicker,
-                allowedContentTypes: [.commaSeparatedText, .plainText],
+                // RULEBOOK 1.48.0: CSV files only (`materialCatalogueCsvFileError` refuses anything else too).
+                allowedContentTypes: [.commaSeparatedText],
                 allowsMultipleSelection: false
             ) { result in
                 handleFileImport(result)
@@ -957,6 +983,25 @@ struct MaterialCatalogueBulkImportView: View {
                     .accessibilityIdentifier("materialCatalogueBulkImport.ok")
             } message: {
                 Text(importError ?? "")
+            }
+            .alert("Some rows cannot be imported", isPresented: Binding(
+                get: { !pendingRowErrors.isEmpty },
+                set: { if !$0 { pendingRowErrors = [] } }
+            )) {
+                Button("Cancel", role: .cancel) { pendingRows = [] }
+                    .accessibilityIdentifier("materialCatalogueBulkImport.rowErrorsCancel")
+                if !pendingRows.isEmpty {
+                    Button("Import the other rows") {
+                        let rows = pendingRows
+                        pendingRows = []
+                        Task { await importRows(rows, mode: pendingImportMode) }
+                    }
+                    .accessibilityIdentifier("materialCatalogueBulkImport.importOtherRows")
+                }
+            } message: {
+                let shown = pendingRowErrors.prefix(8).joined(separator: "\n")
+                let more = pendingRowErrors.count > 8 ? "\n…and \(pendingRowErrors.count - 8) more" : ""
+                Text(shown + more)
             }
             .alert("⚠️ CSV Warning", isPresented: $showCSVDownloadWarning) {
                 Button("Cancel", role: .cancel) {}
@@ -1187,9 +1232,15 @@ struct MaterialCatalogueBulkImportView: View {
             }
             defer { url.stopAccessingSecurityScopedResource() }
             do {
+                // RULEBOOK 1.48.0: read on the device only (never uploaded); the rulebook decides what is accepted.
                 let data = try Data(contentsOf: url)
-                let rows = try MaterialCatalogCSV.parse(data: data)
-                Task { await importRows(rows, mode: pendingImportMode) }
+                let parsed = try MaterialCatalogCSV.parse(data: data, fileName: url.lastPathComponent)
+                if !parsed.errors.isEmpty {
+                    pendingRows = parsed.rows
+                    pendingRowErrors = parsed.errors
+                    return
+                }
+                Task { await importRows(parsed.rows, mode: pendingImportMode) }
             } catch {
                 importError = error.localizedDescription
             }

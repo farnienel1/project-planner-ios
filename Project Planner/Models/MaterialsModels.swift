@@ -32,8 +32,17 @@ enum MaterialWorkflowStatus: String, Codable, CaseIterable {
 
 struct MaterialItem: Identifiable, Codable, Hashable {
     let id: UUID
-    var quantity: Int
+    /// RULEBOOK 1.48.0 (owner decision 3): whole numbers except Metre, so "12.5m" survives. Decodes an older cached Int.
+    var quantity: Double
+    /// The pre-1.48.0 unit (older builds read it). Written by the rulebook writer from the order unit; never offered.
     var unit: MaterialUnit
+    /// RULEBOOK 1.48.0 `MATERIAL_ORDER_UNITS` (Each, Box, Pack, Drum, Reel, Coil, Pallet, Length, Metre), as the rulebook
+    /// reader returned it. Nil on a line made or cached before 1.48.0 (read from the old fields, `effectiveQuantityModel`).
+    var orderUnit: String? = nil
+    /// What is in one (50 m on a drum, 3 m per length); nil when not given.
+    var contentAmount: Double? = nil
+    /// `m`, `mm` or `pcs`.
+    var contentMeasure: String? = nil
     var material: String // Description / name
     var addedBy: String // User who added it
     var addedByUserId: String? // Stable auth UID for ownership checks
@@ -58,8 +67,11 @@ struct MaterialItem: Identifiable, Codable, Hashable {
 
     init(
         id: UUID = UUID(),
-        quantity: Int,
+        quantity: Double,
         unit: MaterialUnit,
+        orderUnit: String? = nil,
+        contentAmount: Double? = nil,
+        contentMeasure: String? = nil,
         material: String,
         addedBy: String,
         addedByUserId: String? = nil,
@@ -86,6 +98,9 @@ struct MaterialItem: Identifiable, Codable, Hashable {
         self.id = id
         self.quantity = quantity
         self.unit = unit
+        self.orderUnit = orderUnit
+        self.contentAmount = contentAmount
+        self.contentMeasure = contentMeasure
         self.material = material
         self.addedBy = addedBy
         self.addedByUserId = addedByUserId
@@ -112,14 +127,13 @@ struct MaterialItem: Identifiable, Codable, Hashable {
     var subtitleLine: String {
         let brandPart = brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let codePart = productCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let sizePart = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lengthPart = formattedLengthSpecification
+        // RULEBOOK 1.48.0: the length is part of the quantity text (`materialLineText`); Size is `materialSizeText`.
+        let sizePart = CanonicalBusinessEngine.materialSizeText(size).trimmingCharacters(in: .whitespacesAndNewlines)
         let categoryPart = category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var parts: [String] = []
         if !brandPart.isEmpty { parts.append(brandPart) }
         if !codePart.isEmpty { parts.append(codePart) }
         if !sizePart.isEmpty { parts.append("Size: \(sizePart)") }
-        if !lengthPart.isEmpty { parts.append("Length: \(lengthPart)") }
         if !categoryPart.isEmpty { parts.append(categoryPart) }
         if !parts.isEmpty {
             return parts.joined(separator: " · ")
@@ -140,6 +154,7 @@ struct MaterialItem: Identifiable, Codable, Hashable {
 
     var sendLineSnapshot: MaterialSendLineSnapshot {
         let lengthDisplay = formattedLengthSpecification
+        let model = effectiveQuantityModel
         return MaterialSendLineSnapshot(
             materialId: id,
             name: material,
@@ -147,7 +162,12 @@ struct MaterialItem: Identifiable, Codable, Hashable {
             unit: unit,
             brand: brand,
             productCode: productCode,
-            lengthDisplay: lengthDisplay.isEmpty ? nil : lengthDisplay
+            lengthDisplay: lengthDisplay.isEmpty ? nil : lengthDisplay,
+            orderUnit: model.orderUnit,
+            contentAmount: model.contentAmount,
+            contentMeasure: model.contentMeasure,
+            // RULEBOOK 1.48.0: the text the line is sent with (`materialLineText`), kept on the record.
+            quantityText: quantityText
         )
     }
 }
@@ -175,7 +195,13 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
     var name: String
     var brand: String
     var productCode: String?
+    /// The pre-1.48.0 default unit (older builds read it); written by the rulebook writer from the order unit.
     var defaultUnit: MaterialUnit
+    /// RULEBOOK 1.48.0: the default order unit and what is in one, as the rulebook reader returned them. Nil on an item
+    /// cached before 1.48.0 (`effectiveQuantityModel` reads the old fields).
+    var orderUnit: String? = nil
+    var contentAmount: Double? = nil
+    var contentMeasure: String? = nil
     var size: String?
     var length: String?
     var lengthUnit: MaterialLengthUnit?
@@ -190,6 +216,9 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         brand: String,
         productCode: String? = nil,
         defaultUnit: MaterialUnit,
+        orderUnit: String? = nil,
+        contentAmount: Double? = nil,
+        contentMeasure: String? = nil,
         size: String? = nil,
         length: String? = nil,
         lengthUnit: MaterialLengthUnit? = nil,
@@ -204,6 +233,9 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         self.brand = brand
         self.productCode = productCode
         self.defaultUnit = defaultUnit
+        self.orderUnit = orderUnit
+        self.contentAmount = contentAmount
+        self.contentMeasure = contentMeasure
         self.size = size
         self.length = length ?? sizeOrLength
         self.lengthUnit = lengthUnit
@@ -213,15 +245,13 @@ struct MaterialCatalogItem: Identifiable, Codable, Hashable {
         self.createdByName = createdByName
     }
 
+    /// RULEBOOK 1.48.0: "Drum · 50m in one", with "Size: x" (`materialSizeText`) when there is one. The length is part
+    /// of what is in one, never a separate "Length:".
     var sizeOrLengthLabel: String? {
-        let sizeTrimmed = size?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let lengthTrimmed = formattedLengthSpecification
-        if !sizeTrimmed.isEmpty && !lengthTrimmed.isEmpty {
-            return "Size: \(sizeTrimmed) · Length: \(lengthTrimmed)"
-        }
-        if !sizeTrimmed.isEmpty { return "Size: \(sizeTrimmed)" }
-        if !lengthTrimmed.isEmpty { return "Length: \(lengthTrimmed)" }
-        return nil
+        let sizeTrimmed = sizeDisplay.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unitLine = orderUnitSummary
+        if !sizeTrimmed.isEmpty { return "\(unitLine) · Size: \(sizeTrimmed)" }
+        return unitLine.isEmpty ? nil : unitLine
     }
 
     var formattedLengthSpecification: String {
@@ -279,14 +309,6 @@ enum MaterialLengthSpecification {
         guard let unit else { return trimmedValue }
         return "\(trimmedValue) \(unit.emailSuffix)"
     }
-
-    nonisolated static func parseUnit(from raw: String?) -> MaterialLengthUnit? {
-        switch raw?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
-        case "M", "METRE", "METRES", "METER", "METERS": return .metres
-        case "MM", "MILLIMETRE", "MILLIMETRES", "MILLIMETER", "MILLIMETERS": return .millimetres
-        default: return nil
-        }
-    }
 }
 
 // MARK: - Material quantity type (was “Unit” in the UI)
@@ -300,23 +322,8 @@ enum MaterialUnit: String, CaseIterable, Codable {
 
     var displayName: String { rawValue }
 
-    /// Label for quantity pickers (renamed from Unit → Type in the materials UI).
-    static let typePickerTitle = "Type"
-
-    func quantityLabel(for quantity: Int) -> String {
-        switch self {
-        case .number:
-            return quantity == 1 ? "Number" : "Numbers"
-        case .box:
-            return quantity == 1 ? "Box" : "Boxes"
-        case .length:
-            return quantity == 1 ? "Length" : "Lengths"
-        case .drum:
-            return quantity == 1 ? "Drum" : "Drums"
-        case .pallet:
-            return quantity == 1 ? "Pallet" : "Pallets"
-        }
-    }
+    // RULEBOOK 1.48.0: the old stored unit only. Pickers offer `MATERIAL_ORDER_UNITS`; every quantity is printed with
+    // `materialLineText` (the old "2 Drums" wording is gone; past send records keep their text, `materialSendLineText`).
 }
 
 // MARK: - Material send history (quote / order batches)
@@ -330,11 +337,18 @@ struct MaterialSendRecipientSnapshot: Codable, Hashable {
 struct MaterialSendLineSnapshot: Codable, Hashable {
     var materialId: UUID
     var name: String
-    var quantity: Int
+    /// RULEBOOK 1.48.0: a Metre line may be 12.5. Decodes an older cached Int.
+    var quantity: Double
     var unit: MaterialUnit
     var brand: String?
     var productCode: String?
     var lengthDisplay: String?
+    /// RULEBOOK 1.48.0: the order unit and what is in one (sent to the email function, stored on new records).
+    var orderUnit: String? = nil
+    var contentAmount: Double? = nil
+    var contentMeasure: String? = nil
+    /// RULEBOOK 1.48.0: the text the line was sent with (`materialLineText`); nil on records sent before 1.48.0.
+    var quantityText: String? = nil
 }
 
 struct MaterialSendRecord: Identifiable, Codable, Hashable {

@@ -130,7 +130,7 @@ struct MaterialsLineCard: View {
                             }
                         }
                         Spacer(minLength: 8)
-                        MaterialsQuantityBadge(quantity: material.quantity, unit: material.unit)
+                        MaterialsQuantityBadge(text: material.quantityText)
                     }
                     HStack(spacing: 6) {
                         MaterialsStatusPill(status: material.status)
@@ -640,14 +640,10 @@ struct MaterialsOrderHistorySheet: View {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(line.name)
                                         .font(.system(size: 13, weight: .medium))
-                                    if let length = line.lengthDisplay, !length.isEmpty {
-                                        Text("Length: \(length)")
-                                            .font(.system(size: 11))
-                                            .foregroundStyle(MaterialsOrderingTheme.muted)
-                                    }
                                 }
                                 Spacer()
-                                Text("\(line.quantity) \(line.unit.quantityLabel(for: line.quantity))")
+                                // RULEBOOK 1.48.0 `materialSendLineText`: the text it was sent with, never re-rendered.
+                                Text(line.historyText)
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundStyle(MaterialsOrderingTheme.primary)
                             }
@@ -676,101 +672,100 @@ struct MaterialsOrderHistorySheet: View {
     }
 }
 
-/// Split row: Length (optional) + Unit M/MM on one line.
-struct MaterialsLengthInputRow: View {
-    @Binding var lengthValue: String
-    @Binding var lengthUnit: MaterialLengthUnit?
+/// RULEBOOK 1.48.0 §28: the quantity, the order unit (`MATERIAL_ORDER_UNITS`, labelled from
+/// `MATERIAL_ORDER_UNIT_DETAILS`) and "What's in one" (amount + a measure the unit offers; hidden for Metre). Replaces the
+/// old Type + Length + Length unit inputs. Layout only — the checks are `materialQuantityError` / `materialContentError`
+/// (`MaterialQuantityDraft.validationError`).
+struct MaterialsOrderUnitRow: View {
+    @Binding var draft: MaterialQuantityDraft
+
+    private var details: [String: MaterialOrderUnitDetail] { CanonicalBusinessEngine.materialOrderUnitDetails }
+    private var detail: MaterialOrderUnitDetail? { details[draft.orderUnit] }
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("LENGTH (OPTIONAL)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                TextField("e.g. 3", text: $lengthValue)
-                    .accessibilityIdentifier("materialsLengthInput.eG3")
-                    .keyboardType(.decimalPad)
-                    .font(.system(size: 14, weight: .medium))
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("QUANTITY")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                    TextField("1", text: $draft.quantityText)
+                        .accessibilityIdentifier("materialsQuantityType.n1")
+                        .keyboardType(detail?.decimalQuantity == true ? .decimalPad : .numberPad)
+                        .font(.system(size: 14, weight: .medium))
+                        .padding(10)
+                        .background(MaterialsOrderingTheme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 11))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("ORDER UNIT")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(MaterialsOrderingTheme.muted)
+                    Picker("Order unit", selection: $draft.orderUnit) {
+                        ForEach(CanonicalBusinessEngine.materialOrderUnits, id: \.self) { unit in
+                            Text(details[unit]?.label ?? unit).tag(unit)
+                        }
+                    }
+                    .accessibilityIdentifier("materialsQuantityType.picker")
+                    .pickerStyle(.menu)
                     .padding(10)
+                    .frame(maxWidth: .infinity)
                     .background(MaterialsOrderingTheme.cardBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 11))
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text("UNIT (OPTIONAL)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                Picker("Length unit", selection: Binding(
-                    get: { lengthUnit ?? .metres },
-                    set: { newValue in
-                        lengthUnit = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : newValue
-                    }
-                )) {
-                    ForEach(MaterialLengthUnit.allCases, id: \.self) { u in
-                        Text(u.displayName).tag(u)
-                    }
                 }
-                .accessibilityIdentifier("materialsLengthInput.lengthUnit")
-                .pickerStyle(.menu)
-                .padding(10)
-                .frame(maxWidth: .infinity)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 11))
-                .onChange(of: lengthValue) { _, newValue in
-                    if newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        lengthUnit = nil
-                    } else if lengthUnit == nil {
-                        lengthUnit = .metres
+            }
+            if let hint = detail?.hint, !hint.isEmpty {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MaterialsOrderingTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let measures = detail?.measures, !measures.isEmpty {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("WHAT'S IN ONE (OPTIONAL)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                        TextField("e.g. 50", text: $draft.contentAmountText)
+                            .accessibilityIdentifier("materialsOrderUnit.contentAmount")
+                            .keyboardType(.decimalPad)
+                            .font(.system(size: 14, weight: .medium))
+                            .padding(10)
+                            .background(MaterialsOrderingTheme.cardBackground)
+                            .clipShape(RoundedRectangle(cornerRadius: 11))
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("MEASURE")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(MaterialsOrderingTheme.muted)
+                        Picker("Measure", selection: Binding(
+                            get: { draft.contentMeasure ?? measures.first ?? "" },
+                            set: { draft.contentMeasure = $0 }
+                        )) {
+                            ForEach(measures, id: \.self) { measure in
+                                Text(measure).tag(measure)
+                            }
+                        }
+                        .accessibilityIdentifier("materialsOrderUnit.contentMeasure")
+                        .pickerStyle(.menu)
+                        .padding(10)
+                        .frame(maxWidth: .infinity)
+                        .background(MaterialsOrderingTheme.cardBackground)
+                        .clipShape(RoundedRectangle(cornerRadius: 11))
                     }
                 }
             }
         }
+        .onChange(of: draft.orderUnit) { _, _ in draft.fitMeasureToUnit() }
     }
 }
 
-struct MaterialsQuantityTypeRow: View {
-    @Binding var quantity: Int
-    @Binding var unit: MaterialUnit
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("QUANTITY")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                TextField("1", value: $quantity, format: .number)
-                    .accessibilityIdentifier("materialsQuantityType.n1")
-                    .keyboardType(.numberPad)
-                    .font(.system(size: 14, weight: .medium))
-                    .padding(10)
-                    .background(MaterialsOrderingTheme.cardBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(MaterialUnit.typePickerTitle.uppercased())
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(MaterialsOrderingTheme.muted)
-                Picker(MaterialUnit.typePickerTitle, selection: $unit) {
-                    ForEach(MaterialUnit.allCases, id: \.self) { u in
-                        Text(u.rawValue).tag(u)
-                    }
-                }
-                .accessibilityIdentifier("materialsQuantityType.picker")
-                .pickerStyle(.menu)
-                .padding(10)
-                .frame(maxWidth: .infinity)
-                .background(MaterialsOrderingTheme.cardBackground)
-                .clipShape(RoundedRectangle(cornerRadius: 11))
-            }
-        }
-    }
-}
-
+/// RULEBOOK 1.48.0: the quantity as `materialLineText` prints it ("2no 50m drums").
 struct MaterialsQuantityBadge: View {
-    let quantity: Int
-    let unit: MaterialUnit
+    let text: String
 
     var body: some View {
-        Text("\(quantity) \(unit.quantityLabel(for: quantity))")
+        Text(text)
             .font(.caption.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.primary)

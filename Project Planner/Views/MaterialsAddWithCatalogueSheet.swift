@@ -14,10 +14,11 @@ private struct MaterialAutocompleteSuggestion: Identifiable {
     let name: String
     let brand: String
     let productCode: String?
-    let unit: MaterialUnit
+    /// RULEBOOK 1.48.0: the order unit and what is in one the suggestion carries (catalogue default or the past line).
+    let quantityModel: MaterialQuantityModel
     let size: String?
+    /// The stored length, for search only (never copied from Size).
     let length: String?
-    let lengthUnit: MaterialLengthUnit?
     let category: String?
     let catalogueItem: MaterialCatalogItem?
 }
@@ -39,16 +40,16 @@ struct MaterialsAddWithCatalogueSheet: View {
 
     @State private var query = ""
     @State private var selectedCatalogue: MaterialCatalogItem?
-    @State private var quantity = 1
-    @State private var unit: MaterialUnit = .number
+    /// RULEBOOK 1.48.0: quantity, order unit and what is in one (`MaterialsOrderUnitRow`).
+    @State private var quantityDraft = MaterialQuantityDraft.newLine
+    /// The line as opened (editing): the quantity checks run only when it changed.
+    @State private var originalQuantity: MaterialQuantityDraft?
     @State private var neededDate: Date
     @State private var notes = ""
     @State private var customItemName = ""
     @State private var customBrand = ""
     @State private var customProductCode = ""
     @State private var sizeValue = ""
-    @State private var lengthValue = ""
-    @State private var lengthUnit: MaterialLengthUnit?
     @State private var customCategory = "Other"
     @State private var websiteURL = ""
     @State private var showingDuplicateAlert = false
@@ -103,10 +104,9 @@ struct MaterialsAddWithCatalogueSheet: View {
                     name: item.name,
                     brand: item.brand,
                     productCode: item.productCode,
-                    unit: item.defaultUnit,
+                    quantityModel: item.effectiveQuantityModel,
                     size: item.size,
-                    length: item.length ?? item.sizeOrLength,
-                    lengthUnit: item.lengthUnit,
+                    length: item.length,
                     category: item.category,
                     catalogueItem: item
                 ))
@@ -122,10 +122,9 @@ struct MaterialsAddWithCatalogueSheet: View {
                     name: item.material,
                     brand: item.brand ?? "Custom",
                     productCode: item.productCode,
-                    unit: item.unit,
+                    quantityModel: item.effectiveQuantityModel,
                     size: item.size,
-                    length: item.length ?? item.sizeOrLength,
-                    lengthUnit: item.lengthUnit,
+                    length: item.length,
                     category: item.category,
                     catalogueItem: nil
                 )
@@ -208,15 +207,14 @@ struct MaterialsAddWithCatalogueSheet: View {
                 if let existing = existingMaterial {
                     query = existing.material
                     customItemName = existing.material
-                    quantity = existing.quantity
-                    unit = existing.unit
+                    let opened = MaterialQuantityDraft(quantity: existing.quantity, model: existing.effectiveQuantityModel)
+                    quantityDraft = opened
+                    originalQuantity = opened
                     neededDate = existing.date
                     notes = existing.notes ?? ""
                     customBrand = existing.brand ?? ""
                     customProductCode = existing.productCode ?? ""
                     sizeValue = existing.size ?? ""
-                    lengthValue = existing.length ?? existing.sizeOrLength ?? ""
-                    lengthUnit = existing.lengthUnit
                     let existingCategory = existing.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     customCategory = existingCategory.isEmpty ? "Other" : existingCategory
                     websiteURL = existing.websiteURL ?? ""
@@ -272,7 +270,7 @@ struct MaterialsAddWithCatalogueSheet: View {
     }
 
     private var canSave: Bool {
-        !resolvedName.isEmpty && quantity > 0
+        !resolvedName.isEmpty && (quantityDraft.quantity ?? 0) > 0
     }
 
     private var resolvedName: String {
@@ -358,7 +356,6 @@ struct MaterialsAddWithCatalogueSheet: View {
                         selectedCatalogue = nil
                         query = item.name
                         customItemName = item.name
-                        unit = item.defaultUnit
                         prefersCustomEntry = true
                         editMatchedLineItemDetails = false
                     } label: {
@@ -553,7 +550,6 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .padding(10)
                 .background(MaterialsOrderingTheme.cardBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
-            MaterialsLengthInputRow(lengthValue: $lengthValue, lengthUnit: $lengthUnit)
             TextField("Product website URL (Optional)", text: $websiteURL)
                 .accessibilityIdentifier("materialsAddWithCatalogue.productWebsiteURLOptional")
                 .textInputAutocapitalization(.never)
@@ -565,18 +561,21 @@ struct MaterialsAddWithCatalogueSheet: View {
     }
 
     private var quantityUnitRow: some View {
-        MaterialsQuantityTypeRow(quantity: $quantity, unit: $unit)
+        MaterialsOrderUnitRow(draft: $quantityDraft)
     }
 
+    /// RULEBOOK 1.48.0: "Brand · Code · Drum · 50m in one · Size: x" (`materialCatalogueUnitSummary`, `materialSizeText`).
     private func autocompleteSubtitle(for suggestion: MaterialAutocompleteSuggestion) -> String {
-        let lengthSpec = MaterialLengthSpecification.format(value: suggestion.length, unit: suggestion.lengthUnit)
+        let model = suggestion.quantityModel
         var parts = [
             suggestion.brand,
             suggestion.productCode ?? "—",
-            suggestion.unit.rawValue
+            CanonicalBusinessEngine.materialCatalogueUnitSummary(
+                orderUnit: model.orderUnit, contentAmount: model.contentAmount, contentMeasure: model.contentMeasure
+            )
         ]
-        if let size = suggestion.size, !size.isEmpty { parts.append("Size: \(size)") }
-        if !lengthSpec.isEmpty { parts.append("Length: \(lengthSpec)") }
+        let size = CanonicalBusinessEngine.materialSizeText(suggestion.size)
+        if !size.isEmpty { parts.append("Size: \(size)") }
         return parts.joined(separator: " · ")
     }
 
@@ -635,11 +634,9 @@ struct MaterialsAddWithCatalogueSheet: View {
         customBrand = suggestion.brand
         customProductCode = suggestion.productCode ?? ""
         sizeValue = suggestion.size ?? ""
-        lengthValue = suggestion.length ?? ""
-        lengthUnit = suggestion.lengthUnit
         customCategory = suggestion.category ?? "Other"
-        unit = suggestion.unit
-        quantity = 1
+        // RULEBOOK 1.48.0: the catalogue item's (or past line's) order unit and what is in one are copied.
+        quantityDraft = MaterialQuantityDraft(quantity: 1, model: suggestion.quantityModel)
     }
 
     private func save(force: Bool = false) async {
@@ -648,8 +645,6 @@ struct MaterialsAddWithCatalogueSheet: View {
         let trimmedCustomBrand = customBrand.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedCustomCode = customProductCode.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSize = sizeValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedLength = lengthValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedLengthUnit: MaterialLengthUnit? = trimmedLength.isEmpty ? nil : lengthUnit
         let trimmedWebsiteURL = websiteURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let shouldOverrideMatched = selectedCatalogue != nil && editMatchedLineItemDetails
         if !force, existingMaterial == nil,
@@ -663,6 +658,12 @@ struct MaterialsAddWithCatalogueSheet: View {
             return
         }
 
+        // RULEBOOK 1.48.0 `materialQuantityError` / `materialContentError`: checked only when the quantity, the unit or
+        // what is in one changed (an older 2.5 boxes line still saves a notes change).
+        if let error = quantityDraft.validationError(comparedWith: originalQuantity) {
+            saveError = error
+            return
+        }
         guard let organizationId = MaterialOfflineService.resolvedOrganizationId(firebaseBackend: firebaseBackend) else { return }
         isSaving = true
         defer { isSaving = false }
@@ -671,8 +672,8 @@ struct MaterialsAddWithCatalogueSheet: View {
         let ownerUid = firebaseBackend.currentUser?.uid ?? Auth.auth().currentUser?.uid
         let cal = Calendar.current
         var item = existingMaterial ?? MaterialItem(
-            quantity: quantity,
-            unit: unit,
+            quantity: quantityDraft.quantity ?? 1,
+            unit: .number,
             material: name,
             addedBy: addedBy,
             addedByUserId: ownerUid,
@@ -689,18 +690,14 @@ struct MaterialsAddWithCatalogueSheet: View {
             size: shouldOverrideMatched
                 ? (trimmedSize.isEmpty ? selectedCatalogue?.size : trimmedSize)
                 : (selectedCatalogue?.size ?? (trimmedSize.isEmpty ? nil : trimmedSize)),
-            length: shouldOverrideMatched
-                ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
-                : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength)),
-            lengthUnit: shouldOverrideMatched
-                ? resolvedLengthUnit ?? selectedCatalogue?.lengthUnit
-                : (selectedCatalogue?.lengthUnit ?? resolvedLengthUnit),
             category: resolvedCategory,
             websiteURL: trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL,
             notes: notes.isEmpty ? nil : notes
         )
-        item.quantity = quantity
-        item.unit = unit
+        // RULEBOOK 1.48.0: the order unit and what is in one; the rulebook writer writes the old `unit` / length fields.
+        if existingMaterial == nil || quantityDraft != originalQuantity {
+            quantityDraft.apply(to: &item)
+        }
         item.material = name
         item.date = cal.startOfDay(for: neededDate)
         item.catalogueItemId = selectedCatalogue?.id
@@ -713,12 +710,6 @@ struct MaterialsAddWithCatalogueSheet: View {
         item.size = shouldOverrideMatched
             ? (trimmedSize.isEmpty ? selectedCatalogue?.size : trimmedSize)
             : (selectedCatalogue?.size ?? (trimmedSize.isEmpty ? nil : trimmedSize))
-        item.length = shouldOverrideMatched
-            ? (trimmedLength.isEmpty ? (selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) : trimmedLength)
-            : ((selectedCatalogue?.length ?? selectedCatalogue?.sizeOrLength) ?? (trimmedLength.isEmpty ? nil : trimmedLength))
-        item.lengthUnit = shouldOverrideMatched
-            ? resolvedLengthUnit ?? selectedCatalogue?.lengthUnit
-            : (selectedCatalogue?.lengthUnit ?? resolvedLengthUnit)
         item.category = resolvedCategory
         item.websiteURL = trimmedWebsiteURL.isEmpty ? nil : trimmedWebsiteURL
         item.notes = notes.isEmpty ? nil : notes

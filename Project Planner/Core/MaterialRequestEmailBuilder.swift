@@ -58,11 +58,11 @@ enum MaterialRequestEmailBuilder {
         let materialLines: String = {
             if context.materials.isEmpty { return "- (No materials listed)" }
             return context.materials.enumerated().map { index, item in
-                let qty = "\(item.quantity) \(item.unit.quantityLabel(for: item.quantity))"
+                // RULEBOOK 1.48.0: the quantity is `materialLineText` ("2no 50m drums"); the length is part of it.
+                let qty = item.quantityText
                 let details = [
                     item.brand.map { "Brand: \($0)" },
                     item.productCode.map { "Code: \($0)" },
-                    item.formattedLengthSpecification.isEmpty ? nil : "Length: \(item.formattedLengthSpecification)",
                     item.notes.map { "Details: \($0)" }
                 ]
                 .compactMap { value -> String? in
@@ -270,11 +270,11 @@ enum MaterialRequestEmailBuilder {
                 : "—")
             let part = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let partHTML = part.isEmpty ? "" : " · Part: <span style=\"color:#475569;font-weight:600;\">\(escapeHTML(part))</span>"
-            let lengthSpec = material.formattedLengthSpecification
-            let lengthHTML = lengthSpec.isEmpty ? "" : " · Length: <span style=\"color:#475569;font-weight:600;\">\(escapeHTML(lengthSpec))</span>"
+            // RULEBOOK 1.48.0: no separate "Length:" — what is in one is part of the quantity text.
+            let lengthHTML = ""
             let notes = material.notes?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let notesHTML = notes.isEmpty ? "" : "<div style=\"font-size:12.5px;color:#7c8aa0;margin-top:3px;line-height:18px;font-style:italic;\">\(escapeHTML(notes))</div>"
-            let qtyLabel = escapeHTML(material.unit.quantityLabel(for: material.quantity))
+            let qtyLabel = escapeHTML(material.quantityText)
             return """
             <tr><td style="padding:14px 16px;border-bottom:1px solid #eef1f6;background:#ffffff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
               <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -287,7 +287,7 @@ enum MaterialRequestEmailBuilder {
                     \(notesHTML)
                   </td>
                   <td align="right" style="vertical-align:top;padding-left:14px;white-space:nowrap;">
-                    <span style="display:inline-block;background:\(badgeColors.bg);color:\(badgeColors.fg);font-size:13px;font-weight:800;padding:6px 12px;border-radius:999px;">\(material.quantity) \(qtyLabel)</span>
+                    <span style="display:inline-block;background:\(badgeColors.bg);color:\(badgeColors.fg);font-size:13px;font-weight:800;padding:6px 12px;border-radius:999px;">\(qtyLabel)</span>
                   </td>
                 </tr>
               </table>

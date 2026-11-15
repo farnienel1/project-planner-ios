@@ -9658,8 +9658,15 @@ extension FirebaseBackend {
         let quantity = row.number("quantity") ?? 1
         return MaterialItem(
             id: JobKeys.inAppId(row.id),
-            quantity: max(0, Int(quantity.rounded())),
+            // RULEBOOK 1.48.0: the stored quantity as it is (12.5 m stays 12.5; never rounded and written back).
+            quantity: max(0, quantity),
             unit: MaterialUnit(rawValue: row.text("unit")) ?? .number,
+            // RULEBOOK 1.48.0 `parseMaterialLineDocument` (`materialQuantityModel`): the order unit and what is in one,
+            // worked out from the old fields for an older line, and from the old fields when an older build left the new
+            // ones stale. Never derived in Swift.
+            orderUnit: row.optionalText("orderUnit"),
+            contentAmount: row.number("contentAmount"),
+            contentMeasure: row.optionalText("contentMeasure"),
             material: row.text("material"),
             addedBy: row.text("addedBy"),
             addedByUserId: row.optionalText("addedByUserId"),
@@ -9697,6 +9704,11 @@ extension FirebaseBackend {
             "projectId": JobKeys.storedJobId(for: material.projectId),
             "quantity": material.quantity,
             "unit": material.unit.rawValue,
+            // RULEBOOK 1.48.0: the order unit and what is in one; `materialLineFields` writes the old `unit` / `length` /
+            // `sizeOrLength` / `lengthUnit` with the nearest old meaning itself.
+            "orderUnit": material.effectiveQuantityModel.orderUnit,
+            "contentAmount": RulebookJSON.orNull(material.effectiveQuantityModel.contentAmount),
+            "contentMeasure": RulebookJSON.orNull(material.effectiveQuantityModel.contentMeasure),
             "material": material.material,
             "dayKey": OrganizationRulebookContext.dayKey(material.date),
             "status": material.status.rawValue,
@@ -10816,6 +10828,10 @@ extension FirebaseBackend {
             "brand": item.brand,
             "productCode": item.productCode ?? NSNull(),
             "defaultUnit": item.defaultUnit.rawValue,
+            // RULEBOOK 1.48.0: `materialCatalogueItemFields` writes the old `defaultUnit` / length fields from these.
+            "orderUnit": item.effectiveQuantityModel.orderUnit,
+            "contentAmount": RulebookJSON.orNull(item.effectiveQuantityModel.contentAmount),
+            "contentMeasure": RulebookJSON.orNull(item.effectiveQuantityModel.contentMeasure),
             "size": item.size ?? NSNull(),
             "length": item.length ?? NSNull(),
             "lengthUnit": item.lengthUnit?.rawValue ?? NSNull(),
@@ -10844,6 +10860,10 @@ extension FirebaseBackend {
             brand: row.text("brand"),
             productCode: row.optionalText("productCode"),
             defaultUnit: MaterialUnit(rawValue: row.text("defaultUnit")) ?? .number,
+            // RULEBOOK 1.48.0 `parseMaterialCatalogueDocument` (`materialQuantityModel`).
+            orderUnit: row.optionalText("orderUnit"),
+            contentAmount: row.number("contentAmount"),
+            contentMeasure: row.optionalText("contentMeasure"),
             size: row.optionalText("size"),
             length: row.optionalText("length"),
             lengthUnit: MaterialLengthUnit(rawValue: row.text("lengthUnit")),
@@ -10939,6 +10959,11 @@ extension FirebaseBackend {
                     "brand": line.brand ?? NSNull(),
                     "productCode": line.productCode ?? NSNull(),
                     "lengthDisplay": line.lengthDisplay ?? NSNull(),
+                    // RULEBOOK 1.48.0: `materialSendRecordCreateFields` writes `quantityText` (`materialLineText`).
+                    "orderUnit": RulebookJSON.orNull(line.orderUnit),
+                    "contentAmount": RulebookJSON.orNull(line.contentAmount),
+                    "contentMeasure": RulebookJSON.orNull(line.contentMeasure),
+                    "quantityText": RulebookJSON.orNull(line.quantityText),
                 ]
             },
         ]
@@ -10988,11 +11013,16 @@ extension FirebaseBackend {
             MaterialSendLineSnapshot(
                 materialId: JobKeys.inAppId(line.text("materialId")),
                 name: line.text("name"),
-                quantity: max(0, Int((line.number("quantity") ?? 1).rounded())),
+                quantity: max(0, line.number("quantity") ?? 1),
                 unit: MaterialUnit(rawValue: line.text("unit")) ?? .number,
                 brand: line.optionalText("brand"),
                 productCode: line.optionalText("productCode"),
-                lengthDisplay: line.optionalText("lengthDisplay")
+                lengthDisplay: line.optionalText("lengthDisplay"),
+                orderUnit: line.optionalText("orderUnit"),
+                contentAmount: line.number("contentAmount"),
+                contentMeasure: line.optionalText("contentMeasure"),
+                // RULEBOOK 1.48.0: the text it was sent with (nil on a record sent before 1.48.0).
+                quantityText: line.optionalText("quantityText")
             )
         }
         let materialsDate = row.optionalText("materialsDayKey").flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }

@@ -120,7 +120,12 @@ enum MaterialRequestEmailPayload {
             if let brand = trimmed(item.brand) { line["brand"] = brand }
             if let productCode = trimmed(item.productCode) { line["productCode"] = productCode }
             if let notes = trimmed(item.notes) { line["notes"] = notes }
+            // Kept for an older `sendEmail` function; 1.48.0 renders `materialLineText` from the three fields below.
             if let length = trimmed(item.formattedLengthSpecification) { line["lengthDisplay"] = length }
+            let model = item.effectiveQuantityModel
+            line["orderUnit"] = model.orderUnit
+            if let amount = model.contentAmount { line["contentAmount"] = amount }
+            if let measure = model.contentMeasure { line["contentMeasure"] = measure }
             return line
         }
     }

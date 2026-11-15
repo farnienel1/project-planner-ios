@@ -53,6 +53,7 @@ struct MaterialsWhatsAppSheet: View {
             deliveryAt: CanonicalBusinessEngine.materialOrderIncludesDeliveryRequired(requestType.rawValue) == true ? deliveryAt : nil,
             countryCode: firebaseBackend.currentOrganization?.countryCode ?? "GB",
             materials: materials.map { item in
+                // RULEBOOK 1.48.0: lines read "• Pipe — 2no 3m lengths · Code P1" (`materialLineText` in the script).
                 MaterialWhatsAppRulebook.Line(
                     material: item.material,
                     quantity: item.quantity,
@@ -60,7 +61,10 @@ struct MaterialsWhatsAppSheet: View {
                     brand: item.brand,
                     productCode: item.productCode,
                     notes: item.notes,
-                    lengthDisplay: item.formattedLengthSpecification.isEmpty ? nil : item.formattedLengthSpecification
+                    lengthDisplay: nil,
+                    orderUnit: item.effectiveQuantityModel.orderUnit,
+                    contentAmount: item.effectiveQuantityModel.contentAmount,
+                    contentMeasure: item.effectiveQuantityModel.contentMeasure
                 )
             },
             recipients: [recipient]
