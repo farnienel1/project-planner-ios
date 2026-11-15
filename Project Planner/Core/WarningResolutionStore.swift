@@ -283,7 +283,9 @@ final class WarningResolutionStore: ObservableObject {
 
     /// `isWarningActive` over `resolvedWarningKeys` and `acceptedBookingClashes`. Every list and count uses this.
     func shouldShowActive(_ warning: Warning) -> Bool {
-        if legacyStatus(for: warning) != nil { return false }
+        // RULEBOOK 1.53.0: an old device-only key never overrides a clash's shared approval (`isClashGroupApproved`,
+        // `isClashApproved`); it still hides a row that is not a clash.
+        if Self.clashBookingIds(warning) == nil, legacyStatus(for: warning) != nil { return false }
         // Operative cluster: hidden once every overlapping pair is approved, dismissed or accepted
         // (`isClashGroupApproved` over `resolvedKeys`); a third booking reopens an approved pair.
         if let clash = warning.operativeClash,
@@ -308,7 +310,6 @@ final class WarningResolutionStore: ObservableObject {
     /// `isClashApproved`: approved on any device, by its `warningResolutions` key or its booking pair.
     func isClashApproved(_ warning: Warning) -> Bool {
         guard let pair = Self.clashBookingIds(warning) else { return false }
-        if legacyStatus(for: warning) == "approved" { return true }
         // A cluster is approved only when every overlapping pair is (`isClashGroupApproved`).
         if let clash = warning.operativeClash {
             return CanonicalBusinessEngine.isClashGroupApproved(
@@ -387,33 +388,52 @@ final class WarningResolutionStore: ObservableObject {
         var deletes = 0
         var keys = [warning.resolutionKey] + (legacyKeysByResolutionKey[warning.resolutionKey] ?? [])
         let pairs = Self.clashApprovalPairs(warning)
+        // RULEBOOK 1.53.0 `clashDocumentsToRemove`: every stored document of the clash in both collections, matched
+        // ignoring case and the order of its two booking ids, plus the ids the app writes now (deleting a missing
+        // document is allowed).
+        var resolutionIds = Set<String>()
         if !pairs.isEmpty {
             var pairIds = Set<String>()
+            let accepted: [(id: String, bookingAId: String?, bookingBId: String?)] = acceptedClashes.compactMap { row in
+                guard let id = row["id"] as? String, !id.isEmpty else { return nil }
+                return (id: id, bookingAId: row["bookingAId"] as? String, bookingBId: row["bookingBId"] as? String)
+            }
+            let resolutions: [(id: String, resolutionKey: String?)] = storedResolutionRows.compactMap { row in
+                guard let id = row["id"], !id.isEmpty else { return nil }
+                return (id: id, resolutionKey: row["resolutionKey"])
+            }
             for pair in pairs {
-                if let pairKey = CanonicalBusinessEngine.clashPairKey(pair.a, pair.b) {
+                // A manager clash has its own `mgr-clash-…` key; an operative pair's is its `clashResolutionKey`.
+                let resolutionKey: String? = warning.operativeClash != nil ? nil : warning.resolutionKey
+                if let docs = CanonicalBusinessEngine.clashDocumentsToRemove(
+                    bookingAId: pair.a,
+                    bookingBId: pair.b,
+                    resolutionKey: resolutionKey,
+                    acceptedClashes: accepted,
+                    resolutions: resolutions
+                ) {
+                    pairIds.formUnion(docs.acceptedClash)
+                    resolutionIds.formUnion(docs.resolution)
+                } else if let pairKey = CanonicalBusinessEngine.clashPairKey(pair.a, pair.b) {
                     pairIds.insert(pairKey)
                 }
-                // Operative pairs have no own key: their `warningResolutions` id is `clashResolutionKey` of the pair.
                 if warning.operativeClash != nil,
                    let key = CanonicalBusinessEngine.clashResolutionKey(bookingAId: pair.a, bookingBId: pair.b),
                    !keys.contains(key) {
                     keys.append(key)
                 }
-                for row in acceptedClashes {
-                    guard let id = row["id"] as? String, !id.isEmpty,
-                          CanonicalBusinessEngine.isClashAccepted(pair.a, pair.b, accepted: [row]) == true else { continue }
-                    pairIds.insert(id)
-                }
             }
-            // Only rows that exist: deleting a missing document is refused for a manager.
-            let existing = Set(acceptedClashes.compactMap { $0["id"] as? String })
-            for id in pairIds where existing.contains(id) {
+            for id in pairIds {
                 batch.deleteDocument(org.collection("acceptedBookingClashes").document(id))
                 deletes += 1
             }
             acceptedClashes.removeAll { row in
                 guard let id = row["id"] as? String else { return false }
                 return pairIds.contains(id)
+            }
+            for id in resolutionIds {
+                batch.deleteDocument(org.collection("warningResolutions").document(id))
+                deletes += 1
             }
         }
         for key in keys {
@@ -422,7 +442,8 @@ final class WarningResolutionStore: ObservableObject {
                 resolutionKey: key,
                 status: "approved",
                 resolvedByUserId: uid
-               ) {
+               ),
+               !resolutionIds.contains(write.documentId) {
                 batch.deleteDocument(org.collection("warningResolutions").document(write.documentId))
                 deletes += 1
             }

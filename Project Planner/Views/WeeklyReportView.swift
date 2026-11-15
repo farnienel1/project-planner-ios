@@ -1162,7 +1162,7 @@ struct WeeklyReportView: View {
     /// and, when some pay is hidden from the viewer, `PAY_HIDDEN_NOTE`.
     static func paySummaryNote(_ pay: RulebookWeeklyReportPay) -> String? {
         let rounded = CanonicalBusinessEngine.weeklyReportPaySummaryNote(pay.people.flatMap(\.lines))
-        let hidden = pay.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : ""
+        let hidden = pay.hiddenPeople > 0 ? (CanonicalBusinessEngine.payHiddenNote ?? "") : ""
         let note = [rounded, hidden].filter { !$0.isEmpty }.joined(separator: " ")
         return note.isEmpty ? nil : note
     }

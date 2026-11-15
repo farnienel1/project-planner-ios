@@ -237,3 +237,29 @@ extension OperativeDayBookingChoice {
         )
     }
 }
+
+/// RULEBOOK 1.53.0 §5 (review of web #331): a booking being made is checked against the person's bookings of the day
+/// before (an overnight one reaching this morning), the day and the day after (this booking crossing midnight into the
+/// next morning), all through one `bookingRequestClashIds` call under the working-hours state.
+enum BookingClashWindow {
+    /// Organisation-zone day keys of the day before, the day and the day after `date`.
+    static func dayKeys(around date: Date) -> Set<String> {
+        let calendar = OrganizationRulebookContext.calendar
+        let day = calendar.startOfDay(for: date)
+        return Set([-1, 0, 1].compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: day).map(OrganizationRulebookContext.dayKey)
+        })
+    }
+
+    /// Whether `request` clashes with any of `existing` (labour and manager schedule rows). True when the script did
+    /// not answer, so the booker is asked rather than a clash missed.
+    static func clashes(request: RulebookClashBooking, existing: [RulebookClashBooking], policy: OrgPayrollTimePolicy) -> Bool {
+        guard !existing.isEmpty else { return false }
+        guard let ids = CanonicalBusinessEngine.bookingRequestClashIds(
+            request: request,
+            existing: existing,
+            day: CanonicalBusinessEngine.bookingDayInput(policy: policy)
+        ) else { return true }
+        return !ids.isEmpty
+    }
+}

@@ -125,7 +125,7 @@ struct OrgSitesMapView: View {
 
             HStack(spacing: 12) {
                 Button {
-                    selectedDate = Calendar.current.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
+                    selectedDate = OrganizationRulebookContext.calendar.date(byAdding: .day, value: -1, to: selectedDate) ?? selectedDate
                 } label: {
                     Label("Previous", systemImage: "chevron.left")
                 }
@@ -135,7 +135,7 @@ struct OrgSitesMapView: View {
                 .tint(PPColor.brand)
 
                 Button {
-                    selectedDate = Calendar.current.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
+                    selectedDate = OrganizationRulebookContext.calendar.date(byAdding: .day, value: 1, to: selectedDate) ?? selectedDate
                 } label: {
                     Label("Next", systemImage: "chevron.right")
                 }
@@ -182,6 +182,7 @@ struct OrgSitesMapView: View {
     private func dayLabel(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateFormat = "EEE d MMM yyyy"
+        formatter.timeZone = OrganizationRulebookContext.timeZone
         return formatter.string(from: date)
     }
 
@@ -189,7 +190,8 @@ struct OrgSitesMapView: View {
         isLoading = true
         defer { isLoading = false }
 
-        let targetDate = Calendar.current.startOfDay(for: selectedDate)
+        // RULEBOOK 1.53.0: the organisation day, never the device's.
+        let targetDate = OrganizationRulebookContext.calendar.startOfDay(for: selectedDate)
         let center = await resolveDefaultCenter()
         await MainActor.run {
             // Keep current focus while user is interacting with a selected pin.

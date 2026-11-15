@@ -1355,9 +1355,17 @@ struct ManagerScheduleContentView: View {
     }
 
     private func wouldClashProbe(on date: Date, probe: ManagerSiteBooking, ignoringBookingId: UUID? = nil) -> Bool {
+        // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way), in one
+        // `bookingRequestClashIds` call under the working-hours state.
         let policy = payrollPolicy(for: date)
-        let existing = mySiteBookings(on: date).filter { $0.id != ignoringBookingId }
-        return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
+        let calendar = OrganizationRulebookContext.calendar
+        let days = [-1, 0, 1].compactMap { calendar.date(byAdding: .day, value: $0, to: calendar.startOfDay(for: date)) }
+        let existing = days.flatMap { mySiteBookings(on: $0) }.filter { $0.id != ignoringBookingId }
+        return BookingClashWindow.clashes(
+            request: probe.rulebookClashBooking,
+            existing: existing.map(\.rulebookClashBooking),
+            policy: policy
+        )
     }
 
     private func isDuplicateBooking(
@@ -2479,13 +2487,11 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             _endTime = State(initialValue: end)
         } else {
             let prefill = CanonicalBusinessEngine.customHoursPrefill(on: day, policy: policy)
-            let base = Calendar.current.startOfDay(for: day)
-            let startMinutes = ManagerScheduleInterval.parseMinutes(prefill.start) ?? 7 * 60 + 30
-            let endMinutes = ManagerScheduleInterval.parseMinutes(prefill.end) ?? 16 * 60
-            let start = Calendar.current.date(byAdding: .minute, value: startMinutes, to: base) ?? base
+            // RULEBOOK 1.53.0: wall-clock times in the organisation zone (right on a clock-change day).
+            let start = Self.wallClock(minutes: ManagerScheduleInterval.parseMinutes(prefill.start) ?? 7 * 60 + 30, on: day)
             _selectedSlot = State(initialValue: .customHours)
             _startTime = State(initialValue: start)
-            _endTime = State(initialValue: Calendar.current.date(byAdding: .minute, value: endMinutes, to: base) ?? start.addingTimeInterval(3600))
+            _endTime = State(initialValue: Self.wallClock(minutes: ManagerScheduleInterval.parseMinutes(prefill.end) ?? 16 * 60, on: day))
         }
     }
 
@@ -2526,6 +2532,8 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                         .accessibilityIdentifier("managerSelfBookingEntry.endTime")
                         .datePickerStyle(.compact)
                 }
+                // The pickers show the organisation's wall clock (the times are stored as "HH:mm" there).
+                .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                 .font(.system(size: 14, weight: .medium))
                 .padding(12)
                 .background(ProjectWorksRevampColors.surface)
@@ -2673,16 +2681,30 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     private func hhmm(_ date: Date) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "HH:mm"
+        fmt.timeZone = OrganizationRulebookContext.timeZone
         return fmt.string(from: date)
     }
 
     private func minutesFromMidnight(_ date: Date) -> Int {
-        let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+        let comps = OrganizationRulebookContext.calendar.dateComponents([.hour, .minute], from: date)
         return (comps.hour ?? 0) * 60 + (comps.minute ?? 0)
     }
 
+    /// RULEBOOK 1.53.0: the instant showing `minutes` past midnight on the organisation's wall clock on `day` (an
+    /// hour/minute set, never midnight plus minutes, so a clock-change day reads right).
+    static func wallClock(minutes: Int, on day: Date) -> Date {
+        let calendar = OrganizationRulebookContext.calendar
+        let base = calendar.startOfDay(for: day)
+        let hour = max(0, minutes) / 60
+        let minute = max(0, minutes) % 60
+        if hour < 24, let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) {
+            return date
+        }
+        return calendar.date(byAdding: .minute, value: minutes, to: base) ?? base
+    }
+
     private static func defaultTimes(for slot: ManagerTimeSlot, day: Date, policy: OrgPayrollTimePolicy) -> (start: Date, end: Date) {
-        let calendar = Calendar.current
+        let calendar = OrganizationRulebookContext.calendar
         let base = calendar.startOfDay(for: day)
         // The day and its AM/PM halves come from the canonical script.
         let range = CanonicalBusinessEngine.slotInterval(
@@ -2691,8 +2713,9 @@ fileprivate struct ManagerSelfBookingEntryView: View {
             workEndTime: nil,
             day: CanonicalStandardDayInput(policy: policy)
         ) ?? CanonicalMinuteInterval(start: 7 * 60 + 30, end: 16 * 60)
-        let start = calendar.date(byAdding: .minute, value: range.start, to: base) ?? base
-        let end = calendar.date(byAdding: .minute, value: range.end, to: base) ?? start.addingTimeInterval(3600)
+        _ = base
+        let start = wallClock(minutes: range.start, on: day)
+        let end = wallClock(minutes: range.end, on: day)
         return (start, end)
     }
 }

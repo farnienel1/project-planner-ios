@@ -23,15 +23,8 @@ struct HomeUpNextDaySection: Identifiable {
 }
 
 enum HomeUpNextSupport {
-    private static let calendar = Calendar.current
-
-    static func sortDate(operativeBooking b: Booking, policy: OrgPayrollTimePolicy = .default) -> Date {
-        b.calendarBlock(on: b.date, policy: policy).start
-    }
-
-    static func sortDate(managerBooking b: ManagerSiteBooking, policy: OrgPayrollTimePolicy = .default) -> Date {
-        b.calendarBlock(on: b.date, policy: policy).start
-    }
+    /// RULEBOOK 1.53.0: the organisation zone, never the device's.
+    private static var calendar: Calendar { OrganizationRulebookContext.calendar }
 
     static func project(forProjectId id: UUID, allProjects: [Project]) -> Project? {
         allProjects.first(where: { $0.id == id })
@@ -56,107 +49,9 @@ enum HomeUpNextSupport {
         }
     }
 
-    /// Next upcoming operative + manager site bookings, merged and sorted (max `limit`).
-    static func upcomingRows(
-        limit: Int,
-        now: Date,
-        authUserId: String?,
-        currentUserEmail: String?,
-        currentUserFirstName: String? = nil,
-        currentUserSurname: String? = nil,
-        operatives: [Operative],
-        bookings: [Booking],
-        managerBookings: [ManagerSiteBooking],
-        allProjects: [Project],
-        organizationUsers: [AppUser],
-        accentBlue: Color,
-        accentPurple: Color,
-        payrollTimePolicy: OrgPayrollTimePolicy = .default
-    ) -> [HomeUpNextRow] {
-        var rows: [HomeUpNextRow] = []
-        let emailKey = currentUserEmail?
-            .lowercased()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let operativeIds = WorkAccess.signedInOperativeIds(
-            email: emailKey,
-            firstName: currentUserFirstName,
-            surname: currentUserSurname,
-            operatives: operatives,
-            users: organizationUsers
-        )
-        if !operativeIds.isEmpty {
-            let mine = bookings.filter { b in
-                operativeIds.contains(b.operativeId) && b.status != .cancelled && b.status != .completed
-            }
-            let today = calendar.startOfDay(for: now)
-            for b in mine {
-                // RULEBOOK 1.19.0 §4.3: each booking's start under its own day's working hours (history first).
-                let start = sortDate(
-                    operativeBooking: b,
-                    policy: CanonicalBusinessEngine.payrollPolicyInEffect(on: b.date, fallback: payrollTimePolicy)
-                )
-                guard calendar.startOfDay(for: start) >= today else { continue }
-                let proj = project(forProjectId: b.projectId, allProjects: allProjects)
-                let site = proj?.siteName ?? "Scheduled work"
-                let title = site
-                let timeStr = timeDotString(from: start)
-                let booker = displayName(forUserId: b.bookedBy, users: organizationUsers)
-                let job = proj?.jobNumber
-                let subtitle: String
-                if let job, !job.isEmpty, !booker.isEmpty {
-                    subtitle = "\(timeStr) · \(job) · \(booker)"
-                } else if let job, !job.isEmpty {
-                    subtitle = "\(timeStr) · \(job)"
-                } else if !booker.isEmpty {
-                    subtitle = "\(timeStr) · \(booker)"
-                } else {
-                    subtitle = timeStr
-                }
-                rows.append(HomeUpNextRow(
-                    id: b.id,
-                    title: title,
-                    subtitle: subtitle,
-                    sortDate: start,
-                    accentColor: accentBlue
-                ))
-            }
-        }
-
-        let accountIds = WorkAccess.signedInAccountIds(
-            authUid: authUserId,
-            currentUser: nil,
-            organizationUsers: organizationUsers,
-            email: currentUserEmail
-        )
-        if !accountIds.isEmpty {
-            let mine = managerBookings.filter { accountIds.contains($0.userId) }
-            let today = calendar.startOfDay(for: now)
-            for b in mine {
-                let dayPolicy = CanonicalBusinessEngine.payrollPolicyInEffect(on: b.date, fallback: payrollTimePolicy)
-                let start = sortDate(managerBooking: b, policy: dayPolicy)
-                guard calendar.startOfDay(for: start) >= today else { continue }
-                let loc = managerLocationTitle(booking: b, allProjects: allProjects)
-                let title = loc
-                let timeStr = timeDotString(from: start)
-                let slot = b.scheduleLabel(policy: dayPolicy)
-                let subtitle = "\(timeStr) · \(slot)"
-                rows.append(HomeUpNextRow(
-                    id: b.id,
-                    title: title,
-                    subtitle: subtitle,
-                    sortDate: start,
-                    accentColor: accentPurple
-                ))
-            }
-        }
-
-        rows.sort { $0.sortDate < $1.sortDate }
-        if rows.count <= limit { return rows }
-        return Array(rows.prefix(limit))
-    }
-
-    /// Groups upcoming rows by calendar day. Shows up to `minDistinctDays` different days when data allows (each day lists all its rows from the merged set).
+    /// RULEBOOK 1.53.0 §23 `CanonicalBusinessEngine.homeUpNextRows`: the signed-in person's labour and manager site
+    /// bookings from today on (organisation day — today's stay all day, Completed shows), matched under every id they
+    /// go by without case, in start order, grouped by the first `minDistinctDays` days. Swift only adds the titles.
     static func upcomingDaySections(
         minDistinctDays: Int = 2,
         mergeRowLimit: Int = 48,
@@ -174,42 +69,81 @@ enum HomeUpNextSupport {
         accentPurple: Color,
         payrollTimePolicy: OrgPayrollTimePolicy = .default
     ) -> [HomeUpNextDaySection] {
-        let merged = upcomingRows(
-            limit: mergeRowLimit,
+        let uid = authUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let viewerUser = organizationUsers.first { $0.id == uid }
+        let viewer: [String: Any] = [
+            "id": uid,
+            "email": currentUserEmail ?? viewerUser?.email ?? "",
+            "formerUserIds": viewerUser?.formerUserIds ?? [],
+            "sameEmailUserIds": viewerUser?.sameEmailUserIds ?? [],
+        ]
+        let labourById = Dictionary(bookings.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        let managerById = Dictionary(managerBookings.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { first, _ in first })
+        guard let answer = CanonicalBusinessEngine.homeUpNextRows(
             now: now,
-            authUserId: authUserId,
-            currentUserEmail: currentUserEmail,
-            currentUserFirstName: currentUserFirstName,
-            currentUserSurname: currentUserSurname,
-            operatives: operatives,
-            bookings: bookings,
-            managerBookings: managerBookings,
-            allProjects: allProjects,
-            organizationUsers: organizationUsers,
-            accentBlue: accentBlue,
-            accentPurple: accentPurple,
-            payrollTimePolicy: payrollTimePolicy
-        )
-        guard !merged.isEmpty else { return [] }
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            viewer: viewer,
+            roster: RulebookPeople.roster(organizationUsers),
+            operatives: operatives.map { ["id": $0.documentId, "email": $0.email] },
+            bookings: bookings.map {
+                RulebookHomeUpNextBooking(
+                    id: $0.id.uuidString,
+                    personId: $0.storedOperativeId,
+                    dayKey: OrganizationRulebookContext.dayKey($0.date),
+                    status: $0.status.rawValue,
+                    timeSlot: $0.timeSlot.rawValue,
+                    workStartTime: $0.workStartTime,
+                    workEndTime: $0.workEndTime
+                )
+            },
+            managerSiteBookings: managerBookings.map {
+                RulebookHomeUpNextBooking(
+                    id: $0.id.uuidString,
+                    personId: $0.userId,
+                    dayKey: OrganizationRulebookContext.dayKey($0.date),
+                    status: nil,
+                    timeSlot: $0.timeSlot.rawValue,
+                    workStartTime: $0.workStartTime,
+                    workEndTime: $0.workEndTime
+                )
+            },
+            policy: CanonicalBusinessEngine.bookingDayInput(policy: payrollTimePolicy),
+            limit: mergeRowLimit,
+            minDistinctDays: minDistinctDays
+        ) else { return [] }
 
-        var byDay: [Date: [HomeUpNextRow]] = [:]
-        for row in merged {
-            let day = calendar.startOfDay(for: row.sortDate)
-            byDay[day, default: []].append(row)
-        }
-        let sortedDays = byDay.keys.sorted()
-        let dayCount = min(sortedDays.count, minDistinctDays)
-        let chosenDays = Array(sortedDays.prefix(dayCount))
-
-        return chosenDays.map { day in
-            let rows = (byDay[day] ?? []).sorted { $0.sortDate < $1.sortDate }
-            let heading = dayHeadingWithOrdinal(for: day)
-            let id = String(day.timeIntervalSince1970)
-            return HomeUpNextDaySection(id: id, heading: heading, rows: rows)
+        return answer.days.map { day in
+            let rows: [HomeUpNextRow] = day.rows.compactMap { row in
+                let sortDate = OrganizationRulebookContext.date(fromDayKey: row.dayKey)?.addingTimeInterval(TimeInterval(row.startMinutes * 60)) ?? now
+                if row.kind == "manager", let booking = managerById[row.id] {
+                    let slot = row.timeRange.isEmpty ? booking.timeSlot.displayName : row.timeRange
+                    return HomeUpNextRow(
+                        id: booking.id,
+                        title: managerLocationTitle(booking: booking, allProjects: allProjects),
+                        subtitle: "\(row.startText) · \(slot)",
+                        sortDate: sortDate,
+                        accentColor: accentPurple
+                    )
+                }
+                guard let booking = labourById[row.id] else { return nil }
+                let proj = project(forProjectId: booking.projectId, allProjects: allProjects)
+                let booker = displayName(forUserId: booking.bookedBy, users: organizationUsers)
+                let parts = [row.startText, proj?.jobNumber ?? "", booker].filter { !$0.isEmpty }
+                return HomeUpNextRow(
+                    id: booking.id,
+                    title: proj?.siteName ?? "Scheduled work",
+                    subtitle: parts.joined(separator: " · "),
+                    sortDate: sortDate,
+                    accentColor: accentBlue
+                )
+            }
+            return HomeUpNextDaySection(id: day.dayKey, heading: dayHeadingWithOrdinal(for: day.dayKey), rows: rows)
         }
     }
 
-    private static func dayHeadingWithOrdinal(for day: Date) -> String {
+    /// "Monday 11th May" for an organisation day key.
+    private static func dayHeadingWithOrdinal(for dayKey: String) -> String {
+        guard let day = OrganizationRulebookContext.date(fromDayKey: dayKey) else { return dayKey }
         let d = calendar.component(.day, from: day)
         let suffix: String
         if (11...13).contains(d % 100) {
@@ -231,13 +165,6 @@ enum HomeUpNextSupport {
         month.calendar = calendar
         month.dateFormat = "MMMM"
         return "\(weekday.string(from: day)) \(d)\(suffix) \(month.string(from: day))"
-    }
-
-    private static func timeDotString(from date: Date) -> String {
-        let f = DateFormatter()
-        f.dateStyle = .none
-        f.timeStyle = .short
-        return f.string(from: date)
     }
 
     private static func displayName(forUserId userId: String, users: [AppUser]) -> String {

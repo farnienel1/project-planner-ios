@@ -309,14 +309,17 @@ enum ScheduleWeekGrid {
         )
         let operativeSet = Set(operativeIds)
         let userSet = Set(userIds)
+        // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way).
+        let keys = BookingClashWindow.dayKeys(around: day)
         let labour = operativeBookings.filter { booking in
             operativeSet.contains(booking.operativeId)
-                && counts(booking, on: day, calendar: calendar)
+                && keys.contains(OrganizationRulebookContext.dayKey(booking.date))
+                && booking.status.occupiesDay
                 && OperativeBookingInterval.bookingsOverlap(probe, booking, policy: policy)
         }
         let manager = managerBookings.filter { booking in
             userSet.contains(booking.userId)
-                && calendar.isDate(booking.date, inSameDayAs: day)
+                && keys.contains(OrganizationRulebookContext.dayKey(booking.date))
                 && OperativeBookingInterval.bookingsOverlap(probe, booking.operativePayrollProbe(), policy: policy)
         }
         return (labour, manager)

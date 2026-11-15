@@ -381,17 +381,18 @@ enum ScheduleBookingConflictEngine {
             // RULEBOOK 1.23.0 §5 `CanonicalBusinessEngine.bookingRequestClashIds`: the person's bookings that day (and an
             // overnight one from the day before) whose slot overlaps this one, both under the booked day's working
             // hours (`day` = the policy state), never today's.
-            let previousDay = calendar.date(byAdding: .day, value: -1, to: day) ?? day
+            // 1.53.0: and the day after (this booking crossing midnight into the next morning).
+            let windowKeys = BookingClashWindow.dayKeys(around: day)
             let candidateProjectBookings = bookingStore.bookings.filter { booking in
                 person.owns(booking) &&
-                    (calendar.isDate(booking.date, inSameDayAs: day) || calendar.isDate(booking.date, inSameDayAs: previousDay)) &&
+                    windowKeys.contains(OrganizationRulebookContext.dayKey(booking.date)) &&
                     booking.occupiesDay &&
                     !excludingBookingIds.contains(booking.id)
             }
             let candidateManagerBookings: [ManagerSiteBooking] = person.userId.map { uid in
                 managerScheduleStore.managerSiteBookings.filter { booking in
                     booking.userId == uid &&
-                        (calendar.isDate(booking.date, inSameDayAs: day) || calendar.isDate(booking.date, inSameDayAs: previousDay))
+                        windowKeys.contains(OrganizationRulebookContext.dayKey(booking.date))
                 }
             } ?? []
             let answered = CanonicalBusinessEngine.bookingRequestClashIds(
