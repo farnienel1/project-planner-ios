@@ -425,7 +425,8 @@ final class Rulebook1200Tests: XCTestCase {
         let unpaid = try XCTUnwrap(CanonicalBusinessEngine.weekendDayPreview(policy: policy, weekday: "saturday", timeZone: zone))
         XCTAssertEqual(
             unpaid.summary,
-            "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — 30 min taken off · 7.5h paid",
+            // RULEBOOK 1.49.0 §4.3: the unpaid break is allowed for in the counts as (was "30 min taken off · 7.5h paid").
+            "07:30–14:00 counts as 8h · Unpaid break 12:00–12:30, 30 min — allowed for in the counts as · 8h paid",
             "switching the draft's break to Unpaid changes the preview at once"
         )
     }
