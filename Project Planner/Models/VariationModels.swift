@@ -206,7 +206,11 @@ nonisolated struct Variation: Identifiable, Hashable, Sendable {
             "voNumberLocked": voNumberLocked,
             "isDeleted": isDeleted,
             "numberHistory": numberHistory.map { ["from": $0.from, "to": $0.to] },
-            "labour": labour.map { ["trade": $0.trade, "hours": $0.hours, "operatives": $0.operatives, "hoursEach": $0.hoursEach] as [String: Any] },
+            "labour": labour.map { line -> [String: Any] in
+                line.hoursEach > 0
+                    ? ["trade": line.trade, "hours": line.hours, "operatives": line.operatives, "hoursEach": line.hoursEach]
+                    : ["trade": line.trade, "hours": line.hours]
+            },
             "customLines": customLines.map {
                 ["name": $0.name, "description": $0.description, "quantity": $0.quantity, "cost": $0.cost] as [String: Any]
             },
@@ -426,7 +430,8 @@ nonisolated enum VariationCodec {
             // shape (`variationLabourLineFields`, `variationMaterialLineFields`). Custom and subcontractor lines are their
             // own arrays (`variationCustomLineFields`, `variationSubcontractorLineFields`).
             "labour": variation.labour.map { line -> [String: Any] in
-                if !line.legacyShape,
+                // A line built without a crew (`hoursEach` 0) keeps its own hours.
+                if !line.legacyShape, line.hoursEach > 0,
                    let fields = CanonicalBusinessEngine.variationLabourLineFields(
                        id: line.id, trade: line.trade, operatives: line.operatives, hoursEach: line.hoursEach
                    ) {
