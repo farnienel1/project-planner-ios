@@ -85,21 +85,15 @@ enum MaterialCatalogCSV {
             $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
         }
         let rows: [[String: Any]] = sorted.map { item in
-            let model = item.effectiveQuantityModel
-            return [
-                "id": WorkDocumentKeys.storedId(for: item.id),
-                "name": item.name,
-                "category": RulebookJSON.orNull(item.category),
-                "brand": item.brand,
-                "productCode": RulebookJSON.orNull(item.productCode),
-                "orderUnit": model.orderUnit,
-                "contentAmount": RulebookJSON.orNull(model.contentAmount),
-                "contentMeasure": RulebookJSON.orNull(model.contentMeasure),
-                "defaultUnit": item.defaultUnit.rawValue,
-                "length": RulebookJSON.orNull(item.length),
-                "lengthUnit": RulebookJSON.orNull(item.lengthUnit?.rawValue),
-                "size": RulebookJSON.orNull(item.size),
-            ]
+            // The model with the old columns that go with it (`materialQuantityWriteFields`), never a stale old field.
+            var row = item.quantityFieldsForScript
+            row["id"] = WorkDocumentKeys.storedId(for: item.id)
+            row["name"] = item.name
+            row["category"] = RulebookJSON.orNull(item.category)
+            row["brand"] = item.brand
+            row["productCode"] = RulebookJSON.orNull(item.productCode)
+            row["size"] = RulebookJSON.orNull(item.size)
+            return row
         }
         return CanonicalBusinessEngine.materialCatalogueCsvExport(rows)
     }

@@ -88,6 +88,18 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// `materialQuantityWriteFields(model, { unitField })`: the new fields and the old ones with the nearest old meaning
+    /// (`unit` / `defaultUnit`, `length`, `sizeOrLength`, `lengthUnit`). Anything that sends a model together with old
+    /// fields sends these, so the two always agree (a disagreement reads as an older build's edit and the old fields win).
+    nonisolated static func materialQuantityWriteFields(_ model: MaterialQuantityModel, unitField: String = "unit") -> [String: Any]? {
+        let input: [String: Any] = [
+            "orderUnit": model.orderUnit,
+            "contentAmount": RulebookJSON.orNull(model.contentAmount),
+            "contentMeasure": RulebookJSON.orNull(model.contentMeasure),
+        ]
+        return callJSON("materialQuantityWriteFields", arguments: [input, ["unitField": unitField]]) as? [String: Any]
+    }
+
     // MARK: Wording
 
     /// `materialLineText(line)`: "2no 50m drums", "10no 3m lengths", "100m", "12.5m", "4no". The quantity alone when the
@@ -249,6 +261,15 @@ extension MaterialItem {
         ]
     }
 
+    /// The model with the old fields that go with it (`materialQuantityWriteFields`), for every payload that carries both.
+    var quantityFieldsForScript: [String: Any] {
+        CanonicalBusinessEngine.materialQuantityWriteFields(effectiveQuantityModel) ?? [
+            "orderUnit": effectiveQuantityModel.orderUnit,
+            "contentAmount": RulebookJSON.orNull(effectiveQuantityModel.contentAmount),
+            "contentMeasure": RulebookJSON.orNull(effectiveQuantityModel.contentMeasure),
+        ]
+    }
+
     /// RULEBOOK 1.48.0 `materialLineText`: "2no 50m drums", "100m", "4no".
     var quantityText: String {
         let model = effectiveQuantityModel
@@ -273,6 +294,15 @@ extension MaterialCatalogItem {
         ]
         return CanonicalBusinessEngine.materialQuantityModel(legacy)
             ?? MaterialQuantityModel(orderUnit: "Each", contentAmount: nil, contentMeasure: nil)
+    }
+
+    /// The model with the old fields that go with it (`materialQuantityWriteFields`, `defaultUnit`).
+    var quantityFieldsForScript: [String: Any] {
+        CanonicalBusinessEngine.materialQuantityWriteFields(effectiveQuantityModel, unitField: "defaultUnit") ?? [
+            "orderUnit": effectiveQuantityModel.orderUnit,
+            "contentAmount": RulebookJSON.orNull(effectiveQuantityModel.contentAmount),
+            "contentMeasure": RulebookJSON.orNull(effectiveQuantityModel.contentMeasure),
+        ]
     }
 
     /// "Drum · 50m in one".
@@ -381,12 +411,24 @@ struct MaterialQuantityDraft: Equatable {
     }
 
     /// Writes the quantity and the model onto a line (the old fields are written by the rulebook writer).
+    /// The old fields as the rulebook writes them for the model (`materialQuantityWriteFields`), so the in-app copy
+    /// says the same as what is saved until it is read back.
+    private func legacy(_ unitField: String) -> (unit: String?, length: String?, lengthUnit: MaterialLengthUnit?)? {
+        guard let fields = CanonicalBusinessEngine.materialQuantityWriteFields(model, unitField: unitField) else { return nil }
+        return (fields[unitField] as? String, fields["length"] as? String, (fields["lengthUnit"] as? String).flatMap(MaterialLengthUnit.init(rawValue:)))
+    }
+
     func apply(to item: inout MaterialItem) {
         if let quantity { item.quantity = quantity }
         let model = self.model
         item.orderUnit = model.orderUnit
         item.contentAmount = model.contentAmount
         item.contentMeasure = model.contentMeasure
+        if let old = legacy("unit") {
+            item.unit = old.unit.flatMap(MaterialUnit.init(rawValue:)) ?? item.unit
+            item.length = old.length
+            item.lengthUnit = old.lengthUnit
+        }
     }
 
     /// Writes the default model onto a catalogue item.
@@ -395,5 +437,10 @@ struct MaterialQuantityDraft: Equatable {
         item.orderUnit = model.orderUnit
         item.contentAmount = model.contentAmount
         item.contentMeasure = model.contentMeasure
+        if let old = legacy("defaultUnit") {
+            item.defaultUnit = old.unit.flatMap(MaterialUnit.init(rawValue:)) ?? item.defaultUnit
+            item.length = old.length
+            item.lengthUnit = old.lengthUnit
+        }
     }
 }

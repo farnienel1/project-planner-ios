@@ -57,7 +57,7 @@ struct MaterialsWhatsAppSheet: View {
                 MaterialWhatsAppRulebook.Line(
                     material: item.material,
                     quantity: item.quantity,
-                    unit: item.unit.rawValue,
+                    unit: (item.quantityFieldsForScript["unit"] as? String) ?? item.unit.rawValue,
                     brand: item.brand,
                     productCode: item.productCode,
                     notes: item.notes,

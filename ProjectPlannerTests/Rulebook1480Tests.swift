@@ -164,6 +164,23 @@ final class Rulebook1480Tests: XCTestCase {
         XCTAssertEqual(new.historyText, "2no 50m drums")
     }
 
+    /// A payload that carries the new fields and old ones sends old fields that agree with the order unit
+    /// (`materialQuantityWriteFields`): otherwise the reader takes it for an older build's edit and the old fields win.
+    func testEmailLinesSendTheOldUnitThatGoesWithTheOrderUnit() throws {
+        var reel = line(3, "Reel", 100, "m")
+        reel.unit = .number // a new line's in-app old unit before it is read back
+        let sent = try XCTUnwrap(MaterialRequestEmailPayload.materialLines([reel]).first)
+        XCTAssertEqual(sent["orderUnit"] as? String, "Reel")
+        XCTAssertEqual(sent["unit"] as? String, "Drum")
+        XCTAssertEqual(CanonicalBusinessEngine.materialLineText(sent), "3no 100m reels")
+        // Applying the picker writes the old fields the rulebook writes, so the in-app copy agrees too.
+        var item = line(1, "Each")
+        MaterialQuantityDraft(quantity: 3, model: MaterialQuantityModel(orderUnit: "Reel", contentAmount: 100, contentMeasure: "m")).apply(to: &item)
+        XCTAssertEqual(item.unit, .drum)
+        XCTAssertEqual(item.length, "100")
+        XCTAssertEqual(item.lengthUnit, .metres)
+    }
+
     // MARK: Catalogue CSV
 
     func testAnOldLayoutCsvStillImports() throws {
