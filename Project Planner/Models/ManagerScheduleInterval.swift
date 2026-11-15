@@ -122,20 +122,6 @@ extension ManagerSiteBooking {
         ManagerScheduleInterval.clashInterval(for: self, policy: policy)?.0 ?? 0
     }
 
-    /// Rough “day units” for reports from paid hours (includes break toggle and OT).
-    /// Weekly-report day units (`reportDayValue`): weighted paid hours over the standard day, capped at 1.5.
-    func reportDayValue(policy: OrgPayrollTimePolicy = .default) -> Double {
-        let result = payrollHoursResult(policy: policy)
-        // Nil only when the script did not run; bookings are then unreadable too. RULEBOOK 1.49.0: the standard part's
-        // own divisor (`standardPartDayHours`) goes in, so a full Saturday window is 1.00 day.
-        return CanonicalBusinessEngine.reportDayValue(
-            totalPaidHours: result.totalPaidHours,
-            standardPaidHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
-            standardHours: result.standardHours,
-            standardPartDayHours: result.standardPartDayHours
-        ) ?? 0
-    }
-
     /// Start/end instants on the booking’s calendar day (for Calendar export and reminders).
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
         let cal = Calendar.current

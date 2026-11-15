@@ -65,6 +65,13 @@ struct OrganisationWorkingHoursView: View {
     /// (`Organization.payrollPolicyStateJSON`). Every save is refused with `PAYROLL_POLICY_STALE_SAVE_MESSAGE` when the
     /// server's working hours moved since (`payrollTimePolicySaveConflict`).
     @State private var baseStateJSON: String?
+    /// RULEBOOK 1.51.0 §4.3 (owner decision 15 Nov): the read-only Working hours history is shown to admins only. The
+    /// admin hub passes the signed-in user's level.
+    private let showsHistory: Bool
+
+    init(showsHistory: Bool = false) {
+        self.showsHistory = showsHistory
+    }
 
     /// A scheduled change must start after today (`payrollTimePolicyScheduleDateError`).
     private static var firstSchedulableDay: Date {
@@ -108,6 +115,12 @@ struct OrganisationWorkingHoursView: View {
 
                 if let scheduled = scheduledChange {
                     scheduledBanner(scheduled)
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 12)
+                }
+
+                if showsHistory, !historyRows.isEmpty {
+                    workingHoursHistoryCard
                         .padding(.horizontal, 16)
                         .padding(.bottom, 12)
                 }
@@ -293,6 +306,63 @@ struct OrganisationWorkingHoursView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(WorkingHoursPalette.indigo.opacity(0.25), lineWidth: 1)
         )
+    }
+
+    /// RULEBOOK 1.51.0 §4.3 `payrollPolicyHistoryRows({ state, todayKey })`: one row per start date, newest first, from
+    /// the stored working-hours state. Display only — nothing is written and no text is built here.
+    private var historyRows: [RulebookPayrollPolicyHistoryRow] {
+        guard let state = CanonicalBusinessEngine.openOrganizationPayrollPolicyState else { return [] }
+        return CanonicalBusinessEngine.payrollPolicyHistoryRows(
+            state: state,
+            todayKey: OrganizationRulebookContext.dayKey(Date())
+        )
+    }
+
+    private var workingHoursHistoryCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Working hours history")
+                .font(.subheadline.weight(.semibold))
+            ForEach(historyRows) { row in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(row.dates)
+                            .font(.caption.weight(.semibold))
+                        if row.inEffectToday {
+                            historyBadge("In effect today", tint: ProjectWorksRevampColors.activeGreen)
+                        }
+                        if row.scheduled {
+                            historyBadge("Scheduled", tint: WorkingHoursPalette.indigo)
+                        }
+                    }
+                    Text("Monday–Friday: \(row.weekday) · \(row.overtime)")
+                    Text("Saturday: \(row.saturday)")
+                    Text("Sunday: \(row.sunday)")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("organisationWorkingHours.history.\(row.effectiveFrom)")
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.systemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(WorkingHoursPalette.indigo.opacity(0.15), lineWidth: 1)
+        )
+        .accessibilityIdentifier("organisationWorkingHours.history")
+    }
+
+    private func historyBadge(_ title: String, tint: Color) -> some View {
+        Text(title)
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(tint.opacity(0.12), in: Capsule())
     }
 
     private var successBanner: some View {

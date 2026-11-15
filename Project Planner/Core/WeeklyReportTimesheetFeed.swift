@@ -30,6 +30,10 @@ struct WeeklyReportTimesheetFeed {
     /// (`applyIfFullyApproved` refused). The report then stops with this message instead of pricing that week from live
     /// bookings at live rates. Nil when every approved week was read.
     var calculationFailedMessage: String? = nil
+    /// RULEBOOK 1.51.0 §7 (Q2): each self-employed person's payment runs overlapping the range, for the invoice check
+    /// line of `weeklyReportPayRows` (`WeeklyReportPaySheet`): `{ personId, startDayKey, endDayKey, sheet, status,
+    /// change, payrollLines, entryFingerprints }`, `sheet` null when the run has no stored timesheet.
+    var sheets: [[String: Any]] = []
     /// Script answers for these weeks, memoised (one call per user and day / per range, never per render).
     private let cache = FeedAnswerCache()
 
@@ -104,6 +108,12 @@ struct WeeklyReportTimesheetFeed {
         }
     }
 
+    /// RULEBOOK 1.51.0 §7: the approved weeks as `weeklyReportPayRows` reads them (`timesheetWeeks`, `FeedWeek` rows with
+    /// each signed line's pay basis, multiplier and PAYE / leave flags).
+    func rulebookWeeksJSON() -> [[String: Any]] {
+        Self.weeksJSON(weeks)
+    }
+
     private static func rangeKeys(_ range: ClosedRange<Date>) -> (String, String) {
         (OrganizationRulebookContext.dayKey(range.lowerBound), OrganizationRulebookContext.dayKey(range.upperBound))
     }
@@ -159,6 +169,10 @@ struct WeeklyReportTimesheetFeed {
             "isOvertime": line.isOvertime,
             "details": line.details,
             "decision": line.decision.rawValue,
+            "payBasis": RulebookJSON.orNull(line.payBasis),
+            "otMultiplier": RulebookJSON.orNull(line.otMultiplier),
+            "isPayeDay": RulebookJSON.orNull(line.isPayeDay),
+            "isLeave": RulebookJSON.orNull(line.isLeave),
         ]
     }
 
@@ -192,11 +206,13 @@ struct WeeklyReportTimesheetFeed {
         let periods = TimesheetPayrollPolicy.payPeriodsOverlapping(range: range, settings: settings)
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var weeks: [ApprovedWeek] = []
+        var sheets: [[String: Any]] = []
         var refusal: String?
 
         for user in users {
             guard user.participatesInTimesheets() else { continue }
             var listedFromCloud = false
+            var storedWeekKeys = Set<String>()
             if let orgId {
                 if let rows = try? await firebaseBackend.listTimesheetStates(
                     organizationId: orgId,
@@ -210,6 +226,7 @@ struct WeeklyReportTimesheetFeed {
                             // The sheet key is the organisation-zone day, never the device's (§1).
                             let day = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
                             TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, organizationId: orgId)
+                            storedWeekKeys.insert(OrganizationRulebookContext.dayKey(day))
                         }
                     }
                 }
@@ -226,6 +243,7 @@ struct WeeklyReportTimesheetFeed {
 
             for period in periods {
                 var draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start, organizationId: orgId)
+                var stored = storedWeekKeys.contains(OrganizationRulebookContext.dayKey(period.start))
                 if !listedFromCloud, let orgId {
                     if let remote = await TimesheetDraftStore.refreshFromCloud(
                         userId: user.id,
@@ -234,11 +252,11 @@ struct WeeklyReportTimesheetFeed {
                         organizationId: orgId
                     ) {
                         draft = remote
+                        stored = true
                     }
                 }
-                guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { continue }
-                // RULEBOOK 1.47.0 §8: a fully signed sheet reopened by a booking change is not an approved week — the
-                // report shows its live bookings. Read only when the loaded bookings hold that pay run.
+                // RULEBOOK 1.47.0 §8: a signed sheet reopened by a booking change. Read only when the loaded bookings
+                // hold that pay run.
                 let change = SignedTimesheetChanges.change(
                     draft: draft,
                     user: user,
@@ -259,6 +277,30 @@ struct WeeklyReportTimesheetFeed {
                         ).loaded && operativeStore.finishedLoadOrganizationId == orgId
                     )
                 )
+                // RULEBOOK 1.51.0 §7 (Q2): this run for the person's invoice check line (`weeklyReportPayRows` `sheets`).
+                sheets.append(sheetEntry(
+                    user: user,
+                    period: period,
+                    draft: stored ? draft : nil,
+                    change: change,
+                    lines: stored ? TimesheetPayrollCollector.collect(
+                        for: user,
+                        week: period,
+                        bookings: bookingStore.bookings,
+                        managerBookings: managerScheduleStore.managerSiteBookings,
+                        operatives: operativeStore.allOperatives,
+                        projects: projectStore.projects,
+                        smallWorks: projectStore.smallWorks,
+                        history: dayRateHistory,
+                        policy: payrollPolicy,
+                        organization: firebaseBackend.currentOrganization,
+                        scheduleOptions: scheduleOptions,
+                        relatedUsers: users
+                    ).lineItems : []
+                ))
+                guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { continue }
+                // RULEBOOK 1.47.0 §8: a fully signed sheet reopened by a booking change is not an approved week — the
+                // report shows its live bookings.
                 if change?.reopened == true { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
@@ -307,7 +349,46 @@ struct WeeklyReportTimesheetFeed {
 
         var feed = WeeklyReportTimesheetFeed(weeks: mergeApprovedWeeks(weeks, users: users))
         feed.calculationFailedMessage = refusal
+        feed.sheets = sheets
         return feed
+    }
+
+    /// One `WeeklyReportPaySheet`: the stored sheet as Firestore JSON (null when none), its sign-off fields
+    /// (`parseTimesheetStatusFields`), its `signedTimesheetBookingChanges`, the run's live payroll lines (the input of
+    /// `timesheetInvoiceRows`) and the loaded copy's entry fingerprints.
+    @MainActor
+    private static func sheetEntry(
+        user: AppUser,
+        period: WeekRange,
+        draft: TimesheetDraft?,
+        change: RulebookSignedTimesheetChange?,
+        lines: [TimesheetPayrollLineItem]
+    ) -> [String: Any] {
+        var row: [String: Any] = [
+            "personId": user.id,
+            "startDayKey": OrganizationRulebookContext.dayKey(period.start),
+            "endDayKey": OrganizationRulebookContext.dayKey(period.end),
+        ]
+        guard let draft else {
+            row["sheet"] = NSNull()
+            return row
+        }
+        row["sheet"] = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
+        if let status = CanonicalBusinessEngine.callJSON("parseTimesheetStatusFields", arguments: [TimesheetDraftStore.statusPayload(for: draft)]),
+           !(status is NSNull) {
+            row["status"] = status
+        }
+        if let change {
+            row["change"] = [
+                "reopened": change.reopened,
+                "changed": change.changed,
+                "waitingFor": RulebookJSON.orNull(change.waitingFor),
+            ] as [String: Any]
+        }
+        row["payrollLines"] = lines.map(\.rulebookTotalsJSON)
+        let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
+        if !fingerprints.isEmpty { row["entryFingerprints"] = fingerprints }
+        return row
     }
 
     /// RULEBOOK 1.22.0 §7 `CanonicalBusinessEngine.mergeTimesheetFeedWeeks`: one approved week per person (email, else

@@ -939,19 +939,23 @@ struct WeeklyReportView: View {
     private func buildExportSections() throws -> [WeeklyReportExportBuilder.Section] {
         let range = reportDateRange
         var sections: [WeeklyReportExportBuilder.Section] = []
+        // RULEBOOK 1.51.0 §7: one call prices the Pay Summary, every check line and every booking's paid days.
+        let pay = try weeklyReportPay()
 
+        // RULEBOOK 1.51.0 §7 (Q4d): an open warning reads `WEEKLY_REPORT_WARNING_OPEN` ("Open").
+        let open = CanonicalBusinessEngine.weeklyReportWarningOpen
         var warningRows: [[String]] = []
         for warning in activeWarningsService.unresolvedBookingClashes(in: range) {
-            warningRows.append(clashExportCells(warning, status: "Not ticked for report"))
+            warningRows.append(clashExportCells(warning, status: open))
         }
         for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
-            warningRows.append(clashExportCells(warning, status: "Active"))
+            warningRows.append(clashExportCells(warning, status: open))
         }
         for warning in activeWarningsService.approvedManagerClashes(in: range) {
             warningRows.append(clashExportCells(warning, status: "Ticked — on report"))
         }
         for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
-            warningRows.append(clashExportCells(warning, status: "Active"))
+            warningRows.append(clashExportCells(warning, status: open))
         }
         if warningRows.isEmpty {
             warningRows.append(["", "", "", "", "No warnings in period", "", ""])
@@ -965,71 +969,96 @@ struct WeeklyReportView: View {
             )
         )
 
-        let operativeRows = operativeProjectRows()
-        let managerRows = managerProjectRows()
-        let allProjectRows = consolidateProjectRows(operativeRows + managerRows)
-        let grouped = Dictionary(grouping: allProjectRows) { "\($0.projectName)|\($0.jobNumber)" }
-        var projectRows: [[String]] = []
-        var projectGrandTotal = 0.0
+        // RULEBOOK 1.51.0 §7 (Q4a): Hours and Paid days from `paidDays` (uncapped, so they tie to the Pay Summary).
+        let projectKinds: Set<String> = [ManagerLocationType.project.rawValue, ManagerLocationType.smallWork.rawValue]
+        let projectRows = workRows(pay.built, pay.result.paidDays.filter { projectKinds.contains($0.locationKind) })
+        let grouped = Dictionary(grouping: projectRows) { "\($0.projectName)|\($0.jobNumber)" }
+        var projectCells: [[String]] = []
+        var projectHours = 0.0
+        var projectDays = 0.0
         for key in grouped.keys.sorted() {
             guard let group = grouped[key] else { continue }
-            var projectTotal = 0.0
+            var groupHours = 0.0
+            var groupDays = 0.0
             for row in group.sorted(by: projectWorkRowSort) {
                 let tradeCell = row.tradeDisplay == "—" ? "" : row.tradeDisplay
-                projectRows.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, formatDays(row.days)])
-                projectTotal += row.days
-                projectGrandTotal += row.days
+                projectCells.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, hoursText(row.hours), daysText(row.days)])
+                groupHours += row.hours
+                groupDays += row.days
             }
-            projectRows.append(["", "", "", "", "Project Total", formatDays(projectTotal)])
+            projectHours += groupHours
+            projectDays += groupDays
+            projectCells.append(["", "", "", "", "Project Total", hoursText(groupHours), daysText(groupDays)])
         }
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "🏗  Project Breakdown",
-                headers: ["Project", "Job No.", "Person", "Trade", "Role", "Days"],
-                rows: projectRows,
-                totalRow: ["", "", "", "", "All Project Work Total", formatDays(projectGrandTotal)]
+                headers: ["Project", "Job No.", "Person", "Trade", "Role", "Hours", "Paid days"],
+                rows: projectCells,
+                totalRow: ["", "", "", "", "All Project Work Total", hoursText(projectHours), daysText(projectDays)]
             )
         )
 
         var subcontractorTotal = 0.0
         let subRows = subcontractorRows().map { row -> [String] in
             subcontractorTotal += row.days
-            return [row.projectName, row.jobNumber, row.subcontractorName, row.subcontractorType, row.timeSlotLabel, formatDays(row.days)]
+            return [row.projectName, row.jobNumber, row.subcontractorName, row.subcontractorType, row.timeSlotLabel, daysText(row.days)]
         }
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "🔧  Sub Contractors",
                 headers: ["Project", "Job No.", "Sub Contractor", "Type", "Time", "Days"],
                 rows: subRows,
-                totalRow: ["", "", "", "", "Sub Contractor Total", formatDays(subcontractorTotal)]
+                totalRow: ["", "", "", "", "Sub Contractor Total", daysText(subcontractorTotal)]
             )
         )
 
-        var annualLeaveTotal = 0.0
-        let leaveRows = annualLeaveRows().map { leave -> [String] in
-            annualLeaveTotal += leave.days
-            return [leave.personName, leave.role, formatDays(leave.days), "Approved"]
-        }
+        // RULEBOOK 1.51.0 §7 (Q4b): `weeklyReportLeaveRows` — per person under every id and email.
+        let leave = CanonicalBusinessEngine.weeklyReportLeaveRows(
+            records: WeeklyReportPayInputs.leaveRecords(holidayStore.bookings),
+            people: WeeklyReportPayInputs.leavePeople(pay.built.people),
+            startDayKey: OrganizationRulebookContext.dayKey(reportStartDay),
+            endDayKey: OrganizationRulebookContext.dayKey(reportEndDay),
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+        ) ?? (rows: [], total: 0)
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "🌴  Annual Leave",
                 headers: ["Person", "Role", "Days", "Type"],
-                rows: leaveRows,
-                totalRow: ["", "", formatDays(annualLeaveTotal), "Annual Leave Total"]
+                rows: leave.rows.map { [$0.person, $0.role, daysText($0.days), $0.type] },
+                totalRow: ["", "", daysText(leave.total), "Annual Leave Total"]
             )
         )
 
-        var additionalScheduleTotal = 0.0
-        let scheduleRows = managerAdditionalScheduleRows().map { row -> [String] in
-            additionalScheduleTotal += row.days
-            return [row.personName, row.role, row.location, row.timeSlotLabel, formatDays(row.days)]
-        }
+        // RULEBOOK 1.51.0 §7 (Q4a): the places that are not jobs, from `paidDays`.
+        let additionalKinds: Set<String> = [
+            ManagerLocationType.office.rawValue,
+            ManagerLocationType.workingFromHome.rawValue,
+            ManagerLocationType.siteSurvey.rawValue,
+            ManagerLocationType.custom.rawValue,
+        ]
+        let managerByKey = Dictionary(
+            managerScheduleStore.managerSiteBookings.map { ($0.documentKey.lowercased(), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        var scheduleHours = 0.0
+        var scheduleDays = 0.0
+        let scheduleRows: [[String]] = pay.result.paidDays
+            .filter { additionalKinds.contains($0.locationKind) }
+            .map { day -> (name: String, cells: [String]) in
+                let person = reportPerson(pay.built, day)
+                scheduleHours += day.hours
+                scheduleDays += day.days
+                return (person.name, [person.name, person.role, additionalLocation(day, booking: managerByKey[day.bookingId.lowercased()]), day.time, hoursText(day.hours), daysText(day.days)])
+            }
+            .sorted { $0.name == $1.name ? $0.cells[2] < $1.cells[2] : $0.name < $1.name }
+            .map(\.cells)
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "📅  Manager / Admin Additional Schedule",
-                headers: ["Person", "Role", "Location", "Time", "Days"],
+                headers: ["Person", "Role", "Location", "Time", "Hours", "Paid days"],
                 rows: scheduleRows,
-                totalRow: ["", "", "Total", "", formatDays(additionalScheduleTotal)]
+                totalRow: ["", "", "Total", "", hoursText(scheduleHours), daysText(scheduleDays)]
             )
         )
 
@@ -1078,189 +1107,122 @@ struct WeeklyReportView: View {
             )
         )
 
-        var payRows: [[String]] = []
-        // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = try payrollSummaryForViewer()
-        for person in payShown.summaries {
-            for line in person.lines {
-                payRows.append([
-                    person.name,
-                    person.role,
-                    line.rateTypeLabel,
-                    line.daysCell(formatDays),
-                    line.rateText ?? formatCurrency(line.rate),
-                    line.payLabel ?? formatCurrency(line.pay),
-                ])
-            }
-            payRows.append(["", "", "\(person.name) total", "", "", person.totalLabel ?? formatCurrency(person.totalPay)])
-        }
-        sections.append(
-            WeeklyReportExportBuilder.Section(
-                title: "💷  Pay Summary",
-                headers: ["Person", "Role", "Rate Type", "Days", "Rate", "Pay"],
-                rows: payRows,
-                totalRow: ["", "", "Grand Total", "", "", formatCurrency(payShown.grandTotal)],
-                note: payShown.hiddenNote
-            )
-        )
-
+        sections.append(Self.paySummarySection(pay.result))
         return sections
     }
 
-    private func buildCSV() throws -> String {
+    /// RULEBOOK 1.51.0 §7 (Q1–Q3): the Pay Summary as `weeklyReportPayRows` returns it — Person | Role | Dates | Line |
+    /// Hours | Days | Rate | Pay (`WEEKLY_REPORT_PAY_COLUMNS`); then "<name> total" and the person's invoice check line
+    /// (amber when it does not match); then the Grand Total and `PAY_HIDDEN_NOTE` when someone's pay is hidden. Pay is
+    /// already shown per `reportPayForViewer` (inside the rule); nothing is priced or hidden here.
+    static func paySummarySection(_ pay: RulebookWeeklyReportPay) -> WeeklyReportExportBuilder.Section {
         var rows: [[String]] = []
-        rows.append(["Weekly Report"])
-        rows.append(["From", formatDate(startDate), "To", formatDate(endDate)])
-        rows.append([])
-        let range = reportDateRange
-        rows.append(["WARNINGS SUMMARY"])
-        rows.append(["Status", "Priority", "Type", "Date", "Description", "Detail", "For"])
-
-        for warning in activeWarningsService.unresolvedBookingClashes(in: range) {
-            rows.append(clashExportCells(warning, status: "Not ticked for report"))
-        }
-        for warning in activeWarningsService.unbookedLabourWarnings(in: range) {
-            rows.append(clashExportCells(warning, status: "Active"))
-        }
-        for warning in activeWarningsService.approvedManagerClashes(in: range) {
-            rows.append(clashExportCells(warning, status: "Ticked — on report"))
-        }
-        for warning in activeWarningsService.materialsCutoffWarnings(in: range) {
-            rows.append(clashExportCells(warning, status: "Active"))
-        }
-        if activeWarningsService.unresolvedBookingClashes(in: range).isEmpty
-            && activeWarningsService.unbookedLabourWarnings(in: range).isEmpty
-            && activeWarningsService.approvedManagerClashes(in: range).isEmpty
-            && activeWarningsService.materialsCutoffWarnings(in: range).isEmpty {
-            rows.append(["", "", "", "", "No warnings in period", ""])
-        }
-        rows.append([])
-        rows.append(["PROJECT BREAKDOWN"])
-        rows.append(["Project", "Job Number", "Person", "Trade", "Role", "Days"])
-
-        let operativeRows = operativeProjectRows()
-        let managerRows = managerProjectRows()
-        let allProjectRows = consolidateProjectRows(operativeRows + managerRows)
-        let grouped = Dictionary(grouping: allProjectRows) { "\($0.projectName)|\($0.jobNumber)" }
-
-        var projectGrandTotal = 0.0
-        for key in grouped.keys.sorted() {
-            guard let group = grouped[key] else { continue }
-            var projectTotal = 0.0
-            for row in group.sorted(by: projectWorkRowSort) {
-                let tradeCell = row.tradeDisplay == "—" ? "" : row.tradeDisplay
-                rows.append([row.projectName, row.jobNumber, row.personName, tradeCell, row.role, formatDays(row.days)])
-                projectTotal += row.days
-                projectGrandTotal += row.days
-            }
-            rows.append(["", "", "", "", "Project Total", formatDays(projectTotal)])
-            rows.append([])
-        }
-        rows.append(["", "", "", "", "All Project Work Total", formatDays(projectGrandTotal)])
-        rows.append([])
-        
-        rows.append(["SUB CONTRACTORS"])
-        rows.append(["Project", "Job Number", "Sub Contractor", "Type", "Time", "Days"])
-        var subcontractorTotal = 0.0
-        for row in subcontractorRows() {
-            rows.append([
-                row.projectName,
-                row.jobNumber,
-                row.subcontractorName,
-                row.subcontractorType,
-                row.timeSlotLabel,
-                formatDays(row.days)
-            ])
-            subcontractorTotal += row.days
-        }
-        rows.append(["", "", "", "", "Sub Contractor Total", formatDays(subcontractorTotal)])
-        rows.append([])
-
-        rows.append(["ANNUAL LEAVE"])
-        rows.append(["Person", "Role", "Days", "Type"])
-        var annualLeaveTotal = 0.0
-        for leave in annualLeaveRows() {
-            rows.append([leave.personName, leave.role, formatDays(leave.days), "Approved"])
-            annualLeaveTotal += leave.days
-        }
-        rows.append(["", "", formatDays(annualLeaveTotal), "Annual Leave Total"])
-        rows.append([])
-        
-        rows.append(["MANAGER/ADMIN ADDITIONAL SCHEDULE"])
-        rows.append(["Person", "Role", "Location", "Time", "Days"])
-        var additionalScheduleTotal = 0.0
-        for row in managerAdditionalScheduleRows() {
-            rows.append([row.personName, row.role, row.location, row.timeSlotLabel, formatDays(row.days)])
-            additionalScheduleTotal += row.days
-        }
-        rows.append(["", "", "Total", "", formatDays(additionalScheduleTotal)])
-        rows.append([])
-
-        // RULEBOOK 1.29.0 §7: PAYE overtime per person per job (hours only); 1.32.0 per multiplier (`payeOvertimeHoursCell`).
-        rows.append(["PAYE OVERTIME"])
-        rows.append(["Person", "Job Number", "Job", "Overtime hours"])
-        let payeRows = payeOvertimeRows()
-        if payeRows.isEmpty {
-            rows.append(["No PAYE overtime in this period", "", "", ""])
-        } else {
-            for row in payeRows {
-                rows.append([row.name, row.jobNumber, row.jobName, payeOvertimeHoursCell(row)])
-            }
-            let total = (payeRows.reduce(0) { $0 + $1.overtimeHours } * 100).rounded() / 100
-            rows.append(["", "", "Total", "\(ScheduleCoverageFormat.hours(total))h"])
-        }
-        rows.append([])
-
-        rows.append(["PRICE WORK"])
-        rows.append(["Person", "Title", "Job Number", "Date", "Details", "Amount"])
-        var priceWorkTotal = 0.0
-        for row in timesheetMoneyRows(\.priceWork) {
-            rows.append([row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)])
-            priceWorkTotal += row.amount
-        }
-        rows.append(["", "", "", "", "Price Work Total", formatCurrency(priceWorkTotal)])
-        rows.append([])
-
-        rows.append(["EXPENSES"])
-        rows.append(["Person", "Title", "Job Number", "Date", "Details", "Amount"])
-        var expenseTotal = 0.0
-        for row in timesheetMoneyRows(\.expenses) {
-            rows.append([row.personName, row.title, row.jobNumber, formatDate(row.date), row.details, formatCurrency(row.amount)])
-            expenseTotal += row.amount
-        }
-        rows.append(["", "", "", "", "Expenses Total", formatCurrency(expenseTotal)])
-        rows.append([])
-
-        rows.append(["PAY SUMMARY"])
-        rows.append(["Person", "Role", "Rate Type", "Days", "Rate", "Pay"])
-        // RULEBOOK 1.32.0 §7, §8: the pay summary follows `canViewPersonPay` (`reportPayForViewer`).
-        let payShown = try payrollSummaryForViewer()
-        for person in payShown.summaries {
+        var warnRows = Set<Int>()
+        var spanRows = Set<Int>()
+        for person in pay.people {
             for line in person.lines {
+                let claim = line.source == "claim"
                 rows.append([
-                    person.name,
+                    person.person,
                     person.role,
-                    line.rateTypeLabel,
-                    line.daysCell(formatDays),
-                    line.rateText ?? formatCurrency(line.rate),
-                    line.payLabel ?? formatCurrency(line.pay)
+                    line.dates,
+                    line.line,
+                    claim ? "" : reportHoursText(line.hours),
+                    claim ? "" : reportDaysText(line.days),
+                    line.rateText,
+                    line.payLabel ?? OrgMoney.format(line.pay),
                 ])
             }
-            rows.append([
-                "",
-                "",
-                "\(person.name) total",
-                "",
-                "",
-                person.totalLabel ?? formatCurrency(person.totalPay)
-            ])
+            rows.append(["", "", "", "\(person.person) total", "", "", "", person.personTotalLabel ?? OrgMoney.format(person.personTotal)])
+            if let check = person.check {
+                if check.tone == "warn" { warnRows.insert(rows.count) }
+                spanRows.insert(rows.count)
+                rows.append(["", "", "", check.label, "", "", "", ""])
+            }
         }
-        rows.append(["", "", "Grand Total", "", "", formatCurrency(payShown.grandTotal)])
-        if let note = payShown.hiddenNote {
-            rows.append([note, "", "", "", "", ""])
-        }
+        var section = WeeklyReportExportBuilder.Section(
+            title: "💷  Pay Summary",
+            headers: CanonicalBusinessEngine.weeklyReportPayColumns,
+            rows: rows,
+            totalRow: ["", "", "", "Grand Total", "", "", "", OrgMoney.format(pay.grandTotal)],
+            note: pay.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : nil
+        )
+        section.warnRows = warnRows
+        section.spanRows = spanRows
+        return section
+    }
 
-        return rows.map { $0.map(csvEscape).joined(separator: ",") }.joined(separator: "\n")
+    /// The weekly report's `weeklyReportPayRows` answer for the report range, with the people it names. Throws when
+    /// the rulebook did not answer (pay is never shown from a partial calculation).
+    private func weeklyReportPay() throws -> (result: RulebookWeeklyReportPay, built: WeeklyReportPayInputs.Built) {
+        let options = appSettings.settings.myScheduleOptions
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let organization = CanonicalBusinessEngine.openOrganizationPayrollPolicyState
+            ?? CanonicalBusinessEngine.memoisedPayrollPolicyJSON(policy)
+            ?? [:]
+        let built = WeeklyReportPayInputs.build(WeeklyReportPayInputs.Sources(
+            users: userStore.organizationUsers,
+            bookingNameUsers: userStore.bookingNameUsers,
+            operatives: operativeStore.allOperatives,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            history: dayRateHistoryCollection,
+            organization: organization,
+            startDayKey: OrganizationRulebookContext.dayKey(reportStartDay),
+            endDayKey: OrganizationRulebookContext.dayKey(reportEndDay),
+            timesheetWeeks: timesheetFeed.rulebookWeeksJSON(),
+            sheets: timesheetFeed.sheets,
+            viewer: userStore.payViewerRow,
+            roleLabel: { user in reportRoleLabel(for: user, fallback: "Operative") },
+            includesManagerBooking: { options.includesManagerScheduleLocation($0) }
+        ))
+        guard let result = CanonicalBusinessEngine.weeklyReportPayRows(built.input) else { throw PayCalculationError() }
+        return (result, built)
+    }
+
+    /// A paid-days row's person (name, role, trade); "Person not found (id …)" when the booking named nobody.
+    private func reportPerson(_ built: WeeklyReportPayInputs.Built, _ day: RulebookWeeklyReportPaidDay) -> (name: String, role: String, user: AppUser?) {
+        if let id = day.personId, let person = built.people[id] {
+            return (person.name, person.role, person.user)
+        }
+        let notFound = CanonicalBusinessEngine.constant("WEEKLY_REPORT_PERSON_NOT_FOUND", as: String.self) ?? "Person not found"
+        return ("\(notFound) (id \(day.bookingPersonId))", "—", nil)
+    }
+
+    /// Project Breakdown rows: one per job and person, hours and paid days added up.
+    private func workRows(_ built: WeeklyReportPayInputs.Built, _ days: [RulebookWeeklyReportPaidDay]) -> [ProjectWorkRow] {
+        var map: [String: ProjectWorkRow] = [:]
+        for day in days {
+            let person = reportPerson(built, day)
+            let projectName = day.jobName.isEmpty ? "Unknown" : day.jobName
+            let jobNumber = day.jobNumber.isEmpty ? "N/A" : day.jobNumber
+            let key = "\(projectName)|\(jobNumber)|\(day.personId ?? day.bookingPersonId)"
+            var row = map[key] ?? ProjectWorkRow(
+                projectName: projectName,
+                jobNumber: jobNumber,
+                personName: person.name,
+                tradeDisplay: StaffEmailIdentity.reportTrade(for: person.user),
+                tradeSortKey: StaffTradeType.sortKey(presetRaw: person.user?.tradeTypePreset, custom: person.user?.tradeTypeCustom),
+                role: person.role,
+                hours: 0,
+                days: 0
+            )
+            row.hours += day.hours
+            row.days += day.days
+            map[key] = row
+        }
+        return Array(map.values)
+    }
+
+    /// The Additional Schedule's place: a custom place's own name, else the kind's name.
+    private func additionalLocation(_ day: RulebookWeeklyReportPaidDay, booking: ManagerSiteBooking?) -> String {
+        if day.locationKind == ManagerLocationType.custom.rawValue {
+            let custom = (booking?.customLocationName ?? day.jobName).trimmingCharacters(in: .whitespacesAndNewlines)
+            return custom.isEmpty || custom == "—" ? "Custom" : custom
+        }
+        return ManagerLocationType(rawValue: day.locationKind)?.displayName ?? day.jobName
     }
 
     private func projectWorkRowSort(_ lhs: ProjectWorkRow, _ rhs: ProjectWorkRow) -> Bool {
@@ -1270,206 +1232,6 @@ struct WeeklyReportView: View {
         return lhs.personName.localizedCaseInsensitiveCompare(rhs.personName) == .orderedAscending
     }
 
-    private func operativeProjectRows() -> [ProjectWorkRow] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        let filtered = bookingStore.bookings.filter { booking in
-            let day = cal.startOfDay(for: booking.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && booking.occupiesDay
-        }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
-        var totals: [String: Double] = [:]
-        var rowsMap: [String: ProjectWorkRow] = [:]
-        for booking in filtered {
-            let person = reportPerson(for: booking, people: people)
-            let linkedUser = person.user
-            if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
-            // RULEBOOK 1.29.0 §7: a PAYE day leaves the hours and pay rows (it is in the PAYE overtime section).
-            if payeReportDay(linkedUser, on: booking.date) { continue }
-            let project = projectStore.projects.first(where: { $0.id == booking.projectId })
-                ?? projectStore.smallWorks.first(where: { $0.id == booking.projectId })
-            let projectName = project?.siteName ?? "Unknown"
-            let jobNumber = project?.jobNumber ?? "N/A"
-            let personName = person.name
-            let roleLabel = reportRoleLabel(for: linkedUser, fallback: "Operative")
-            let key = "\(projectName)|\(jobNumber)|\(personName)|\(roleLabel)"
-            let dayValue = bookingDayValue(from: booking)
-            totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(
-                projectName: projectName,
-                jobNumber: jobNumber,
-                personName: personName,
-                tradeDisplay: StaffEmailIdentity.reportTrade(for: linkedUser),
-                tradeSortKey: StaffTradeType.sortKey(presetRaw: linkedUser?.tradeTypePreset, custom: linkedUser?.tradeTypeCustom),
-                role: roleLabel,
-                days: totals[key] ?? 0
-            )
-        }
-        mergeTimesheetProjectRows(into: &rowsMap, totals: &totals)
-        return Array(rowsMap.values)
-    }
-
-    private func managerProjectRows() -> [ProjectWorkRow] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        let filtered = managerScheduleStore.managerSiteBookings.filter { booking in
-            let day = cal.startOfDay(for: booking.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && (booking.locationType == .project || booking.locationType == .smallWork)
-        }
-        var totals: [String: Double] = [:]
-        var rowsMap: [String: ProjectWorkRow] = [:]
-        for booking in filtered {
-            guard let user = reportingUser(for: booking.userId) else { continue }
-            if timesheetFeed.covers(userId: user.id, day: booking.date)
-                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
-            if payeReportDay(user, on: booking.date) { continue }
-            let project = projectStore.projects.first(where: { $0.id == booking.locationId })
-                ?? projectStore.smallWorks.first(where: { $0.id == booking.locationId })
-            let projectName = project?.siteName ?? "Unknown"
-            let jobNumber = project?.jobNumber ?? "N/A"
-            let personName = user.fullName
-            let roleLabel = reportRoleLabel(for: user, fallback: "Manager")
-            let key = "\(projectName)|\(jobNumber)|\(personName)|\(roleLabel)"
-            let dayValue = managerDayValue(from: booking)
-            totals[key, default: 0] += dayValue
-            rowsMap[key] = ProjectWorkRow(
-                projectName: projectName,
-                jobNumber: jobNumber,
-                personName: personName,
-                tradeDisplay: StaffEmailIdentity.reportTrade(for: user),
-                tradeSortKey: StaffTradeType.sortKey(presetRaw: user.tradeTypePreset, custom: user.tradeTypeCustom),
-                role: roleLabel,
-                days: totals[key] ?? 0
-            )
-        }
-        return Array(rowsMap.values)
-    }
-
-    private func annualLeaveRows() -> [AnnualLeaveRow] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        let approved = holidayStore.bookings.filter {
-            $0.status == .approved && $0.cancellationRequestedAt == nil
-        }
-        var totals: [String: AnnualLeaveRow] = [:]
-        // RULEBOOK 1.9.0 §7: leave days in the report range are `leaveDaysInRange` (its `leaveRecordDayKeys` in range,
-        // 0.5 for AM / PM) — weekends and bank holidays inside a multi-day record are not counted.
-        let rangeStartKey = OrganizationRulebookContext.dayKey(reportStartDay)
-        let rangeEndKey = OrganizationRulebookContext.dayKey(reportEndDay)
-        for booking in approved {
-            let dayValue = CanonicalBusinessEngine.leaveDaysInRange(
-                startDayKey: booking.startDayKey,
-                endDayKey: booking.endDayKey,
-                timeSlot: booking.timeSlot.rawValue,
-                rangeStartDayKey: rangeStartKey,
-                rangeEndDayKey: rangeEndKey,
-                nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
-            ) ?? overlappingDays(for: booking, calendar: cal) * booking.timeSlot.dayValue
-            guard dayValue > 0 else { continue }
-            if let uid = booking.userId, let u = userStore.organizationUsers.first(where: { $0.id == uid }) {
-                let key = "\(u.fullName)|\(u.permissions.manager ? "Manager" : "User")"
-                var row = totals[key] ?? AnnualLeaveRow(personName: u.fullName, role: u.permissions.manager ? "Manager" : "User", days: 0)
-                row.days += dayValue
-                totals[key] = row
-            } else if let oid = booking.operativeId,
-                      let op = operativeStore.allOperatives.first(where: { $0.id == oid }) {
-                let key = "\(op.name)|Operative"
-                var row = totals[key] ?? AnnualLeaveRow(personName: op.name, role: "Operative", days: 0)
-                row.days += dayValue
-                totals[key] = row
-            }
-        }
-        return Array(totals.values).sorted(by: { $0.personName < $1.personName })
-    }
-
-    private func labourRateSummaries() -> [LabourRateSummary] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        let operativeBookings = bookingStore.bookings.filter {
-            let day = cal.startOfDay(for: $0.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && $0.occupiesDay
-        }
-        let managerBookings = managerScheduleStore.managerSiteBookings.filter {
-            let day = cal.startOfDay(for: $0.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-        }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
-        
-        var totals: [String: LabourRateSummary] = [:]
-        for booking in operativeBookings {
-            let person = reportPerson(for: booking, people: people)
-            let user = person.user
-            if timesheetFeed.covers(userId: user?.id, day: booking.date) { continue }
-            if payeReportDay(user, on: booking.date) { continue }
-            let rate = resolvedPayrollRate(user: user, operative: person.operative, on: booking.date).reportRateValue()
-            let days = bookingDayValue(from: booking)
-            let key = labourRateKey(name: person.name, role: "Operative", rate: rate)
-            var summary = totals[key] ?? LabourRateSummary(name: person.name, role: "Operative", rate: rate, days: 0)
-            summary.days += days
-            totals[key] = summary
-        }
-        
-        for booking in managerBookings {
-            guard appSettings.settings.myScheduleOptions.includesManagerScheduleLocation(booking) else { continue }
-            guard let manager = reportingUser(for: booking.userId) else { continue }
-            if timesheetFeed.covers(userId: manager.id, day: booking.date)
-                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
-            if payeReportDay(manager, on: booking.date) { continue }
-            let managerName = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let rate = dayRateForUserOnDay(userId: manager.id, fallback: manager.hourlyRate ?? manager.dayRate, date: booking.date)
-            let days = managerDayValue(from: booking)
-            let key = labourRateKey(name: managerName, role: "Manager", rate: rate)
-            var summary = totals[key] ?? LabourRateSummary(name: managerName, role: "Manager", rate: rate, days: 0)
-            summary.days += days
-            totals[key] = summary
-        }
-        
-        return Array(totals.values)
-    }
-    
-    private func managerAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        let opts = appSettings.settings.myScheduleOptions
-        let filtered = managerScheduleStore.managerSiteBookings.filter {
-            let day = cal.startOfDay(for: $0.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && ($0.locationType == .office || $0.locationType == .workingFromHome || $0.locationType == .siteSurvey || $0.locationType == .custom)
-                && opts.includesManagerScheduleLocation($0)
-                && !timesheetFeed.covers(userId: $0.userId, day: $0.date)
-        }
-        let liveRows = filtered.compactMap { booking -> ManagerAdditionalScheduleRow? in
-            guard let person = userStore.organizationUsers.first(where: { $0.id == booking.userId }) else { return nil }
-            if payeReportDay(person, on: booking.date) { return nil }
-            let personName = person.fullName.isEmpty ? person.email : person.fullName
-            let roleLabel = reportRoleLabel(for: person, fallback: "Manager")
-            let locationName: String
-            if booking.locationType == .custom {
-                let custom = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                locationName = custom.isEmpty ? "Custom" : custom
-            } else {
-                locationName = booking.locationType.displayName
-            }
-            return ManagerAdditionalScheduleRow(
-                personName: personName,
-                role: roleLabel,
-                location: locationName,
-                timeSlotLabel: booking.scheduleLabel(policy: firebaseBackend.payrollPolicy(for: booking.date)),
-                days: managerDayValue(from: booking)
-            )
-        }
-        let timesheetRows = timesheetAdditionalScheduleRows()
-        return (liveRows + timesheetRows).sorted {
-            if $0.personName == $1.personName {
-                return $0.location < $1.location
-            }
-            return $0.personName < $1.personName
-        }
-    }
-    
     private func subcontractorRows() -> [SubcontractorWorkRow] {
         let cal = CanonicalBusinessEngine.businessCalendar
         let filtered = subcontractorStore.bookings.filter {
@@ -1489,7 +1251,7 @@ struct WeeklyReportView: View {
                 subcontractorName: subcontractor.name,
                 subcontractorType: subcontractor.subcontractorType,
                 timeSlotLabel: booking.timeSlot.displayName,
-                days: subcontractorDayValue(from: booking.timeSlot)
+                days: subcontractorDayValue(booking)
             )
         }
         .sorted {
@@ -1499,100 +1261,27 @@ struct WeeklyReportView: View {
             return $0.projectName < $1.projectName
         }
     }
-    
-    private func labourRateKey(name: String, role: String, rate: Double?) -> String {
-        if let rate {
-            return "\(name)|\(role)|\(rate)"
-        }
-        return "\(name)|\(role)|NO_RATE"
-    }
 
-    private func calendarDayStart(_ date: Date) -> Date {
-        CanonicalBusinessEngine.businessCalendar.startOfDay(for: date)
-    }
-
-    /// Uses day-rate history keyed by user id; compares **calendar days** so a change effective “tomorrow” does not apply to today’s bookings.
-    private func resolvedPayrollRate(user: AppUser?, operative: Operative?, on date: Date) -> ResolvedPayrollRate {
-        let policy = firebaseBackend.payrollPolicy(for: date)
-        // RULEBOOK 1.20.0 §8: the day a day rate is divided by is `weekdayPaidHours` of that day's policy (no 8h floor).
-        let standardDayHours = max(CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
-        return PayrollRateResolver.resolveForTimesheetDay(
-            user: user,
-            operative: StaffEmailIdentity.operativeUsedForPay(user: user, operative: operative),
-            on: date,
-            history: dayRateHistoryCollection,
-            standardDayHours: standardDayHours,
-            // RULEBOOK 1.36.0 §8: history under every operatives row of the person counts (web `personRateHistoryIds`).
-            personOperativeIds: PayrollRateResolver.personOperativeIds(
-                user: user, operative: operative, operatives: operativeStore.allOperatives
-            )
-        )
-    }
-
-    private func dayRateForUserOnDay(userId: String, fallback: Double?, date: Date) -> Double? {
-        let user = userStore.organizationUsers.first(where: { $0.id == userId })
-        let resolved = resolvedPayrollRate(user: user, operative: nil, on: date)
-        return resolved.reportRateValue() ?? fallback
-    }
-
-    private func overlappingDays(for booking: HolidayBooking, calendar: Calendar) -> Double {
-        let rangeStart = calendar.startOfDay(for: startDate)
-        let rangeEnd = calendar.startOfDay(for: endDate)
-        let start = max(calendar.startOfDay(for: booking.startDate), rangeStart)
-        let end = min(calendar.startOfDay(for: booking.endDate), rangeEnd)
-        guard start <= end else { return 0 }
-        let days = (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
-        return Double(days)
-    }
-
-    private func bookingDayValue(from booking: Booking) -> Double {
-        booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
-    }
-
-    /// Subcontractor day units from the rulebook (`subcontractorDayValue`).
-    private func subcontractorDayValue(from timeSlot: TimeSlot) -> Double {
-        CanonicalBusinessEngine.subcontractorDayValue(timeSlot.rawValue) ?? 0
-    }
-
-    private func managerDayValue(from booking: ManagerSiteBooking) -> Double {
-        booking.reportDayValue(policy: firebaseBackend.payrollPolicy(for: booking.date))
-    }
-
-    private func linkedAppUser(for operative: Operative) -> AppUser? {
-        StaffEmailIdentity.preferredUser(sharing: operative.email, in: userStore.organizationUsers)
-    }
-
-    /// The person on a labour booking, from the rulebook's `resolveBookingPerson` (web's `findUserAndOperative` asks
-    /// the same function). A booking under a uid or a former invite id with no catalogue row stays on the report.
-    private func reportPerson(for booking: Booking, people: LabourBookingPeople) -> (operative: Operative?, user: AppUser?, name: String) {
-        let person = people.person(for: booking.operativeId)
-        let user = person.operative.flatMap(linkedAppUser(for:))
-            ?? person.user.map { StaffEmailIdentity.preferredUser(sharing: $0.email, in: userStore.organizationUsers) ?? $0 }
-        let name: String
-        if let full = user?.fullName.trimmingCharacters(in: .whitespacesAndNewlines), !full.isEmpty {
-            name = full
-        } else if let catalogue = person.operative?.name.trimmingCharacters(in: .whitespacesAndNewlines), !catalogue.isEmpty {
-            name = catalogue
-        } else if let email = user?.email.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
-            name = email
-        } else {
-            name = unknownLabourPersonName
-        }
-        return (person.operative, user, name)
-    }
-
-    private func isPaye(_ user: AppUser?, on day: Date) -> Bool {
-        user?.employmentType(on: day) == .paye
-    }
-
-    /// RULEBOOK 1.29.0 §7 `weeklyReportPayeDay`: the person is PAYE on that day, so the day leaves the hours, pay and
-    /// additional-schedule rows (it is in the PAYE overtime section instead).
-    private func payeReportDay(_ user: AppUser?, on day: Date) -> Bool {
-        guard let user else { return false }
-        return CanonicalBusinessEngine.weeklyReportPayeDay(
-            employment: user.overtimeEmploymentPayload,
-            dayKey: OrganizationRulebookContext.dayKey(day)
-        )
+    /// RULEBOOK 1.51.0 §7 (Q4c) `subcontractorDayValue(timeSlot, { hours, standardDayHours })`: custom hours are the hours
+    /// worked (`payrollHoursResult` under that day's working hours) ÷ that day's paid day (`weekdayPaidHours`).
+    private func subcontractorDayValue(_ booking: SubcontractorBooking) -> Double {
+        let policy = firebaseBackend.payrollPolicy(for: booking.date)
+        let hours = CanonicalBusinessEngine.payrollHoursResult(RulebookPayrollHoursInput(
+            booking: CanonicalPayrollBooking(
+                timeSlot: booking.timeSlot.rawValue,
+                workStartTime: booking.workStartTime,
+                workEndTime: booking.workEndTime,
+                isBreakRemoved: booking.isBreakRemoved,
+                otMultiplierOverride: nil
+            ),
+            dayKey: OrganizationRulebookContext.dayKey(booking.date),
+            policy: policy
+        ))
+        return CanonicalBusinessEngine.subcontractorDayValue(
+            booking.timeSlot.rawValue,
+            workedHours: hours?.workedHours,
+            standardDayHours: CanonicalBusinessEngine.weekdayPaidHours(policy)
+        ) ?? 0
     }
 
     /// RULEBOOK 1.29.0 §7 `weeklyReportPayeOvertime`: one row per PAYE person per job with their overtime hours in the
@@ -1627,100 +1316,6 @@ struct WeeklyReportView: View {
         )
     }
 
-    /// Pay cells and the person total from the rulebook (`reportPayCell`, `reportPersonPayCell`):
-    /// a PAYE line shows PAYE, no figure, and adds nothing to the totals.
-    private func settledSummary(name: String, role: String, lines: [PayrollRateLine], subject: AppUser?) -> PayrollPersonSummary {
-        var settled: [PayrollRateLine] = []
-        for line in lines {
-            var copy = line
-            if let cell = CanonicalBusinessEngine.reportPayCell(CanonicalReportPayLine(isPaye: line.isPaye, pay: line.pay)) {
-                copy.pay = cell.pay
-                copy.payLabel = cell.label
-            }
-            settled.append(copy)
-        }
-        let inputs = settled.map { CanonicalReportPayLine(isPaye: $0.isPaye, pay: $0.pay) }
-        let personCell = CanonicalBusinessEngine.reportPersonPayCell(inputs)
-        return PayrollPersonSummary(
-            name: name,
-            role: role,
-            lines: settled,
-            totalPay: personCell?.pay ?? 0,
-            totalLabel: personCell?.label,
-            subject: subject
-        )
-    }
-
-    /// RULEBOOK 1.32.0 §7, §8 `reportPayForViewer` (owner decisions 5 Nov): the pay summary as this viewer may see it.
-    /// A person whose pay the viewer may not see (`canViewPersonPay`, default context — the weekly report is not a
-    /// timesheet review) keeps their hours with the rate and pay cells `PAY_HIDDEN_CELL_LABEL`; the grand total covers
-    /// the people shown only; `hiddenNote` is `PAY_HIDDEN_NOTE` when anyone was hidden. A row with no known person is
-    /// visible to admins only. Swift sends the rows and reads the cells back; nothing is decided here.
-    private func payrollSummaryForViewer() throws -> (summaries: [PayrollPersonSummary], grandTotal: Double, hiddenNote: String?) {
-        let summaries = try payrollPersonSummaries()
-        let rows: [[String: Any]] = summaries.enumerated().map { index, person in
-            var row: [String: Any] = [
-                "summaryIndex": index,
-                "lines": person.lines.map { line -> [String: Any] in
-                    [
-                        "rate": line.rate ?? 0,
-                        "pay": RulebookJSON.orNull(line.pay),
-                        "payLabel": RulebookJSON.orNull(line.payLabel),
-                        "isPaye": line.isPaye,
-                    ]
-                },
-                "personTotal": person.totalPay,
-                "personTotalLabel": RulebookJSON.orNull(person.totalLabel),
-            ]
-            if let subject = person.subject { row["paySubject"] = subject.payAccessSubject }
-            return row
-        }
-        guard let shown = CanonicalBusinessEngine.reportPayForViewer(
-            rows: rows,
-            viewer: userStore.payViewerRow,
-            roster: userStore.organizationUsers.map(\.payAccessSubject)
-        ) else {
-            // The script did not answer: no pay figure is shown (§8 — pay stays hidden).
-            let hidden = summaries.map { person in
-                PayrollPersonSummary(
-                    name: person.name,
-                    role: person.role,
-                    lines: person.lines.map { line in
-                        var copy = line
-                        copy.rateText = ""
-                        copy.pay = nil
-                        copy.payLabel = ""
-                        return copy
-                    },
-                    totalPay: 0,
-                    totalLabel: "",
-                    subject: person.subject
-                )
-            }
-            return (hidden, 0, nil)
-        }
-        var out: [PayrollPersonSummary] = []
-        for row in shown.rows {
-            guard let index = (row["summaryIndex"] as? NSNumber)?.intValue, summaries.indices.contains(index) else { continue }
-            let person = summaries[index]
-            let cells = row["lines"] as? [[String: Any]] ?? []
-            var lines = person.lines
-            for (lineIndex, cell) in cells.enumerated() where lines.indices.contains(lineIndex) {
-                lines[lineIndex].rateText = cell["rateText"] as? String
-                lines[lineIndex].payLabel = cell["payLabel"] as? String
-                lines[lineIndex].pay = (cell["pay"] as? NSNumber)?.doubleValue
-            }
-            out.append(PayrollPersonSummary(
-                name: person.name,
-                role: person.role,
-                lines: lines,
-                totalPay: (row["personTotal"] as? NSNumber)?.doubleValue ?? 0,
-                totalLabel: row["personTotalLabel"] as? String,
-                subject: person.subject
-            ))
-        }
-        return (out, shown.grandTotal, shown.hiddenPeople > 0 ? CanonicalBusinessEngine.payHiddenNote : nil)
-    }
 
     /// RULEBOOK 1.32.0 §7: a PAYE overtime row's hours cell — `multiplierText` ("2h at ×1.5 = 3h"), and on a row whose
     /// bookings carry their own rate (`changedFromOrganization`) `OVERTIME_RATE_CHANGED_MARK` with the organisation's
@@ -1730,15 +1325,6 @@ struct WeeklyReportView: View {
         return "\(row.multiplierText) (\(mark), ×\(ScheduleCoverageFormat.hours(row.organizationMultiplier)))"
     }
 
-    private func reportingUser(for userId: String) -> AppUser? {
-        // A manager booking saved under an invite id the account later replaced (`formerIdAliases`) names that account.
-        let users = userStore.organizationUsers
-        let currentId = users.contains(where: { $0.id == userId }) ? userId : (CanonicalBusinessEngine.formerIdAliases(
-            users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
-        )?[userId] ?? userId)
-        guard let user = users.first(where: { $0.id == currentId }) else { return nil }
-        return StaffEmailIdentity.preferredUser(sharing: user.email, in: userStore.organizationUsers) ?? user
-    }
 
     private func reportRoleLabel(for user: AppUser?, fallback: String) -> String {
         guard let user else { return fallback }
@@ -1746,30 +1332,6 @@ struct WeeklyReportView: View {
         return adminLike ? "Admin User" : fallback
     }
 
-    private func consolidateProjectRows(_ rows: [ProjectWorkRow]) -> [ProjectWorkRow] {
-        var map: [String: ProjectWorkRow] = [:]
-        for row in rows {
-            let key = "\(row.projectName)|\(row.jobNumber)|\(row.personName)|\(row.role)"
-            if var existing = map[key] {
-                existing.days += row.days
-                if existing.tradeDisplay == "—", row.tradeDisplay != "—" {
-                    existing = ProjectWorkRow(
-                        projectName: existing.projectName,
-                        jobNumber: existing.jobNumber,
-                        personName: existing.personName,
-                        tradeDisplay: row.tradeDisplay,
-                        tradeSortKey: row.tradeSortKey,
-                        role: existing.role,
-                        days: existing.days
-                    )
-                }
-                map[key] = existing
-            } else {
-                map[key] = row
-            }
-        }
-        return Array(map.values)
-    }
 
     /// RULEBOOK 1.46.0: a booking the rulebook could not price (`bookingPaySlices` did not answer) stops the report with
     /// `TimesheetPayrollSummary.calculationFailedMessage` — pay is never understated by leaving a booking out.
@@ -1777,131 +1339,6 @@ struct WeeklyReportView: View {
         var errorDescription: String? { TimesheetPayrollSummary.calculationFailedMessage }
     }
 
-    private func payrollPersonSummaries() throws -> [PayrollPersonSummary] {
-        let cal = CanonicalBusinessEngine.businessCalendar
-        var booked: [WeeklyReportPayRows.Booked] = []
-        let operativeBookings = bookingStore.bookings.filter {
-            let day = cal.startOfDay(for: $0.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && $0.occupiesDay
-        }
-        let people = LabourBookingPeople(operatives: operativeStore.allOperatives, users: userStore.bookingNameUsers)
-        for booking in operativeBookings {
-            let person = reportPerson(for: booking, people: people)
-            let linkedUser = person.user
-            if timesheetFeed.covers(userId: linkedUser?.id, day: booking.date) { continue }
-            if payeReportDay(linkedUser, on: booking.date) { continue }
-            let policy = firebaseBackend.payrollPolicy(for: booking.date)
-            let role = reportRoleLabel(for: linkedUser, fallback: "Operative")
-            let name = person.name
-            let resolved = resolvedPayrollRate(
-                user: linkedUser,
-                operative: StaffEmailIdentity.operativeUsedForPay(user: linkedUser, operative: person.operative),
-                on: booking.date
-            )
-            booked.append(WeeklyReportPayRows.Booked(
-                probe: booking, day: booking.date, policy: policy, name: name, role: role, resolved: resolved,
-                paye: isPaye(linkedUser, on: booking.date), subject: linkedUser
-            ))
-        }
-
-        let managerBookings = managerScheduleStore.managerSiteBookings.filter {
-            let day = cal.startOfDay(for: $0.date)
-            return day >= reportStartDay
-                && day <= reportEndDay
-                && appSettings.settings.myScheduleOptions.includesManagerScheduleLocation($0)
-        }
-        for booking in managerBookings {
-            guard let manager = reportingUser(for: booking.userId) else { continue }
-            if timesheetFeed.covers(userId: manager.id, day: booking.date)
-                || timesheetFeed.covers(userId: booking.userId, day: booking.date) { continue }
-            if payeReportDay(manager, on: booking.date) { continue }
-            let policy = firebaseBackend.payrollPolicy(for: booking.date)
-            let role = reportRoleLabel(for: manager, fallback: "Manager")
-            let name = manager.fullName.isEmpty ? manager.email : manager.fullName
-            let linkedOperative = operativeStore.allOperatives.first {
-                StaffEmailIdentity.emailKey($0.email) == StaffEmailIdentity.emailKey(manager.email)
-            }
-            let resolved = resolvedPayrollRate(
-                user: manager,
-                operative: StaffEmailIdentity.operativeUsedForPay(user: manager, operative: linkedOperative),
-                on: booking.date
-            )
-            booked.append(WeeklyReportPayRows.Booked(
-                probe: booking.operativePayrollProbe(), day: booking.date, policy: policy, name: name, role: role,
-                resolved: resolved, paye: isPaye(manager, on: booking.date), subject: manager
-            ))
-        }
-
-        let summaries = try WeeklyReportPayRows.summaries(booked)
-        return mergeTimesheetPay(into: summaries).sorted {
-            if $0.name == $1.name { return $0.role < $1.role }
-            return $0.name < $1.name
-        }
-    }
-
-    private func mergeTimesheetProjectRows(into rowsMap: inout [String: ProjectWorkRow], totals: inout [String: Double]) {
-        let projectKinds: Set<String> = [
-            ManagerLocationType.project.rawValue,
-            ManagerLocationType.smallWork.rawValue
-        ]
-        for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
-            guard !line.isOvertime else { continue }
-            guard projectKinds.contains(line.locationKind) else { continue }
-            guard line.days > 0.0001 else { continue }
-            if payeReportDay(userStore.organizationUsers.first { $0.id == week.userId }, on: line.date) { continue }
-            let projectName = line.projectName.isEmpty ? "Unknown" : line.projectName
-            let jobNumber = line.jobNumber.isEmpty ? "N/A" : line.jobNumber
-            let key = "\(projectName)|\(jobNumber)|\(week.personName)|\(week.role)"
-            totals[key, default: 0] += line.days
-            if var existing = rowsMap[key] {
-                existing.days = totals[key] ?? existing.days
-                rowsMap[key] = existing
-            } else {
-                rowsMap[key] = ProjectWorkRow(
-                    projectName: projectName,
-                    jobNumber: jobNumber,
-                    personName: week.personName,
-                    tradeDisplay: week.tradeDisplay,
-                    tradeSortKey: week.tradeSortKey,
-                    role: week.role,
-                    days: totals[key] ?? line.days
-                )
-            }
-        }
-    }
-
-    private func timesheetAdditionalScheduleRows() -> [ManagerAdditionalScheduleRow] {
-        let additionalKinds: Set<String> = [
-            ManagerLocationType.office.rawValue,
-            ManagerLocationType.workingFromHome.rawValue,
-            ManagerLocationType.siteSurvey.rawValue,
-            ManagerLocationType.custom.rawValue
-        ]
-        return timesheetFeed.labourLines(in: reportDateRange).compactMap { week, line in
-            guard !line.isOvertime else { return nil }
-            guard additionalKinds.contains(line.locationKind) else { return nil }
-            guard line.days > 0.0001 else { return nil }
-            if payeReportDay(userStore.organizationUsers.first { $0.id == week.userId }, on: line.date) { return nil }
-            let location: String
-            if line.locationKind == ManagerLocationType.custom.rawValue {
-                let name = line.projectName.trimmingCharacters(in: .whitespacesAndNewlines)
-                location = name.isEmpty || name == "—" ? "Custom" : name
-            } else if let kind = ManagerLocationType(rawValue: line.locationKind) {
-                location = kind.displayName
-            } else {
-                location = line.projectName
-            }
-            return ManagerAdditionalScheduleRow(
-                personName: week.personName,
-                role: week.role,
-                location: location,
-                timeSlotLabel: line.details.isEmpty ? "Timesheet" : line.details,
-                days: line.days
-            )
-        }
-    }
 
     private func timesheetMoneyRows(
         _ keyPath: KeyPath<TimesheetWeeklyReportOverride, [TimesheetWeeklyReportMoneyLine]>
@@ -1924,96 +1361,32 @@ struct WeeklyReportView: View {
         }
     }
 
-    private func mergeTimesheetPay(into summaries: [PayrollPersonSummary]) -> [PayrollPersonSummary] {
-        struct Acc {
-            var name: String
-            var role: String
-            var lines: [PayrollRateLine]
-            var totalPay: Double
-            var subject: AppUser?
-        }
-        var map: [String: Acc] = [:]
-        for summary in summaries {
-            map["\(summary.name)|\(summary.role)"] = Acc(
-                name: summary.name,
-                role: summary.role,
-                lines: summary.lines,
-                totalPay: summary.totalPay,
-                subject: summary.subject
-            )
-        }
-        func add(name: String, role: String, line: PayrollRateLine, userId: String) {
-            let key = "\(name)|\(role)"
-            var acc = map[key] ?? Acc(name: name, role: role, lines: [], totalPay: 0, subject: nil)
-            acc.lines.append(line)
-            acc.totalPay += line.pay ?? 0
-            acc.subject = acc.subject ?? userStore.organizationUsers.first { $0.id == userId }
-            map[key] = acc
-        }
-        for (week, line) in timesheetFeed.labourLines(in: reportDateRange) {
-            let weekUser = userStore.organizationUsers.first { $0.id == week.userId }
-            // RULEBOOK 1.29.0 §7: PAYE days leave the pay rows (they are in the PAYE overtime section).
-            if payeReportDay(weekUser, on: line.date) { continue }
-            let paye = isPaye(weekUser, on: line.date)
-            guard line.amount > 0.0001 || (paye && line.days > 0.0001) else { continue }
-            let rate = !paye && line.days > 0.0001 ? line.amount / line.days : nil
-            add(
-                name: week.personName,
-                role: week.role,
-                line: PayrollRateLine(
-                    rateTypeLabel: line.isOvertime ? "Timesheet OT" : "Timesheet",
-                    days: line.days,
-                    rate: rate,
-                    pay: paye ? 0 : line.amount,
-                    isPaye: paye,
-                    // RULEBOOK 1.20.4: a signed OT line keeps its stored text (`parseMultipliedHoursText`).
-                    hoursText: line.isOvertime
-                        ? CanonicalBusinessEngine.parseMultipliedHoursText(line.details).flatMap { parsed in
-                            parsed.breakHours > 0
-                                ? CanonicalBusinessEngine.multipliedHoursText(
-                                    clockHours: parsed.clockHours, multiplier: parsed.multiplier, breakHours: parsed.breakHours
-                                )
-                                : nil
-                        }
-                        : nil
-                ),
-                userId: week.userId
-            )
-        }
-        for (week, line) in timesheetFeed.moneyLines(\.priceWork, in: reportDateRange) {
-            add(
-                name: week.personName,
-                role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Price work", days: 0, rate: nil, pay: line.amount),
-                userId: week.userId
-            )
-        }
-        for (week, line) in timesheetFeed.moneyLines(\.expenses, in: reportDateRange) {
-            add(
-                name: week.personName,
-                role: week.role,
-                line: PayrollRateLine(rateTypeLabel: "Expenses", days: 0, rate: nil, pay: line.amount),
-                userId: week.userId
-            )
-        }
-        return map.values.map { settledSummary(name: $0.name, role: $0.role, lines: $0.lines, subject: $0.subject) }
-    }
 
     private func formatDate(_ date: Date) -> String {
         date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))
     }
 
-    private func formatDays(_ value: Double) -> String {
-        WeeklyReportPayRows.formatDays(value)
+    /// Paid days on the report: two decimals (`WeeklyReportPayRow.days` is already rounded by the rule).
+    nonisolated static func reportDaysText(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
+
+    /// Paid hours on the report ("12.5h").
+    nonisolated static func reportHoursText(_ value: Double) -> String {
+        // As web (`${round2(hours)}h`): two decimals at most, trailing zeros dropped.
+        let hundredths = (value * 100).rounded()
+        if hundredths.truncatingRemainder(dividingBy: 100) == 0 { return String(format: "%.0fh", hundredths / 100) }
+        if hundredths.truncatingRemainder(dividingBy: 10) == 0 { return String(format: "%.1fh", hundredths / 100) }
+        return String(format: "%.2fh", hundredths / 100)
+    }
+
+    private func daysText(_ value: Double) -> String { Self.reportDaysText(value) }
+
+    private func hoursText(_ value: Double) -> String { Self.reportHoursText(value) }
 
     private func formatCurrency(_ value: Double?) -> String {
         guard let value else { return "" }
         return OrgMoney.format(value)
-    }
-
-    private func csvEscape(_ input: String) -> String {
-        ExportTextEscaping.csvField(input)
     }
 
     private func clashTypeLabel(_ type: Warning.WarningType) -> String {
@@ -2034,9 +1407,27 @@ struct WeeklyReportView: View {
             warning.clashPersonKind?.bookingClashTitle ?? clashTypeLabel(warning.type),
             warning.occurrenceDate.map(formatDate) ?? "",
             warning.title,
-            warning.message,
+            clashDetail(warning),
             warning.affectedPersonNames,
         ]
+    }
+
+    /// RULEBOOK 1.51.0 §7 (Q4d): a clash row's Detail is `weeklyReportClashDetail` — the day and each place with its
+    /// times, facts only; never the Warnings screen's message ("Approve if it's intentional…"). Other warnings keep
+    /// their message.
+    private func clashDetail(_ warning: Warning) -> String {
+        let entries = warning.clashEntries
+        guard !entries.isEmpty else { return warning.message }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        formatter.dateFormat = "d MMM yyyy"
+        let dayText = (warning.clashDate ?? warning.occurrenceDate).map { formatter.string(from: $0) } ?? ""
+        let places = entries.map { entry -> (label: String, time: String) in
+            let site = entry.siteName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return (site.isEmpty ? entry.locationLabel : site, entry.timeLabel)
+        }
+        return CanonicalBusinessEngine.weeklyReportClashDetail(dayText: dayText, places: places) ?? warning.message
     }
 }
 
@@ -2056,19 +1447,7 @@ private struct ProjectWorkRow {
     let tradeDisplay: String
     let tradeSortKey: String
     let role: String
-    var days: Double
-}
-
-private struct AnnualLeaveRow {
-    let personName: String
-    let role: String
-    var days: Double
-}
-
-private struct LabourRateSummary {
-    let name: String
-    let role: String
-    let rate: Double?
+    var hours: Double
     var days: Double
 }
 
@@ -2079,214 +1458,6 @@ private struct SubcontractorWorkRow {
     let subcontractorType: String
     let timeSlotLabel: String
     let days: Double
-}
-
-private struct ManagerAdditionalScheduleRow {
-    let personName: String
-    let role: String
-    let location: String
-    let timeSlotLabel: String
-    let days: Double
-}
-
-/// RULEBOOK 1.46.0 / 1.49.0 §7: the weekly report's pay rows — each booking priced on its own (`bookingPaySlices`) and
-/// added to its row (`mergeBookingPaySlice`), rows keyed by person, role, basis and rate, multiplier, the slice's own
-/// divisor and PAYE. The screen passes its bookings; the tests drive the same code (review of #234 item 1).
-enum WeeklyReportPayRows {
-    typealias PayCalculationError = WeeklyReportView.PayCalculationError
-
-    /// One booking to price, as the screen chose it (person, role, rate and PAYE on its day).
-    struct Booked {
-        var probe: Booking
-        var day: Date
-        var policy: OrgPayrollTimePolicy
-        var name: String
-        var role: String
-        var resolved: ResolvedPayrollRate
-        var paye: Bool
-        var subject: AppUser?
-    }
-
-    /// The Days cell's number (screen, PDF, XLSX, HTML).
-    static func formatDays(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    static func summaries(_ booked: [Booked]) throws -> [PayrollPersonSummary] {
-        struct Acc {
-            var name: String
-            var role: String
-            var resolved: ResolvedPayrollRate
-            /// RULEBOOK 1.46.0 §7 (`bookingPaySlices` + `mergeBookingPaySlice`): the row's standard and overtime parts,
-            /// each the sum of every booking's own rounded pay (never re-priced from the summed hours), with the
-            /// overtime clock hours and break for display (`payrollMultipliedHours`).
-            var normal: RulebookBookingPaySlice? = nil
-            var overtime: RulebookBookingPaySlice? = nil
-            var otMultiplier: Double
-            var standardDayHours: Double
-            var isPaye: Bool = false
-            /// RULEBOOK 1.32.0 §8: the person whose pay this row is (`reportPayForViewer` `paySubject`).
-            var subject: AppUser? = nil
-        }
-        var byKey: [String: Acc] = [:]
-        var pricingFailed = false
-
-        /// One booking priced on its own (`bookingPaySlices`) and added to its row (`mergeBookingPaySlice`). Rows keep
-        /// today's keys (person, role, basis and rate, multiplier, standard day, PAYE).
-        func addBooking(probe: Booking, day: Date, policy: OrgPayrollTimePolicy, name: String, role: String, resolved: ResolvedPayrollRate, paye: Bool, subject: AppUser?) {
-            // The paid day a day rate divides by (`orgDayHours` of that day's `weekdayPaidHours`), as web.
-            guard let standardDayHours = CanonicalBusinessEngine.orgDayHours(CanonicalBusinessEngine.weekdayPaidHours(policy)) else {
-                pricingFailed = true
-                return
-            }
-            guard let slices = CanonicalBusinessEngine.bookingPaySlices(
-                hoursInput: PayrollHoursEngine.canonicalInput(booking: probe, day: day, policy: policy),
-                standardDayHours: standardDayHours,
-                payBasis: resolved.basis == .hourly ? "hourly" : "day",
-                dayRate: resolved.dayRate,
-                hourlyRate: resolved.hourlyRate,
-                isPaye: paye
-            ) else {
-                pricingFailed = true
-                return
-            }
-            let otMultiplier = slices.first(where: \.isOvertime)?.otMultiplier
-                ?? PayrollHoursEngine.canonicalResult(booking: probe, day: day, policy: policy)?.outsideMultiplier
-                ?? 1
-            let rateKey = resolved.basis == .hourly
-                ? "hr-\(resolved.hourlyRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-                : "day-\(resolved.dayRate.map { String(format: "%.4f", $0) } ?? "no-rate")"
-            for slice in slices {
-                // RULEBOOK 1.19.0 §7: days under different working hours (standard day, overtime rate) are separate rows.
-                // 1.49.0 §7/§8: each slice's own divisor (`bookingPaySlices` `standardDayHours`, `payrollDayRateHours`) is in
-                // the key, so a set-window weekend day on its counts-as is its own row ("2.00 days at £240/day").
-                let divisor = slice.standardDayHours
-                let key = "\(name)|\(role)|\(rateKey)|\(String(format: "%.3f", otMultiplier))|\(String(format: "%.3f", divisor))|\(paye ? "paye" : "")"
-                var acc = byKey[key] ?? Acc(name: name, role: role, resolved: resolved, otMultiplier: otMultiplier, standardDayHours: divisor, isPaye: paye)
-                acc.subject = acc.subject ?? subject
-                let held = slice.isOvertime ? acc.overtime : acc.normal
-                let merged: RulebookBookingPaySlice
-                if let held {
-                    guard let sum = CanonicalBusinessEngine.mergeBookingPaySlice(held, slice) else {
-                        pricingFailed = true
-                        return
-                    }
-                    merged = sum
-                } else {
-                    merged = slice
-                }
-                if slice.isOvertime { acc.overtime = merged } else { acc.normal = merged }
-                byKey[key] = acc
-            }
-        }
-
-        for entry in booked {
-            addBooking(
-                probe: entry.probe, day: entry.day, policy: entry.policy, name: entry.name, role: entry.role,
-                resolved: entry.resolved, paye: entry.paye, subject: entry.subject
-            )
-        }
-        if pricingFailed { throw PayCalculationError() }
-
-        let groupedByPerson = Dictionary(grouping: byKey.values) { "\($0.name)|\($0.role)" }
-        var summaries: [PayrollPersonSummary] = []
-        for (_, entries) in groupedByPerson {
-            guard let first = entries.first else { continue }
-            var lines: [PayrollRateLine] = []
-            var total = 0.0
-            for entry in entries.sorted(by: {
-                ($0.resolved.reportRateValue() ?? -1) < ($1.resolved.reportRateValue() ?? -1)
-            }) {
-                if let normal = entry.normal, normal.paidHours > 0.0001 {
-                    let standard = entry.standardDayHours
-                    let days = normal.paidHours / standard
-                    let rateLabel = entry.resolved.basis == .hourly ? "Normal (hourly)" : "Normal"
-                    lines.append(
-                        PayrollRateLine(
-                            rateTypeLabel: rateLabel,
-                            days: days,
-                            rate: entry.isPaye ? nil : entry.resolved.reportRateValue(),
-                            pay: normal.pay,
-                            isPaye: entry.isPaye
-                        )
-                    )
-                    total += normal.pay
-                }
-                if let overtime = entry.overtime, overtime.paidHours > 0.0001 {
-                    let standard = entry.standardDayHours
-                    let otDays = overtime.paidHours / standard
-                    let label = abs(entry.otMultiplier - entry.otMultiplier.rounded()) < 0.001
-                        ? "OT x\(Int(entry.otMultiplier.rounded()))"
-                        : String(format: "OT x%.1f", entry.otMultiplier)
-                    let otLabel = entry.resolved.basis == .hourly ? "\(label) (hourly)" : label
-                    // RULEBOOK 1.20.4: with an unpaid break off the multiplied hours the row shows
-                    // "6.5h × 2 − 0.5h break = 12.5h" (`multipliedHoursText`), never the back-calculated hours.
-                    let breakHours = overtime.breakHours ?? 0
-                    let clockHours = overtime.clockHours ?? 0
-                    let hoursText = breakHours > 0.0001 && clockHours > 0.0001
-                        ? CanonicalBusinessEngine.multipliedHoursText(
-                            clockHours: clockHours, multiplier: entry.otMultiplier, breakHours: breakHours
-                        )
-                        : nil
-                    lines.append(
-                        PayrollRateLine(
-                            rateTypeLabel: otLabel,
-                            days: otDays,
-                            // The rate × multiplier, rounded (`bookingPaySlices` `rate`).
-                            rate: entry.isPaye ? nil : overtime.rate,
-                            pay: overtime.pay,
-                            isPaye: entry.isPaye,
-                            hoursText: hoursText
-                        )
-                    )
-                    total += overtime.pay
-                }
-            }
-            summaries.append(PayrollPersonSummary(
-                name: first.name,
-                role: first.role,
-                lines: lines,
-                totalPay: total,
-                totalLabel: nil,
-                subject: entries.lazy.compactMap(\.subject).first
-            ))
-        }
-        return summaries
-    }
-}
-
-struct PayrollRateLine {
-    let rateTypeLabel: String
-    let days: Double
-    let rate: Double?
-    var pay: Double?
-    /// PAYE on the line's day(s): hours stay, pay is not shown or totalled.
-    var isPaye: Bool = false
-    /// `PAYE` when the cell shows that instead of a figure (`reportPayCell`); `PAY_HIDDEN_CELL_LABEL` when the viewer
-    /// may not see this person's pay (`reportPayForViewer`).
-    var payLabel: String? = nil
-    /// RULEBOOK 1.32.0: `PAY_HIDDEN_CELL_LABEL` in the rate cell when the viewer may not see this person's pay.
-    var rateText: String? = nil
-    /// RULEBOOK 1.20.4: an overtime row's `multipliedHoursText` when an unpaid break came off the multiplied hours.
-    var hoursText: String? = nil
-
-    /// The Days cell on screen, PDF, XLSX and HTML: the day units, with the multiplied hours beside them.
-    func daysCell(_ formatDays: (Double) -> String) -> String {
-        guard let hoursText else { return formatDays(days) }
-        return "\(formatDays(days)) (\(hoursText))"
-    }
-}
-
-struct PayrollPersonSummary {
-    let name: String
-    let role: String
-    let lines: [PayrollRateLine]
-    let totalPay: Double
-    /// `PAYE` when every line is PAYE (`reportPersonPayCell`); `PAY_HIDDEN_CELL_LABEL` when the pay is hidden.
-    var totalLabel: String? = nil
-    /// RULEBOOK 1.32.0 §8: the person whose pay this is (`reportPayForViewer` `paySubject`); nil for a catalogue
-    /// operative with no account (then admins only).
-    var subject: AppUser? = nil
 }
 
 private struct WeeklyReportShareSheet: UIViewControllerRepresentable {

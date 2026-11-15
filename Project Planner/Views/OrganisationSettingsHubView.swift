@@ -110,7 +110,8 @@ struct OrganisationSettingsHubView: View {
                     hubSectionTitle("Defaults for new operatives")
                     hubCard {
                         NavigationLink {
-                            OrganisationWorkingHoursView()
+                            // RULEBOOK 1.51.0 §4.3: the Working hours history is for admins only.
+                            OrganisationWorkingHoursView(showsHistory: userStore.currentUser?.isRosterAdmin == true)
                                 .environmentObject(firebaseBackend)
                         } label: {
                             hubRowLabel(
