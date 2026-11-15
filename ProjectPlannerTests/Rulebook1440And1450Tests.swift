@@ -43,7 +43,7 @@ final class Rulebook1440And1450Tests: XCTestCase {
 
     // MARK: 1.44.0
 
-    func testTheWeekdayPaidDayIsAlwaysDerived() {
+    func testTheWeekdayPaidDayIsAlwaysDerived() throws {
         // The owner example: 07:00–16:00, 30 min unpaid 12:00–12:30 → 8.5h, whatever an older save stored.
         var policy = OrgPayrollTimePolicy.default
         policy.standardDayStart = "07:00"
@@ -54,7 +54,7 @@ final class Rulebook1440And1450Tests: XCTestCase {
         policy.breakWindowEnd = "12:30"
         policy.standardPaidHours = 9
         policy.paidHoursDerived = nil
-        XCTAssertEqual(CanonicalBusinessEngine.weekdayPaidHours(policy), 8.5, accuracy: 0.0001)
+        XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidHours(policy)), 8.5, accuracy: 0.0001)
     }
 
     func testAWeekendDayWithNoCountsAsFallsBackToEightHoursNotThePaidDay() {

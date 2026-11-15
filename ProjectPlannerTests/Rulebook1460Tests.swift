@@ -718,7 +718,7 @@ final class Rulebook1460Tests: XCTestCase {
         )
         let slices = try XCTUnwrap(CanonicalBusinessEngine.bookingPaySlices(
             hoursInput: PayrollHoursEngine.canonicalInput(booking: probe, day: day, policy: ownerPolicy),
-            standardDayHours: CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy),
+            standardDayHours: try XCTUnwrap(CanonicalBusinessEngine.weekdayPaidHours(ownerPolicy)),
             payBasis: "day", dayRate: 250, hourlyRate: nil, isPaye: false
         ))
         XCTAssertEqual(slices.count, 2)

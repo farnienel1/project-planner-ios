@@ -96,7 +96,7 @@ final class Rulebook1270Tests: XCTestCase {
         XCTAssertEqual(variation.removedEvidence, [
             VariationRemovedEvidence(path: "old.pdf", name: "old.pdf", removedBy: "u0", removedAt: Date(timeIntervalSince1970: 5)),
         ])
-        XCTAssertNil(VariationCodec.firestoreMap(from: variation)["removedEvidence"], "only the removal write touches the list")
+        XCTAssertNil(try VariationCodec.firestoreMap(from: variation)["removedEvidence"], "only the removal write touches the list")
     }
 
     func testOnlyAdminsOutsideOperativeModeSeeRemovedEvidence() {

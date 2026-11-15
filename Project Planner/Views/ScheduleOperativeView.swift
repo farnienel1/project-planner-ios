@@ -1756,9 +1756,11 @@ struct ScheduleOperativeView: View {
             )
             // Bookings under any id this person has had clash too (`resolveBookingPerson`, `bookingIdsForAccount`).
             let personIds = labourBookingIds(sameAs: operative.id, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)
+            // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way).
+            let windowKeys = BookingClashWindow.dayKeys(around: date)
             let existingBookings = bookingStore.bookings.filter { booking in
                 personIds.contains(booking.operativeId) &&
-                    OrganizationRulebookContext.calendar.isDate(booking.date, inSameDayAs: date) &&
+                    windowKeys.contains(OrganizationRulebookContext.dayKey(booking.date)) &&
                     booking.occupiesDay
             }
 

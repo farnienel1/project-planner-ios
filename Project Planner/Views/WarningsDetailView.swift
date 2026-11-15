@@ -1450,10 +1450,10 @@ private struct WarningDismissConfirmationSheet: View {
 /// Sheet/item identity for a calendar day without making `Date` globally Identifiable.
 nonisolated private struct IdentifiableDay: Identifiable, Hashable, Sendable {
     let date: Date
-    var id: TimeInterval { Calendar.current.startOfDay(for: date).timeIntervalSince1970 }
+    var id: TimeInterval { OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970 }
 
     nonisolated init(_ date: Date) {
-        self.date = Calendar.current.startOfDay(for: date)
+        self.date = OrganizationRulebookContext.calendar.startOfDay(for: date)
     }
 }
 
@@ -1468,7 +1468,7 @@ private enum WarningsFullScreenCover: Identifiable {
         case .settings:
             return "settings"
         case .bookLabour(let date, _):
-            return "book-\(Calendar.current.startOfDay(for: date).timeIntervalSince1970)"
+            return "book-\(OrganizationRulebookContext.calendar.startOfDay(for: date).timeIntervalSince1970)"
         }
     }
 }

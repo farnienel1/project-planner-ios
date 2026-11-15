@@ -1220,7 +1220,7 @@ struct SiteAuditCreateFlowView: View {
         for item in saved {
             if Task.isCancelled { return }
             guard let urlString = item.imageURL,
-                  let url = URL(string: urlString),
+                  let url = CanonicalBusinessEngine.safeExternalURL(urlString),
                   let (data, _) = try? await URLSession.shared.data(from: url) else { continue }
             let normalized = await Task.detached(priority: .utility) {
                 SiteAuditMediaProcessor.displayImage(from: data)
@@ -1281,6 +1281,13 @@ struct SiteAuditCreateFlowView: View {
         guard !Task.isCancelled,
               let data = try? await entry.loadTransferable(type: Data.self),
               !Task.isCancelled else { return nil }
+        // RULEBOOK 1.50.0 §24 (review of #235): over 40 MB / 50 MP is refused before the photo is decoded; it is
+        // counted with the photos that could not be added.
+        let refusal = await MainActor.run { StorageUploadPolicy.photoPrepareRefusal(data: data) }
+        if let refusal {
+            print("⚠️ [SiteAudit] photo refused: \(refusal)")
+            return nil
+        }
         return await Task.detached(priority: .userInitiated) {
             SiteAuditMediaProcessor.draftImage(from: data, capturedAt: capturedAt)
         }.value
@@ -2190,7 +2197,7 @@ struct SiteAuditDetailView: View {
                 set: { if !$0 { selectedImageURL = nil } }
             )) {
                 NavigationStack {
-                    AsyncImage(url: URL(string: selectedImageURL ?? "")) { image in
+                    AsyncImage(url: CanonicalBusinessEngine.safeExternalURL(selectedImageURL)) { image in
                         image.resizable().scaledToFit()
                     } placeholder: { ProgressView() }
                     .padding()
@@ -2265,7 +2272,7 @@ struct SiteAuditDetailView: View {
                 if !item.comments.isEmpty {
                     Text(item.comments).font(.subheadline)
                 }
-                if let url = item.imageURL, let imageURL = URL(string: url) {
+                if let url = item.imageURL, let imageURL = CanonicalBusinessEngine.safeExternalURL(url) {
                     Button { selectedImageURL = url } label: {
                         AsyncImage(url: imageURL) { phase in
                             switch phase {
@@ -2321,7 +2328,7 @@ struct SiteAuditDetailView: View {
         var drafts: [SiteAuditDraftItem] = []
         for item in displayAudit.items {
             var image: UIImage?
-            if let urlString = item.imageURL, let url = URL(string: urlString),
+            if let urlString = item.imageURL, let url = CanonicalBusinessEngine.safeExternalURL(urlString),
                let (data, _) = try? await URLSession.shared.data(from: url),
                let loaded = UIImage(data: data) {
                 image = await Task.detached(priority: .utility) {
@@ -2359,8 +2366,7 @@ struct SiteAuditDetailView: View {
 
     private func loadLogo() async -> UIImage? {
         guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = URL(string: logoURL),
-              url.scheme?.hasPrefix("http") == true,
+              let url = CanonicalBusinessEngine.safeExternalURL(logoURL),
               let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
         return UIImage(data: data)
     }

@@ -551,13 +551,16 @@ class WarningsService: ObservableObject {
             scanFallbackReason = scanWindow?.fallbackReason
         }
         let dataEnd = max(coverageEnd, max(unbookedEnd, clashEnd))
+        // RULEBOOK 1.53.0 §5: the day before the window too, so an overnight booking ending on its first morning is a
+        // clash there (rows are dated on their group's own day; the unbooked and leave scans keep to the window).
+        let dataStart = cal.date(byAdding: .day, value: -1, to: coverageStart) ?? coverageStart
         let windowedBookings = bookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= dataEnd
+            return day >= dataStart && day <= dataEnd
         }
         let windowedManager = managerSiteBookings.filter {
             let day = cal.startOfDay(for: $0.date)
-            return day >= coverageStart && day <= dataEnd
+            return day >= dataStart && day <= dataEnd
         }
         // The reader's organisation-zone day keys (`parseHolidayDocument`), compared as `YYYY-MM-DD` text.
         let windowStartKey = OrganizationRulebookContext.dayKey(coverageStart)

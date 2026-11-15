@@ -32,7 +32,7 @@ final class RulebookBypassGuardTests: XCTestCase {
     ]
 
     /// Second calculators deleted in the rulebook-bypass sweep. Each has a rulebook function instead.
-    private static let bannedSymbols = #"\b(BookLabourCandidateSelection|LabourDayCoverage|purgeInvalidWeekendBookingsIfNeeded|workingDaysBetween|isAssignedManager|isAssignedOrBookedOnto|notifyBookingClash|hoursInsideStandardClockWindow|segmentHoursForManager|segmentHoursForOperative|holidayUserMatches|consumedDays|OperativeProfileView|paidOvertimeHours)\b"#
+    private static let bannedSymbols = #"\b(BookLabourCandidateSelection|LabourDayCoverage|purgeInvalidWeekendBookingsIfNeeded|workingDaysBetween|isAssignedManager|isAssignedOrBookedOnto|notifyBookingClash|hoursInsideStandardClockWindow|segmentHoursForManager|segmentHoursForOperative|holidayUserMatches|consumedDays|OperativeProfileView|paidOvertimeHours|WeeklyReportPayRows|PayrollPersonSummary|PayrollRateLine)\b"#
 
     /// Files the ratchet does not count, with the reason.
     private static let allowList: [String: String] = [
@@ -83,21 +83,17 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/EditMaterialView.swift": 1,
             "Views/EditProjectView.swift": 1,
             "Views/HolidayView.swift": 2,
-            "Views/HomeUpNextSupport.swift": 1,
             "Views/InvoicingView.swift": 2,
             "Views/ManageUsersView.swift": 2,
             "Views/MaterialsAddWithCatalogueSheet.swift": 1,
             "Views/MaterialsSendListSheet.swift": 1,
             "Views/MaterialsView.swift": 1,
-            "Views/MyScheduleView.swift": 5,
             "Views/OperativeAnnualLeaveViews.swift": 1,
             "Views/OperativeQualificationsEditorView.swift": 4,
-            "Views/OrgSitesMapView.swift": 3,
             "Views/OrganisationSettingsHubView.swift": 1,
             "Views/OrganisationWorkingHoursView.swift": 2,
             "Views/ProjectDetailView.swift": 6,
             "Views/ProjectsView.swift": 1,
-            "Views/WarningsDetailView.swift": 3,
             "Views/WholesalersRevampViews.swift": 1,
             "Views/WorksDashboardCard.swift": 2,
         ],
@@ -141,7 +137,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/ProjectHealthSafetyView.swift": 4,
             "Views/SettingsView.swift": 5,
             "Views/TasksDetailView.swift": 2,
-            "Views/WeeklyReportView.swift": 3,
         ],
         "emailEquality": [
             "Core/NotificationService.swift": 5,
@@ -168,7 +163,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/SiteAuditView.swift": 2,
             "Views/SmallWorksView.swift": 1,
             "Views/TasksDetailView.swift": 1,
-            "Views/WeeklyReportView.swift": 1,
         ],
         "rawLineManagerIds": [
             "Core/DeferredLeaveNotices.swift": 1,

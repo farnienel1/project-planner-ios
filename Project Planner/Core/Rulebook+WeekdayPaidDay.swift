@@ -44,13 +44,14 @@ extension CanonicalBusinessEngine {
 
     /// RULEBOOK 1.20.0 §4.3 `weekdayPaidHours(policy)`: the paid hours of a Monday–Friday full day — what FULL DAY pays,
     /// what a day rate is divided by, the weekly-report day unit, the unbooked day and Home. Derived from start, finish
-    /// and the unpaid break when the policy is `paidHoursDerived`; a policy saved before 1.20.0 keeps its stored
-    /// `standardPaidHours`. Pass the policy in effect on the day. The stored figure only when the script did not run.
-    nonisolated static func weekdayPaidHours(_ policy: OrgPayrollTimePolicy) -> Double {
+    /// and the unpaid break (1.44.0: for every policy). Pass the policy in effect on the day.
+    /// RULEBOOK 1.53.0, review of #235: never the stored `standardPaidHours` (it is not read for pay since 1.44.0) and
+    /// never a made-up figure — nil when the script did not answer, so every caller refuses or shows "unavailable".
+    nonisolated static func weekdayPaidHours(_ policy: OrgPayrollTimePolicy) -> Double? {
         weekdayPaidHoursMemo.value(for: policy) {
             guard let json = payrollPolicyJSON(policy) else { return nil }
             return (callJSON("weekdayPaidHours", arguments: [json]) as? NSNumber)?.doubleValue
-        } ?? policy.standardPaidHours
+        }
     }
 
     /// RULEBOOK 1.44.0 §4.3 `weekendCountsAsHours(null)`: the default for a weekend day with no stored "counts as" hours

@@ -2157,9 +2157,15 @@ struct BookLabourFlowView: View {
         workStart: String? = nil,
         workEnd: String? = nil
     ) -> Bool {
-        let existing = managerScheduleStore.bookings(for: userId, on: date)
+        // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way).
+        let keys = BookingClashWindow.dayKeys(around: date)
+        // The booking's `userId` without case (`normalizeDocumentId`, review of #235).
+        let personKey = userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let existing = managerScheduleStore.managerSiteBookings.filter {
+            $0.userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == personKey
+                && keys.contains(OrganizationRulebookContext.dayKey($0.date))
+        }
         if existing.isEmpty { return false }
-        let policy = payrollTimePolicy
         let probe = ManagerSiteBooking(
             userId: userId,
             date: date,
@@ -2169,7 +2175,11 @@ struct BookLabourFlowView: View {
             workStartTime: workStart,
             workEndTime: workEnd
         )
-        return existing.contains { ManagerScheduleInterval.bookingsOverlap(probe, $0, policy: policy) }
+        return BookingClashWindow.clashes(
+            request: probe.rulebookClashBooking,
+            existing: existing.map(\.rulebookClashBooking),
+            policy: payrollTimePolicy
+        )
     }
 
     private func operativeWouldClash(
@@ -2181,13 +2191,14 @@ struct BookLabourFlowView: View {
         breakRemoved: Bool = false
     ) -> Bool {
         let personIds = samePersonIds(operativeId)
+        // RULEBOOK 1.53.0 §5: the day before, the day and the day after (overnight bookings either way).
+        let keys = BookingClashWindow.dayKeys(around: day)
         let existing = bookingStore.bookings.filter {
             personIds.contains($0.operativeId) &&
-                calendar.isDate($0.date, inSameDayAs: day) &&
+                keys.contains(OrganizationRulebookContext.dayKey($0.date)) &&
                 $0.occupiesDay
         }
         if existing.isEmpty { return false }
-        let policy = payrollTimePolicy
         let probe = Booking(
             operativeId: operativeId,
             projectId: projectId,
@@ -2198,7 +2209,11 @@ struct BookLabourFlowView: View {
             workEndTime: workEnd,
             isBreakRemoved: breakRemoved
         )
-        return existing.contains { OperativeBookingInterval.bookingsOverlap(probe, $0, policy: policy) }
+        return BookingClashWindow.clashes(
+            request: probe.rulebookClashBooking,
+            existing: existing.map(\.rulebookClashBooking),
+            policy: payrollTimePolicy
+        )
     }
 
     // MARK: - Candidate building

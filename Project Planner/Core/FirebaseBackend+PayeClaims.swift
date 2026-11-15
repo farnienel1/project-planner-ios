@@ -211,23 +211,47 @@ extension FirebaseBackend {
         guard let orgId = payeClaimsOrganizationId, let uid = payeClaimsUid else {
             throw PayeClaimRefused(message: "You must be signed in to upload evidence.")
         }
-        let fileExtension = contentType == "application/pdf" ? "pdf" : "jpg"
-        guard let path = CanonicalBusinessEngine.payeClaimEvidencePath(
-            organizationId: orgId,
-            userId: uid,
-            unixMs: StorageUploadPolicy.unixMillisecondsNow(),
-            fileExtension: fileExtension
-        ) else {
-            throw PayeClaimRefused(message: "You must be signed in to upload evidence.")
+        let unixMs = StorageUploadPolicy.unixMillisecondsNow()
+        func evidencePath(_ fileExtension: String) throws -> String {
+            guard let path = CanonicalBusinessEngine.payeClaimEvidencePath(
+                organizationId: orgId,
+                userId: uid,
+                unixMs: unixMs,
+                fileExtension: fileExtension
+            ) else {
+                throw PayeClaimRefused(message: "You must be signed in to upload evidence.")
+            }
+            return path
         }
-        try await putPayeClaimData(data, path: path, contentType: contentType)
-        return PayeClaimEvidence(path: path, name: name, kind: kind, contentType: contentType, auditId: auditId)
+        // RULEBOOK 1.50.0 §24 (review of #235): the type is the one `uploadAllowed` reads from the bytes, never the
+        // type the caller claimed; the object's extension and the stored entry follow it.
+        let detected = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: try evidencePath(Self.payeClaimFileExtension(for: contentType)), data: data, declaredContentType: contentType
+        )
+        let path = try evidencePath(Self.payeClaimFileExtension(for: detected))
+        try await putPayeClaimData(data, path: path, contentType: detected)
+        return PayeClaimEvidence(path: path, name: name, kind: kind, contentType: detected, auditId: auditId)
+    }
+
+    /// The object extension for a detected content type.
+    static func payeClaimFileExtension(for contentType: String) -> String {
+        switch contentType.lowercased() {
+        case "application/pdf": return "pdf"
+        case "image/png": return "png"
+        case "image/heic": return "heic"
+        case "image/heif": return "heif"
+        case "image/webp": return "webp"
+        default: return "jpg"
+        }
     }
 
     private func putPayeClaimData(_ data: Data, path: String, contentType: String) async throws {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = contentType
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(data, metadata: metadata) { metadata, error in
                 if let error {

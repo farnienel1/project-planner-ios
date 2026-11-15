@@ -6820,7 +6820,8 @@ private enum InvoicePDFGenerationSupport {
             history: history,
             relatedUsers: userStore.organizationUsers
         )
-        let total = rows.reduce(0) { $0 + $1.amount }
+        // RULEBOOK 1.53.0: the total in pennies (`roundPennies`).
+        let total = CanonicalBusinessEngine.roundPennies(rows.reduce(0) { $0 + $1.amount })
         let notes = rateChangeNotes(
             for: period,
             currentUser: currentUser,
@@ -6876,9 +6877,13 @@ private enum InvoicePDFGenerationSupport {
             userId: currentUser.id,
             weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
         )
-        // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
-        // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
+        // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows`: the signed snapshot first, else the live lines; PAYE and leave
+        // lines never go on an invoice. 1.53.0 (B12): `decided` once the line manager has signed (their review
+        // decisions apply), `raw` before (the owner's draft at the amounts entered).
+        let extrasMode: TimesheetInvoiceRows.ExtrasMode = draft.managerSignedAt != nil ? .decided : .raw
+        let rows = TimesheetInvoiceRows.rows(
+            for: currentUser, summary: summary, draft: draft, extrasMode: extrasMode, period: period.startDate...period.endDate
+        )
         let sorted = InvoiceLineItem.invoiceLines(rows).sorted {
             if $0.date == $1.date {
                 return $0.projectName < $1.projectName
@@ -6887,7 +6892,7 @@ private enum InvoicePDFGenerationSupport {
         }
         // RULEBOOK 1.45.0 §8: the evidence pages of this invoice's price work and expense rows.
         let evidence = TimesheetInvoiceRows.evidencePages(
-            for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate
+            for: currentUser, summary: summary, draft: draft, extrasMode: extrasMode, period: period.startDate...period.endDate
         )
         return (sorted, evidence)
     }
@@ -7713,7 +7718,8 @@ private enum TimesheetExportHelper {
             scheduleOptions: scheduleOptions,
             relatedUsers: organizationUsers
         )
-        let grandTotal = rows.reduce(0) { $0 + $1.amount }
+        // RULEBOOK 1.53.0: the total in pennies (`roundPennies`).
+        let grandTotal = CanonicalBusinessEngine.roundPennies(rows.reduce(0) { $0 + $1.amount })
         let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
         var notes = signatureNotes(for: draft)
         if let rebuiltNote { notes.insert(rebuiltNote, at: 0) }

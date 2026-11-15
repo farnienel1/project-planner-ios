@@ -186,7 +186,7 @@ struct CompanyDetailsEditView: View {
                                         .foregroundStyle(PPColor.brand)
                                 } else if !logoRemoved,
                                           let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-                                          let url = URL(string: logoURL) {
+                                          let url = CanonicalBusinessEngine.safeExternalURL(logoURL) {
                                     AsyncImage(url: url) { image in
                                         image.resizable().scaledToFit()
                                     } placeholder: {
@@ -334,8 +334,13 @@ struct CompanyDetailsEditView: View {
             .onChange(of: selectedLogoItem) { _, newItem in
                 guard let newItem else { return }
                 Task {
-                    if let data = try? await newItem.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
+                    guard let data = try? await newItem.loadTransferable(type: Data.self) else { return }
+                    // RULEBOOK 1.50.0 §24: a photo over 40 MB / 50 MP is refused before it is decoded.
+                    if let refusal = StorageUploadPolicy.photoPrepareRefusal(data: data) {
+                        await MainActor.run { errorMessage = refusal }
+                        return
+                    }
+                    if let image = UIImage(data: data) {
                         await MainActor.run {
                             selectedLogoImage = resizedLogoImage(image)
                             selectedLogoPDFData = nil

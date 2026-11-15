@@ -97,9 +97,27 @@ struct DailyOverviewView: View {
         }
     }
     
-    private var dayHolidays: [HolidayBooking] {
+    private var dayHolidays: [HolidayBooking] { dayLeave ?? [] }
+
+    /// Review of #235: nil when `dailyOverviewLeaveRows` did not answer — the leave section says so.
+    private var dayLeave: [HolidayBooking]? {
         let scope = overviewScope
-        return holidayStore.approvedBookings(covering: overviewDate).filter { holidayInScope($0, scope: scope) }
+        // RULEBOOK 1.53.0 (A7) `dailyOverviewLeaveRows`: approved records whose leave days include this day (a weekend
+        // or bank holiday inside a multi-day record is not a leave day).
+        let dayKey = OrganizationRulebookContext.dayKey(overviewDate)
+        let candidates = holidayStore.bookings.filter { $0.startDayKey <= dayKey && $0.endDayKey >= dayKey }
+        guard let ids = CanonicalBusinessEngine.dailyOverviewLeaveRecordIds(
+            records: candidates.map {
+                (id: $0.documentId, startDayKey: $0.startDayKey, endDayKey: $0.endDayKey, timeSlot: $0.timeSlot.rawValue, status: $0.status.rawValue)
+            },
+            dayKey: dayKey,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            bankHolidayDayKeys: OrganizationBankHolidays.dayKeys
+        ) else {
+            // Review of #235: no Swift leave filter — the section says the leave could not be worked out.
+            return nil
+        }
+        return candidates.filter { ids.contains($0.documentId) && holidayInScope($0, scope: scope) }
     }
 
     // MARK: Team scope (RULEBOOK 1.33.0 §6)
@@ -194,22 +212,16 @@ struct DailyOverviewView: View {
 
     /// Custom location sections respect General → My schedule custom list and toggles.
     private var filteredCustomBookingsByName: [String: [ManagerSiteBooking]] {
-        dayCustomBookingsByName.filter { _, bookings in
-            bookings.contains { scheduleOptions.includesManagerScheduleLocation($0) }
-        }
+        dayCustomBookingsByName
     }
 
-    private var visibleOfficeBookings: [ManagerSiteBooking] {
-        scheduleOptions.showOffice ? dayOfficeBookings : []
-    }
+    // RULEBOOK 1.53.0 (A10, owner confirmed 15 Nov): a switched-off schedule option only leaves the pickers; its
+    // bookings still count on Daily Overview (rows, hours and counts).
+    private var visibleOfficeBookings: [ManagerSiteBooking] { dayOfficeBookings }
 
-    private var visibleWFHBookings: [ManagerSiteBooking] {
-        scheduleOptions.showWorkingFromHome ? dayWorkingFromHomeBookings : []
-    }
+    private var visibleWFHBookings: [ManagerSiteBooking] { dayWorkingFromHomeBookings }
 
-    private var visibleSiteSurveyBookings: [ManagerSiteBooking] {
-        scheduleOptions.showSiteSurvey ? daySiteSurveyBookings : []
-    }
+    private var visibleSiteSurveyBookings: [ManagerSiteBooking] { daySiteSurveyBookings }
 
     /// Distinct people with a project or small-work booking on this day (operative bookings + manager site bookings).
     private var onSitePeopleCount: Int {
@@ -274,9 +286,7 @@ struct DailyOverviewView: View {
             keys.insert(overviewPersonKey(operativeId: b.operativeId))
         }
         for b in scopedManagerBookings where cal.isDate(b.date, inSameDayAs: overviewDate) {
-            if scheduleOptions.includesManagerScheduleLocation(b) {
-                keys.insert(overviewPersonKey(userId: b.userId))
-            }
+            keys.insert(overviewPersonKey(userId: b.userId))
         }
         for b in scopedSubcontractorBookings where cal.isDate(b.date, inSameDayAs: overviewDate) && b.status.occupiesDay {
             keys.insert("sub:\(b.subcontractorId.uuidString)")
@@ -441,7 +451,7 @@ struct DailyOverviewView: View {
                             .padding(.top, 20)
                     }
 
-                    if !dayHolidays.isEmpty {
+                    if dayLeave == nil || !dayHolidays.isEmpty {
                         annualLeaveRevampBlock
                     }
 
@@ -838,6 +848,12 @@ struct DailyOverviewView: View {
         VStack(alignment: .leading, spacing: 0) {
             revampSectionHeader(title: "Annual leave", trailing: nil)
             VStack(alignment: .leading, spacing: 0) {
+                if dayLeave == nil {
+                    Text("Annual leave for this day could not be worked out. Pull to refresh or try again shortly.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("dailyOverview.leaveUnavailable")
+                }
                 ForEach(Array(dayHolidays.enumerated()), id: \.element.id) { idx, booking in
                     OnHolidayRowView(booking: booking, slotLabel: Self.leaveRowSlotLabel(booking, policy: payrollTimePolicy))
                     if idx < dayHolidays.count - 1 {

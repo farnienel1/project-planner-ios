@@ -4049,6 +4049,12 @@ private struct AddProjectTaskView: View {
     @State private var uploadedImageURLs: [String] = []
     @State private var errorMessage: String?
     @State private var showingError = false
+
+    /// RULEBOOK 1.50.0 §24 (review of #235): a picked photo the rulebook refused is shown, not only logged.
+    private func showPhotoRefusal(_ message: String) {
+        errorMessage = message
+        showingError = true
+    }
     private var managerEmailsLowercased: Set<String> {
         Set(operativeStore.activeManagers.map {
             $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4147,10 +4153,10 @@ private struct AddProjectTaskView: View {
                 handleFileSelection(result)
             }
             .sheet(isPresented: $showingImagePicker) {
-                ImagePicker(images: $selectedImages)
+                ImagePicker(images: $selectedImages, onRefused: showPhotoRefusal)
             }
             .sheet(isPresented: $showingCameraPicker) {
-                TaskCameraImagePicker(images: $selectedImages)
+                TaskCameraImagePicker(images: $selectedImages, onRefused: showPhotoRefusal)
             }
             .sheet(item: $peoplePickRoute) { route in
                 TaskPeoplePickerSheet(
@@ -5275,6 +5281,8 @@ struct TaskCompletionPopupView: View {
     @State private var isUploading = false
     @State private var uploadProgress: Double = 0
     @State private var validationMessage: String?
+    /// RULEBOOK 1.50.0 §24 (review of #235): a picked photo the rulebook refused (over 40 MB / 50 MP).
+    @State private var photoRefusal: String?
     
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
@@ -5390,12 +5398,20 @@ struct TaskCompletionPopupView: View {
                 .overlay(Rectangle().frame(height: 0.5).foregroundStyle(CompleteTaskUXPalette.border), alignment: .top)
             }
             .sheet(isPresented: $showingCameraPicker) {
-                TaskCameraPicker { image in
+                TaskCameraPicker(onCapture: { image in
                     selectedImages.append(TaskCapturedImage(image: image, capturedAt: Date()))
-                }
+                }, onRefused: { photoRefusal = $0 })
             }
             .sheet(isPresented: $showingImagePicker) {
-                CompletionImagePicker(images: $selectedImages)
+                CompletionImagePicker(images: $selectedImages, onRefused: { photoRefusal = $0 })
+            }
+            .alert("Photo not added", isPresented: Binding(
+                get: { photoRefusal != nil },
+                set: { if !$0 { photoRefusal = nil } }
+            )) {
+                Button("OK", role: .cancel) { photoRefusal = nil }
+            } message: {
+                Text(photoRefusal ?? "")
             }
             .fileImporter(
                 isPresented: $showingFilePicker,
@@ -5840,6 +5856,8 @@ struct TaskCompletionPopupView: View {
 
 private struct TaskCameraImagePicker: UIViewControllerRepresentable {
     @Binding var images: [UIImage]
+    /// RULEBOOK 1.50.0 §24 (review of #235): the refusal message, shown by the screen.
+    var onRefused: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
@@ -5865,7 +5883,12 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
 
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
             picker.dismiss(animated: true)
-            if let img = info[.originalImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24: the 40 MB / 50 MP check before the photo is used.
+            let refusal = StorageUploadPolicy.pickerPhotoRefusal(info)
+            if let refusal {
+                DispatchQueue.main.async { self.parent.onRefused(refusal) }
+            }
+            if refusal == nil, let img = info[.originalImage] as? UIImage {
                 DispatchQueue.main.async {
                     self.parent.images.append(img)
                     self.parent.dismiss()
@@ -5890,6 +5913,8 @@ private struct TaskCameraImagePicker: UIViewControllerRepresentable {
 
 private struct ImagePicker: UIViewControllerRepresentable {
     @Binding var images: [UIImage]
+    /// RULEBOOK 1.50.0 §24 (review of #235): the refusal message of a photo over 40 MB / 50 MP, shown by the screen.
+    var onRefused: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -5918,12 +5943,13 @@ private struct ImagePicker: UIViewControllerRepresentable {
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
             
+            // RULEBOOK 1.50.0 §24: refused before decoding (40 MB / 50 MP), decoded downsampled.
             for result in results {
-                result.itemProvider.loadObject(ofClass: UIImage.self) { object, error in
-                    if let image = object as? UIImage {
-                        DispatchQueue.main.async {
-                            self.parent.images.append(image)
-                        }
+                StorageUploadPolicy.loadPreparablePhoto(result.itemProvider) { outcome in
+                    if case .success(let image) = outcome {
+                        self.parent.images.append(image)
+                    } else if case .failure(let error) = outcome {
+                        self.parent.onRefused(error.localizedDescription)
                     }
                 }
             }
@@ -5933,6 +5959,8 @@ private struct ImagePicker: UIViewControllerRepresentable {
 
 private struct CompletionImagePicker: UIViewControllerRepresentable {
     @Binding var images: [TaskCapturedImage]
+    /// RULEBOOK 1.50.0 §24 (review of #235): the refusal message, shown by the screen.
+    var onRefused: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     
     func makeUIViewController(context: Context) -> PHPickerViewController {
@@ -5961,12 +5989,13 @@ private struct CompletionImagePicker: UIViewControllerRepresentable {
         func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
             picker.dismiss(animated: true)
             
+            // RULEBOOK 1.50.0 §24: refused before decoding (40 MB / 50 MP), decoded downsampled.
             for result in results {
-                result.itemProvider.loadObject(ofClass: UIImage.self) { object, _ in
-                    if let image = object as? UIImage {
-                        DispatchQueue.main.async {
-                            self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
-                        }
+                StorageUploadPolicy.loadPreparablePhoto(result.itemProvider) { outcome in
+                    if case .success(let image) = outcome {
+                        self.parent.images.append(TaskCapturedImage(image: image, capturedAt: Date()))
+                    } else if case .failure(let error) = outcome {
+                        self.parent.onRefused(error.localizedDescription)
                     }
                 }
             }
@@ -5982,6 +6011,8 @@ private struct TaskCapturedImage: Identifiable {
 
 private struct TaskCameraPicker: UIViewControllerRepresentable {
     let onCapture: (UIImage) -> Void
+    /// RULEBOOK 1.50.0 §24 (review of #235): the refusal message, shown by the screen.
+    var onRefused: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
     
     func makeUIViewController(context: Context) -> UIImagePickerController {
@@ -6019,7 +6050,10 @@ private struct TaskCameraPicker: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let image = info[.originalImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24: the 40 MB / 50 MP check before the photo is used.
+            if let refusal = StorageUploadPolicy.pickerPhotoRefusal(info) {
+                parent.onRefused(refusal)
+            } else if let image = info[.originalImage] as? UIImage {
                 parent.onCapture(image)
             }
             parent.dismiss()
@@ -6040,7 +6074,8 @@ private struct TaskCompletionFileRow: View {
     
     var body: some View {
         Button(action: {
-            if let url = URL(string: urlString) {
+            // RULEBOOK 1.50.0 §24: a stored link opens only when `safeExternalUrl` allows it (https).
+            if let url = CanonicalBusinessEngine.safeExternalURL(urlString) {
                 UIApplication.shared.open(url)
             }
         }) {
@@ -6096,7 +6131,7 @@ private struct TaskCompletionImageView: View {
             }
         }
         .task(id: urlString) {
-            guard let url = URL(string: urlString), image == nil else { return }
+            guard let url = CanonicalBusinessEngine.safeExternalURL(urlString), image == nil else { return }
             do {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 if let uiImage = UIImage(data: data) {
@@ -6660,7 +6695,7 @@ struct CompletedTaskDetailView: View {
     private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, reportFileName: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
-                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
             } label: {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -6718,7 +6753,7 @@ struct CompletedTaskDetailView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
                         ForEach(Array(displayTask.completionImages.enumerated()), id: \.offset) { _, url in
                             Button {
-                                if let u = URL(string: url) { UIApplication.shared.open(u) }
+                                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
                             } label: {
                                 TaskCompletionImageView(urlString: url)
                                     .frame(height: 90)

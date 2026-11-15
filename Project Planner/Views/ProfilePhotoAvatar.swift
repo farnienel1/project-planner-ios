@@ -74,7 +74,7 @@ struct ProfilePhotoAvatar<Placeholder: View>: View {
             failuresForKey = key
             failures = 0
         }
-        guard !trimmedURL.isEmpty, let url = URL(string: trimmedURL) else {
+        guard !trimmedURL.isEmpty, let url = CanonicalBusinessEngine.safeExternalURL(trimmedURL) else {
             image = nil
             loadedKey = key
             failedKey = nil

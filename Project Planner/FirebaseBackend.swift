@@ -3014,7 +3014,10 @@ class FirebaseBackend: ObservableObject {
         let path = "organizations/\(organizationId)/healthSafety/\(projectId.uuidString)/\(safeCategory)/\(prepared.objectName)"
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = prepared.contentType
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
                 if let error = error {
@@ -3095,7 +3098,10 @@ class FirebaseBackend: ObservableObject {
         
         // Upload image using async/await wrapper
         let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(imageData, metadata: metadata) { metadata, error in
                 if let error = error {
@@ -3132,7 +3138,10 @@ class FirebaseBackend: ObservableObject {
         let imageData = prepared.data
         let storageRef = storage.reference().child(imagePath)
         let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(imageData, metadata: metadata) { metadata, error in
                 if let error = error {
@@ -3173,7 +3182,10 @@ class FirebaseBackend: ObservableObject {
         let imageData = prepared.data
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: imageData, declaredContentType: prepared.contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(imageData, metadata: metadata) { metadata, error in
                 if let error = error {
@@ -3222,7 +3234,10 @@ class FirebaseBackend: ObservableObject {
         let imageData = prepared.data
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = "image/jpeg"
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`); a logo is PNG, never made a JPEG.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: imageData, declaredContentType: prepared.contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(imageData, metadata: metadata) { metadata, error in
                 if let error = error {
@@ -3267,7 +3282,11 @@ class FirebaseBackend: ObservableObject {
         }
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = prepared.contentType
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`); JPEG or PDF until the 1.50.0
+        // Storage rules are published (`StorageUploadPolicy.storageRules150Published`).
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
+        )
         
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
@@ -3303,7 +3322,10 @@ class FirebaseBackend: ObservableObject {
         }
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = "application/pdf"
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: "application/pdf"
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(data, metadata: metadata) { metadata, error in
                 if let error {
@@ -3340,7 +3362,10 @@ class FirebaseBackend: ObservableObject {
     private func putStorageData(_ data: Data, path: String, contentType: String) async throws -> String {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        metadata.contentType = contentType
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: contentType
+        )
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             storageRef.putData(data, metadata: metadata) { metadata, error in
                 if let error {
@@ -10293,9 +10318,12 @@ extension FirebaseBackend {
     /// gets the server copy (nil when the document is missing) and returns the native fields the save would write
     /// (`NSNull` / `FieldValue.delete()` for "no value"). A missing document is created whole; otherwise only the
     /// fields `writeFields` names are written, with `WriteMetadata`. Never a whole-document overwrite.
+    /// `base` (1.52.0): the copy the editor opened. When given and the document exists, the save writes only what
+    /// differs from that copy (never every difference from the server copy).
     func writeOperationsDocument(
         _ ref: DocumentReference,
         writeFields: String,
+        base: [String: Any]? = nil,
         makePayload: ([String: Any]?) throws -> [String: Any]
     ) async throws {
         let uid = auth.currentUser?.uid
@@ -10307,7 +10335,7 @@ extension FirebaseBackend {
             try await ref.setData(WriteMetadata.stamped(createPayload, userId: uid))
             return
         }
-        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: stored, next: payload) else {
+        guard let write = CanonicalBusinessEngine.peopleDocumentWrite(writeFields, before: base ?? stored, next: payload) else {
             throw CanonicalWriteUnavailableError(function: writeFields)
         }
         var changes = write.firestoreFields(from: payload)

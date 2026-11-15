@@ -484,7 +484,8 @@ enum WarningsRefreshHelper {
             return false
         }
         WarningsService.shared.setIncompleteDataMessage(nil)
-        let activeOperatives = operativeStore.allOperatives.filter(\.isActive)
+        // RULEBOOK 1.53.0 (A5): every operative; the rules skip inactive people themselves (`isActive` passed).
+        let activeOperatives = operativeStore.allOperatives
 
         // Honor Organisation Warnings detection horizon (days / working week / invoicing period):
         // `coverageWindow`, the unbooked end and `clashScanDays` with every weekend day of the week

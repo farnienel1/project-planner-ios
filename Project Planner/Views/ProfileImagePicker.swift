@@ -10,6 +10,8 @@ import UIKit
 struct ProfileImagePicker: UIViewControllerRepresentable {
     @Binding var image: UIImage?
     var sourceType: UIImagePickerController.SourceType
+    /// RULEBOOK 1.50.0 §24 (review of #235): the refusal message of a photo over 40 MB / 50 MP, shown by the screen.
+    var onRefused: (String) -> Void = { _ in }
     @Environment(\.dismiss) private var dismiss
 
     func makeCoordinator() -> Coordinator {
@@ -37,7 +39,10 @@ struct ProfileImagePicker: UIViewControllerRepresentable {
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let edited = info[.editedImage] as? UIImage {
+            // RULEBOOK 1.50.0 §24 (review of #235): the 40 MB / 50 MP check on the picked file before the photo is used.
+            if let refusal = StorageUploadPolicy.pickerPhotoRefusal(info) {
+                parent.onRefused(refusal)
+            } else if let edited = info[.editedImage] as? UIImage {
                 parent.image = edited
             } else if let original = info[.originalImage] as? UIImage {
                 parent.image = original

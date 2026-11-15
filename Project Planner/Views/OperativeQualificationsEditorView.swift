@@ -44,8 +44,8 @@ struct OperativeQualificationsEditorView: View {
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
 
-    private static let maxCertificateBytes = 10 * 1024 * 1024
-    private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg]
+    /// RULEBOOK 1.50.0: every photo type and PDF (photos are sent as JPEG until the 1.50.0 Storage rules are published).
+    private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .heif, .webP]
 
     init(
         operative: Operative,
@@ -529,26 +529,37 @@ struct OperativeQualificationsEditorView: View {
             }
         }
 
+        // RULEBOOK 1.50.0 §24: a certificate is a photo (JPEG, PNG, HEIC/HEIF, WebP) or a PDF. The rulebook reads the
+        // name, size and first bytes (`uploadAllowed`); a photo is judged on 40 MB here and redrawn (as a JPEG until
+        // the 1.50.0 Storage rules are published) before its 10 MB cap is checked.
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
-        if let size = attrs[.size] as? Int64, size > maxCertificateBytes {
-            throw NSError(
-                domain: "OperativeQualificationsEditor",
-                code: 413,
-                userInfo: [NSLocalizedDescriptionKey: "File is too large. Please choose a PDF or JPEG smaller than 10MB."]
-            )
+        if let size = attrs[.size] as? Int64,
+           let message = StorageUploadPolicy.refusal(
+               family: .qualificationCertificate,
+               fileExtension: url.pathExtension,
+               contentType: nil,
+               byteCount: Int(size)
+           ) {
+            throw NSError(domain: "OperativeQualificationsEditor", code: 413, userInfo: [NSLocalizedDescriptionKey: message])
         }
 
         let data = try Data(contentsOf: url)
-        guard !data.isEmpty else {
+        let picked = CanonicalBusinessEngine.uploadAllowed(
+            kind: StorageUploadPolicy.uploadKind(for: .qualificationCertificate),
+            fileName: url.lastPathComponent,
+            contentType: nil,
+            sizeBytes: data.isEmpty ? 0 : 1,
+            headBytes: data
+        )
+        guard picked.allowed else {
             throw NSError(
                 domain: "OperativeQualificationsEditor",
-                code: 400,
-                userInfo: [NSLocalizedDescriptionKey: "The selected file was empty."]
+                code: 415,
+                userInfo: [NSLocalizedDescriptionKey: picked.message ?? CanonicalBusinessEngine.uploadNoAnswerMessage]
             )
         }
-
-        let kind = try detectCertificateKind(data: data, pathExtension: url.pathExtension)
-        let fileName = sanitizedFileName(url.lastPathComponent, kind: kind)
+        let pickedExtension = url.pathExtension.lowercased()
+        let fileName = pickedExtension.isEmpty ? "certificate" : "certificate.\(pickedExtension)"
         let tempURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("qual-cert-\(UUID().uuidString)-\(fileName)")
         if FileManager.default.fileExists(atPath: tempURL.path) {
@@ -556,75 +567,6 @@ struct OperativeQualificationsEditorView: View {
         }
         try data.write(to: tempURL, options: .atomic)
         return tempURL
-    }
-
-    private enum CertificateKind {
-        case pdf
-        case jpeg
-
-        var pathExtension: String {
-            switch self {
-            case .pdf: return "pdf"
-            case .jpeg: return "jpg"
-            }
-        }
-
-        var contentType: String {
-            switch self {
-            case .pdf: return "application/pdf"
-            case .jpeg: return "image/jpeg"
-            }
-        }
-    }
-
-    private static func detectCertificateKind(data: Data, pathExtension: String) throws -> CertificateKind {
-        if isPDF(data) { return .pdf }
-        if isJPEG(data) { return .jpeg }
-        let ext = pathExtension.lowercased()
-        if ext == "pdf" {
-            throw NSError(
-                domain: "OperativeQualificationsEditor",
-                code: 415,
-                userInfo: [NSLocalizedDescriptionKey: "That file doesn’t look like a valid PDF."]
-            )
-        }
-        if ext == "jpg" || ext == "jpeg" {
-            throw NSError(
-                domain: "OperativeQualificationsEditor",
-                code: 415,
-                userInfo: [NSLocalizedDescriptionKey: "That file doesn’t look like a valid JPEG."]
-            )
-        }
-        throw NSError(
-            domain: "OperativeQualificationsEditor",
-            code: 415,
-            userInfo: [NSLocalizedDescriptionKey: "Only PDF or JPEG certificates are allowed."]
-        )
-    }
-
-    private static func isPDF(_ data: Data) -> Bool {
-        guard data.count >= 4 else { return false }
-        return data[0] == 0x25 && data[1] == 0x50 && data[2] == 0x44 && data[3] == 0x46
-    }
-
-    private static func isJPEG(_ data: Data) -> Bool {
-        guard data.count >= 3 else { return false }
-        return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF
-    }
-
-    private static func sanitizedFileName(_ raw: String, kind: CertificateKind) -> String {
-        let base = (raw as NSString).deletingPathExtension
-        let cleaned = base
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "/", with: "_")
-        let safe = cleaned.isEmpty ? "certificate" : cleaned
-        return "\(safe).\(kind.pathExtension)"
-    }
-
-    private static func contentType(for fileURL: URL) -> String {
-        let ext = fileURL.pathExtension.lowercased()
-        if ext == "pdf" { return CertificateKind.pdf.contentType }
-        return CertificateKind.jpeg.contentType
     }
 
     @MainActor
@@ -726,14 +668,14 @@ struct OperativeQualificationsEditorView: View {
             do {
                 for (qualificationId, fileURL) in certificateUploadTargets {
                     let data = try Data(contentsOf: fileURL)
-                    let kind = try Self.detectCertificateKind(data: data, pathExtension: fileURL.pathExtension)
+                    // RULEBOOK 1.50.0 §24: no type is assumed here; the bytes decide (`uploadAllowed`).
                     let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
                         data: data,
                         organizationId: organizationId,
                         operativeId: operative.documentId,
                         qualificationId: qualificationId,
-                        fileName: "certificate.\(kind.pathExtension)",
-                        contentType: kind.contentType
+                        fileName: fileURL.lastPathComponent,
+                        contentType: ""
                     )
                     uploaded[qualificationId] = uploadedURL
                 }

@@ -69,7 +69,7 @@ final class Rulebook1490Tests: XCTestCase {
     /// The owner's reference fortnight (2–15 Nov): Mon–Fri at £250/day, the rate changed to £240 from Sat 14 Nov, and a
     /// full Saturday and Sunday window. Driven through the real `TimesheetPayrollCollector`, the invoice rows
     /// (`TimesheetInvoiceRows` → `timesheetInvoiceRows` + `invoiceLines`), the timesheet total (`timesheetTotals`) and the
-    /// weekly report rows (`WeeklyReportPayRows`, the screen's own pricing) — every figure is the app's.
+    /// weekly report rows (`WeeklyReportPayInputs` → `weeklyReportPayRows`, 1.51.0) — every figure is the app's.
     func testTheOwnersReferenceFortnightIs3141Point76OnTheTimesheetTheInvoiceAndTheWeeklyReport() throws {
         let policy = ownerPolicy
         let user = LogicFixtures.selfEmployedUser(id: "TEST-user-149", email: "test-149@example.com", dayRate: 240)
@@ -129,35 +129,44 @@ final class Rulebook1490Tests: XCTestCase {
         XCTAssertFalse(invoice.isEmpty)
         XCTAssertEqual(CanonicalBusinessEngine.roundPennies(invoice.reduce(0) { $0 + $1.amount }), 3141.76, accuracy: 0.001)
 
-        // 4. The weekly report rows, priced as the screen prices them.
-        let operativeIds = PayrollRateResolver.personOperativeIds(user: user, operative: operative, operatives: [operative])
-        let booked = bookings.map { entry in
-            WeeklyReportPayRows.Booked(
-                probe: entry,
-                day: entry.date,
-                policy: policy,
-                name: user.fullName,
-                role: "Operative",
-                resolved: PayrollRateResolver.resolveForTimesheetDay(
-                    user: user,
-                    operative: operative,
-                    on: entry.date,
-                    history: history,
-                    standardDayHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
-                    personOperativeIds: operativeIds
-                ),
-                paye: false,
-                subject: user
-            )
-        }
-        let report = try WeeklyReportPayRows.summaries(booked)
-        XCTAssertEqual(report.count, 1)
-        let person = try XCTUnwrap(report.first)
-        XCTAssertEqual(CanonicalBusinessEngine.roundPennies(person.totalPay), 3141.76, accuracy: 0.001)
-        let weekendRow = try XCTUnwrap(person.lines.first { abs(($0.rate ?? 0) - 240) < 0.001 }, "the £240/day row")
-        XCTAssertEqual(weekendRow.daysCell(WeeklyReportPayRows.formatDays), "2.00", "Saturday and Sunday: 2.00 days")
-        XCTAssertEqual(weekendRow.pay ?? 0, 480, accuracy: 0.001)
-        XCTAssertEqual(weekendRow.rateTypeLabel, "Normal")
+        // 4. The weekly report rows (RULEBOOK 1.51.0 §7): the screen's own input builder (`WeeklyReportPayInputs`) and
+        // `weeklyReportPayRows` — the person sees their own pay.
+        let built = WeeklyReportPayInputs.build(WeeklyReportPayInputs.Sources(
+            users: [user],
+            bookingNameUsers: [user],
+            operatives: [operative],
+            bookings: bookings,
+            managerBookings: [],
+            projects: [],
+            smallWorks: [],
+            history: history,
+            organization: try XCTUnwrap(CanonicalBusinessEngine.memoisedPayrollPolicyJSON(policy)),
+            startDayKey: "2026-11-02",
+            endDayKey: "2026-11-15",
+            viewer: user.payAccessSubject,
+            currency: "GBP",
+            roleLabel: { _ in "Operative" }
+        ))
+        let report = try XCTUnwrap(CanonicalBusinessEngine.weeklyReportPayRows(built.input))
+        XCTAssertEqual(report.people.count, 1)
+        let person = try XCTUnwrap(report.people.first)
+        XCTAssertEqual(person.personTotal, 3141.76, accuracy: 0.001)
+        XCTAssertEqual(report.grandTotal, 3141.76, accuracy: 0.001)
+        XCTAssertEqual(person.lines.count, 5)
+        XCTAssertEqual(person.lines.map(\.line), [
+            "Weekday standard",
+            "Weekday overtime ×1.5 (12h × 1.5 = 18h)",
+            "Weekday overtime ×2 (6.5h × 2 = 13h)",
+            "Saturday 14 Nov window (counts as a full day)",
+            "Sunday 15 Nov window (counts as a full day)",
+        ])
+        let saturday = try XCTUnwrap(person.lines.first { $0.line.hasPrefix("Saturday") })
+        XCTAssertEqual(saturday.days, 1, accuracy: 0.0001, "Saturday: 1.00 day")
+        XCTAssertEqual(saturday.pay, 240, accuracy: 0.001)
+        XCTAssertEqual(saturday.rateText, "£240.00/day")
+        // The Project Breakdown's paid days tie to the Pay Summary's days.
+        let paidDays = report.paidDays.reduce(0) { $0 + $1.days }
+        XCTAssertEqual(paidDays, person.lines.reduce(0) { $0 + $1.days }, accuracy: 0.01)
     }
 
     func testSameAsMondayToFridayPaysOneDayAndHourlyPaysTheWeekdayDay() throws {

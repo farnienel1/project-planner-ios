@@ -258,44 +258,66 @@ final class StaffEmailIdentityTests: XCTestCase {
         XCTAssertEqual(eligible.first?.id, linked.id, "the candidate is their catalogue row")
     }
 
-    func testExcludedAliasDoesNotHideTheOtherAccountOnThatEmail() {
-        let people = WarningsComputation.orderedPeopleForUnbookedScript([
+    /// RULEBOOK 1.53.0 §5 (web #331, hand-off item 4): one person per email with the other same-email ids in
+    /// `formerIds`; the rule matches exclusions under every id the person goes by, so excluding one of a person's
+    /// ids leaves the person out (before 1.53.0 iOS sent each id as its own row and the other account stayed listed).
+    func testExcludedAliasExcludesThePersonOnThatEmail() throws {
+        let people = try XCTUnwrap(WarningsComputation.unbookedPeopleOnePerEmail([
             ["id": "admin-a", "email": "admin@example.com", "name": "Ada", "passwordSet": true, "isActive": true, "isOperativeMode": true],
             ["id": "admin-b", "email": "admin@example.com", "name": "Ada", "passwordSet": true, "isActive": true, "isOperativeMode": true]
-        ], excludedUserIds: ["admin-a"])
-        XCTAssertEqual(people.first?["id"] as? String, "admin-b")
-        let excluded = Set(WarningsComputation.storedExcludedUserIds(["admin-a"]))
-        XCTAssertEqual(excluded, ["admin-a"])
-        let rows = CanonicalBusinessEngine.objectRows(
-            function: "unbookedLabourRows",
-            payload: [
-                "timeZone": "Europe/London",
-                "startDayKey": "2026-10-09",
-                "endDayKey": "2026-10-09",
-                "includeWeekends": false,
-                "excludedUserIds": Array(excluded),
-                "standardDayStart": "07:30",
-                "standardDayEnd": "16:00",
-                "breakWindowStart": "12:00",
-                "breakWindowEnd": "12:30",
-                "standardPaidHours": 8,
-                "people": people,
-                "operatives": [] as [[String: Any]],
-                "bookings": [] as [[String: Any]],
-                "holidays": [] as [[String: Any]]
-            ]
-        )
-        XCTAssertEqual(rows?.count, 1)
-        XCTAssertEqual(rows?.first?["personKey"] as? String, "admin-b")
+        ]))
+        // `rosterPeople` (web `rosterKeeps`): equal on every other field, the smaller id is kept.
+        XCTAssertEqual(people.count, 1)
+        XCTAssertEqual(people.first?["id"] as? String, "admin-a")
+        XCTAssertEqual(people.first?["formerIds"] as? [String], ["admin-b"])
+        func rows(excluded: [String]) -> [[String: Any]]? {
+            CanonicalBusinessEngine.objectRows(
+                function: "unbookedLabourRows",
+                payload: [
+                    "timeZone": "Europe/London",
+                    "startDayKey": "2026-10-09",
+                    "endDayKey": "2026-10-09",
+                    "includeWeekends": false,
+                    "excludedUserIds": excluded,
+                    "standardDayStart": "07:30",
+                    "standardDayEnd": "16:00",
+                    "breakWindowStart": "12:00",
+                    "breakWindowEnd": "12:30",
+                    "standardPaidHours": 8,
+                    "people": people,
+                    "operatives": [] as [[String: Any]],
+                    "bookings": [] as [[String: Any]],
+                    "holidays": [] as [[String: Any]]
+                ]
+            )
+        }
+        XCTAssertEqual(rows(excluded: WarningsComputation.storedExcludedUserIds(["admin-b"]))?.count, 0)
+        XCTAssertEqual(rows(excluded: [])?.first?["personKey"] as? String, "admin-a")
     }
 
-    func testUnbookedScriptUsesTheSameAccountOnEveryPhone() {
-        let people = WarningsComputation.orderedPeopleForUnbookedScript([
+    /// Review of #235: the one-per-email fold is the rulebook's `rosterPeople`, so the kept account is web's
+    /// (`rosterKeeps`: admin first, then signed in, …), not a Swift pick — here the admin document is kept although
+    /// the other one is signed in (the old Swift order kept the signed-in one), so `personKey` and dismissals match web.
+    func testUnbookedScriptKeepsTheSameAccountAsWeb() throws {
+        let people = try XCTUnwrap(WarningsComputation.unbookedPeopleOnePerEmail([
+            ["id": "b-user", "email": "Ada@x.com", "passwordSet": true, "isActive": true, "isOperativeMode": true, "hasName": true],
+            ["id": "a-admin", "email": "ada@x.com", "passwordSet": false, "isActive": true, "isAdmin": true, "hasName": true, "formerIds": ["inv-1"]]
+        ]))
+        XCTAssertEqual(people.count, 1)
+        XCTAssertEqual(people.first?["id"] as? String, "a-admin")
+        XCTAssertEqual(people.first?["formerIds"] as? [String], ["inv-1", "b-user"])
+        XCTAssertNil(people.first?["hasName"])
+        XCTAssertNil(people.first?["sameEmailUserIds"])
+    }
+
+    func testUnbookedScriptUsesTheSameAccountOnEveryPhone() throws {
+        let people = try XCTUnwrap(WarningsComputation.unbookedPeopleOnePerEmail([
             ["id": "rWoccK8LDZVJjBj3UCbqay8bPyf2", "email": "Manager@Example.com", "passwordSet": true, "isActive": true],
             ["id": "463952DE-0375-435D-8AB3-67570C902C56", "email": "manager@example.com", "passwordSet": true, "isActive": true]
-        ])
-        let firstFinished = people.first { ($0["passwordSet"] as? Bool) == true }
-        XCTAssertEqual(firstFinished?["id"] as? String, "463952DE-0375-435D-8AB3-67570C902C56")
+        ]))
+        XCTAssertEqual(people.count, 1)
+        XCTAssertEqual(people.first?["id"] as? String, "463952DE-0375-435D-8AB3-67570C902C56")
+        XCTAssertEqual(people.first?["formerIds"] as? [String], ["rWoccK8LDZVJjBj3UCbqay8bPyf2"])
     }
 
     func testEveningPaidHoursDoNotHideAnUnbookedStandardDay() throws {
@@ -374,41 +396,77 @@ final class StaffEmailIdentityTests: XCTestCase {
         XCTAssertTrue(unbooked[0].message.contains("Ada Lovelace"))
     }
 
-    func testWarningPayloadRepeatsAliasCoverage() {
-        let bookings: [[String: Any]] = [[
-            "personId": "alias",
-            "dayKey": "2026-10-08",
-            "kind": "manager",
-            "timeSlot": "FULL DAY",
-            "workStart": "",
-            "workEnd": ""
-        ]]
-        let holidays: [[String: Any]] = [[
-            "userId": "",
-            "operativeId": "quiet-operative",
-            "startDayKey": "2026-10-08",
-            "endDayKey": "2026-10-08",
-            "approved": true
-        ]]
-        let people: [[String: Any]] = [
-            ["id": "primary", "email": "person@example.com"],
-            ["id": "alias", "email": "person@example.com"]
-        ]
-        let operatives: [[String: Any]] = [
-            ["id": "quiet-operative", "email": "person@example.com"],
-            ["id": "busy-operative", "email": "person@example.com"]
-        ]
-        let shared = WarningsComputation.shareCoverageAcrossEmail(
-            bookings: bookings,
-            holidays: holidays,
-            people: people,
-            operatives: operatives
+    /// RULEBOOK 1.53.0 §5: a manager booking filed under a same-email id covers the person through `formerIds`
+    /// (matched without case); nothing is copied onto other ids any more.
+    func testAliasBookingCoversThePersonThroughFormerIds() throws {
+        let people = try XCTUnwrap(WarningsComputation.unbookedPeopleOnePerEmail([
+            ["id": "primary", "email": "person@example.com", "name": "P", "passwordSet": true, "isActive": true, "isManager": true, "sameEmailUserIds": ["alias"]]
+        ]))
+        XCTAssertEqual(people.first?["formerIds"] as? [String], ["alias"])
+        let rows = CanonicalBusinessEngine.objectRows(
+            function: "unbookedLabourRows",
+            payload: [
+                "timeZone": "Europe/London",
+                "startDayKey": "2026-10-09",
+                "endDayKey": "2026-10-09",
+                "includeWeekends": false,
+                "excludedUserIds": [] as [String],
+                "standardDayStart": "07:30",
+                "standardDayEnd": "16:00",
+                "breakWindowStart": "12:00",
+                "breakWindowEnd": "12:30",
+                "standardPaidHours": 8,
+                "people": people,
+                "operatives": [] as [[String: Any]],
+                "bookings": [[
+                    "personId": "ALIAS", "dayKey": "2026-10-09", "kind": "manager",
+                    "timeSlot": "FULL DAY", "workStart": "", "workEnd": ""
+                ]],
+                "holidays": [] as [[String: Any]]
+            ]
         )
-        let personIds = Set(shared.bookings.compactMap { $0["personId"] as? String })
-        XCTAssertEqual(personIds, ["primary", "alias"])
-        let holidayOperatives = Set(shared.holidays.compactMap { $0["operativeId"] as? String })
-        XCTAssertTrue(holidayOperatives.contains("busy-operative"))
-        XCTAssertTrue(holidayOperatives.contains("quiet-operative"))
+        XCTAssertEqual(rows?.count, 0)
+    }
+
+    /// Review of #235 (restores the old leave-coverage case): approved leave stored under one of the person's
+    /// same-email `operatives` rows (another row, another letter case) covers them, and so does leave under a
+    /// same-email users id — through the rule, with nothing copied onto other ids.
+    func testLeaveUnderASameEmailOperativesRowCoversThePerson() throws {
+        let people = try XCTUnwrap(WarningsComputation.unbookedPeopleOnePerEmail([
+            ["id": "primary", "email": "person@example.com", "name": "P", "passwordSet": true, "isActive": true, "isOperativeMode": true, "sameEmailUserIds": ["alias"]]
+        ]))
+        let operatives: [[String: Any]] = [
+            ["id": "quiet-operative", "email": "person@example.com", "name": "P", "isActive": true],
+            ["id": "busy-operative", "email": "Person@Example.com", "name": "P", "isActive": true],
+        ]
+        func rows(_ holidays: [[String: Any]]) -> Int? {
+            CanonicalBusinessEngine.objectRows(
+                function: "unbookedLabourRows",
+                payload: [
+                    "timeZone": "Europe/London",
+                    "startDayKey": "2026-10-08",
+                    "endDayKey": "2026-10-08",
+                    "includeWeekends": false,
+                    "excludedUserIds": [] as [String],
+                    "standardDayStart": "07:30",
+                    "standardDayEnd": "16:00",
+                    "breakWindowStart": "12:00",
+                    "breakWindowEnd": "12:30",
+                    "standardPaidHours": 8,
+                    "people": people,
+                    "operatives": operatives,
+                    "bookings": [] as [[String: Any]],
+                    "holidays": holidays,
+                ]
+            )?.count
+        }
+        XCTAssertEqual(rows([]), 1, "nothing booked, no leave: unbooked")
+        XCTAssertEqual(rows([[
+            "userId": "", "operativeId": "QUIET-OPERATIVE", "startDayKey": "2026-10-08", "endDayKey": "2026-10-08", "approved": true
+        ]]), 0)
+        XCTAssertEqual(rows([[
+            "userId": "ALIAS", "operativeId": "", "startDayKey": "2026-10-08", "endDayKey": "2026-10-08", "approved": true
+        ]]), 0)
     }
 
     func testQualificationsHubStaysOpenWhenTheCatalogueToggleIsOff() {

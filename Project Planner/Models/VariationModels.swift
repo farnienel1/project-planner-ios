@@ -57,16 +57,49 @@ nonisolated enum VariationNumberingMode: String, Codable, Hashable, Sendable {
     case resequenceAll
 }
 
+/// RULEBOOK 1.52.0 §22: a labour line is a crew — operatives × hours each (`variationLabourCrew`); `hours` is their
+/// product. A line stored before 1.52 reads as one operative × its hours.
 nonisolated struct VariationLabourLine: Identifiable, Hashable, Sendable {
     var id: String
     var trade: String
     var hours: Double
+    var operatives: Int = 1
+    var hoursEach: Double = 0
+    /// True when the stored row had no crew fields and the line has not been edited: it is written back exactly as
+    /// `{ id, trade, hours }` (never new fields on an untouched old line).
+    var legacyShape: Bool = false
 }
 
+/// RULEBOOK 1.52.0 §22: a material quantity is a number with its unit (`variationMaterialQuantity`). `quantity` is the
+/// stored text (shown as stored when it is not a number, e.g. "1-"); `quantityValue` nil then.
 nonisolated struct VariationMaterialLine: Identifiable, Hashable, Sendable {
     var id: String
     var name: String
     var quantity: String
+    var quantityValue: Double? = nil
+    var unit: String = ""
+    /// True when the stored row had no `quantityValue` and the line has not been edited: written back exactly as
+    /// `{ id, name, quantity }`.
+    var legacyShape: Bool = false
+}
+
+/// RULEBOOK 1.52.0 §22: a custom line — name, description, quantity × cost (organisation currency).
+nonisolated struct VariationCustomLine: Identifiable, Hashable, Sendable {
+    var id: String
+    var name: String
+    var description: String
+    var quantity: Double
+    var cost: Double
+}
+
+/// RULEBOOK 1.52.0 §22: a subcontractor line — the firm (`subcontractors/{id}` or typed), quote number, quantity × cost.
+nonisolated struct VariationSubcontractorLine: Identifiable, Hashable, Sendable {
+    var id: String
+    var subcontractorId: String
+    var name: String
+    var quoteNumber: String
+    var quantity: Double
+    var cost: Double
 }
 
 nonisolated struct VariationEvidenceItem: Identifiable, Hashable, Sendable {
@@ -123,6 +156,10 @@ nonisolated struct Variation: Identifiable, Hashable, Sendable {
     var status: VariationStatus
     var labour: [VariationLabourLine]
     var materials: [VariationMaterialLine]
+    /// RULEBOOK 1.52.0 §22 (reader `customLines`).
+    var customLines: [VariationCustomLine] = []
+    /// RULEBOOK 1.52.0 §22 (reader `subcontractorLines`).
+    var subcontractorLines: [VariationSubcontractorLine] = []
     var evidence: [VariationEvidenceItem]
     var totalLabourHours: Double
     var materialLineCount: Int
@@ -140,10 +177,55 @@ nonisolated struct Variation: Identifiable, Hashable, Sendable {
     /// (`canViewRemovedEvidence`); never written by a variation save.
     var removedEvidence: [VariationRemovedEvidence] = []
 
+    /// RULEBOOK 1.52.0 §22 `CanonicalBusinessEngine.variationTotals`: the stored counters come from the rule (an
+    /// evidence entry counts with a storage path or a URL, the reader's rule). Pending uploads are left out. When the
+    /// script does not answer the counters are left as they are.
     mutating func recomputeCounts() {
-        totalLabourHours = labour.reduce(0) { $0 + $1.hours }
-        materialLineCount = materials.count
-        evidenceCount = evidence.filter { !$0.isPending && !$0.downloadURL.isEmpty }.count
+        guard let totals = totals else { return }
+        totalLabourHours = totals.labourHours
+        materialLineCount = totals.materialsCount
+        evidenceCount = totals.evidenceCount
+    }
+
+    /// `variationTotals` of this variation (pending evidence left out). Nil when the script did not answer.
+    var totals: RulebookVariationTotals? {
+        CanonicalBusinessEngine.variationTotals(rulebookInput)
+    }
+
+    /// The variation as the rulebook's totals, export and renumber rules read it (script JSON).
+    var rulebookInput: [String: Any] {
+        var input: [String: Any] = [
+            "id": id,
+            "voNumber": voNumber,
+            "heading": heading,
+            "description": description,
+            "status": status.rawValue,
+            "createdByName": createdByName,
+            "createdAtMs": createdAt.timeIntervalSince1970 * 1000,
+            "sequence": sequence,
+            "voNumberLocked": voNumberLocked,
+            "isDeleted": isDeleted,
+            "numberHistory": numberHistory.map { ["from": $0.from, "to": $0.to] },
+            "labour": labour.map { line -> [String: Any] in
+                line.hoursEach > 0
+                    ? ["trade": line.trade, "hours": line.hours, "operatives": line.operatives, "hoursEach": line.hoursEach]
+                    : ["trade": line.trade, "hours": line.hours]
+            },
+            "customLines": customLines.map {
+                ["name": $0.name, "description": $0.description, "quantity": $0.quantity, "cost": $0.cost] as [String: Any]
+            },
+            "subcontractorLines": subcontractorLines.map {
+                ["name": $0.name, "quoteNumber": $0.quoteNumber, "quantity": $0.quantity, "cost": $0.cost] as [String: Any]
+            },
+            "evidence": evidence.filter { !$0.isPending }.map { ["storagePath": $0.storagePath, "downloadURL": $0.downloadURL] },
+        ]
+        input["materials"] = materials.map { line -> [String: Any] in
+            var row: [String: Any] = ["name": line.name, "quantity": line.quantity]
+            if let value = line.quantityValue { row["quantityValue"] = value }
+            if !line.unit.isEmpty { row["unit"] = line.unit }
+            return row
+        }
+        return input
     }
 }
 
@@ -157,9 +239,11 @@ nonisolated struct VariationTracker: Hashable, Sendable {
     var prefix: String
     var padding: Int
     var version: Int
-    var lockedByUid: String?
-    var lockedByName: String?
-    var lockedAt: Date?
+    /// RULEBOOK 1.52.0 §22: the tracker's order lock (`parseVariationTrackerDocument` `orderLocked`, set on web). iOS
+    /// only shows it ("Locked", who and when); it never writes it, nor the old 5-minute lock fields.
+    var orderLocked: Bool = false
+    var orderLockedByName: String?
+    var orderLockedAt: Date?
 
     static func disabled(parentId: String, parentType: VariationParentType) -> VariationTracker {
         VariationTracker(
@@ -171,10 +255,7 @@ nonisolated struct VariationTracker: Hashable, Sendable {
             numberingMode: .lockSubmitted,
             prefix: VariationNumbering.defaultPrefix,
             padding: VariationNumbering.defaultPadding,
-            version: 0,
-            lockedByUid: nil,
-            lockedByName: nil,
-            lockedAt: nil
+            version: 0
         )
     }
 }
@@ -217,6 +298,17 @@ nonisolated enum VariationCodec {
     nonisolated static func variation(from data: [String: Any], documentId: String) -> Variation? {
         guard let row = CanonicalBusinessEngine.parseVariationDocument(documentId: documentId, data: data) else { return nil }
         func at(_ value: Date?) -> Date { value ?? Date(timeIntervalSince1970: 0) }
+        // Lines stored with the 1.52 shape (an id and the crew / number fields); every other line is written back as
+        // stored until it is edited.
+        func storedIds(_ key: String, having field: String) -> Set<String> {
+            Set(((data[key] as? [Any]) ?? []).compactMap { entry -> String? in
+                guard let line = entry as? [String: Any], line[field] != nil,
+                      let id = (line["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else { return nil }
+                return id.lowercased()
+            })
+        }
+        let crewIds = storedIds("labour", having: "operatives")
+        let numberIds = storedIds("materials", having: "quantityValue")
         return Variation(
             id: row.id,
             orgId: row.text("orgId"),
@@ -235,10 +327,44 @@ nonisolated enum VariationCodec {
             description: row.raw["description"] as? String ?? "",
             status: VariationStatus(rawValue: row.text("status")) ?? .open,
             labour: row.rows("labour").map { line in
-                VariationLabourLine(id: line.id, trade: line.text("trade"), hours: line.number("hours") ?? 0)
+                let hours = line.number("hours") ?? 0
+                return VariationLabourLine(
+                    id: line.id,
+                    trade: line.text("trade"),
+                    hours: hours,
+                    operatives: max(1, Int(line.number("operatives") ?? 1)),
+                    hoursEach: line.number("hoursEach") ?? hours,
+                    legacyShape: !crewIds.contains(line.id.lowercased())
+                )
             },
             materials: row.rows("materials").map { line in
-                VariationMaterialLine(id: line.id, name: line.text("name"), quantity: line.text("quantity"))
+                VariationMaterialLine(
+                    id: line.id,
+                    name: line.text("name"),
+                    quantity: line.text("quantity"),
+                    quantityValue: line.number("quantityValue"),
+                    unit: line.text("unit"),
+                    legacyShape: !numberIds.contains(line.id.lowercased())
+                )
+            },
+            customLines: row.rows("customLines").map { line in
+                VariationCustomLine(
+                    id: line.id,
+                    name: line.text("name"),
+                    description: line.raw["description"] as? String ?? "",
+                    quantity: line.number("quantity") ?? 1,
+                    cost: line.number("cost") ?? 0
+                )
+            },
+            subcontractorLines: row.rows("subcontractorLines").map { line in
+                VariationSubcontractorLine(
+                    id: line.id,
+                    subcontractorId: line.text("subcontractorId"),
+                    name: line.text("name"),
+                    quoteNumber: line.text("quoteNumber"),
+                    quantity: line.number("quantity") ?? 1,
+                    cost: line.number("cost") ?? 0
+                )
             },
             evidence: row.rows("evidence").map { item in
                 VariationEvidenceItem(
@@ -278,7 +404,58 @@ nonisolated enum VariationCodec {
         )
     }
 
-    static func firestoreMap(from variation: Variation) -> [String: Any] {
+    /// RULEBOOK 1.52.0 §22, review of #235: every new or changed line is shaped by the rulebook; when the script does
+    /// not answer for a line the save is refused (`CanonicalWriteUnavailableError`), never a line dropped or written
+    /// in another shape.
+    static func firestoreMap(from variation: Variation) throws -> [String: Any] {
+        var labourRows: [[String: Any]] = []
+        for line in variation.labour {
+            // An untouched old line, or one built without a crew (`hoursEach` 0), keeps its stored shape and hours.
+            if line.legacyShape || line.hoursEach <= 0 {
+                labourRows.append(["id": line.id, "trade": line.trade, "hours": line.hours])
+                continue
+            }
+            guard let fields = CanonicalBusinessEngine.variationLabourLineFields(
+                id: line.id, trade: line.trade, operatives: line.operatives, hoursEach: line.hoursEach
+            ) else { throw CanonicalWriteUnavailableError(function: "variationLabourLineFields") }
+            labourRows.append(fields)
+        }
+        var materialRows: [[String: Any]] = []
+        for line in variation.materials {
+            guard !line.legacyShape, let value = line.quantityValue else {
+                materialRows.append(["id": line.id, "name": line.name, "quantity": line.quantity])
+                continue
+            }
+            guard let fields = CanonicalBusinessEngine.variationMaterialLineFields(
+                id: line.id, name: line.name, quantity: value, unit: line.unit.isEmpty ? "no" : line.unit
+            ) else { throw CanonicalWriteUnavailableError(function: "variationMaterialLineFields") }
+            materialRows.append(fields)
+        }
+        var customRows: [[String: Any]] = []
+        for line in variation.customLines {
+            guard let fields = CanonicalBusinessEngine.variationCustomLineFields(
+                id: line.id, name: line.name, description: line.description, quantity: line.quantity, cost: line.cost
+            ) else { throw CanonicalWriteUnavailableError(function: "variationCustomLineFields") }
+            customRows.append(fields)
+        }
+        var subcontractorRows: [[String: Any]] = []
+        for line in variation.subcontractorLines {
+            guard let fields = CanonicalBusinessEngine.variationSubcontractorLineFields(
+                id: line.id, subcontractorId: line.subcontractorId, name: line.name,
+                quoteNumber: line.quoteNumber, quantity: line.quantity, cost: line.cost
+            ) else { throw CanonicalWriteUnavailableError(function: "variationSubcontractorLineFields") }
+            subcontractorRows.append(fields)
+        }
+        return firestoreMap(from: variation, labour: labourRows, materials: materialRows, customLines: customRows, subcontractorLines: subcontractorRows)
+    }
+
+    private static func firestoreMap(
+        from variation: Variation,
+        labour labourRows: [[String: Any]],
+        materials materialRows: [[String: Any]],
+        customLines customRows: [[String: Any]],
+        subcontractorLines subcontractorRows: [[String: Any]]
+    ) -> [String: Any] {
         var map: [String: Any] = [
             "id": variation.id,
             "orgId": variation.orgId,
@@ -300,20 +477,11 @@ nonisolated enum VariationCodec {
             "heading": variation.heading,
             "description": variation.description,
             "status": variation.status.rawValue,
-            "labour": variation.labour.map { line in
-                [
-                    "id": line.id,
-                    "trade": line.trade,
-                    "hours": line.hours
-                ] as [String: Any]
-            },
-            "materials": variation.materials.map { line in
-                [
-                    "id": line.id,
-                    "name": line.name,
-                    "quantity": line.quantity
-                ] as [String: Any]
-            },
+            // RULEBOOK 1.52.0 §22: lines shaped above (an untouched old line exactly as stored).
+            "labour": labourRows,
+            "materials": materialRows,
+            "customLines": customRows,
+            "subcontractorLines": subcontractorRows,
             "evidence": variation.evidence.filter { !$0.isPending }.map { item in
                 [
                     "id": item.id,
@@ -368,27 +536,9 @@ nonisolated enum VariationCodec {
             prefix: row.optionalText("prefix") ?? VariationNumbering.defaultPrefix,
             padding: Int(row.number("padding") ?? Double(VariationNumbering.defaultPadding)),
             version: Int(row.number("version") ?? 0),
-            lockedByUid: row.optionalText("lockedByUid"),
-            lockedByName: row.optionalText("lockedByName"),
-            lockedAt: row.date("lockedAtMs")
+            orderLocked: row.bool("orderLocked"),
+            orderLockedByName: row.optionalText("orderLockedByName"),
+            orderLockedAt: row.date("orderLockedAtMs")
         )
-    }
-
-    static func firestoreMap(from tracker: VariationTracker) -> [String: Any] {
-        var map: [String: Any] = [
-            "parentId": tracker.parentId,
-            "parentType": tracker.parentType.rawValue,
-            "enabled": tracker.enabled,
-            "numberingMode": tracker.numberingMode.rawValue,
-            "prefix": tracker.prefix,
-            "padding": tracker.padding,
-            "version": tracker.version
-        ]
-        if let enabledAt = tracker.enabledAt { map["enabledAt"] = Timestamp(date: enabledAt) }
-        if let enabledByUid = tracker.enabledByUid { map["enabledByUid"] = enabledByUid }
-        if let lockedByUid = tracker.lockedByUid { map["lockedByUid"] = lockedByUid }
-        if let lockedByName = tracker.lockedByName { map["lockedByName"] = lockedByName }
-        if let lockedAt = tracker.lockedAt { map["lockedAt"] = Timestamp(date: lockedAt) }
-        return map
     }
 }

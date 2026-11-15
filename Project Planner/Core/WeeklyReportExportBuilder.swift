@@ -16,6 +16,10 @@ enum WeeklyReportExportBuilder {
         /// A line under the section (RULEBOOK 1.32.0: `PAY_HIDDEN_NOTE` under the Pay Summary when some people's pay is
         /// hidden). Shown as given.
         var note: String? = nil
+        /// RULEBOOK 1.51.0 §7: rows drawn in amber (a Pay Summary check line whose invoice does not match, `tone: warn`).
+        var warnRows: Set<Int> = []
+        /// Rows whose one text runs across the table (a Pay Summary check line).
+        var spanRows: Set<Int> = []
     }
 
     struct Context {
@@ -314,18 +318,28 @@ enum WeeklyReportExportBuilder {
         y += 22
 
         let dataRows = section.rows.isEmpty ? [Array(repeating: "—", count: section.headers.count)] : section.rows
-        for row in dataRows {
+        let amber = UIColor(red: 0.71, green: 0.42, blue: 0.0, alpha: 1)
+        for (rowIndex, row) in dataRows.enumerated() {
             if y > pageRect.height - 60 {
                 pdf.beginPage()
                 y = margin
             }
             UIColor(white: 0.94, alpha: 1).setFill()
             UIRectFill(CGRect(x: margin, y: y, width: contentWidth, height: 0.6))
-            for (index, cell) in row.enumerated() {
-                (cell as NSString).draw(
-                    in: CGRect(x: margin + CGFloat(index) * colWidth + 4, y: y + 4, width: colWidth - 6, height: 28),
-                    withAttributes: [.font: UIFont.systemFont(ofSize: 8.5), .foregroundColor: slate]
+            let color = section.warnRows.contains(rowIndex) ? amber : slate
+            if section.spanRows.contains(rowIndex), let index = row.firstIndex(where: { !$0.isEmpty }) {
+                let x = margin + CGFloat(index) * colWidth + 4
+                (row[index] as NSString).draw(
+                    in: CGRect(x: x, y: y + 4, width: margin + contentWidth - x - 4, height: 28),
+                    withAttributes: [.font: UIFont.systemFont(ofSize: 8.5, weight: .semibold), .foregroundColor: color]
                 )
+            } else {
+                for (index, cell) in row.enumerated() {
+                    (cell as NSString).draw(
+                        in: CGRect(x: margin + CGFloat(index) * colWidth + 4, y: y + 4, width: colWidth - 6, height: 28),
+                        withAttributes: [.font: UIFont.systemFont(ofSize: 8.5), .foregroundColor: color]
+                    )
+                }
             }
             y += 30
         }

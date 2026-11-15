@@ -528,11 +528,26 @@ extension CanonicalBusinessEngine {
     /// RULEBOOK 1.23.0 `leaveCoverageRows(input)` with `day` = the working-hours state (`standardDayOn`), so each day of
     /// the window is read under the hours in effect on it. `day` nil keeps the input's own standard day. Nil when the
     /// script did not answer.
-    nonisolated static func leaveCoverageRows(_ input: CanonicalLeaveCoverageInput, day: Any?) -> [CanonicalLeaveCoverageRow]? {
-        guard let day else { return leaveCoverageRows(input) }
+    /// RULEBOOK 1.53.0 (A3): `aliasUserIds` — per `personKey`, every other users id the person goes by (`formerUserIds`,
+    /// `sameEmailUserIds`); a labour booking or leave filed under any of them covers the person.
+    nonisolated static func leaveCoverageRows(
+        _ input: CanonicalLeaveCoverageInput,
+        day: Any?,
+        aliasUserIds: [String: [String]] = [:]
+    ) -> [CanonicalLeaveCoverageRow]? {
+        guard day != nil || !aliasUserIds.isEmpty else { return leaveCoverageRows(input) }
         guard let data = try? JSONEncoder().encode(input),
               var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        object["day"] = day
+        if let day { object["day"] = day }
+        if !aliasUserIds.isEmpty, let people = object["people"] as? [[String: Any]] {
+            object["people"] = people.map { person -> [String: Any] in
+                var row = person
+                if let key = person["personKey"] as? String, let aliases = aliasUserIds[key], !aliases.isEmpty {
+                    row["aliasUserIds"] = aliases
+                }
+                return row
+            }
+        }
         guard let answer = callJSON("leaveCoverageRows", arguments: [object]),
               JSONSerialization.isValidJSONObject(answer),
               let rows = try? JSONSerialization.data(withJSONObject: answer) else { return nil }

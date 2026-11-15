@@ -217,7 +217,8 @@ enum MaterialRequestEmailBuilder {
 
     private static func companyLogoHeaderHTML(url: String?) -> String {
         let trimmed = url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty, let _ = URL(string: trimmed) else {
+        // RULEBOOK 1.50.0 §24: only a `safeExternalUrl` (https) logo address is put in the email.
+        guard !trimmed.isEmpty, CanonicalBusinessEngine.safeExternalUrl(trimmed) != nil else {
             return ""
         }
         return """

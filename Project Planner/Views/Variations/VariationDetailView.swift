@@ -61,7 +61,8 @@ struct VariationDetailView: View {
                                             Text(row.trade)
                                                 .foregroundStyle(.primary)
                                             Spacer()
-                                            Text(formatHours(row.hours) + " hrs")
+                                            // RULEBOOK 1.52.0 §22 `variationLabourText` ("2 × 4h = 8h").
+                                            Text(CanonicalBusinessEngine.variationLabourText(operatives: row.operatives, hoursEach: row.hoursEach, hours: row.hours) ?? formatHours(row.hours) + " hrs")
                                                 .monospacedDigit()
                                                 .foregroundStyle(.secondary)
                                         }
@@ -94,6 +95,10 @@ struct VariationDetailView: View {
                                         .frame(minHeight: 50)
                                     }
                                 }
+                            }
+
+                            if canSeeCosts, !variation.customLines.isEmpty || !variation.subcontractorLines.isEmpty {
+                                costLinesSection(variation)
                             }
 
                             sectionTitle("Evidence")
@@ -217,12 +222,18 @@ struct VariationDetailView: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
 
+            // RULEBOOK 1.52.0 §22 `variationTotals`.
+            let totals = variation.totals ?? .zero
             HStack(alignment: .top, spacing: 12) {
-                PPStat(value: formatHours(variation.totalLabourHours), label: "Hours")
+                PPStat(value: formatHours(totals.labourHours), label: "Hours")
                 PPStatDivider()
-                PPStat(value: "\(variation.materialLineCount)", label: "Materials")
+                PPStat(value: "\(totals.materialsCount)", label: "Materials")
                 PPStatDivider()
-                PPStat(value: "\(variation.evidenceCount)", label: "Evidence", highlight: variation.evidenceCount == 0)
+                PPStat(value: "\(totals.evidenceCount)", label: "Evidence", highlight: totals.evidenceCount == 0)
+                if canSeeCosts, totals.customCount + totals.subcontractorCount > 0 {
+                    PPStatDivider()
+                    PPStat(value: OrgMoney.format(totals.costTotal), label: "Cost")
+                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 18)
@@ -277,7 +288,8 @@ struct VariationDetailView: View {
     }
 
     private func applyStatus(_ status: VariationStatus) async {
-        guard var variation else { return }
+        guard let opened = variation else { return }
+        var variation = opened
         let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
             preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
         )) ?? ""
@@ -299,16 +311,72 @@ struct VariationDetailView: View {
             variation.closedAt = Date()
         }
         do {
-            try await firebaseBackend.saveVariation(variation, organizationId: orgId)
+            // RULEBOOK 1.52.0 §22: only the status fields this change made (against the copy shown).
+            try await firebaseBackend.saveVariation(variation, opened: opened, organizationId: orgId)
             store.upsert(variation)
         } catch {
             statusError = error.localizedDescription
         }
     }
 
+    /// RULEBOOK 1.52.0 §22 `canSeeVariationCosts`.
+    private var canSeeCosts: Bool {
+        guard let user = userStore.displayUser else { return false }
+        return CanonicalBusinessEngine.canSeeVariationCosts(UserStore.staffAccountRole(for: user))
+    }
+
+    /// Custom and subcontractor lines with their line totals (`variationLineTotal`) and the cost total.
+    @ViewBuilder
+    private func costLinesSection(_ variation: Variation) -> some View {
+        sectionTitle("Costs · \(OrgMoney.format((variation.totals ?? .zero).costTotal))")
+        PPGroupedCard {
+            ForEach(variation.customLines) { line in
+                costRow(
+                    symbol: "square.and.pencil",
+                    title: line.name,
+                    detail: line.description,
+                    quantity: line.quantity,
+                    cost: line.cost
+                )
+            }
+            ForEach(variation.subcontractorLines) { line in
+                costRow(
+                    symbol: "person.2.fill",
+                    title: line.name,
+                    detail: line.quoteNumber.isEmpty ? "Subcontractor" : "Subcontractor · Quote \(line.quoteNumber)",
+                    quantity: line.quantity,
+                    cost: line.cost
+                )
+            }
+        }
+    }
+
+    private func costRow(symbol: String, title: String, detail: String, quantity: Double, cost: Double) -> some View {
+        let total = CanonicalBusinessEngine.variationLineTotal(quantity: String(quantity), cost: String(cost)) ?? 0
+        return HStack(spacing: 13) {
+            PPIconTile(symbol: symbol, family: .trade)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).foregroundStyle(.primary)
+                if !detail.isEmpty {
+                    Text(detail).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(OrgMoney.format(total)).monospacedDigit()
+                Text("\(String(format: "%g", quantity)) × \(OrgMoney.format(cost))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 50)
+    }
+
     private func evidenceThumb(_ item: VariationEvidenceItem) -> some View {
         Button {
-            if let url = URL(string: item.downloadURL) { fullscreenURL = url }
+            if let url = CanonicalBusinessEngine.safeExternalURL(item.downloadURL) { fullscreenURL = url }
         } label: {
             VStack(spacing: 6) {
                 PPIconTile(symbol: item.contentType.contains("pdf") ? "doc.fill" : "photo", family: .plan, size: 36)
