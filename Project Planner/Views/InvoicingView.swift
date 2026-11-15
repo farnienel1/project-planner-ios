@@ -1251,8 +1251,20 @@ enum TimesheetDraftStore {
         } catch {
             return "Couldn't save your timesheet: \(error.localizedDescription)"
         }
-        // What this device wrote is now its loaded copy (the base of the next save).
-        rememberLoadedCopy(draft, userId: userId, weekStart: weekStart, organizationId: organizationId)
+        // What this device wrote is now its loaded copy (the base of the next save). RULEBOOK 1.47.0 §8 (web third review
+        // #325): the record's server time was written once with this save, so the flag is cleared — a later save never
+        // re-stamps it.
+        var written = draft
+        if changed["operativeSignedBookingsAt"] != nil { written.operativeSignedBookingsAtPending = nil }
+        rememberLoadedCopy(written, userId: userId, weekStart: weekStart, organizationId: organizationId)
+        if changed["operativeSignedBookingsAt"] != nil {
+            var local = load(userId: userId, weekStart: weekStart, organizationId: organizationId)
+            if local.operativeSignedBookingsAtPending == true,
+               local.operativeSignedBookingsSignedAt == draft.operativeSignedBookingsSignedAt {
+                local.operativeSignedBookingsAtPending = nil
+                save(local, userId: userId, weekStart: weekStart, organizationId: organizationId)
+            }
+        }
         if !reviewer && !frozenEntriesChanged {
             // RULEBOOK 1.45.0 §8 `timesheetEntryEvidenceToDelete`: removed files go only inside the §24 undo window.
             let evidenceAfter = draft.expenseEntries.flatMap(\.evidence) + draft.priceWorkEntries.flatMap(\.evidence)
@@ -2422,13 +2434,20 @@ private struct MyTimesheetView: View {
             smallWorks: projectStore.smallWorks,
             organization: firebaseBackend.currentOrganization,
             users: userStore.organizationUsers,
-            liveLoaded: periodBookingsState.loaded
+            // The person's ids come from the operatives list too (web third review #325): wait for it.
+            liveLoaded: periodBookingsState.loaded && operativesLoaded
         )
         return SignedTimesheetChanges.change(draft: draft, user: currentUser, period: week, inputs: inputs, lines: payrollLines)
     }
 
     /// The person must review and sign again (1.47.0 §8).
     private var mustSignAgain: Bool { bookingChange?.waitingForPerson == true }
+
+    /// The operatives list of the open organisation has loaded (the person's booking ids depend on it).
+    private var operativesLoaded: Bool {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return false }
+        return operativeStore.finishedLoadOrganizationId == orgId && !operativeStore.isLoading
+    }
 
     /// RULEBOOK 1.47.0 §8: a reopened sheet shows (and invoices) the live bookings' figures, never its stale signed
     /// snapshot (web `draftForFigures`).
@@ -3360,8 +3379,9 @@ private struct MyTimesheetView: View {
             saveErrorMessage = blocked
             return
         }
-        // RULEBOOK 1.47.0 §8: what the person signs is recorded only once every input has loaded (the roster too).
-        guard RulebookRosterSnapshot.hasLoaded else {
+        // RULEBOOK 1.47.0 §8: what the person signs is recorded only once every input has loaded (the roster and the
+        // operatives list too).
+        guard RulebookRosterSnapshot.hasLoaded, operativesLoaded else {
             saveErrorMessage = TimesheetDraftStore.rosterNotLoadedMessage
             return
         }
@@ -3531,6 +3551,13 @@ private struct MyTimesheetView: View {
                 subject: current
             )
             saveErrorMessage = message
+            // RULEBOOK 1.47.0 §8: the record's server time went with this save; clear the flag on the draft as it is
+            // now (same signature only), so a later save never re-stamps it.
+            if message == nil, snapshot.operativeSignedBookingsAtPending == true,
+               draft.operativeSignedBookingsAtPending == true,
+               draft.operativeSignedBookingsSignedAt == snapshot.operativeSignedBookingsSignedAt {
+                draft.operativeSignedBookingsAtPending = nil
+            }
             return message
         }
     }
@@ -4875,7 +4902,7 @@ struct OperativeTimesheetsView: View {
                     smallWorks: projectStore.smallWorks,
                     organization: firebaseBackend.currentOrganization,
                     users: userStore.organizationUsers,
-                    liveLoaded: gateReady()
+                    liveLoaded: gateReady() && operativeStore.finishedLoadOrganizationId == exportOrgId
                 )
             )
             if !CanonicalBusinessEngine.signedTimesheetActions(change).mayExport {
@@ -5350,11 +5377,18 @@ private struct OperativeTimesheetReviewView: View {
             smallWorks: projectStore.smallWorks,
             organization: firebaseBackend.currentOrganization,
             users: userStore.organizationUsers,
-            liveLoaded: periodBookingsState.loaded
+            // The person's ids come from the operatives list too (web third review #325): wait for it.
+            liveLoaded: periodBookingsState.loaded && operativesLoaded
         )
         return SignedTimesheetChanges.change(
             draft: draft, user: operative, period: week, inputs: inputs, lines: payrollSummary.lineItems
         )
+    }
+
+    /// The operatives list of the open organisation has loaded (the person's booking ids depend on it).
+    private var operativesLoaded: Bool {
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return false }
+        return operativeStore.finishedLoadOrganizationId == orgId && !operativeStore.isLoading
     }
 
     /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot.

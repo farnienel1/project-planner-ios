@@ -256,7 +256,7 @@ struct WeeklyReportTimesheetFeed {
                             bookingStore: bookingStore,
                             managerScheduleStore: managerScheduleStore,
                             from: period.start
-                        ).loaded
+                        ).loaded && operativeStore.finishedLoadOrganizationId == orgId
                     )
                 )
                 if change?.reopened == true { continue }

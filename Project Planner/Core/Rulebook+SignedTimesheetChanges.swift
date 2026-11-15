@@ -546,7 +546,9 @@ final class SignedTimesheetChangeContext {
             managerScheduleStore: managerScheduleStore,
             from: period.start
         ).loaded
-        guard loaded else { return nil }
+        // The person's ids come from the operatives list too (web third review #325): nothing reads as changed before.
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        guard loaded, orgId != nil, operativeStore.finishedLoadOrganizationId == orgId, !operativeStore.isLoading else { return nil }
         let key = [
             user.id,
             String(Int64(period.start.timeIntervalSince1970)),
