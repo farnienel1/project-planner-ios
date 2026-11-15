@@ -1043,16 +1043,21 @@ struct WeeklyReportView: View {
         )
         var scheduleHours = 0.0
         var scheduleDays = 0.0
-        let scheduleRows: [[String]] = pay.result.paidDays
-            .filter { additionalKinds.contains($0.locationKind) }
-            .map { day -> (name: String, cells: [String]) in
-                let person = reportPerson(pay.built, day)
-                scheduleHours += day.hours
-                scheduleDays += day.days
-                return (person.name, [person.name, person.role, additionalLocation(day, booking: managerByKey[day.bookingId.lowercased()]), day.time, hoursText(day.hours), daysText(day.days)])
-            }
-            .sorted { $0.name == $1.name ? $0.cells[2] < $1.cells[2] : $0.name < $1.name }
-            .map(\.cells)
+        var scheduleEntries: [(name: String, location: String, cells: [String])] = []
+        for day in pay.result.paidDays where additionalKinds.contains(day.locationKind) {
+            let person = reportPerson(pay.built, day)
+            let booking = managerByKey[day.bookingId.lowercased()]
+            let location = additionalLocation(day, booking: booking)
+            scheduleHours += day.hours
+            scheduleDays += day.days
+            let cells: [String] = [person.name, person.role, location, day.time, hoursText(day.hours), daysText(day.days)]
+            scheduleEntries.append((name: person.name, location: location, cells: cells))
+        }
+        scheduleEntries.sort { lhs, rhs in
+            if lhs.name == rhs.name { return lhs.location < rhs.location }
+            return lhs.name < rhs.name
+        }
+        let scheduleRows: [[String]] = scheduleEntries.map { $0.cells }
         sections.append(
             WeeklyReportExportBuilder.Section(
                 title: "📅  Manager / Admin Additional Schedule",
