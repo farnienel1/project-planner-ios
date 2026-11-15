@@ -443,15 +443,23 @@ extension FirebaseBackend {
     /// The timesheets of the given people (`settings` where `userId ==`, one query per id, the query User Timesheets
     /// already makes), read through `parsePayrunSnapshotSheet`. A failed read leaves that person's sheets out.
     func loadPayrunSnapshotSheets(userIds: [String]) async -> [[String: Any]] {
+        await loadPayrunSnapshotSheetsWithDrafts(userIds: userIds).map(\.sheet)
+    }
+
+    /// RULEBOOK 1.47.0 §8: each Snapshot sheet with its stored draft, so its booking change can be read
+    /// (`signedTimesheetBookingChanges` → the sheet's `bookingsChange`), as web `payrunSnapshotData.readSheets`.
+    func loadPayrunSnapshotSheetsWithDrafts(userIds: [String]) async -> [(sheet: [String: Any], draft: TimesheetDraft?)] {
         guard let org = try? payeClaimsOrganizationRef() else { return [] }
         var seen = Set<String>()
         let ids = userIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty && seen.insert($0).inserted }
-        var out: [[String: Any]] = []
+        var out: [(sheet: [String: Any], draft: TimesheetDraft?)] = []
         for id in ids {
             guard let snapshot = try? await org.collection("settings").whereField("userId", isEqualTo: id).getDocuments() else { continue }
             for doc in snapshot.documents {
                 let data = FirebaseBackend.firestoreJSON(doc.data()) as? [String: Any] ?? [:]
-                if let sheet = CanonicalBusinessEngine.parsePayrunSnapshotSheet(docId: doc.documentID, data: data) { out.append(sheet) }
+                if let sheet = CanonicalBusinessEngine.parsePayrunSnapshotSheet(docId: doc.documentID, data: data) {
+                    out.append((sheet: sheet, draft: TimesheetDraftStore.decodeFirestoreMap(doc.data())))
+                }
             }
         }
         return out

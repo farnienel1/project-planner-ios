@@ -237,6 +237,29 @@ struct WeeklyReportTimesheetFeed {
                     }
                 }
                 guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { continue }
+                // RULEBOOK 1.47.0 §8: a fully signed sheet reopened by a booking change is not an approved week — the
+                // report shows its live bookings. Read only when the loaded bookings hold that pay run.
+                let change = SignedTimesheetChanges.change(
+                    draft: draft,
+                    user: user,
+                    period: period,
+                    inputs: SignedTimesheetChanges.Inputs(
+                        bookings: bookingStore.bookings,
+                        managerBookings: managerScheduleStore.managerSiteBookings,
+                        operatives: operativeStore.allOperatives,
+                        projects: projectStore.projects,
+                        smallWorks: projectStore.smallWorks,
+                        organization: firebaseBackend.currentOrganization,
+                        users: users,
+                        liveLoaded: PayInputsLoad.periodBookings(
+                            firebaseBackend: firebaseBackend,
+                            bookingStore: bookingStore,
+                            managerScheduleStore: managerScheduleStore,
+                            from: period.start
+                        ).loaded
+                    )
+                )
+                if change?.reopened == true { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
                 var working = draft

@@ -28,6 +28,8 @@ struct PayrunSnapshotView: View {
     @State private var customStart = Date()
     @State private var customEnd = Date()
     @State private var inputs: PayrunSnapshotInputs?
+    /// RULEBOOK 1.47.0 §8: each loaded sheet's stored draft, in the order of `inputs.sheets`, for its booking change.
+    @State private var sheetDrafts: [TimesheetDraft?] = []
     @State private var loadError: String?
     @State private var rows: [PayrunSnapshotRow] = []
     @State private var opened: PayrunSnapshotLink?
@@ -139,7 +141,18 @@ struct PayrunSnapshotView: View {
         .navigationTitle(CanonicalBusinessEngine.payrunSnapshotText("PAYRUN_SNAPSHOT_LABEL", fallback: "Payrun Snapshot"))
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
-        .task { await load() }
+        .task {
+            // RULEBOOK 1.47.0 §8: the sheets' booking changes are read through the shared context (explicit stores here).
+            SignedTimesheetChangeContext.shared.attach(
+                firebaseBackend: firebaseBackend,
+                bookingStore: bookingStore,
+                managerScheduleStore: managerScheduleStore,
+                operativeStore: operativeStore,
+                projectStore: projectStore,
+                userStore: userStore
+            )
+            await load()
+        }
         .onChange(of: kind) { _, _ in recompute() }
         .onChange(of: customStart) { _, _ in recompute() }
         .onChange(of: customEnd) { _, _ in recompute() }
@@ -182,10 +195,11 @@ struct PayrunSnapshotView: View {
             let ids = users.flatMap { [$0.id] + $0.formerUserIds }
             async let overtime = firebaseBackend.loadAllOvertimeRecords()
             async let claims = firebaseBackend.loadPayrunSnapshotClaims()
-            async let sheets = firebaseBackend.loadPayrunSnapshotSheets(userIds: ids)
+            async let sheets = firebaseBackend.loadPayrunSnapshotSheetsWithDrafts(userIds: ids)
             let (overtimeRecords, claimRecords, sheetRows) = try await (overtime, claims, sheets)
+            sheetDrafts = sheetRows.map(\.draft)
             inputs = PayrunSnapshotInputs(
-                sheets: sheetRows,
+                sheets: sheetRows.map(\.sheet),
                 overtimeRequests: overtimeRecords.requests,
                 overtimeReviews: overtimeRecords.reviews,
                 overtimeReports: overtimeRecords.reports,
@@ -212,11 +226,32 @@ struct PayrunSnapshotView: View {
             jobs: jobs
         )
         let operatives: [[String: Any]] = operativeStore.allOperatives.map { ["id": $0.documentId, "email": $0.email] as [String: Any] }
+        // RULEBOOK 1.47.0 §8: each sheet's `bookingsChange` (Not started / Submitted follow it) when the loaded bookings
+        // hold that sheet's pay run (`SignedTimesheetChangeContext` answers nil otherwise).
+        var withChanges = inputs
+        withChanges.sheets = inputs.sheets.enumerated().map { index, sheet in
+            guard index < sheetDrafts.count, let draft = sheetDrafts[index],
+                  let userId = sheet["userId"] as? String,
+                  let user = userStore.organizationUsers.first(where: { $0.id == userId }),
+                  let startKey = sheet["startDayKey"] as? String,
+                  let start = OrganizationRulebookContext.date(fromDayKey: startKey) else { return sheet }
+            let endKey = sheet["endDayKey"] as? String ?? ""
+            let settings = firebaseBackend.currentOrganization?.settings.invoicing ?? .default
+            let period = TimesheetPayrollPolicy.periodMatchingStoredStart(
+                start,
+                storedEnd: endKey.isEmpty ? nil : OrganizationRulebookContext.date(fromDayKey: endKey),
+                settings: settings
+            )
+            guard let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: period) else { return sheet }
+            var out = sheet
+            out["bookingsChange"] = change.bucketArgument
+            return out
+        }
         rows = CanonicalBusinessEngine.payrunSnapshotRows(
             roster: PayrunSnapshotPeople.roster(userStore.organizationUsers),
             organization: organization,
             period: current,
-            inputs: inputs,
+            inputs: withChanges,
             bookings: bookings,
             operatives: operatives
         )

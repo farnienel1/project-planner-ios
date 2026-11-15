@@ -101,7 +101,8 @@ final class Rulebook1330OfflineDeleteTests: XCTestCase {
         ]
         XCTAssertEqual(
             CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: "2026-11-04", sheets: [signed]),
-            "This day is on a signed timesheet. Deleting the booking does not change the signed timesheet."
+            // RULEBOOK 1.47.0 §2: the text now says an unexported sheet goes back for signing.
+            "This day is on a signed timesheet. If it has not been exported, it goes back to the person to review and sign again. An exported timesheet does not change."
         )
         XCTAssertNil(CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(dayKey: "2026-11-10", sheets: [signed]))
         XCTAssertNil(CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning(

@@ -90,6 +90,13 @@ struct InvoicingView: View {
             .navigationTitle("Timesheets")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
+            // RULEBOOK 1.47.0 §8: the My Timesheets entry and the counts read each signed sheet's booking change.
+            .attachesSignedTimesheetChanges()
+            .onAppear {
+                if let user = userStore.displayUser {
+                    SignedTimesheetChangeContext.shared.ensureHubBookings(user: user, settings: settings)
+                }
+            }
             .toolbar {
                 // Home presents Timesheets full screen; Done closes it.
                 ToolbarItem(placement: .topBarLeading) {
@@ -332,6 +339,23 @@ struct InvoicingView: View {
         }
         .accessibilityIdentifier("invoicing.myTimesheets")
         .buttonStyle(PPPressableButtonStyle())
+        // RULEBOOK 1.47.0 §8: a yellow triangle when one of the person's signed sheets must be signed again.
+        .overlay(alignment: .topTrailing) {
+            if ownSheetNeedsSigningAgain {
+                SignedTimesheetChangedTriangle()
+                    .padding(8)
+            }
+        }
+    }
+
+    /// RULEBOOK 1.47.0 §8: any of the person's own signed, unexported sheets of the last six pay runs waits for them
+    /// to sign again (`signedTimesheetBookingChanges` → `waitingFor == "person"`).
+    private var ownSheetNeedsSigningAgain: Bool {
+        let _ = landingVersion
+        let _ = bookingStore.revision
+        let _ = managerScheduleStore.revision
+        guard let user = userStore.displayUser else { return false }
+        return SignedTimesheetChangeContext.shared.ownSheetNeedsSigningAgain(user: user, settings: settings)
     }
 
     @ViewBuilder
@@ -385,7 +409,8 @@ struct InvoicingView: View {
         let awaiting = landingAwaitingTimesheetCount(users: reviewUsers)
         let signed = reviewUsers.filter {
             let draft = TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start)
-            return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) && !TimesheetApprovalPolicy.isExported(draft)
+            // RULEBOOK 1.47.0 §8: a sheet reopened by a booking change is not signed off (`timesheetListBucket` with it).
+            return TimesheetApprovalPolicy.listBucket(draft: draft, user: $0, period: openWeek) == "signed"
         }.count
         let exported = reviewUsers.filter {
             TimesheetApprovalPolicy.isExported(TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start))
@@ -408,6 +433,13 @@ struct InvoicingView: View {
                     }
                     .accessibilityIdentifier("invoicing.myTimesheets2")
                     .buttonStyle(PPMenuRowButtonStyle())
+                    // RULEBOOK 1.47.0 §8: the yellow triangle next to My Timesheets.
+                    .overlay(alignment: .trailing) {
+                        if ownSheetNeedsSigningAgain {
+                            SignedTimesheetChangedTriangle()
+                                .padding(.trailing, 30)
+                        }
+                    }
                     PPRowDivider()
                 }
                 // RULEBOOK 1.29.0 §25 `overtimeHubAccess`: below My Timesheets, above User Timesheets.
@@ -716,8 +748,15 @@ enum TimesheetApprovalPolicy {
         return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: requiresLineManagerCounterSign(for: user)) == true
     }
 
-    static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser) -> Bool {
-        TimesheetDraftStore.listBucket(for: draft, hasLineManager: requiresLineManagerCounterSign(for: user)) == "awaiting"
+    static func awaitingManagerSignOff(draft: TimesheetDraft, user: AppUser, change: RulebookSignedTimesheetChange? = nil) -> Bool {
+        TimesheetDraftStore.listBucket(for: draft, hasLineManager: requiresLineManagerCounterSign(for: user), change: change) == "awaiting"
+    }
+
+    /// RULEBOOK 1.47.0 §8: the sheet's list bucket with its booking change (`timesheetListBucket(fields, hasLineManager,
+    /// change)`), the change read from `SignedTimesheetChangeContext` for the stored period.
+    static func listBucket(draft: TimesheetDraft, user: AppUser, period: WeekRange) -> String? {
+        let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: period)
+        return TimesheetDraftStore.listBucket(for: draft, hasLineManager: requiresLineManagerCounterSign(for: user), change: change)
     }
 
     /// One row per pay period. An exported copy of that period never waits for sign-off.
@@ -733,6 +772,7 @@ enum TimesheetApprovalPolicy {
             var endKey: String
             var hasActivity: Bool
             var periodStart: Date
+            var period: WeekRange
         }
         var candidates: [Candidate] = []
         for start in documentStarts {
@@ -750,7 +790,8 @@ enum TimesheetApprovalPolicy {
                 startKey: startKey,
                 endKey: endKey,
                 hasActivity: hasActivity,
-                periodStart: period.start
+                periodStart: period.start,
+                period: period
             ))
         }
         var awaiting: [Date] = []
@@ -772,7 +813,9 @@ enum TimesheetApprovalPolicy {
             guard let index = CanonicalBusinessEngine.pickTimesheetRowForPeriod(rows: rows, period: period),
                   candidates.indices.contains(index) else { continue }
             let chosen = TimesheetDraftStore.load(userId: user.id, weekStart: candidates[index].weekStart)
-            if awaitingManagerSignOff(draft: chosen, user: user) {
+            // RULEBOOK 1.47.0 §8: reopened + person → not awaiting; reopened + line manager → awaiting.
+            let change = SignedTimesheetChangeContext.shared.change(draft: chosen, user: user, period: candidates[index].period)
+            if awaitingManagerSignOff(draft: chosen, user: user, change: change) {
                 awaiting.append(candidates[index].periodStart)
             }
         }
@@ -806,6 +849,11 @@ enum TimesheetApprovalPolicy {
         draft.exportedAt = nil
         draft.approvedAt = nil
         draft.weeklyReportOverride = nil
+        // RULEBOOK 1.47.0 §8: the signed-bookings record goes with the signature.
+        draft.operativeSignedBookings = nil
+        draft.operativeSignedBookingsSignedAt = nil
+        draft.operativeSignedBookingsAt = nil
+        draft.operativeSignedBookingsAtPending = nil
         draft.payrollLineReviews = [:]
         for index in draft.expenseEntries.indices {
             draft.expenseEntries[index].managerDecision = .approved
@@ -920,9 +968,9 @@ enum TimesheetDraftStore {
         parseTimesheetStatusFields(statusPayload(for: draft))
     }
 
-    static func listBucket(for draft: TimesheetDraft, hasLineManager: Bool) -> String? {
+    static func listBucket(for draft: TimesheetDraft, hasLineManager: Bool, change: RulebookSignedTimesheetChange? = nil) -> String? {
         guard let fields = statusFields(for: draft) else { return nil }
-        return CanonicalBusinessEngine.timesheetListBucket(fields, hasLineManager: hasLineManager)
+        return CanonicalBusinessEngine.timesheetListBucket(fields, hasLineManager: hasLineManager, change: change)
     }
 
     static func parseTimesheetStatusFields(_ data: [String: Any]) -> CanonicalBusinessEngine.CanonicalTimesheetStatusFields? {
@@ -1155,6 +1203,14 @@ enum TimesheetDraftStore {
             }
         }
         if reviewer {
+            // RULEBOOK 1.47.0 §8: the signed-bookings record is the person's own; a reviewer never writes it.
+            for key in signedBookingsKeys { changed.removeValue(forKey: key) }
+        } else if draft.operativeSignedBookingsAtPending == true,
+                  changed["operativeSignedBookings"] != nil || changed["operativeSignedAt"] != nil {
+            // RULEBOOK 1.47.0 §8: the record's server time, written once with the signature (never the device clock).
+            changed["operativeSignedBookingsAt"] = FieldValue.serverTimestamp()
+        }
+        if reviewer {
             let storedIds = storedEntryIds(server)
             func entryId(_ id: UUID, _ stored: String?) -> String {
                 stored ?? storedIds[id.uuidString.lowercased()] ?? WorkDocumentKeys.storedId(for: id)
@@ -1373,6 +1429,33 @@ enum TimesheetDraftStore {
     }
 
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
+        var map = baseFirestoreMap(draft)
+        // RULEBOOK 1.47.0 §8 (owner fields): what the person signed and the signature it belongs to. Written only when
+        // the draft has them (a sheet signed before 1.47.0 keeps its stored shape), and cleared with the signature.
+        // `operativeSignedBookingsAt` is server time: read back here; a fresh signature sends
+        // `FieldValue.serverTimestamp()` once (`saveToCloud`).
+        if let rows = draft.operativeSignedBookings {
+            map["operativeSignedBookings"] = rows.map(\.storedMap)
+        } else if draft.operativeSignedAt == nil {
+            map["operativeSignedBookings"] = NSNull()
+        }
+        if let signedAt = draft.operativeSignedBookingsSignedAt {
+            map["operativeSignedBookingsSignedAt"] = Timestamp(date: signedAt)
+        } else if draft.operativeSignedAt == nil {
+            map["operativeSignedBookingsSignedAt"] = NSNull()
+        }
+        if let writtenAt = draft.operativeSignedBookingsAt {
+            map["operativeSignedBookingsAt"] = Timestamp(date: writtenAt)
+        } else if draft.operativeSignedAt == nil {
+            map["operativeSignedBookingsAt"] = NSNull()
+        }
+        return map
+    }
+
+    /// RULEBOOK 1.47.0 §8: the three owner fields that record what the person signed (never written for someone else).
+    static let signedBookingsKeys = ["operativeSignedBookings", "operativeSignedBookingsSignedAt", "operativeSignedBookingsAt"]
+
+    private static func baseFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
         [
             "managerNote": draft.managerNote,
             "operativeSignedAt": draft.operativeSignedAt.map(Timestamp.init(date:)) as Any,
@@ -1449,6 +1532,12 @@ enum TimesheetDraftStore {
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = firestoreDate(map["exportedAt"])
         output.approvedAt = firestoreDate(map["approvedAt"])
+        // RULEBOOK 1.47.0 §8: the person's signed-bookings record (missing on sheets signed before 1.47.0).
+        if let rows = map["operativeSignedBookings"] as? [Any] {
+            output.operativeSignedBookings = rows.compactMap { TimesheetSignedBookingRow(stored: $0) }
+        }
+        output.operativeSignedBookingsSignedAt = firestoreDate(map["operativeSignedBookingsSignedAt"])
+        output.operativeSignedBookingsAt = firestoreDate(map["operativeSignedBookingsAt"])
         if output.managerSignedAt == nil {
             output.managerSignedAt = firestoreDate(map["approvedAt"])
         }
@@ -1824,12 +1913,17 @@ private struct MyTimesheetsHubView: View {
 
     private var pendingWeeks: [WeekRange] {
         guard let user = userStore.displayUser else { return [] }
-        guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) else { return [] }
         var weeks: [WeekRange] = [currentWeek]
         weeks.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: 24, settings: settings))
+        let countersigned = TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)
         return weeks.filter { week in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-            return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user)
+            // RULEBOOK 1.47.0 §8: a sheet reopened by a booking change is pending too (the person signs again), and
+            // its bucket follows the change (`timesheetListBucket(fields, hasLineManager, change)`).
+            let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: week)
+            if change?.waitingForPerson == true { return true }
+            guard countersigned else { return false }
+            return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user, change: change)
         }
     }
 
@@ -1945,7 +2039,8 @@ private struct MyTimesheetsHubView: View {
                         detail: "Review bookings, add extras, and sign your timesheet.",
                         symbol: "calendar",
                         tint: PPColor.brand,
-                        family: .plan
+                        family: .plan,
+                        bookingsChanged: mustSignAgain(currentWeek)
                     ) {
                         MyTimesheetView(settings: settings, week: currentWeek)
                             .environmentObject(firebaseBackend)
@@ -1963,13 +2058,17 @@ private struct MyTimesheetsHubView: View {
                             PPGroupLabel(text: "Pending timesheets")
                                 .padding(.bottom, -10)
                             ForEach(pending, id: \.start) { week in
+                                let changed = mustSignAgain(week)
                                 hubCard(
                                     title: week.title,
-                                    subtitle: "Timesheet pending manager signature",
-                                    detail: "You signed — waiting for your line manager to counter-sign.",
+                                    subtitle: changed ? CanonicalBusinessEngine.signedTimesheetChangedStatus : "Timesheet pending manager signature",
+                                    detail: changed
+                                        ? CanonicalBusinessEngine.signedTimesheetChangedMessage
+                                        : "You signed — waiting for your line manager to counter-sign.",
                                     symbol: "clock.fill",
                                     tint: PPFamily.trade.bottom,
-                                    family: .trade
+                                    family: .trade,
+                                    bookingsChanged: changed
                                 ) {
                                     MyTimesheetView(settings: settings, week: week)
                                         .environmentObject(firebaseBackend)
@@ -2006,7 +2105,8 @@ private struct MyTimesheetsHubView: View {
                                     detail: "View breakdown, signatures, and generate invoice again.",
                                     symbol: "clock.arrow.circlepath",
                                     tint: .secondary,
-                                    family: .system
+                                    family: .system,
+                                    bookingsChanged: mustSignAgain(week)
                                 ) {
                                     MyTimesheetView(settings: settings, week: week)
                                         .environmentObject(firebaseBackend)
@@ -2029,9 +2129,13 @@ private struct MyTimesheetsHubView: View {
         .navigationTitle("My Timesheets")
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
+        .attachesSignedTimesheetChanges()
         .onAppear {
             if let userId = userStore.displayUser?.id {
                 refreshPastWeeksFromLocalCache(userId: userId)
+            }
+            if let user = userStore.displayUser {
+                SignedTimesheetChangeContext.shared.ensureHubBookings(user: user, settings: settings)
             }
         }
         .task(id: organizationId) {
@@ -2043,6 +2147,8 @@ private struct MyTimesheetsHubView: View {
         guard let user = userStore.displayUser else { return "Previous period" }
         let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
         if TimesheetApprovalPolicy.isExported(draft) { return "Exported" }
+        // RULEBOOK 1.47.0 §8: a reopened sheet is not signed off.
+        if mustSignAgain(week) { return CanonicalBusinessEngine.signedTimesheetChangedStatus }
         if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) { return "Signed off" }
         if TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user) {
             return "Timesheet pending manager signature"
@@ -2079,6 +2185,7 @@ private struct MyTimesheetsHubView: View {
         symbol: String,
         tint: Color,
         family: PPFamily,
+        bookingsChanged: Bool = false,
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         NavigationLink {
@@ -2110,6 +2217,27 @@ private struct MyTimesheetsHubView: View {
         }
         .accessibilityIdentifier("timesheets.chevronRight")
         .buttonStyle(PPPressableButtonStyle())
+        // RULEBOOK 1.47.0 §8: the yellow triangle on a sheet whose bookings changed since the person signed it.
+        .overlay(alignment: .topTrailing) {
+            if bookingsChanged {
+                SignedTimesheetChangedTriangle()
+                    .padding(6)
+            }
+        }
+    }
+
+    /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingChanges` for the person's own sheet of `week` (nil when unsigned,
+    /// exported-and-unchanged, or the pay run's bookings have not loaded).
+    private func bookingChange(for week: WeekRange) -> RulebookSignedTimesheetChange? {
+        let _ = bookingStore.revision
+        let _ = managerScheduleStore.revision
+        guard let user = userStore.displayUser else { return nil }
+        let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
+        return SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: week)
+    }
+
+    private func mustSignAgain(_ week: WeekRange) -> Bool {
+        bookingChange(for: week)?.waitingForPerson == true
     }
 }
 
@@ -2236,13 +2364,13 @@ private struct MyTimesheetView: View {
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals`: this sheet's totals as the invoice will have them
     /// — review decisions apply once the line manager has signed (web `draftTimesheetTotals`).
     private var ownerTotals: RulebookTimesheetTotals? {
-        TimesheetTotalsSource.totals(lines: payrollLines, draft: draft, decided: managerHasSigned, subject: userStore.displayUser, period: week.start...week.end)
+        TimesheetTotalsSource.totals(lines: payrollLines, draft: draftForFigures, decided: managerHasSigned, subject: userStore.displayUser, period: week.start...week.end)
     }
 
     /// The same sheet at the amounts the person entered (`timesheetTotals` in `raw` mode, no labour reviews), for the
     /// "before line manager adjustments" figures and the sign sheet.
     private var submittedTotals: RulebookTimesheetTotals? {
-        var unreviewed = draft
+        var unreviewed = draftForFigures
         unreviewed.payrollLineReviews = [:]
         return TimesheetTotalsSource.totals(lines: payrollLines, draft: unreviewed, decided: false, subject: userStore.displayUser, period: week.start...week.end)
     }
@@ -2280,6 +2408,35 @@ private struct MyTimesheetView: View {
             relatedUsers: userStore.organizationUsers
         )
         return summary.lineItems
+    }
+
+    /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingChanges`: whether this signed sheet's bookings changed since it was
+    /// signed (only once the whole pay run's bookings have loaded — never from a partial load).
+    private var bookingChange: RulebookSignedTimesheetChange? {
+        guard let currentUser = userStore.displayUser, SignedTimesheetChanges.isSigned(draft) else { return nil }
+        let inputs = SignedTimesheetChanges.Inputs(
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            operatives: operativeStore.allOperatives,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            organization: firebaseBackend.currentOrganization,
+            users: userStore.organizationUsers,
+            liveLoaded: periodBookingsState.loaded
+        )
+        return SignedTimesheetChanges.change(draft: draft, user: currentUser, period: week, inputs: inputs, lines: payrollLines)
+    }
+
+    /// The person must review and sign again (1.47.0 §8).
+    private var mustSignAgain: Bool { bookingChange?.waitingForPerson == true }
+
+    /// RULEBOOK 1.47.0 §8: a reopened sheet shows (and invoices) the live bookings' figures, never its stale signed
+    /// snapshot (web `draftForFigures`).
+    private var draftForFigures: TimesheetDraft {
+        guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
+        var live = draft
+        live.weeklyReportOverride = nil
+        return live
     }
 
     /// Approved annual leave in this period (`timesheetLeaveLines`): information rows only.
@@ -2591,12 +2748,17 @@ private struct MyTimesheetView: View {
                 .background(ProjectWorksRevampColors.requiredPillBg)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                if let blocked = payInputsBlockMessage, draft.operativeSignedAt == nil {
+                // RULEBOOK 1.47.0 §8: bookings changed since the person signed — they review the live bookings and sign
+                // again (`SIGNED_TIMESHEET_CHANGED_MESSAGE`).
+                if mustSignAgain {
+                    SignedTimesheetChangedBanner(message: bookingChange?.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage)
+                }
+                if let blocked = payInputsBlockMessage, draft.operativeSignedAt == nil || mustSignAgain {
                     PayInputsFailureBanner(message: blocked) {
                         Task { await loadDayRateHistory() }
                     }
                 }
-                if draft.operativeSignedAt == nil && payInputsBlockMessage == nil {
+                if (draft.operativeSignedAt == nil || mustSignAgain) && payInputsBlockMessage == nil {
                     NavigationLink {
                         SignTimesheetView(
                             week: week,
@@ -2615,7 +2777,7 @@ private struct MyTimesheetView: View {
                             }
                         )
                     } label: {
-                        Label("Continue to sign", systemImage: "pencil.and.scribble")
+                        Label(mustSignAgain ? "Review and sign again" : "Continue to sign", systemImage: "pencil.and.scribble")
                             .frame(maxWidth: .infinity)
                             .fontWeight(.semibold)
                             .padding(.vertical, 14)
@@ -2651,6 +2813,7 @@ private struct MyTimesheetView: View {
 
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
+                   bookingChange?.reopened != true,
                    let managerSignedAt = draft.managerSignedAt {
                     VStack(spacing: 8) {
                         if let base64 = draft.managerSignatureImageBase64,
@@ -2676,7 +2839,9 @@ private struct MyTimesheetView: View {
                 }
 
                 if let currentUser = userStore.displayUser,
-                   TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser) {
+                   TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser),
+                   // RULEBOOK 1.47.0 §8: no invoice from a reopened sheet's stale snapshot.
+                   CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
                     if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
                         Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
                             .font(.caption)
@@ -2957,6 +3122,11 @@ private struct MyTimesheetView: View {
             await MainActor.run { invoiceErrorMessage = blocked }
             return
         }
+        // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).mayGenerateInvoice`: never invoice a reopened sheet.
+        if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
+            await MainActor.run { invoiceErrorMessage = CanonicalBusinessEngine.signedTimesheetChangedMessage }
+            return
+        }
 
         let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
             period: weekInvoicePeriod,
@@ -3190,9 +3360,18 @@ private struct MyTimesheetView: View {
             saveErrorMessage = blocked
             return
         }
+        // RULEBOOK 1.47.0 §8: what the person signs is recorded only once every input has loaded (the roster too).
+        guard RulebookRosterSnapshot.hasLoaded else {
+            saveErrorMessage = TimesheetDraftStore.rosterNotLoadedMessage
+            return
+        }
         let signedByName = userStore.displayUser?.fullName.isEmpty == false
             ? (userStore.displayUser?.fullName ?? "")
             : (userStore.displayUser?.email ?? "")
+        // RULEBOOK 1.47.0 §8: a sheet reopened by a booking change rebuilds its snapshot from the live bookings when
+        // this signature completes it (self-signed; with a line manager the counter-signature rebuilds it).
+        let rebuild = CanonicalBusinessEngine.signedTimesheetActions(bookingChange).rebuildSnapshot
+        let previous = draft
         guard TimesheetDraftStore.applySignOff(
             to: &draft,
             role: "operative",
@@ -3201,10 +3380,21 @@ private struct MyTimesheetView: View {
             signedByUserId: userStore.displayUser?.id,
             signatureImageBase64: signatureImageData.base64EncodedString()
         ) else { return }
+        // RULEBOOK 1.47.0 §8 `signedTimesheetBookingRecord`: the bookings this signature covers, from the lines shown.
+        guard SignedTimesheetChanges.stampSignedBookings(
+            on: &draft,
+            lines: payrollLines,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings
+        ) else {
+            draft = previous
+            saveErrorMessage = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+            return
+        }
         if let current = userStore.displayUser {
             TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &draft, user: current)
         }
-        saveDraft()
+        saveDraft(rebuildSnapshot: rebuild)
         guard let current = userStore.displayUser else { return }
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
@@ -3283,7 +3473,7 @@ private struct MyTimesheetView: View {
     }
 
     @discardableResult
-    private func saveDraft() -> Task<String?, Never>? {
+    private func saveDraft(rebuildSnapshot: Bool = false) -> Task<String?, Never>? {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
@@ -3315,7 +3505,10 @@ private struct MyTimesheetView: View {
                     subject: current
                 ),
                 // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
-                snapshotInputsReady: payInputsBlockMessage == nil
+                snapshotInputsReady: payInputsBlockMessage == nil,
+                // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).rebuildSnapshot`: a reopened sheet's re-signature
+                // builds the snapshot fresh from the live bookings.
+                rebuildSnapshot: rebuildSnapshot && payInputsBlockMessage == nil
             )
             if let refusal {
                 saveErrorMessage = refusal
@@ -3978,7 +4171,8 @@ struct OperativeTimesheetsView: View {
         let _ = refreshVersion
         return directReports.filter { user in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
-            let bucket = TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user))
+            // RULEBOOK 1.47.0 §8: the bucket follows the sheet's booking change.
+            let bucket = TimesheetApprovalPolicy.listBucket(draft: draft, user: user, period: week)
             switch selectedTab {
             case .awaiting:
                 return bucket == "awaiting"
@@ -4255,6 +4449,8 @@ struct OperativeTimesheetsView: View {
         }
         .background(PPColor.page.ignoresSafeArea())
         .navigationTitle("User Timesheets")
+        // RULEBOOK 1.47.0 §8: rows, counts and Export read each sheet's booking change.
+        .attachesSignedTimesheetChanges()
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         // RULEBOOK 1.43.0 (review r318): Exported → Download PDF shares the PDF rebuilt from the stored, exported sheet.
@@ -4352,8 +4548,12 @@ struct OperativeTimesheetsView: View {
             ownSheetExportNotice = nil
             return
         }
+        // RULEBOOK 1.47.0 §8: a sheet waiting for the person to sign the changed bookings again is not signed.
+        let waitingForOwner = userStore.currentUser.flatMap {
+            SignedTimesheetChangeContext.shared.change(draft: ownSheet, user: $0, period: week)
+        }?.waitingForPerson == true
         ownSheetExportNotice = CanonicalBusinessEngine.timesheetExportOwnSheetNotice(
-            ownSheetSigned: ownSheet.operativeSignedAt != nil,
+            ownSheetSigned: ownSheet.operativeSignedAt != nil && !waitingForOwner,
             ownSheetExported: ownSheet.exportedAt != nil
         )
     }
@@ -4476,9 +4676,13 @@ struct OperativeTimesheetsView: View {
 
     @ViewBuilder
     private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
+        let bucket = TimesheetApprovalPolicy.listBucket(draft: draft, user: user, period: week)
         if TimesheetApprovalPolicy.isExported(draft) {
             statusPillLabel("Exported", symbol: "tray.and.arrow.up.fill", color: .secondary)
-        } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) {
+        } else if SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: week)?.waitingForPerson == true {
+            // RULEBOOK 1.47.0 §8: back with the person to sign again.
+            statusPillLabel(CanonicalBusinessEngine.signedTimesheetChangedStatus, symbol: "exclamationmark.triangle.fill", color: Color(.systemYellow))
+        } else if bucket == "signed" || (bucket == nil && TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user)) {
             statusPillLabel("Signed off", symbol: "checkmark.circle.fill", color: PPFamily.sites.bottom)
         } else if TimesheetApprovalPolicy.operativeHasSigned(draft) {
             statusPillLabel("Pending", symbol: "clock.fill", color: PPFamily.trade.bottom)
@@ -4634,6 +4838,8 @@ struct OperativeTimesheetsView: View {
         // closes stops the export with nobody stamped. A sheet exported elsewhere, or not signed in its fresh copy, is left.
         var prepared: [(operative: AppUser, draft: TimesheetDraft)] = []
         var skippedElsewhere: [String] = []
+        /// RULEBOOK 1.47.0 §8: sheets left out because their bookings changed since they were signed.
+        var skippedChanged: [String] = []
         for op in targets {
             guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
@@ -4655,6 +4861,27 @@ struct OperativeTimesheetsView: View {
                 continue
             }
             guard d.operativeSignedAt != nil else { continue }
+            // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).mayExport`, re-checked on the fresh copy before
+            // `exportedAt` is stamped: a reopened sheet is never exported on its stale snapshot.
+            let change = SignedTimesheetChanges.change(
+                draft: d,
+                user: op,
+                period: week,
+                inputs: SignedTimesheetChanges.Inputs(
+                    bookings: bookingStore.bookings,
+                    managerBookings: managerScheduleStore.managerSiteBookings,
+                    operatives: operativeStore.allOperatives,
+                    projects: projectStore.projects,
+                    smallWorks: projectStore.smallWorks,
+                    organization: firebaseBackend.currentOrganization,
+                    users: userStore.organizationUsers,
+                    liveLoaded: gateReady()
+                )
+            )
+            if !CanonicalBusinessEngine.signedTimesheetActions(change).mayExport {
+                skippedChanged.append(name(op))
+                continue
+            }
             // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never exported (fail closed).
             if let refusal = TimesheetWeeklyReportOverrideBuilder.applyIfFullyApproved(
                 to: &d,
@@ -4753,6 +4980,10 @@ struct OperativeTimesheetsView: View {
             skipped: skippedElsewhere,
             stampError: stampError
         )
+        if !skippedChanged.isEmpty {
+            let line = "\(skippedChanged.joined(separator: ", ")): \(CanonicalBusinessEngine.signedTimesheetExportSkippedMessage)"
+            exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        }
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
@@ -5013,6 +5244,8 @@ private struct OperativeTimesheetReviewView: View {
     let week: WeekRange
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
+    /// RULEBOOK 1.47.0 §8: the counter-signature of a reopened sheet rebuilds its snapshot on the save that follows.
+    @State private var rebuildSnapshotOnSave = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
     @State private var payInputsState: PayInputsLoadState = .loading
@@ -5095,10 +5328,41 @@ private struct OperativeTimesheetReviewView: View {
         if TimesheetApprovalPolicy.isExported(draft) {
             return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
         }
+        // RULEBOOK 1.47.0 §8: while the person must sign the changed bookings again nothing is reviewed or
+        // counter-signed; once they have, the line manager reviews and counter-signs again.
+        if bookingChange?.waitingForPerson == true { return false }
         return TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative)
-            && TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
+            && (TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
+                || bookingChange?.waitingForLineManager == true)
             && TimesheetApprovalPolicy.operativeHasSigned(draft)
             && !TimesheetApprovalPolicy.isExported(draft)
+    }
+
+    /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingChanges` for the subject's sheet (nil until the pay run's bookings
+    /// have loaded).
+    private var bookingChange: RulebookSignedTimesheetChange? {
+        guard SignedTimesheetChanges.isSigned(draft) else { return nil }
+        let inputs = SignedTimesheetChanges.Inputs(
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            operatives: operativeStore.allOperatives,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            organization: firebaseBackend.currentOrganization,
+            users: userStore.organizationUsers,
+            liveLoaded: periodBookingsState.loaded
+        )
+        return SignedTimesheetChanges.change(
+            draft: draft, user: operative, period: week, inputs: inputs, lines: payrollSummary.lineItems
+        )
+    }
+
+    /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot.
+    private var draftForFigures: TimesheetDraft {
+        guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
+        var live = draft
+        live.weeklyReportOverride = nil
+        return live
     }
 
     private var managerHasSigned: Bool {
@@ -5110,7 +5374,7 @@ private struct OperativeTimesheetReviewView: View {
     private var reviewTotals: RulebookTimesheetTotals? {
         TimesheetTotalsSource.totals(
             lines: payrollSummary.lineItems,
-            draft: draft,
+            draft: draftForFigures,
             decided: managerHasSigned || canManagerReview,
             reviewing: canManagerReview && !managerHasSigned,
             subject: operative,
@@ -5359,7 +5623,31 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var reviewSignOffSection: some View {
-        if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
+        // RULEBOOK 1.47.0 §8: the reviewer's note — back with the person, counter-sign again, or (exported) a warning.
+        if let note = bookingChange?.reviewerMessage {
+            SignedTimesheetChangedBanner(message: note)
+        }
+        if bookingChange?.waitingForLineManager == true, viewerIsReviewer {
+            if needsExtrasReviewMessage {
+                Text("Approve, decline or edit every expense and price-work line before signing off.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+            Button(action: handleSignOffTapped) {
+                Label("Counter-sign again", systemImage: "checkmark")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .foregroundStyle(.white)
+                    .background(Color.green)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .accessibilityIdentifier("operativeTimesheetReview.counterSignAgain")
+            .buttonStyle(.plain)
+            .disabled(!CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign)
+            .onlineOnly(isOnline: smartCache.isOnline)
+        } else if bookingChange?.reopened == true {
+            EmptyView()
+        } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Signed off", systemImage: "checkmark.circle.fill")
                     .frame(maxWidth: .infinity)
@@ -5404,6 +5692,14 @@ private struct OperativeTimesheetReviewView: View {
     private func handleSignOffTapped() {
         // RULEBOOK 1.30.2: nobody counter-signs their own sheet (`timesheetWriterIsReviewer`).
         guard viewerIsReviewer else { return }
+        // RULEBOOK 1.47.0 §8 `signedTimesheetActions`: no counter-signature while the person must sign again; a
+        // counter-signature of a reopened sheet rebuilds the snapshot from the live bookings.
+        let actions = CanonicalBusinessEngine.signedTimesheetActions(bookingChange)
+        guard actions.lineManagerMayCounterSign else {
+            saveErrorMessage = bookingChange?.reviewerMessage
+            return
+        }
+        rebuildSnapshotOnSave = actions.rebuildSnapshot
         // RULEBOOK 1.43.0 §8 (review r318): tapping re-checks the period's bookings (reloads them when no server answer
         // covers the period), so a stuck "Loading bookings…" recovers.
         ensurePeriodBookings()
@@ -5693,13 +5989,16 @@ private struct OperativeTimesheetReviewView: View {
                 )
             },
             // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
-            snapshotInputsReady: payInputsBlockMessage == nil
+            snapshotInputsReady: payInputsBlockMessage == nil,
+            // RULEBOOK 1.47.0 §8 `rebuildSnapshot`: only on the save after a counter-signature of a reopened sheet.
+            rebuildSnapshot: rebuildSnapshotOnSave && payInputsBlockMessage == nil
         )
         if let refusal {
             saveErrorMessage = refusal
             return
         }
         }
+        rebuildSnapshotOnSave = false
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let snapshot = draft

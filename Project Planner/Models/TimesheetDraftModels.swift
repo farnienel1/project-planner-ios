@@ -150,7 +150,17 @@ struct TimesheetDraft: Codable {
     /// they have no line manager). Weekly Report and the web app read this field
     /// from `organizations/{orgId}/settings/timesheet_{userId}_{weekStartUnix}`.
     var weeklyReportOverride: TimesheetWeeklyReportOverride?
-
+    /// RULEBOOK 1.47.0 §8 (owner fields): what the person signed — one row per booking of the live lines
+    /// (`signedTimesheetBookingRecord`), written with every operative signature. Nil on sheets signed before 1.47.0.
+    /// Read and kept on every save; never written for someone else's sheet.
+    var operativeSignedBookings: [TimesheetSignedBookingRow]? = nil
+    /// The `operativeSignedAt` the record belongs to (the same value, written together).
+    var operativeSignedBookingsSignedAt: Date? = nil
+    /// When the record was written — server time (`FieldValue.serverTimestamp()`), read back from the server.
+    var operativeSignedBookingsAt: Date? = nil
+    /// Local only (never stored): the record was just written and its server time is pending, so the next save sends
+    /// `operativeSignedBookingsAt = FieldValue.serverTimestamp()` once.
+    var operativeSignedBookingsAtPending: Bool? = nil
 }
 
 /// Shared iOS + web contract. Field names match Firestore `weeklyReportOverride`.
