@@ -228,11 +228,21 @@ struct PayrunSnapshotView: View {
         let operatives: [[String: Any]] = operativeStore.allOperatives.map { ["id": $0.documentId, "email": $0.email] as [String: Any] }
         // RULEBOOK 1.47.0 §8: each sheet's `bookingsChange` (Not started / Submitted follow it) when the loaded bookings
         // hold that sheet's pay run (`SignedTimesheetChangeContext` answers nil otherwise).
+        // Guardrail 1 (review of #234 item 3): a sheet filed under a former, same-email or other-case id is that
+        // person's (`personIdSet` through `RulebookPeople.ownerIds`), never only an exact users id match.
+        let users = userStore.organizationUsers
+        var personById: [String: AppUser] = [:]
+        for user in users { personById[user.id.lowercased()] = user }
+        for user in users {
+            for id in RulebookPeople.ownerIds(for: user, users: users) where personById[id.lowercased()] == nil {
+                personById[id.lowercased()] = user
+            }
+        }
         var withChanges = inputs
         withChanges.sheets = inputs.sheets.enumerated().map { index, sheet in
             guard index < sheetDrafts.count, let draft = sheetDrafts[index],
                   let userId = sheet["userId"] as? String,
-                  let user = userStore.organizationUsers.first(where: { $0.id == userId }),
+                  let user = personById[userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()],
                   let startKey = sheet["startDayKey"] as? String,
                   let start = OrganizationRulebookContext.date(fromDayKey: startKey) else { return sheet }
             let endKey = sheet["endDayKey"] as? String ?? ""

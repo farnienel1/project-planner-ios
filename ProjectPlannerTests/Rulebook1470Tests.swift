@@ -417,4 +417,226 @@ final class Rulebook1470Tests: XCTestCase {
             "This day is on a signed timesheet. If it has not been exported, it goes back to the person to review and sign again. An exported timesheet does not change."
         )
     }
+
+    // MARK: Review of #234 item 6 — the rest of web's 1.47.0 cases, through the iOS mappers
+
+    private let managerUUID = UUID(uuidString: "8B1E2D3C-4B5A-4978-8695-A4B3C2D1E0F3")!
+
+    private func labour(
+        id: UUID? = nil, start: String = "07:00", end: String = "16:00",
+        breakRemoved: Bool = false, ot: Double? = nil, written: Date? = nil
+    ) -> Booking {
+        Booking(
+            id: id ?? bookingUUID,
+            operativeId: operativeUUID,
+            projectId: jobUUID,
+            date: day,
+            timeSlot: .customHours,
+            bookedBy: "TEST-Manager",
+            workStartTime: start,
+            workEndTime: end,
+            isBreakRemoved: breakRemoved,
+            otMultiplierOverride: ot,
+            createdAt: written ?? signedAt.addingTimeInterval(-86_400),
+            updatedAt: written ?? signedAt.addingTimeInterval(-86_400)
+        )
+    }
+
+    /// A signed line with no booking fingerprint (a sheet signed before 1.46.0), or with one (`fingerprint`).
+    private func snapshotLine(_ id: UUID, fingerprint: String?, reviewPartOf: String? = nil, suffix: String = "normal") -> TimesheetWeeklyReportLabourLine {
+        TimesheetWeeklyReportLabourLine(
+            id: "op-\(id.uuidString)-\(suffix)", date: day, jobNumber: "TEST-1", projectName: "TEST-Kitchen refit",
+            locationKind: "project", details: "07:00–16:00", paidHours: 8.5, days: 1, amount: 250, isOvertime: suffix == "ot",
+            decision: .approved, bookingId: "op-\(id.uuidString)", bookingFingerprint: fingerprint,
+            reviewPartOf: reviewPartOf, isPayeDay: false, isLeave: false
+        )
+    }
+
+    /// A counter-signed sheet with only its snapshot (no 1.47.0 record).
+    private func snapshotDraft(_ lines: [TimesheetWeeklyReportLabourLine]) -> TimesheetDraft {
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = signedAt
+        draft.operativeSignedByName = "TEST-Operative"
+        draft.managerSignedAt = signedAt.addingTimeInterval(60)
+        draft.managerSignedByName = "TEST-Manager"
+        draft.weeklyReportOverride = TimesheetWeeklyReportOverride(
+            approvedAt: signedAt.addingTimeInterval(60), approvedByUserId: "TEST-manager", approvedByName: "TEST-Manager",
+            selfSigned: false, lines: lines, priceWork: [], expenses: []
+        )
+        return draft
+    }
+
+    private func managerLine(_ booking: ManagerSiteBooking) -> TimesheetPayrollLineItem {
+        TimesheetPayrollLineItem(
+            id: "mgr-\(booking.id.uuidString)-normal",
+            date: day,
+            jobNumber: "TEST-1",
+            projectName: "TEST-Kitchen refit",
+            details: "07:00–16:00",
+            paidHours: 8.5,
+            payrollBasis: .dayRate,
+            dayRate: 250,
+            hourlyRate: nil,
+            amount: 250,
+            isPayeDay: false,
+            isOvertimeLine: false,
+            bookingId: "mgr-\(booking.id.uuidString)",
+            bookingCreatedAt: booking.createdAt,
+            bookingUpdatedAt: booking.updatedAt,
+            bookingFingerprint: CanonicalBusinessEngine.payrollLineBookingFingerprint(OvertimeBookingInput(
+                id: booking.id.uuidString, collection: "managerSiteBookings", personId: "", dayKey: dayKey,
+                timeSlot: booking.timeSlot.rawValue, workStartTime: booking.workStartTime, workEndTime: booking.workEndTime,
+                isBreakRemoved: booking.isBreakRemoved, otMultiplierOverride: booking.otMultiplierOverride, status: nil, jobId: nil
+            )),
+            bookingCollection: "managerSiteBookings"
+        )
+    }
+
+    private func changeWithManager(
+        _ draft: TimesheetDraft, lines: [TimesheetPayrollLineItem], documents: [Booking], managers: [ManagerSiteBooking]
+    ) -> RulebookSignedTimesheetChange? {
+        let keys = SignedTimesheetChangeInputs.documentKeys(bookings: documents, managerBookings: managers)
+        return CanonicalBusinessEngine.signedTimesheetBookingChanges(
+            sheet: SignedTimesheetChangeInputs.sheet(draft, keys: keys),
+            liveLines: SignedTimesheetChangeInputs.liveLines(lines, keys: keys),
+            liveBookings: SignedTimesheetChangeInputs.bookingDocuments(bookings: documents, managerBookings: managers),
+            personIds: [personId, "TEST-user-147"],
+            liveLoaded: true,
+            selfSigned: false
+        )
+    }
+
+    /// Web "a sheet signed before 1.46.0 (no fingerprints) never reopens for hours; a delete still counts": only an
+    /// added or removed booking reopens it.
+    func testASheetSignedBefore146ReopensOnlyForAddedOrRemovedBookings() throws {
+        let draft = snapshotDraft([snapshotLine(bookingUUID, fingerprint: nil)])
+        let longer = labour(end: "18:00", written: signedAt.addingTimeInterval(3_600))
+        let hours = try XCTUnwrap(change(draft, lines: [line(longer)], documents: [longer]))
+        XCTAssertFalse(hours.changed, "no fingerprint: an hours change is not detectable")
+        let deleted = try XCTUnwrap(change(draft, lines: [], documents: []))
+        XCTAssertTrue(deleted.reopened)
+        XCTAssertEqual(deleted.basis, "bookingIds")
+        XCTAssertEqual(deleted.removedBookingIds.map { $0.lowercased() }, [bookingUUID.uuidString.lowercased()])
+        let original = labour()
+        let added = labour(id: secondUUID, start: "17:00", end: "19:00", written: signedAt.addingTimeInterval(3_600))
+        let more = try XCTUnwrap(change(draft, lines: [line(original), line(added)], documents: [original, added]))
+        XCTAssertTrue(more.reopened)
+        XCTAssertEqual(more.basis, "bookingIds")
+        XCTAssertEqual(more.addedBookingIds.map { $0.lowercased() }, [secondUUID.uuidString.lowercased()])
+    }
+
+    /// Web "(review nit) a record older than the latest signature is ignored": the snapshot is the reference.
+    func testARecordOlderThanTheSignatureIsIgnored() throws {
+        let original = labour()
+        let short = labour(end: "12:00")
+        var draft = snapshotDraft([snapshotLine(bookingUUID, fingerprint: fingerprint(original))])
+        XCTAssertTrue(SignedTimesheetChanges.stampSignedBookings(on: &draft, lines: [line(short)], bookings: [short], managerBookings: []))
+        draft.operativeSignedBookingsAt = signedAt.addingTimeInterval(1)
+        draft.operativeSignedBookingsAtPending = nil
+        // An older app signed again a day later without writing a record.
+        draft.operativeSignedAt = signedAt.addingTimeInterval(86_400)
+        let result = try XCTUnwrap(change(draft, lines: [line(original)], documents: [original]))
+        XCTAssertFalse(result.changed, "the stale record (07:00–12:00) is not the reference")
+    }
+
+    /// Web "(second review 3) additions use the record server time, conservatively while it is pending": a booking
+    /// written 5 minutes before a fast device's signature is still an addition.
+    func testABookingWrittenFiveMinutesBeforeAFastDevicesSignatureIsAnAddition() throws {
+        let original = labour()
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = signedAt
+        draft.operativeSignedByName = "TEST-Operative"
+        XCTAssertTrue(SignedTimesheetChanges.stampSignedBookings(on: &draft, lines: [line(original)], bookings: [original], managerBookings: []))
+        XCTAssertNil(draft.operativeSignedBookingsAt, "the server time is pending")
+        let unseen = labour(id: secondUUID, start: "17:00", end: "19:00", written: signedAt.addingTimeInterval(-300))
+        let pending = try XCTUnwrap(change(draft, lines: [line(original), line(unseen)], documents: [original, unseen]))
+        XCTAssertEqual(pending.addedBookingIds.map { $0.lowercased() }, [secondUUID.uuidString.lowercased()])
+        // The server time came back 8 minutes earlier than the (fast) device clock.
+        draft.operativeSignedBookingsAt = signedAt.addingTimeInterval(-480)
+        draft.operativeSignedBookingsAtPending = nil
+        let server = try XCTUnwrap(change(draft, lines: [line(original), line(unseen)], documents: [original, unseen]))
+        XCTAssertEqual(server.addedBookingIds.map { $0.lowercased() }, [secondUUID.uuidString.lowercased()])
+    }
+
+    /// Web "(second review) a labour booking moved to the manager schedule reopens (removed + added)".
+    func testALabourBookingMovedToTheManagerScheduleReopens() throws {
+        let original = labour()
+        let draft = signedDraft([original])
+        let moved = ManagerSiteBooking(
+            id: managerUUID, userId: "TEST-user-147", date: day, timeSlot: .customHours, locationType: .project,
+            locationId: jobUUID, workStartTime: "07:00", workEndTime: "16:00",
+            createdAt: signedAt.addingTimeInterval(3_600), updatedAt: signedAt.addingTimeInterval(3_600)
+        )
+        let result = try XCTUnwrap(changeWithManager(draft, lines: [managerLine(moved)], documents: [], managers: [moved]))
+        XCTAssertTrue(result.reopened)
+        XCTAssertEqual(result.waitingFor, "person")
+        XCTAssertEqual(result.removedBookingIds.map { $0.lowercased() }, [bookingUUID.uuidString.lowercased()])
+        XCTAssertEqual(result.addedBookingIds.map { $0.lowercased() }, [managerUUID.uuidString.lowercased()])
+    }
+
+    /// Web "(second review) … overtime rate and break toggle do" reopen.
+    func testAnOvertimeRateChangeReopensTheSheet() throws {
+        let original = labour()
+        let draft = signedDraft([original])
+        let rated = labour(ot: 2, written: signedAt.addingTimeInterval(3_600))
+        let result = try XCTUnwrap(change(draft, lines: [line(rated)], documents: [rated]))
+        XCTAssertTrue(result.reopened)
+        XCTAssertEqual(result.changedBookingIds.map { $0.lowercased() }, [bookingUUID.uuidString.lowercased()])
+    }
+
+    func testABreakToggleChangeReopensTheSheet() throws {
+        let original = labour()
+        let draft = signedDraft([original])
+        let noBreak = labour(breakRemoved: true, written: signedAt.addingTimeInterval(3_600))
+        let result = try XCTUnwrap(change(draft, lines: [line(noBreak)], documents: [noBreak]))
+        XCTAssertTrue(result.reopened)
+        XCTAssertEqual(result.changedBookingIds.map { $0.lowercased() }, [bookingUUID.uuidString.lowercased()])
+    }
+
+    /// Web "(second review) an Edit hours part (reviewPartOf) alone never reopens".
+    func testAnEditHoursPartAloneNeverReopens() throws {
+        let original = labour()
+        let fp = fingerprint(original)
+        let draft = snapshotDraft([
+            snapshotLine(bookingUUID, fingerprint: fp),
+            snapshotLine(bookingUUID, fingerprint: fp, reviewPartOf: "op-\(bookingUUID.uuidString)-normal", suffix: "ot"),
+        ])
+        let result = try XCTUnwrap(change(draft, lines: [line(original)], documents: [original]))
+        XCTAssertFalse(result.changed)
+    }
+
+    /// Review of #234 item 4: `invoiceGeneratedAt` reaches the rule. An `exportedAt` written with web's invoice (within
+    /// `TIMESHEET_INVOICE_EXPORT_LEFTOVER_MS`) is not an export (`resolveTimesheetExportedAtMs`), on the status fields and
+    /// in the booking-change answer alike.
+    func testAnInvoiceLeftoverExportIsNotAnExport() throws {
+        var draft = signedDraft([labour()])
+        draft.managerSignedAt = signedAt.addingTimeInterval(60)
+        draft.managerSignedByName = "TEST-Manager"
+        draft.exportedAt = signedAt.addingTimeInterval(120)
+        XCTAssertTrue(TimesheetApprovalPolicy.isExported(draft))
+        XCTAssertEqual(try XCTUnwrap(change(draft, lines: [line(labour())], documents: [labour()])).exported, true)
+        draft.invoiceGeneratedAt = signedAt.addingTimeInterval(110)
+        XCTAssertFalse(TimesheetApprovalPolicy.isExported(draft), "within the leftover window of the invoice")
+        XCTAssertEqual(try XCTUnwrap(change(draft, lines: [line(labour())], documents: [labour()])).exported, false)
+    }
+
+    /// Review of #234 item 2: the list memo is keyed by the people and working-hours content, not by counts.
+    func testTheListMemoKeyFollowsAnEmailOrWorkingHoursChange() {
+        let user = LogicFixtures.selfEmployedUser(id: "TEST-user-147", email: "a@example.com")
+        let operative = LogicFixtures.operative(id: operativeUUID, email: "a@example.com")
+        let before = SignedTimesheetChangeContext.peopleStamp(user: user, operatives: [operative], users: [user])
+        var renamed = operative
+        renamed.email = "b@example.com"
+        XCTAssertNotEqual(before, SignedTimesheetChangeContext.peopleStamp(user: user, operatives: [renamed], users: [user]))
+        var moved = user
+        moved.email = "b@example.com"
+        XCTAssertNotEqual(before, SignedTimesheetChangeContext.peopleStamp(user: moved, operatives: [operative], users: [moved]))
+        var organization = Organization(firestoreDocumentId: org, name: "TEST-Company 147")
+        let hoursBefore = SignedTimesheetChangeContext.organizationStamp(organization)
+        organization.settings.payrollTimePolicy.standardDayEnd = "17:00"
+        XCTAssertNotEqual(hoursBefore, SignedTimesheetChangeContext.organizationStamp(organization))
+        var options = Organization(firestoreDocumentId: org, name: "TEST-Company 147")
+        options.settings.myScheduleOptions.showOffice.toggle()
+        XCTAssertNotEqual(hoursBefore, SignedTimesheetChangeContext.organizationStamp(options))
+    }
 }

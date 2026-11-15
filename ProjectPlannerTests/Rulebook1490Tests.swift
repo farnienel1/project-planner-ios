@@ -48,66 +48,116 @@ final class Rulebook1490Tests: XCTestCase {
         return policy
     }
 
-    private func booking(_ dayKey: String, _ start: String, _ end: String, ot: Double? = nil) -> (Booking, Date) {
-        let day = OrganizationRulebookContext.date(fromDayKey: dayKey)!
-        return (Booking(
-            operativeId: UUID(),
+    private func booking(_ dayKey: String, _ start: String, _ end: String, ot: Double? = nil, operativeId: UUID) -> Booking {
+        Booking(
+            operativeId: operativeId,
             projectId: UUID(),
-            date: day,
+            date: OrganizationRulebookContext.date(fromDayKey: dayKey)!,
             timeSlot: .customHours,
             bookedBy: "TEST-Admin",
             workStartTime: start,
             workEndTime: end,
             otMultiplierOverride: ot
-        ), day)
-    }
-
-    /// One booking's pay as the collector prices it: the standard line on `standardPartDayHours`, the overtime line on
-    /// `overtimePartDayHours` (both from the rulebook), each through `payForHours`.
-    private func pay(_ entry: (Booking, Date), rate: ResolvedPayrollRate, policy: OrgPayrollTimePolicy) throws -> (standard: Double, overtime: Double, days: Double) {
-        let hours = try XCTUnwrap(PayrollHoursEngine.canonicalResult(booking: entry.0, day: entry.1, policy: policy))
-        let standardDivisor = try XCTUnwrap(hours.standardPartDayHours)
-        let overtimeDivisor = try XCTUnwrap(hours.overtimePartDayHours)
-        let standard = try XCTUnwrap(rate.payForHoursIfCalculated(max(0, hours.standardHours), standardDayHours: standardDivisor))
-        var overtime = 0.0
-        if hours.outsideHours > CanonicalBusinessEngine.timesheetOvertimeLineMinHours {
-            overtime = try XCTUnwrap(rate.payForHoursIfCalculated(
-                hours.outsideHours, standardDayHours: overtimeDivisor, otMultiplier: hours.outsideMultiplier
-            ))
-        }
-        return (standard, overtime, max(0, hours.standardHours) / standardDivisor)
-    }
-
-    func testTheOwnersReferenceFortnightIs3141Point76() throws {
-        let policy = ownerPolicy
-        let before = ResolvedPayrollRate(basis: .dayRate, dayRate: 250, hourlyRate: nil)
-        let after = ResolvedPayrollRate(basis: .dayRate, dayRate: 240, hourlyRate: nil)
-        let weekdays = [
-            booking("2026-11-02", "07:00", "16:00"),
-            booking("2026-11-03", "07:00", "16:00"),
-            booking("2026-11-04", "07:00", "16:00"),
-            booking("2026-11-05", "07:00", "21:00"),
-            booking("2026-11-06", "07:00", "23:00"),
-            booking("2026-11-09", "07:00", "22:30", ot: 2),
-            booking("2026-11-10", "07:00", "16:00"),
-        ]
-        var weekdayTotal = 0.0
-        for entry in weekdays {
-            let line = try pay(entry, rate: before, policy: policy)
-            weekdayTotal += line.standard + line.overtime
-        }
-        XCTAssertEqual(CanonicalBusinessEngine.roundPennies(weekdayTotal), 2661.76, accuracy: 0.001)
-
-        let saturday = try pay(booking("2026-11-14", "07:30", "14:00"), rate: after, policy: policy)
-        let sunday = try pay(booking("2026-11-15", "07:30", "14:00"), rate: after, policy: policy)
-        XCTAssertEqual(saturday.standard, 240, accuracy: 0.001)
-        XCTAssertEqual(sunday.standard, 240, accuracy: 0.001)
-        XCTAssertEqual(saturday.overtime, 0)
-        XCTAssertEqual(saturday.days, 1, accuracy: 0.0001, "a full Saturday window reads 1.00 day")
-        XCTAssertEqual(sunday.days, 1, accuracy: 0.0001)
-        XCTAssertEqual(
-            CanonicalBusinessEngine.roundPennies(weekdayTotal + saturday.standard + sunday.standard), 3141.76, accuracy: 0.001
         )
+    }
+
+    private func historyRow(_ userId: String, _ dayKey: String, _ rate: Double) -> OperativeDayRateHistoryEntry {
+        let day = OrganizationRulebookContext.date(fromDayKey: dayKey)!
+        return OperativeDayRateHistoryEntry(id: UUID(), userId: userId, operativeId: nil, dayRate: rate, effectiveAt: day, createdAt: day)
+    }
+
+    /// The owner's reference fortnight (2–15 Nov): Mon–Fri at £250/day, the rate changed to £240 from Sat 14 Nov, and a
+    /// full Saturday and Sunday window. Driven through the real `TimesheetPayrollCollector`, the invoice rows
+    /// (`TimesheetInvoiceRows` → `timesheetInvoiceRows` + `invoiceLines`), the timesheet total (`timesheetTotals`) and the
+    /// weekly report rows (`WeeklyReportPayRows`, the screen's own pricing) — every figure is the app's.
+    func testTheOwnersReferenceFortnightIs3141Point76OnTheTimesheetTheInvoiceAndTheWeeklyReport() throws {
+        let policy = ownerPolicy
+        let user = LogicFixtures.selfEmployedUser(id: "TEST-user-149", email: "test-149@example.com", dayRate: 240)
+        let operative = LogicFixtures.operative(id: UUID(), email: user.email, dayRate: 240)
+        let history = OperativeDayRateHistoryCollection(
+            byUserId: [user.id: [historyRow(user.id, "2026-10-01", 250), historyRow(user.id, "2026-11-14", 240)]],
+            byOperativeId: [:]
+        )
+        let bookings = [
+            booking("2026-11-02", "07:00", "16:00", operativeId: operative.id),
+            booking("2026-11-03", "07:00", "16:00", operativeId: operative.id),
+            booking("2026-11-04", "07:00", "16:00", operativeId: operative.id),
+            booking("2026-11-05", "07:00", "21:00", operativeId: operative.id),
+            booking("2026-11-06", "07:00", "23:00", operativeId: operative.id),
+            booking("2026-11-09", "07:00", "22:30", ot: 2, operativeId: operative.id),
+            booking("2026-11-10", "07:00", "16:00", operativeId: operative.id),
+            booking("2026-11-14", "07:30", "14:00", operativeId: operative.id),
+            booking("2026-11-15", "07:30", "14:00", operativeId: operative.id),
+        ]
+        let start = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: "2026-11-02"))
+        let end = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: "2026-11-15"))
+
+        // 1. The timesheet (collector).
+        let summary = TimesheetPayrollCollector.collect(
+            for: user,
+            in: start...end,
+            bookings: bookings,
+            managerBookings: [],
+            operatives: [operative],
+            projects: [],
+            smallWorks: [],
+            history: history,
+            policy: policy
+        )
+        XCTAssertFalse(summary.calculationFailed)
+        XCTAssertEqual(CanonicalBusinessEngine.roundPennies(summary.workAmount), 3141.76, accuracy: 0.001)
+        let weekendLines = summary.lineItems.filter {
+            let key = OrganizationRulebookContext.dayKey($0.date)
+            return key == "2026-11-14" || key == "2026-11-15"
+        }
+        XCTAssertEqual(weekendLines.count, 2, "a full window has no overtime line")
+        for line in weekendLines {
+            XCTAssertEqual(line.amount, 240, accuracy: 0.001)
+            XCTAssertEqual(line.paidHours / (line.standardDayHours ?? 0), 1, accuracy: 0.0001, "1.00 day on its counts-as")
+        }
+
+        // 2. The timesheet total (`timesheetTotals`, the sum of the invoice rows).
+        let totals = try XCTUnwrap(TimesheetTotalsSource.totals(
+            lines: summary.lineItems, draft: TimesheetDraft(), decided: false, subject: user, period: start...end
+        ))
+        XCTAssertEqual(totals.total, 3141.76, accuracy: 0.001)
+
+        // 3. The invoice rows.
+        let invoice = InvoiceLineItem.invoiceLines(TimesheetInvoiceRows.rows(
+            for: user, summary: summary, draft: TimesheetDraft(), extrasMode: .raw, period: start...end
+        ))
+        XCTAssertFalse(invoice.isEmpty)
+        XCTAssertEqual(CanonicalBusinessEngine.roundPennies(invoice.reduce(0) { $0 + $1.amount }), 3141.76, accuracy: 0.001)
+
+        // 4. The weekly report rows, priced as the screen prices them.
+        let operativeIds = PayrollRateResolver.personOperativeIds(user: user, operative: operative, operatives: [operative])
+        let booked = bookings.map { entry in
+            WeeklyReportPayRows.Booked(
+                probe: entry,
+                day: entry.date,
+                policy: policy,
+                name: user.fullName,
+                role: "Operative",
+                resolved: PayrollRateResolver.resolveForTimesheetDay(
+                    user: user,
+                    operative: operative,
+                    on: entry.date,
+                    history: history,
+                    standardDayHours: CanonicalBusinessEngine.weekdayPaidHours(policy),
+                    personOperativeIds: operativeIds
+                ),
+                paye: false,
+                subject: user
+            )
+        }
+        let report = try WeeklyReportPayRows.summaries(booked)
+        XCTAssertEqual(report.count, 1)
+        let person = try XCTUnwrap(report.first)
+        XCTAssertEqual(CanonicalBusinessEngine.roundPennies(person.totalPay), 3141.76, accuracy: 0.001)
+        let weekendRow = try XCTUnwrap(person.lines.first { abs(($0.rate ?? 0) - 240) < 0.001 }, "the £240/day row")
+        XCTAssertEqual(weekendRow.daysCell(WeeklyReportPayRows.formatDays), "2.00", "Saturday and Sunday: 2.00 days")
+        XCTAssertEqual(weekendRow.pay ?? 0, 480, accuracy: 0.001)
+        XCTAssertEqual(weekendRow.rateTypeLabel, "Normal")
     }
 
     func testSameAsMondayToFridayPaysOneDayAndHourlyPaysTheWeekdayDay() throws {
@@ -115,11 +165,30 @@ final class Rulebook1490Tests: XCTestCase {
         policy.saturday.countsAsFollowsWeekday = true
         policy.saturday.breakPaid = false
         XCTAssertEqual(CanonicalBusinessEngine.weekendCountsAsHours(policy.saturday, policy: policy), 8.5, accuracy: 0.0001)
-        let day = try pay(booking("2026-11-14", "07:30", "14:00"), rate: ResolvedPayrollRate(basis: .dayRate, dayRate: 240, hourlyRate: nil), policy: policy)
-        XCTAssertEqual(day.standard, 240, accuracy: 0.001)
-        XCTAssertEqual(day.days, 1, accuracy: 0.0001)
-        let hourly = try pay(booking("2026-11-14", "07:30", "14:00"), rate: ResolvedPayrollRate(basis: .hourly, dayRate: nil, hourlyRate: 30), policy: policy)
-        XCTAssertEqual(hourly.standard, 255, accuracy: 0.001)
+        func saturdayAmount(_ user: AppUser) throws -> Double {
+            let operative = LogicFixtures.operative(id: UUID(), email: user.email, dayRate: user.dayRate ?? 0)
+            let day = try XCTUnwrap(OrganizationRulebookContext.date(fromDayKey: "2026-11-14"))
+            let summary = TimesheetPayrollCollector.collect(
+                for: user,
+                in: day...day,
+                bookings: [booking("2026-11-14", "07:30", "14:00", operativeId: operative.id)],
+                managerBookings: [],
+                operatives: [operative],
+                projects: [],
+                smallWorks: [],
+                history: .empty,
+                policy: policy
+            )
+            XCTAssertFalse(summary.calculationFailed)
+            return summary.workAmount
+        }
+        let dayRate = LogicFixtures.selfEmployedUser(id: "TEST-day", email: "test-day@example.com", dayRate: 240)
+        XCTAssertEqual(try saturdayAmount(dayRate), 240, accuracy: 0.001)
+        var hourly = LogicFixtures.selfEmployedUser(id: "TEST-hourly", email: "test-hourly@example.com", dayRate: 0)
+        hourly.dayRate = nil
+        hourly.payBasis = "hourly"
+        hourly.hourlyRate = 30
+        XCTAssertEqual(try saturdayAmount(hourly), 255, accuracy: 0.001, "8.5h × £30")
     }
 
     func testCountsAsHasOneReaderAndOneFallback() {

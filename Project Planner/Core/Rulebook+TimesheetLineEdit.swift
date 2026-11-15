@@ -122,7 +122,10 @@ nonisolated struct RulebookBookingPaySlice: Hashable, Sendable {
     var breakHours: Double?
 
     init?(json: Any?) {
-        guard let row = json as? [String: Any], let pay = (row["pay"] as? NSNumber)?.doubleValue else { return nil }
+        // RULEBOOK 1.49.0 §7: the part's divisor is the script's (`payrollDayRateHours`); an answer without it is a
+        // failed answer (the caller fails the pricing), never a Swift fallback.
+        guard let row = json as? [String: Any], let pay = (row["pay"] as? NSNumber)?.doubleValue,
+              let standardDayHours = (row["standardDayHours"] as? NSNumber)?.doubleValue else { return nil }
         payBasis = row["payBasis"] as? String ?? "day"
         isOvertime = row["isOvertime"] as? Bool ?? false
         otMultiplier = (row["otMultiplier"] as? NSNumber)?.doubleValue
@@ -130,7 +133,7 @@ nonisolated struct RulebookBookingPaySlice: Hashable, Sendable {
         paidHours = (row["paidHours"] as? NSNumber)?.doubleValue ?? 0
         self.pay = pay
         isPaye = row["isPaye"] as? Bool ?? false
-        standardDayHours = (row["standardDayHours"] as? NSNumber)?.doubleValue ?? 0
+        self.standardDayHours = standardDayHours
         clockHours = (row["clockHours"] as? NSNumber)?.doubleValue
         breakHours = (row["breakHours"] as? NSNumber)?.doubleValue
     }

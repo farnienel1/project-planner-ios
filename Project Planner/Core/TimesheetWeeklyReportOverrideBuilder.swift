@@ -292,7 +292,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 // RULEBOOK 1.49.0 §8: a standard part divides by the live standard line's own day (a set-window weekend
                 // day's counts-as, `payrollDayRateHours`); an overtime part by the weekday paid day.
                 let standardPart: Double = {
-                    if !line.isOvertimeLine, let own = line.standardDayHours, own >= 1 {
+                    if !line.isOvertimeLine, let own = line.standardDayHours {
                         return CanonicalBusinessEngine.orgDayHours(own) ?? standard
                     }
                     return standard
@@ -573,8 +573,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
         policy: OrgPayrollTimePolicy
     ) -> Double {
         // RULEBOOK 1.49.0 §8: days against the line's own divisor (the collector sets it per part, `payrollDayRateHours`).
-        let own = line.standardDayHours.flatMap { $0 >= 1 ? $0 : nil }
-        let standard = max(own ?? CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
+        let standard = max(line.standardDayHours ?? CanonicalBusinessEngine.weekdayPaidHours(policy), 0.01)
         let baseDays = max(0, line.paidHours) / standard
         guard originalAmount > 0.0001 else { return baseDays }
         return baseDays * (effectiveAmount / originalAmount)

@@ -359,49 +359,6 @@ struct InvoicingView: View {
     }
 
     @ViewBuilder
-    private var previousTimesheetsCard: some View {
-        NavigationLink {
-            PreviousTimesheetsView(settings: settings)
-                .environmentObject(firebaseBackend)
-                .environmentObject(userStore)
-                .environmentObject(bookingStore)
-                .environmentObject(operativeStore)
-                .environmentObject(projectStore)
-                .environmentObject(managerScheduleStore)
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(.blue)
-                    .frame(width: 34, height: 34)
-                    .background(Color.blue.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Previous Timesheets")
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text("View previous payment runs and statuses.")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(14)
-            .background(Color(.systemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color(.separator), lineWidth: 0.5)
-            )
-        }
-        .accessibilityIdentifier("invoicing.clockArrowCirclepath")
-        .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
     private var managerLandingCards: some View {
         let _ = landingVersion
         let reviewUsers = managerReviewUsersIncludingPending()
@@ -961,6 +918,8 @@ enum TimesheetDraftStore {
             row["approvedByName"] = draft.managerSignedByName ?? ""
         }
         put("exportedAt", draft.exportedAt)
+        // `resolveTimesheetExportedAtMs` (inside `parseTimesheetStatusFields`) reads it beside `exportedAt`.
+        put("invoiceGeneratedAt", draft.invoiceGeneratedAt)
         return row
     }
 
@@ -1543,6 +1502,7 @@ enum TimesheetDraftStore {
         let managerSignature = (map["managerSignatureImageBase64"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         output.managerSignatureImageBase64 = managerSignature.isEmpty ? nil : managerSignature
         output.exportedAt = firestoreDate(map["exportedAt"])
+        output.invoiceGeneratedAt = firestoreDate(map["invoiceGeneratedAt"])
         output.approvedAt = firestoreDate(map["approvedAt"])
         // RULEBOOK 1.47.0 §8: the person's signed-bookings record (missing on sheets signed before 1.47.0).
         if let rows = map["operativeSignedBookings"] as? [Any] {
@@ -2443,6 +2403,14 @@ private struct MyTimesheetView: View {
     /// The person must review and sign again (1.47.0 §8).
     private var mustSignAgain: Bool { bookingChange?.waitingForPerson == true }
 
+    /// RULEBOOK 1.47.0 §8 (review of #234 item 5): a signed sheet's booking-change answer is ready — the whole pay run's
+    /// bookings and the operatives list have loaded and the script answered. Until then nothing that a reopened sheet
+    /// may not do (Generate Invoice) is offered: "not loaded" is not "unchanged".
+    private var bookingCheckReady: Bool {
+        guard SignedTimesheetChanges.isSigned(draft) else { return true }
+        return periodBookingsState.loaded && operativesLoaded && bookingChange != nil
+    }
+
     /// The operatives list of the open organisation has loaded (the person's booking ids depend on it).
     private var operativesLoaded: Bool {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return false }
@@ -2888,7 +2856,19 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.generateInvoice")
                     .buttonStyle(.plain)
-                    .disabled(isGeneratingInvoice)
+                    .disabled(isGeneratingInvoice || !bookingCheckReady)
+                    .opacity(bookingCheckReady ? 1 : 0.5)
+
+                    if !bookingCheckReady {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Checking the bookings on this timesheet…")
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .accessibilityIdentifier("timesheets.generateInvoice.checking")
+                    }
 
                     if let invoiceErrorMessage {
                         Text(invoiceErrorMessage)
@@ -3141,7 +3121,12 @@ private struct MyTimesheetView: View {
             await MainActor.run { invoiceErrorMessage = blocked }
             return
         }
-        // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).mayGenerateInvoice`: never invoice a reopened sheet.
+        // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).mayGenerateInvoice`: never invoice a reopened sheet, and
+        // never before the check could run (review of #234 item 5).
+        if !bookingCheckReady {
+            await MainActor.run { invoiceErrorMessage = "Still checking the bookings on this timesheet. Try again in a moment." }
+            return
+        }
         if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
             await MainActor.run { invoiceErrorMessage = CanonicalBusinessEngine.signedTimesheetChangedMessage }
             return
@@ -3666,399 +3651,6 @@ private struct MyTimesheetView: View {
     }
 }
 
-private struct PreviousTimesheetsView: View {
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-
-    let settings: OrganizationInvoicingSettings
-
-    @State private var runs: [PreviousTimesheetRun] = []
-    @State private var selectedRunId: String = ""
-    @State private var isLoading = false
-    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
-    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
-    @State private var payInputsState: PayInputsLoadState = .loading
-    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
-    private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
-    }
-    @State private var showInvoiceUTRWarning = false
-    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
-    @State private var includeTaxIds = false
-    @State private var invoiceTaxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
-    @State private var showInvoiceSuccess = false
-    @State private var generatedInvoiceURL: URL?
-    @State private var isGeneratingInvoice = false
-    @State private var invoiceErrorMessage: String?
-    @State private var pendingInvoicePeriod: InvoicePeriodOption?
-
-    private var selectedRun: PreviousTimesheetRun? {
-        runs.first(where: { $0.id == selectedRunId }) ?? runs.first
-    }
-
-    private var selectedPeriod: InvoicePeriodOption? {
-        guard let selectedRun else { return nil }
-        return InvoicePeriodOption(
-            id: selectedRun.id,
-            title: "Signed timesheet period",
-            dateRangeText: selectedRun.week.title,
-            startDate: selectedRun.week.start,
-            endDate: selectedRun.week.end
-        )
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("Previous payment runs")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-
-                if runs.isEmpty {
-                    if isLoading {
-                        ProgressView("Loading previous timesheets...")
-                    } else {
-                        ContentUnavailableView(
-                            "No Previous Timesheets",
-                            systemImage: "clock.arrow.circlepath",
-                            description: Text("Previous runs appear here once submitted.")
-                        )
-                    }
-                } else {
-                    Menu {
-                        ForEach(runs) { run in
-                            Button {
-                                selectedRunId = run.id
-                            } label: {
-                                Text(run.week.title)
-                            }
-                                .accessibilityIdentifier("timesheets.row.\(run.id)")
-                        }
-                    } label: {
-                        HStack {
-                            Text("Select previous payment run")
-                                .foregroundStyle(.primary)
-                            Spacer()
-                            Text(selectedRun?.week.title ?? "Choose")
-                                .foregroundStyle(.blue)
-                                .lineLimit(1)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .foregroundStyle(.blue)
-                        }
-                        .padding(14)
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    }
-                        .accessibilityIdentifier("timesheets.selectPreviousPaymentRun")
-
-                    if let run = selectedRun {
-                        summaryCard(run)
-                        signatureCard(run)
-                        if run.isCompleted,
-                           let selectedPeriod,
-                           let currentUser = userStore.displayUser {
-                            InvoiceTaxIdsOption(subject: currentUser, isOn: $includeTaxIds)
-                            Button {
-                                beginInvoiceGeneration(for: currentUser, period: selectedPeriod)
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    if isGeneratingInvoice {
-                                        ProgressView().tint(.white)
-                                    } else {
-                                        Text("Generate Invoice")
-                                            .fontWeight(.semibold)
-                                    }
-                                    Spacer()
-                                }
-                                .padding(.vertical, 14)
-                                .background(Color.green)
-                                .foregroundStyle(.white)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-                            .accessibilityIdentifier("timesheets.generateInvoice")
-                            .buttonStyle(.plain)
-                            .disabled(isGeneratingInvoice)
-
-                            if let invoiceErrorMessage {
-                                Text(invoiceErrorMessage)
-                                    .font(.footnote)
-                                    .foregroundStyle(.red)
-                            }
-                        }
-                    }
-                }
-            }
-            .padding(16)
-        }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle("Previous Timesheets")
-        .navigationBarTitleDisplayMode(.inline)
-        .task {
-            await loadDayRateHistory()
-            await loadRuns()
-        }
-        .sheet(isPresented: $showInvoiceUTRWarning) {
-            InvoiceUTRBlankWarningSheet(
-                onBack: { showInvoiceUTRWarning = false },
-                onAccept: {
-                    showInvoiceUTRWarning = false
-                    Task { await runPendingInvoiceGeneration() }
-                }
-            )
-        }
-        .sheet(isPresented: $showInvoiceSuccess) {
-            if let generatedInvoiceURL {
-                InvoiceGeneratedSuccessSheet(pdfURL: generatedInvoiceURL) {
-                    showInvoiceSuccess = false
-                    self.generatedInvoiceURL = nil
-                }
-            }
-        }
-    }
-
-    private func beginInvoiceGeneration(for user: AppUser, period: InvoicePeriodOption) {
-        invoiceErrorMessage = nil
-        pendingInvoicePeriod = period
-        Task {
-            invoiceTaxIds = await InvoicePDFGenerationSupport.taxIdsForExport(subject: user, requested: includeTaxIds, userStore: userStore)
-            if InvoicePDFGenerationSupport.shouldWarnBlankUTR(requested: includeTaxIds, taxIds: invoiceTaxIds) {
-                showInvoiceUTRWarning = true
-            } else {
-                await runPendingInvoiceGeneration()
-            }
-        }
-    }
-
-    private func runPendingInvoiceGeneration() async {
-        guard let period = pendingInvoicePeriod else { return }
-        guard !isGeneratingInvoice else { return }
-        if payInputsState != .loaded { await loadDayRateHistory() }
-        if let blocked = payInputsBlockMessage {
-            invoiceErrorMessage = blocked
-            return
-        }
-        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
-        PayInputsLoad.ensurePeriodBookings(
-            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-            from: period.startDate, retryFailed: true
-        )
-        if let blocked = PayInputsLoad.blockMessage(
-            state: payInputsState,
-            organization: firebaseBackend.currentOrganization,
-            bookings: PayInputsLoad.periodBookings(
-                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-                from: period.startDate
-            )
-        ) {
-            invoiceErrorMessage = blocked
-            return
-        }
-        isGeneratingInvoice = true
-        invoiceErrorMessage = nil
-        defer { isGeneratingInvoice = false }
-
-        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
-            period: period,
-            settings: settings,
-            firebaseBackend: firebaseBackend,
-            userStore: userStore,
-            bookingStore: bookingStore,
-            operativeStore: operativeStore,
-            projectStore: projectStore,
-            managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection,
-            taxIds: invoiceTaxIds
-        )
-
-        if let pdfURL {
-            generatedInvoiceURL = pdfURL
-            showInvoiceSuccess = true
-        } else {
-            invoiceErrorMessage = "Failed to generate the invoice PDF."
-        }
-    }
-
-    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
-    private func loadDayRateHistory() async {
-        let result = await PayInputsLoad.loadHistory(firebaseBackend)
-        await MainActor.run {
-            if let history = result.history { dayRateHistoryCollection = history }
-            payInputsState = result.state
-        }
-    }
-
-    @ViewBuilder
-    private func summaryCard(_ run: PreviousTimesheetRun) -> some View {
-        // RULEBOOK 1.22.0 §8: `CanonicalBusinessEngine.timesheetTotals` — the summary total is the invoice total.
-        let summary = bookingSummary(for: run.week, draft: run.draft)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(run.isCompleted ? "Completed" : "Sign Off Pending")
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .background((run.isCompleted ? Color.green : Color.orange).opacity(0.16))
-                    .foregroundStyle(run.isCompleted ? .green : .orange)
-                    .clipShape(Capsule())
-                Spacer()
-                Text(run.week.title)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            row("Hours", summary.map { "\(formatHours($0.hours))h" } ?? "—")
-            row("Overtime", summary.map { "\(formatHours($0.overtimeHours))h" } ?? "—")
-            row("Price work", summary.map { OrgMoney.format($0.priceWork) } ?? "—")
-            row("Expenses", summary.map { OrgMoney.format($0.expenses) } ?? "—")
-            Divider()
-            row("Summary total", summary.map { OrgMoney.format($0.total) } ?? "—")
-        }
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    @ViewBuilder
-    private func signatureCard(_ run: PreviousTimesheetRun) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Signature Status")
-                .font(.headline)
-            Text("Operative signed: \(run.draft.operativeSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No")")
-                .font(.footnote)
-                .foregroundStyle(run.draft.operativeSignedAt == nil ? .orange : .green)
-            Text("Manager signed: \(run.draft.managerSignedAt?.formatted(date: .abbreviated, time: .shortened) ?? "No")")
-                .font(.footnote)
-                .foregroundStyle(run.draft.managerSignedAt == nil ? .orange : .green)
-        }
-        .padding(14)
-        .background(Color(.systemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-    }
-
-    private func row(_ key: String, _ value: String) -> some View {
-        HStack {
-            Text(key).foregroundStyle(.secondary)
-            Spacer()
-            Text(value).fontWeight(.semibold)
-        }
-        .font(.subheadline)
-    }
-
-    private func loadRuns() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
-        guard let userId = userStore.displayUser?.id else { return }
-        await MainActor.run { isLoading = true }
-        var output: [PreviousTimesheetRun] = []
-        if let rows = try? await firebaseBackend.listTimesheetStates(
-            organizationId: orgId,
-            userId: userId,
-            limit: 200
-        ) {
-            for row in rows {
-                guard let weekStart = firestoreDate(row["weekStart"]),
-                      let storedStart = TimesheetDraftStore.organizationDay(weekStart) else { continue }
-                TimesheetDraftStore.rememberBounds(from: row, userId: userId, weekStart: storedStart, organizationId: orgId)
-                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: userId, weekStart: storedStart, organizationId: orgId)
-                let week = TimesheetPayrollPolicy.periodMatchingStoredStart(
-                    storedStart,
-                    storedEnd: storedEnd,
-                    settings: settings
-                )
-                guard let draft = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
-                var adjusted = draft
-                if let user = userStore.displayUser {
-                    TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &adjusted, user: user)
-                }
-                let hasAnyContent = !adjusted.expenseEntries.isEmpty
-                    || !adjusted.priceWorkEntries.isEmpty
-                    || adjusted.operativeSignedAt != nil
-                    || adjusted.managerSignedAt != nil
-                    || !adjusted.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                guard hasAnyContent else { continue }
-                TimesheetDraftStore.save(adjusted, userId: userId, weekStart: storedStart, organizationId: orgId)
-                output.append(
-                    PreviousTimesheetRun(
-                        id: "prev-\(Int(week.start.timeIntervalSince1970))",
-                        week: week,
-                        draft: adjusted,
-                        owner: userStore.displayUser
-                    )
-                )
-            }
-        }
-        if output.isEmpty {
-            let current = TimesheetPayrollPolicy.payPeriodContaining(settings: settings)
-            for week in TimesheetPayrollPolicy.previousPayPeriods(count: 32, settings: settings) {
-                guard week.start != current.start else { continue }
-                let local = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
-                _ = await TimesheetDraftStore.refreshFromCloud(
-                    userId: userId,
-                    weekStart: week.start,
-                    firebaseBackend: firebaseBackend,
-                    organizationId: orgId
-                )
-                let merged = TimesheetDraftStore.load(userId: userId, weekStart: week.start)
-                let hasAnyContent = !merged.expenseEntries.isEmpty
-                    || !merged.priceWorkEntries.isEmpty
-                    || merged.operativeSignedAt != nil
-                    || merged.managerSignedAt != nil
-                    || !merged.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || local.operativeSignedAt != nil
-                if hasAnyContent {
-                    output.append(
-                        PreviousTimesheetRun(
-                            id: "prev-\(Int(week.start.timeIntervalSince1970))",
-                            week: week,
-                            draft: merged,
-                            owner: userStore.displayUser
-                        )
-                    )
-                }
-            }
-        }
-        await MainActor.run {
-            runs = output.sorted(by: { $0.week.start > $1.week.start })
-            selectedRunId = runs.first?.id ?? ""
-            isLoading = false
-        }
-    }
-
-    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for one past run: decided, as the export invoice.
-    private func bookingSummary(for week: WeekRange, draft: TimesheetDraft) -> RulebookTimesheetTotals? {
-        guard let currentUser = userStore.displayUser else { return nil }
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
-        let summary = TimesheetPayrollCollector.collect(
-            for: currentUser,
-            week: week,
-            bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings,
-            operatives: operativeStore.allOperatives,
-            projects: projectStore.projects,
-            smallWorks: projectStore.smallWorks,
-            history: dayRateHistoryCollection,
-            policy: policy,
-            organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions,
-            relatedUsers: userStore.organizationUsers
-        )
-        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: currentUser, period: week.start...week.end)
-    }
-
-    private func formatHours(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.001 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
-    }
-}
-
 private struct TimesheetAutoOpenTarget: Identifiable, Hashable {
     let userId: String
     let weekStart: Date
@@ -4082,23 +3674,6 @@ private struct ManagerTimesheetRow: Identifiable, Hashable {
     let id: String
     let user: AppUser
     let week: WeekRange
-}
-
-private struct PreviousTimesheetRun: Identifiable {
-    let id: String
-    let week: WeekRange
-    let draft: TimesheetDraft
-    /// RULEBOOK §8 `isTimesheetFullySigned(fields, hasLineManager)` for the owner (`timesheetSelfSigned`): a self-signed
-    /// sheet is complete with the owner's signature alone. It used to need a manager signature too, so a self-signed
-    /// admin's past runs read "Sign Off Pending" forever.
-    let isCompleted: Bool
-
-    init(id: String, week: WeekRange, draft: TimesheetDraft, owner: AppUser?) {
-        self.id = id
-        self.week = week
-        self.draft = draft
-        self.isCompleted = owner.map { TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: $0) } ?? false
-    }
 }
 
 /// Internal (1.33.0) so the Payrun Snapshot can open a person's timesheet for a pay run.
@@ -4852,11 +4427,13 @@ struct OperativeTimesheetsView: View {
             exportMessage = "Failed: no organisation."
             return
         }
+        // RULEBOOK 1.47.0 §8 (review of #234 item 5): the booking-change check needs the whole pay run's bookings AND the
+        // operatives list (the person's ids); until both have loaded nothing is exported (never fail open).
         func gateReady() -> Bool {
             PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: week.start
-            ).loaded
+            ).loaded && operativeStore.finishedLoadOrganizationId == exportOrgId && !operativeStore.isLoading
         }
         func name(_ user: AppUser) -> String { user.fullName.isEmpty ? user.email : user.fullName }
 
@@ -4902,9 +4479,14 @@ struct OperativeTimesheetsView: View {
                     smallWorks: projectStore.smallWorks,
                     organization: firebaseBackend.currentOrganization,
                     users: userStore.organizationUsers,
-                    liveLoaded: gateReady() && operativeStore.finishedLoadOrganizationId == exportOrgId
+                    liveLoaded: gateReady()
                 )
             )
+            // No answer (the script did not run) is not a clean sheet: stop rather than export unchecked.
+            guard let change else {
+                exportMessage = TimesheetDraftStore.exportStoppedMessage
+                return
+            }
             if !CanonicalBusinessEngine.signedTimesheetActions(change).mayExport {
                 skippedChanged.append(name(op))
                 continue
@@ -5391,6 +4973,13 @@ private struct OperativeTimesheetReviewView: View {
         return operativeStore.finishedLoadOrganizationId == orgId && !operativeStore.isLoading
     }
 
+    /// RULEBOOK 1.47.0 §8 (review of #234 item 5): the booking-change answer is ready (the pay run's bookings and the
+    /// operatives list loaded, the script answered). Until then nothing is counter-signed: "not loaded" is not "unchanged".
+    private var bookingCheckReady: Bool {
+        guard SignedTimesheetChanges.isSigned(draft) else { return true }
+        return periodBookingsState.loaded && operativesLoaded && bookingChange != nil
+    }
+
     /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot.
     private var draftForFigures: TimesheetDraft {
         guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
@@ -5483,7 +5072,8 @@ private struct OperativeTimesheetReviewView: View {
                 showingManagerSignSheet: $showingManagerSignSheet,
                 userStore: userStore,
                 notificationService: notificationService,
-                onSaveDraft: saveDraft
+                onSaveDraft: saveDraft,
+                counterSignAllowed: counterSignAllowedNow
             ))
     }
 
@@ -5677,7 +5267,7 @@ private struct OperativeTimesheetReviewView: View {
             }
             .accessibilityIdentifier("operativeTimesheetReview.counterSignAgain")
             .buttonStyle(.plain)
-            .disabled(!CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign)
+            .disabled(!bookingCheckReady || !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign)
             .onlineOnly(isOnline: smartCache.isOnline)
         } else if bookingChange?.reopened == true {
             EmptyView()
@@ -5711,10 +5301,20 @@ private struct OperativeTimesheetReviewView: View {
             }
             .accessibilityIdentifier("operativeTimesheetReview.signOffFinalise")
             .buttonStyle(.plain)
-            .disabled(!TimesheetApprovalPolicy.operativeHasSigned(draft))
-            .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) ? 1 : 0.5)
+            .disabled(!TimesheetApprovalPolicy.operativeHasSigned(draft) || !bookingCheckReady)
+            .opacity(TimesheetApprovalPolicy.operativeHasSigned(draft) && bookingCheckReady ? 1 : 0.5)
             // RULEBOOK §2: timesheet signing is online only.
             .onlineOnly(isOnline: smartCache.isOnline)
+            if TimesheetApprovalPolicy.operativeHasSigned(draft), !bookingCheckReady {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Checking the bookings on this timesheet…")
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .accessibilityIdentifier("operativeTimesheetReview.checkingBookings")
+            }
         }
     }
 
@@ -5723,16 +5323,28 @@ private struct OperativeTimesheetReviewView: View {
             && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty)
     }
 
+    /// RULEBOOK 1.47.0 §8 (review of #234 item 5): the counter-signature waits for the booking-change check and follows
+    /// `signedTimesheetActions(change).lineManagerMayCounterSign`; the reason is shown when it may not.
+    private func counterSignAllowedNow() -> Bool {
+        guard bookingCheckReady else {
+            saveErrorMessage = "Still checking the bookings on this timesheet. Try again in a moment."
+            return false
+        }
+        guard CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign else {
+            saveErrorMessage = bookingChange?.reviewerMessage
+            return false
+        }
+        return true
+    }
+
     private func handleSignOffTapped() {
         // RULEBOOK 1.30.2: nobody counter-signs their own sheet (`timesheetWriterIsReviewer`).
         guard viewerIsReviewer else { return }
         // RULEBOOK 1.47.0 §8 `signedTimesheetActions`: no counter-signature while the person must sign again; a
         // counter-signature of a reopened sheet rebuilds the snapshot from the live bookings.
+        ensurePeriodBookings()
+        guard counterSignAllowedNow() else { return }
         let actions = CanonicalBusinessEngine.signedTimesheetActions(bookingChange)
-        guard actions.lineManagerMayCounterSign else {
-            saveErrorMessage = bookingChange?.reviewerMessage
-            return
-        }
         rebuildSnapshotOnSave = actions.rebuildSnapshot
         // RULEBOOK 1.43.0 §8 (review r318): tapping re-checks the period's bookings (reloads them when no server answer
         // covers the period), so a stuck "Loading bookings…" recovers.
@@ -6187,6 +5799,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     let userStore: UserStore
     let notificationService: NotificationService
     let onSaveDraft: () -> Void
+    /// RULEBOOK 1.47.0 §8: whether the counter-signature may be saved now (the review screen's check; it shows why not).
+    let counterSignAllowed: () -> Bool
 
     func body(content: Content) -> some View {
         content
@@ -6349,6 +5963,12 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 let signedByName = userStore.displayUser?.fullName.isEmpty == false
                     ? (userStore.displayUser?.fullName ?? "")
                     : (userStore.displayUser?.email ?? "")
+                // RULEBOOK 1.47.0 §8 (review of #234 item 5): re-checked when the signature is saved — never counter-sign
+                // before the booking-change check could run, nor a sheet waiting for the person.
+                guard counterSignAllowed() else {
+                    showingManagerSignSheet = false
+                    return
+                }
                 guard TimesheetDraftStore.applySignOff(
                     to: &draft,
                     role: "manager",
@@ -7257,555 +6877,6 @@ private enum InvoicePDFGenerationSupport {
     }
 }
 
-private struct GenerateInvoiceView: View {
-    @EnvironmentObject var firebaseBackend: FirebaseBackend
-    @EnvironmentObject var userStore: UserStore
-    @EnvironmentObject var bookingStore: BookingStore
-    @EnvironmentObject var operativeStore: OperativeStore
-    @EnvironmentObject var projectStore: ProjectStore
-    @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
-
-    let settings: OrganizationInvoicingSettings
-    let lockedPeriod: InvoicePeriodOption?
-
-    @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
-    /// Pay-rate history read state: a failed read blocks sign-off, the agreed snapshot, invoices and exports.
-    @State private var payInputsState: PayInputsLoadState = .loading
-    /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
-    private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
-    }
-    @State private var selectedPeriodId: String = ""
-    @State private var isGenerating = false
-    @State private var errorMessage: String?
-    @State private var generatedPDFURL: URL?
-    @State private var showInvoiceUTRWarning = false
-    /// Off each time the screen opens (`SENSITIVE_EXPORT_OPTION_LABEL`).
-    @State private var includeTaxIds = false
-    @State private var invoiceTaxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
-    @State private var showInvoiceSuccess = false
-
-    private var periodOptions: [InvoicePeriodOption] {
-        if let lockedPeriod {
-            return [lockedPeriod]
-        }
-        if settings.paymentRunMode == .recurringTimeframe {
-            guard let period = recurringInvoicePeriod() else { return [] }
-            return [period]
-        }
-        let historical = historicalDateRangePeriods(limit: 18)
-        if !historical.isEmpty { return historical }
-
-        // Fallback keeps Generate Invoice usable even when historic periods are unavailable.
-        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
-        let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: Date())) ?? Date()
-        let monthLabel = monthStart.formatted(.dateTime.month(.abbreviated).year())
-        guard let firstRange = settings.normalizedRanges.first,
-              let fallback = makePeriodOption(for: firstRange, monthDate: monthStart, monthLabel: monthLabel) else {
-            return []
-        }
-        return [fallback]
-    }
-
-    private var selectedPeriod: InvoicePeriodOption? {
-        if let lockedPeriod {
-            return lockedPeriod
-        }
-        if settings.paymentRunMode == .recurringTimeframe {
-            return periodOptions.first
-        }
-        return periodOptions.first(where: { $0.id == selectedPeriodId }) ?? periodOptions.first
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                summaryCard
-
-                Text("Invoice Period")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .textCase(.uppercase)
-                    .padding(.horizontal, 4)
-
-                if let lockedPeriod {
-                    lockedInvoicePeriodCard(lockedPeriod)
-                } else {
-                    invoicePeriodPickerCard
-                }
-
-                if let subject = userStore.displayUser {
-                    InvoiceTaxIdsOption(subject: subject, isOn: $includeTaxIds)
-                }
-                Button {
-                    beginInvoiceGeneration()
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isGenerating {
-                            ProgressView()
-                                .tint(.white)
-                        } else {
-                            Text("Generate Invoice")
-                                .fontWeight(.semibold)
-                        }
-                        Spacer()
-                    }
-                    .padding(.vertical, 16)
-                }
-                .accessibilityIdentifier("invoicing.generateInvoice")
-                .buttonStyle(.plain)
-                .foregroundStyle(.white)
-                .background(
-                    LinearGradient(colors: [Color(red: 0.169, green: 0.816, blue: 0.478), Color(red: 0.102, green: 0.635, blue: 0.349)], startPoint: .leading, endPoint: .trailing)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .green.opacity(0.25), radius: 12, y: 6)
-                .disabled(isGenerating || selectedPeriod == nil)
-                .opacity(selectedPeriod == nil ? 0.45 : 1)
-
-                if let errorMessage {
-                    Text(errorMessage)
-                        .foregroundStyle(.red)
-                        .font(.caption)
-                        .padding(.horizontal, 4)
-                }
-            }
-            .padding(16)
-        }
-        .background(Color(.systemGroupedBackground).ignoresSafeArea())
-        .navigationTitle("Generate Invoice")
-        .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showInvoiceUTRWarning) {
-            InvoiceUTRBlankWarningSheet(
-                onBack: { showInvoiceUTRWarning = false },
-                onAccept: {
-                    showInvoiceUTRWarning = false
-                    Task { await runInvoiceGeneration() }
-                }
-            )
-        }
-        .sheet(isPresented: $showInvoiceSuccess) {
-            if let generatedPDFURL {
-                InvoiceGeneratedSuccessSheet(pdfURL: generatedPDFURL) {
-                    showInvoiceSuccess = false
-                    self.generatedPDFURL = nil
-                }
-            }
-        }
-        .task {
-            await loadRateHistory()
-            if selectedPeriodId.isEmpty {
-                selectedPeriodId = periodOptions.first?.id ?? ""
-            }
-        }
-    }
-
-    init(settings: OrganizationInvoicingSettings, lockedPeriod: InvoicePeriodOption? = nil) {
-        self.settings = settings
-        self.lockedPeriod = lockedPeriod
-    }
-
-    private var summaryCard: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("Your payment runs")
-                .font(.footnote.weight(.black))
-                .foregroundStyle(Color(red: 0.169, green: 0.733, blue: 0.937))
-                .textCase(.uppercase)
-                .tracking(1.2)
-                .padding(.horizontal, 16)
-                .padding(.top, 14)
-                .padding(.bottom, 6)
-
-            if settings.paymentRunMode == .dateRanges {
-                ForEach(Array(settings.normalizedRanges.enumerated()), id: \.element.id) { index, range in
-                    summaryRow(chip: "\(range.startDay) - \(range.endDay)", text: index == 0 ? "First payment run" : "Second payment run")
-                    if let payout = payoutSummary(forRunIndex: index) {
-                        summaryRow(chip: payout.chip, text: payout.text)
-                    }
-                }
-            } else {
-                summaryRow(chip: "\(settings.recurringRunStartDay.title.prefix(3)) - \(settings.recurringRunEndDay.title.prefix(3))", text: settings.recurringRunDisplaySummary)
-                if let payout = payoutSummary(forRunIndex: 0) {
-                    summaryRow(chip: payout.chip, text: payout.text)
-                }
-            }
-        }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: Color.black.opacity(0.07), radius: 8, y: 2)
-    }
-
-    private func payoutSummary(forRunIndex index: Int) -> (chip: String, text: String)? {
-        if settings.paymentDateMode == .specificDates {
-            let dates = settings.normalizedPaymentDates
-            guard index < dates.count else { return nil }
-            return ("Day \(dates[index])", "Payout day")
-        }
-        return ("Every \(settings.recurringPaymentDay.title)", "Payout day")
-    }
-
-    @ViewBuilder
-    private func summaryRow(chip: String, text: String) -> some View {
-        HStack(spacing: 10) {
-            Text(chip)
-                .font(.subheadline.weight(.bold))
-                .foregroundStyle(ProjectWorksRevampColors.ink)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(ProjectWorksRevampColors.blueTint)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 1)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            Text(text)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .overlay(alignment: .top) { Divider().padding(.horizontal, 16) }
-    }
-
-    @ViewBuilder
-    private var invoicePeriodPickerCard: some View {
-        if settings.paymentRunMode == .dateRanges {
-            Menu {
-                ForEach(periodOptions) { option in
-                    Button {
-                        selectedPeriodId = option.id
-                    } label: {
-                        HStack {
-                            Text(option.title)
-                            if selectedPeriodId == option.id {
-                                Image(systemName: "checkmark")
-                            }
-                        }
-                    }
-                        .accessibilityIdentifier("invoicing.row.\(option.id).checkmark")
-                }
-            } label: {
-                HStack {
-                    Text("Invoice Period")
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                    Spacer()
-                    Text(selectedPeriod?.title ?? "Select")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.blue)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.blue)
-                }
-                .padding(.horizontal, 18)
-                .padding(.vertical, 16)
-                .background(ProjectWorksRevampColors.surface)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
-            }
-            .accessibilityIdentifier("invoicing.checkmark")
-            .buttonStyle(.plain)
-            .onAppear {
-                if selectedPeriodId.isEmpty {
-                    selectedPeriodId = periodOptions.first?.id ?? ""
-                }
-            }
-        } else if let period = selectedPeriod {
-            HStack {
-                Text("Invoice Period")
-                    .font(.body)
-                Spacer()
-                VStack(alignment: .trailing, spacing: 2) {
-                    Text(period.title)
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.blue)
-                    Text(period.dateRangeText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 16)
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
-        } else {
-            Text("No recurring period available.")
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func lockedInvoicePeriodCard(_ period: InvoicePeriodOption) -> some View {
-        HStack {
-            Text("Invoice Period")
-                .font(.body)
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(period.title)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.blue)
-                Text(period.dateRangeText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 16)
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .shadow(color: Color.black.opacity(0.06), radius: 8, y: 2)
-    }
-
-    /// A failed read is a failure (`PayInputsLoad`), never an empty history.
-    private func loadRateHistory() async {
-        let result = await PayInputsLoad.loadHistory(firebaseBackend)
-        if let history = result.history { dayRateHistoryCollection = history }
-        payInputsState = result.state
-    }
-
-    private func beginInvoiceGeneration() {
-        guard let user = userStore.displayUser else { return }
-        errorMessage = nil
-        Task {
-            invoiceTaxIds = await InvoicePDFGenerationSupport.taxIdsForExport(subject: user, requested: includeTaxIds, userStore: userStore)
-            if InvoicePDFGenerationSupport.shouldWarnBlankUTR(requested: includeTaxIds, taxIds: invoiceTaxIds) {
-                showInvoiceUTRWarning = true
-            } else {
-                await runInvoiceGeneration()
-            }
-        }
-    }
-
-    private func runInvoiceGeneration() async {
-        guard !isGenerating else { return }
-        guard let period = selectedPeriod else { return }
-        isGenerating = true
-        errorMessage = nil
-        defer { isGenerating = false }
-
-        if payInputsState != .loaded {
-            await loadRateHistory()
-        }
-        if let blocked = payInputsBlockMessage {
-            errorMessage = blocked
-            return
-        }
-        // RULEBOOK 1.43.0 §8 `timesheetSnapshotReady`: the invoice waits for the period's bookings.
-        PayInputsLoad.ensurePeriodBookings(
-            firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-            from: period.startDate, retryFailed: true
-        )
-        if let blocked = PayInputsLoad.blockMessage(
-            state: payInputsState,
-            organization: firebaseBackend.currentOrganization,
-            bookings: PayInputsLoad.periodBookings(
-                firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-                from: period.startDate
-            )
-        ) {
-            errorMessage = blocked
-            return
-        }
-
-        let pdfURL = await InvoicePDFGenerationSupport.generatePDF(
-            period: period,
-            settings: settings,
-            firebaseBackend: firebaseBackend,
-            userStore: userStore,
-            bookingStore: bookingStore,
-            operativeStore: operativeStore,
-            projectStore: projectStore,
-            managerScheduleStore: managerScheduleStore,
-            dayRateHistoryCollection: dayRateHistoryCollection,
-            taxIds: invoiceTaxIds
-        )
-
-        if let pdfURL {
-            generatedPDFURL = pdfURL
-            showInvoiceSuccess = true
-        } else {
-            errorMessage = "Failed to generate the invoice PDF."
-        }
-    }
-
-    private func generateInvoicePDF() async {
-        await runInvoiceGeneration()
-    }
-
-    private func invoiceLineItems(for period: InvoicePeriodOption) -> [InvoiceLineItem] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
-        let summary = TimesheetPayrollCollector.collect(
-            for: currentUser,
-            in: period.startDate...period.endDate,
-            bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings,
-            operatives: operativeStore.allOperatives,
-            projects: projectStore.projects,
-            smallWorks: projectStore.smallWorks,
-            history: dayRateHistoryCollection,
-            policy: policy,
-            organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions,
-            relatedUsers: userStore.organizationUsers
-        )
-        let draft = TimesheetDraftStore.load(
-            userId: currentUser.id,
-            weekStart: OrganizationRulebookContext.calendar.startOfDay(for: period.startDate)
-        )
-        // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows` (`raw`, as web's owner invoice): the signed snapshot first, else
-        // the live lines; PAYE and leave lines never go on an invoice.
-        let rows = TimesheetInvoiceRows.rows(for: currentUser, summary: summary, draft: draft, period: period.startDate...period.endDate)
-        return InvoiceLineItem.invoiceLines(rows).sorted {
-            if $0.date == $1.date {
-                return $0.projectName < $1.projectName
-            }
-            return $0.date < $1.date
-        }
-    }
-
-    private func rateChangeNotes(for period: InvoicePeriodOption) -> [String] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
-        var notes: [String] = []
-
-        let userHistory = (dayRateHistoryCollection.byUserId[currentUser.id] ?? [])
-            .filter {
-                let day = cal.startOfDay(for: $0.effectiveAt)
-                return day >= period.startDate && day <= period.endDate
-            }
-            .sorted(by: { $0.effectiveAt < $1.effectiveAt })
-
-        for entry in userHistory {
-            notes.append(entry.dayRate.map { "Rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
-                ?? "Rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
-        }
-
-        let matchedOperatives = operativeStore.allOperatives.filter {
-            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                == currentUser.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        }
-        for operative in matchedOperatives {
-            let entries = (dayRateHistoryCollection.byOperativeId[operative.id.uuidString] ?? [])
-                .filter {
-                    let day = cal.startOfDay(for: $0.effectiveAt)
-                    return day >= period.startDate && day <= period.endDate
-                }
-                .sorted(by: { $0.effectiveAt < $1.effectiveAt })
-            for entry in entries {
-                notes.append(entry.dayRate.map { "Operative rate updated to \(formatCurrency($0)) from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted))." }
-                ?? "Operative rate not set from \(entry.effectiveAt.formatted(date: .abbreviated, time: .omitted)).")
-            }
-        }
-
-        return Array(Set(notes)).sorted()
-    }
-
-    private func calendarDayStart(_ date: Date, in calendar: Calendar = .current) -> Date {
-        calendar.startOfDay(for: date)
-    }
-
-    private func projectLabel(for id: UUID) -> (jobNumber: String, siteName: String) {
-        if let project = projectStore.projects.first(where: { $0.id == id }) {
-            return (project.jobNumber, project.siteName)
-        }
-        if let project = projectStore.smallWorks.first(where: { $0.id == id }) {
-            return (project.jobNumber, project.siteName)
-        }
-        return ("—", "Unknown Project")
-    }
-
-    private func historicalDateRangePeriods(limit: Int) -> [InvoicePeriodOption] {
-        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
-        let today = cal.startOfDay(for: Date())
-        let monthStartToday = cal.date(from: cal.dateComponents([.year, .month], from: today)) ?? today
-        var periods: [InvoicePeriodOption] = []
-
-        for monthOffset in 0..<max(3, limit) {
-            guard let monthDate = cal.date(byAdding: .month, value: -monthOffset, to: monthStartToday) else { continue }
-            let monthLabel = monthDate.formatted(.dateTime.month(.abbreviated).year())
-            for range in settings.normalizedRanges {
-                guard let option = makePeriodOption(for: range, monthDate: monthDate, monthLabel: monthLabel) else { continue }
-                if option.endDate <= today {
-                    periods.append(option)
-                }
-            }
-            if periods.count >= limit { break }
-        }
-
-        return periods.sorted(by: { $0.endDate > $1.endDate })
-    }
-
-    private func makePeriodOption(for range: PaymentRunDateRange, monthDate: Date, monthLabel: String) -> InvoicePeriodOption? {
-        let cal = OrganizationRulebookContext.calendar  // pay periods are organisation-zone days
-        guard let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: monthDate)),
-              let daysInMonth = cal.range(of: .day, in: .month, for: monthStart)?.count else {
-            return nil
-        }
-        let startDay = min(max(range.startDay, 1), daysInMonth)
-        guard let startDate = cal.date(byAdding: .day, value: startDay - 1, to: monthStart) else { return nil }
-
-        let endDate: Date
-        if range.startDay <= range.endDay {
-            let clampedEnd = min(max(range.endDay, 1), daysInMonth)
-            endDate = cal.date(byAdding: .day, value: clampedEnd - 1, to: monthStart) ?? startDate
-        } else {
-            guard let nextMonth = cal.date(byAdding: .month, value: 1, to: monthStart),
-                  let daysInNextMonth = cal.range(of: .day, in: .month, for: nextMonth)?.count else {
-                return nil
-            }
-            let clampedEnd = min(max(range.endDay, 1), daysInNextMonth)
-            endDate = cal.date(byAdding: .day, value: clampedEnd - 1, to: nextMonth) ?? startDate
-        }
-
-        let title = "\(monthLabel): \(range.startDay)-\(range.endDay)"
-        let rangeLabel = "\(startDate.formatted(date: .abbreviated, time: .omitted)) to \(endDate.formatted(date: .abbreviated, time: .omitted))"
-        return InvoicePeriodOption(
-            id: "\(range.id.uuidString)-\(Int(startDate.timeIntervalSince1970))",
-            title: title,
-            dateRangeText: rangeLabel,
-            startDate: cal.startOfDay(for: startDate),
-            endDate: cal.startOfDay(for: endDate)
-        )
-    }
-
-    private func recurringInvoicePeriod() -> InvoicePeriodOption? {
-        let period = TimesheetPayrollPolicy.timesheetWeekRange(for: settings)
-        let label = "Previous recurring arrears period"
-        return InvoicePeriodOption(
-            id: "recurring-\(Int(period.start.timeIntervalSince1970))",
-            title: label,
-            dateRangeText: "\(period.start.formatted(date: .abbreviated, time: .omitted)) to \(period.end.formatted(date: .abbreviated, time: .omitted))",
-            startDate: period.start,
-            endDate: period.end
-        )
-    }
-
-    private func formatHours(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.001 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
-    }
-
-    private func formatMultiplier(_ value: Double) -> String {
-        if abs(value - value.rounded()) < 0.001 {
-            return "x\(Int(value.rounded()))"
-        }
-        return String(format: "x%.1f", value)
-    }
-
-    private func formatCurrency(_ value: Double) -> String {
-        OrgMoney.format(value)
-    }
-}
-
 private struct InvoicePeriodOption: Identifiable, Hashable {
     let id: String
     let title: String
@@ -7888,7 +6959,7 @@ enum TimesheetSignedLineRate {
 /// (`payrollLineReview`) and entry decisions (`timesheetEntryDecision`) in `decided` mode. This only maps the
 /// script's rows back onto the line items the PDF prints; nothing is decided here. PAYE price work and expenses follow
 /// the function (kept today; owner decision pending).
-private enum TimesheetInvoiceRows {
+enum TimesheetInvoiceRows {
     enum ExtrasMode: String {
         /// The owner's invoice before review (web `TimesheetPeriodPage`).
         case raw
@@ -8050,7 +7121,7 @@ private enum TimesheetInvoiceRows {
     }
 }
 
-private struct InvoiceLineItem {
+struct InvoiceLineItem {
     /// `invoiceLines`: the rows a generated invoice carries (never PAYE or leave lines), in input order.
     /// Empty when the script did not answer, so nothing unchecked is invoiced.
     static func invoiceLines(_ rows: [InvoiceLineItem]) -> [InvoiceLineItem] {

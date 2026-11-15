@@ -272,6 +272,7 @@ enum SignedTimesheetChangeInputs {
             "managerSignedAt": ms(draft.managerSignedAt),
             "approvedAt": ms(draft.approvedAt),
             "exportedAt": ms(draft.exportedAt),
+            "invoiceGeneratedAt": ms(draft.invoiceGeneratedAt),
         ]
         sheet["operativeSignedBookings"] = draft.operativeSignedBookings.map { rows in rows.map(\.storedMap) as Any } ?? NSNull()
         if let override = draft.weeklyReportOverride {
@@ -530,9 +531,39 @@ final class SignedTimesheetChangeContext {
         let snapshot = (draft.weeklyReportOverride?.lines ?? []).map { "\($0.id):\($0.bookingFingerprint ?? "")" }
         return [
             ms(draft.operativeSignedAt), ms(draft.managerSignedAt), ms(draft.exportedAt), ms(draft.approvedAt),
+            ms(draft.invoiceGeneratedAt),
             ms(draft.operativeSignedBookingsAt), ms(draft.operativeSignedBookingsSignedAt),
             ms(draft.weeklyReportOverride?.approvedAt), record.joined(separator: ","), snapshot.joined(separator: ","),
         ].joined(separator: "|")
+    }
+
+    /// The people content the answer depends on (review of #234 item 2): the person, every users document (ids, emails,
+    /// former and same-email ids, employment type — the whole document) and every operatives row's id and email, so an
+    /// email or id change while a list is open is a new answer. Counts alone missed edits.
+    static func peopleStamp(user: AppUser, operatives: [Operative], users: [AppUser]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(user)
+        hasher.combine(users.count)
+        for person in users { hasher.combine(person) }
+        hasher.combine(operatives.count)
+        for row in operatives {
+            hasher.combine(row.documentId)
+            hasher.combine(row.email)
+        }
+        return hasher.finalize()
+    }
+
+    /// The organisation content the collector prices with (review of #234 item 2): the settings (working hours, schedule
+    /// options, invoicing) and the whole working-hours state (prior, effective day, scheduled change, history JSON).
+    static func organizationStamp(_ organization: Organization?) -> Int {
+        var hasher = Hasher()
+        guard let organization else { return 0 }
+        hasher.combine(organization.settings)
+        hasher.combine(organization.payrollTimePolicyPrior)
+        hasher.combine(organization.payrollTimePolicyEffectiveFrom)
+        hasher.combine(organization.payrollTimePolicyScheduled)
+        hasher.combine(organization.payrollPolicyStateJSON)
+        return hasher.finalize()
     }
 
     /// The change of `user`'s `draft` for `period`, or nil (not signed, stores not attached, script did not answer).
@@ -556,8 +587,10 @@ final class SignedTimesheetChangeContext {
             signature(draft),
             String(bookingStore.revision),
             String(managerScheduleStore.revision),
-            String(operativeStore.allOperatives.count),
-            String(userStore.organizationUsers.count),
+            String(operativeStore.revision),
+            String(projectStore.revision),
+            String(Self.peopleStamp(user: user, operatives: operativeStore.allOperatives, users: userStore.organizationUsers)),
+            String(Self.organizationStamp(firebaseBackend.currentOrganization)),
             firebaseBackend.currentOrganization?.firestoreDocumentId ?? "",
         ].joined(separator: "#")
         if let held = memo[key] { return held }

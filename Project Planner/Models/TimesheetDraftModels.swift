@@ -142,6 +142,10 @@ struct TimesheetDraft: Codable {
     var managerSignedByUserId: String?
     var managerSignatureImageBase64: String?
     var exportedAt: Date?
+    /// RULEBOOK 1.47.0 §8 / `resolveTimesheetExportedAtMs`: when web generated the invoice, as stored. Read only — an
+    /// `exportedAt` within the leftover window of it is not an export. Passed to `parseTimesheetStatusFields` and
+    /// `signedTimesheetBookingChanges`; never written by iOS.
+    var invoiceGeneratedAt: Date? = nil
     /// RULEBOOK 1.43.0 §8: the older approval field as stored (`approvedAt`), read for `timesheetOwnerCanAddExtras` (the
     /// security rules test it with `managerSignedAt`). Read only; the save writes `approvedAt` from `managerSignedAt`.
     var approvedAt: Date?
