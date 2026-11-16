@@ -170,6 +170,9 @@ class FirebaseBackend: ObservableObject {
     }
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// Why the last Add User invitation email was not sent (nil when it was): the invitation itself is created, so
+    /// Add User says the email failed instead of "An invitation email has been sent" (review of #242).
+    @Published var lastInviteEmailProblem: String?
     /// Bumped on every change to `currentOrganization` (settings, working hours, schedule options), so answers built
     /// from it can be memoised per revision.
     private(set) var organizationRevision = 0
@@ -7720,8 +7723,8 @@ class FirebaseBackend: ObservableObject {
                 throw error
             }
         
-        // Send invitation email
-        await sendInvitationEmail(email: email, firstName: firstName, surname: surname, invitationId: invitationId, organizationId: organizationId)
+        // Send invitation email. The invitation is created either way; a failed send is kept for Add User to show.
+        lastInviteEmailProblem = await sendInvitationEmail(email: email, firstName: firstName, surname: surname, invitationId: invitationId, organizationId: organizationId)
     }
     
     /// The set-up email for an invitation, through the authenticated `sendEmail` function, template `invite_setup`

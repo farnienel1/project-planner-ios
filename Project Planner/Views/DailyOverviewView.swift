@@ -450,8 +450,8 @@ struct DailyOverviewView: View {
                         // Review of #242: the profile has not loaded, so the team is not known yet — never an empty
                         // "nobody unbooked" day.
                         HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Loading your team…")
+                            if smartCache.isOnline { ProgressView() }
+                            Text(JobAccessContext.viewerPendingMessage(isOnline: smartCache.isOnline))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }

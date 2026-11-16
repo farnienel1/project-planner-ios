@@ -287,6 +287,12 @@ nonisolated enum JobAccessContext {
     /// viewer to wait for and the unscoped rules apply as before.
     static var viewerPending: Bool { signedIn && readViewer == nil }
 
+    /// What a screen shows while `viewerPending`: loading online; offline the profile may never load, so it says so
+    /// instead of spinning for ever (review of #242).
+    static func viewerPendingMessage(isOnline: Bool) -> String {
+        isOnline ? "Loading your team…" : "Your profile hasn't loaded — connect to the internet."
+    }
+
     static func updateViewer(_ viewer: JobAccessViewer?) {
         guard viewer != readViewer else { return }
         readViewer = viewer
@@ -497,7 +503,10 @@ extension UserStore {
     func refreshJobAccessContext() {
         JobAccessContext.updateAccounts(organizationUsers)
         JobAccessContext.updateOwnAccount(currentUser)
-        JobAccessContext.updateViewer(currentUser.map { jobAccessViewer(for: $0) })
+        // Review of #242: the launch placeholder (`isProvisional`, an admin-shaped stand-in while `users/{uid}` loads)
+        // is never a viewer: its admin flags would show a manager the whole company. Until the real profile loads the
+        // viewer is pending (warnings and Daily Overview show nobody; the read plans read as before the profile).
+        JobAccessContext.updateViewer(currentUser.flatMap { $0.isProvisional ? nil : jobAccessViewer(for: $0) })
     }
 
     // MARK: Gates the screens call

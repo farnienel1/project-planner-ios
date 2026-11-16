@@ -57,6 +57,8 @@ struct HomeView: View {
     // Navigation states for menu items
     @State private var showingClientsView = false
     @State private var showingQuickMenu = false
+    /// The menu's "Reset my password" result (sent, or why not).
+    @State private var resetPasswordMessage: String?
     @State private var isCustomisingQuickActions = false
     @State private var showingAddQuickActionPicker = false
     @State private var showingQuickActionCustomizeHint = false
@@ -375,8 +377,24 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
             if let email = firebaseBackend.currentUser?.email {
-                Task { try? await firebaseBackend.resetPassword(email: email) }
+                // Review of #242: the result is shown, never swallowed.
+                Task {
+                    do {
+                        try await firebaseBackend.resetPassword(email: email)
+                        resetPasswordMessage = "A password reset email has been sent to \(email)."
+                    } catch {
+                        resetPasswordMessage = "The password reset email was not sent: \(error.localizedDescription)"
+                    }
+                }
             }
+        }
+        .alert("Reset password", isPresented: Binding(
+            get: { resetPasswordMessage != nil },
+            set: { if !$0 { resetPasswordMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { resetPasswordMessage = nil }
+        } message: {
+            Text(resetPasswordMessage ?? "")
         }
         .sheet(isPresented: $showingQuickMenu) {
             QuickMenuSheet()

@@ -1300,12 +1300,21 @@ struct AddUserView: View {
                     .fontWeight(.bold)
                     .multilineTextAlignment(.center)
                 
-                Text(ghostMode
-                     ? "\(firstName) \(surname) has been added. They have no app login and can be booked straight away."
-                     : "An invitation email has been sent to \(email)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                if !ghostMode, let emailProblem = firebaseBackend.lastInviteEmailProblem {
+                    // Review of #242: the user was invited but `sendEmail` did not send the set-up email.
+                    Text("The invitation was created, but the email to \(email) was not sent: \(emailProblem). Use Resend on their profile in Manage Users.")
+                        .font(.subheadline)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                        .accessibilityIdentifier("addUser.success.emailNotSent")
+                } else {
+                    Text(ghostMode
+                         ? "\(firstName) \(surname) has been added. They have no app login and can be booked straight away."
+                         : "An invitation email has been sent to \(email)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
             }
             
             Spacer()

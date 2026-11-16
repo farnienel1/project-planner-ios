@@ -485,4 +485,39 @@ final class IOSScanFixesTests: XCTestCase {
         }
         XCTAssertNil(FirebaseBackend.notificationActorUserId(type: "task_created", passed: nil, signedInUid: nil))
     }
+
+    /// Re-review of #242 (a): a save that finishes while a newer edit is queued never puts the older copy back.
+    func testAFinishedSaveNeverUndoesANewerEdit() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let sent = [deadline(a, "A", progress: 0.5), deadline(b, "B")]
+        // The save stored A at 0.5 (read back) and someone else added C.
+        let saved = [deadline(a, "A", progress: 0.5), deadline(b, "B"), deadline(c, "C")]
+        // Meanwhile the person edited A again (0.9) and deleted B — a newer save is queued.
+        let onScreen = [deadline(a, "A", progress: 0.9)]
+        let screen = DeadlineScreenMerge.screenAfterSave(sent: sent, saved: saved, onScreen: onScreen)
+        XCTAssertEqual(screen.first { $0.id == a }?.progress, 0.9, "the newer edit stays")
+        XCTAssertNil(screen.first { $0.id == b }, "the newer delete stays")
+        XCTAssertNotNil(screen.first { $0.id == c }, "another device's new deadline appears")
+        // A failed save puts back only what it sent and the person has not changed since.
+        let failed = DeadlineScreenMerge.screenAfterSave(sent: sent, saved: [deadline(a, "A"), deadline(b, "B")], onScreen: sent)
+        XCTAssertEqual(failed.first { $0.id == a }?.progress, 0)
+        let source = (try? source("Project Planner/Views/ProjectDeadlinesView.swift")) ?? ""
+        XCTAssertFalse(source.contains("store.replaceAll(serverBaseItems)"))
+        XCTAssertFalse(source.contains("store.replaceAll(result.items)"))
+    }
+
+    /// Re-review of #242 (b): the admin-shaped launch placeholder is never the viewer.
+    func testTheProvisionalProfileIsNeverTheViewer() throws {
+        let access = try source("Project Planner/Core/Rulebook+JobAccess.swift")
+        XCTAssertTrue(access.contains("$0.isProvisional ? nil : jobAccessViewer(for: $0)"))
+        XCTAssertEqual(JobAccessContext.viewerPendingMessage(isOnline: false), "Your profile hasn't loaded — connect to the internet.")
+        XCTAssertEqual(JobAccessContext.viewerPendingMessage(isOnline: true), "Loading your team…")
+    }
+
+    /// Re-review of #242 (c): Add User's first email and the menu's password reset report their failures.
+    func testFirstInviteEmailAndMenuResetReportFailures() throws {
+        XCTAssertTrue(try source("Project Planner/FirebaseBackend.swift").contains("lastInviteEmailProblem = await sendInvitationEmail("))
+        XCTAssertTrue(try source("Project Planner/Views/AddUserView.swift").contains("firebaseBackend.lastInviteEmailProblem"))
+        XCTAssertFalse(try source("Project Planner/Views/HomeView.swift").contains("try? await firebaseBackend.resetPassword"))
+    }
 }

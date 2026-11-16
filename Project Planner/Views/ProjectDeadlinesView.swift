@@ -222,7 +222,7 @@ struct ProjectDeadlinesView: View {
     private func saveDeadlineChanges(_ items: [DLDeadline]) async {
         guard let orgId = organizationId() else { return }
         guard OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline) else {
-            store.replaceAll(serverBaseItems)
+            store.replaceAll(DeadlineScreenMerge.screenAfterSave(sent: items, saved: serverBaseItems, onScreen: store.items))
             errorMessage = OnlineOnlyActionError(actionId: UnlistedOfflineAction.saveDeadlines.rawValue).localizedDescription
             return
         }
@@ -242,8 +242,11 @@ struct ProjectDeadlinesView: View {
             serverBaseItems = result.items
             serverBaseRows = result.storedRows
             store.lastKnownUpdatedAt = Date()
-            if result.items != items {
-                store.replaceAll(result.items)
+            // Review of #242: only the deadlines the person has not changed since this save was sent take the saved
+            // copy; a newer edit still waiting to be saved stays on screen.
+            let screen = DeadlineScreenMerge.screenAfterSave(sent: items, saved: result.items, onScreen: store.items)
+            if screen != store.items {
+                store.replaceAll(screen)
             }
             OfflineDeadlineLocalStore.shared.save(
                 items: result.items,
@@ -256,7 +259,8 @@ struct ProjectDeadlinesView: View {
                 errorMessage = "Not saved — changed or deleted on another device: \(titles). Check it and try again."
             }
         } catch {
-            store.replaceAll(serverBaseItems)
+            // Puts back only what this save sent; a newer edit made since stays (its own save follows).
+            store.replaceAll(DeadlineScreenMerge.screenAfterSave(sent: items, saved: serverBaseItems, onScreen: store.items))
             errorMessage = error.localizedDescription
         }
     }
@@ -406,5 +410,30 @@ extension DLStore {
                 await syncNotifications(items)
             }
         }
+    }
+}
+
+/// What the Deadlines screen shows when a save finishes (review of #242). Saves run one after another, and the person
+/// may edit again while one is in flight. A deadline still exactly as this save sent it takes `saved` (the stored copy,
+/// or the base when the save failed); one changed, added or deleted on screen since stays as it is; a deadline the
+/// stored list has that this save neither sent nor shows (added on another device) is added. Screen plumbing only.
+enum DeadlineScreenMerge {
+    static func screenAfterSave(sent: [DLDeadline], saved: [DLDeadline], onScreen: [DLDeadline]) -> [DLDeadline] {
+        let sentById = Dictionary(sent.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let savedById = Dictionary(saved.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var out: [DLDeadline] = []
+        for item in onScreen {
+            if let was = sentById[item.id], was == item {
+                if let fresh = savedById[item.id] { out.append(fresh) }
+            } else {
+                out.append(item)
+            }
+        }
+        let shown = Set(onScreen.map(\.id))
+        let sentIds = Set(sent.map(\.id))
+        for fresh in saved where !shown.contains(fresh.id) && !sentIds.contains(fresh.id) {
+            out.append(fresh)
+        }
+        return out
     }
 }
