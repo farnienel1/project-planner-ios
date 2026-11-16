@@ -184,6 +184,10 @@ struct TimesheetDraft: Codable {
     /// RULEBOOK 1.55.0 §8: the previous version's exported total (`timesheetExportedTotal`), read from that frozen
     /// document when this draft is a revision — the base of the difference shown ("+£44.12"). Never stored.
     var previousVersionExportedTotal: Double? = nil
+    /// RULEBOOK 1.55.0 §8: the previous version was read with this one (its total may still be unknown).
+    var previousVersionKnown: Bool? = nil
+    /// RULEBOOK 1.55.0 §8: the ORIGINAL's stored `userId` (the invoice number's person). Read only, never written.
+    var originalStoredUserId: String? = nil
 }
 
 /// RULEBOOK 1.54.0 §8: one late extra — a price work or expense entry added after the line manager signed. Its own

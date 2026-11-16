@@ -213,36 +213,21 @@ struct WeeklyReportTimesheetFeed {
             guard user.participatesInTimesheets() else { continue }
             var listedFromCloud = false
             var storedWeekKeys = Set<String>()
-            /// RULEBOOK 1.55.0 §8: the version the report uses per pay run (`timesheetReportVersion`: the latest exported
-            /// or signed-off one — an open revision leaves the previous exported version in force), by start day key.
-            var reportDrafts: [String: TimesheetDraft] = [:]
             if let orgId {
+                // RULEBOOK 1.55.0 §8 (owner decision J4): one row per pay run — its LATEST version (`timesheetLatestVersion`).
                 if let rows = try? await firebaseBackend.listTimesheetStates(
                     organizationId: orgId,
                     userId: user.id,
-                    limit: 80,
-                    versions: .all
+                    limit: 80
                 ) {
                     listedFromCloud = true
-                    let chains = CanonicalBusinessEngine.timesheetVersionsForPeriod(rows.compactMap { row in
-                        (row["__documentId"] as? String).map { id in (documentId: id, data: row.filter { entry in !entry.key.hasPrefix("__") }) }
-                    }) ?? []
-                    for chain in chains {
-                        guard let report = CanonicalBusinessEngine.timesheetReportVersion(chain) else { continue }
-                        let row = FirebaseBackend.versionRow(report, chain: chain)
-                        guard let weekStart = (row["weekStart"] as? Timestamp)?.dateValue(),
-                              let decoded = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
-                        // The sheet key is the organisation-zone day, never the device's (§1).
-                        let day = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
-                        let key = OrganizationRulebookContext.dayKey(day)
-                        reportDrafts[key] = decoded
-                        storedWeekKeys.insert(key)
-                        // The device's copy of a pay run is its LATEST version (lists, the period page).
-                        if let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain),
-                           let latestDraft = latest.documentId == report.documentId
-                            ? decoded
-                            : TimesheetDraftStore.decodeFirestoreMap(FirebaseBackend.versionRow(latest, chain: chain)) {
-                            TimesheetDraftStore.save(latestDraft, userId: user.id, weekStart: day, organizationId: orgId)
+                    for row in rows {
+                        if let weekStart = (row["weekStart"] as? Timestamp)?.dateValue(),
+                           let decoded = TimesheetDraftStore.decodeFirestoreMap(row) {
+                            // The sheet key is the organisation-zone day, never the device's (§1).
+                            let day = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
+                            TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, organizationId: orgId)
+                            storedWeekKeys.insert(OrganizationRulebookContext.dayKey(day))
                         }
                     }
                 }
@@ -258,8 +243,7 @@ struct WeeklyReportTimesheetFeed {
             let tradeSortKey = StaffTradeType.sortKey(presetRaw: reportingUser.tradeTypePreset, custom: reportingUser.tradeTypeCustom)
 
             for period in periods {
-                var draft = reportDrafts[OrganizationRulebookContext.dayKey(period.start)]
-                    ?? TimesheetDraftStore.load(userId: user.id, weekStart: period.start, organizationId: orgId)
+                var draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start, organizationId: orgId)
                 var stored = storedWeekKeys.contains(OrganizationRulebookContext.dayKey(period.start))
                 if !listedFromCloud, let orgId {
                     if let remote = await TimesheetDraftStore.refreshFromCloud(
@@ -270,13 +254,6 @@ struct WeeklyReportTimesheetFeed {
                     ) {
                         draft = remote
                         stored = true
-                        // RULEBOOK 1.55.0 §8: the report's version of the chain just read (`timesheetReportVersion`).
-                        let chain = TimesheetVersionChainCache.chain(for: remote.versionDocumentId)
-                        if let report = CanonicalBusinessEngine.timesheetReportVersion(chain),
-                           report.documentId != remote.versionDocumentId,
-                           let reportDraft = TimesheetDraftStore.decodeFirestoreMap(FirebaseBackend.versionRow(report, chain: chain)) {
-                            draft = reportDraft
-                        }
                     }
                 }
                 // RULEBOOK 1.47.0 §8: a signed sheet reopened by a booking change. Read only when the loaded bookings
@@ -328,6 +305,15 @@ struct WeeklyReportTimesheetFeed {
                 // RULEBOOK 1.54.0 §8: late extras waiting for the line manager never take a signed sheet out of the feed
                 // (its signed money stands; only approved late extras are in its snapshot).
                 if change?.reopened == true && change?.bookingsChanged != false { continue }
+                // RULEBOOK 1.55.0 §8 (owner decision J4): a revision due (the exported latest version's bookings changed)
+                // is not approved either — the live bookings are reported until the revision is signed off. An open
+                // revision is not fully approved, so it never reaches here.
+                if CanonicalBusinessEngine.timesheetRevisionReportState(
+                    revision: draft.revision,
+                    exported: TimesheetApprovalPolicy.isExported(draft),
+                    signedOff: true,
+                    change: change
+                )?.state == "due" { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
                 var working = draft
@@ -413,6 +399,8 @@ struct WeeklyReportTimesheetFeed {
             row["change"] = [
                 "reopened": change.reopened,
                 "changed": change.changed,
+                // RULEBOOK 1.55.0 (J4): an exported sheet whose bookings changed — "Revision due".
+                "exported": change.exported,
                 "waitingFor": RulebookJSON.orNull(change.waitingFor),
             ] as [String: Any]
         }

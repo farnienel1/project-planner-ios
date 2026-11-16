@@ -272,7 +272,12 @@ struct PayrunSnapshotView: View {
             )
             guard let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: period) else { return sheet }
             var out = sheet
-            out["bookingsChange"] = change.bucketArgument
+            // RULEBOOK 1.55.0 (J4): `changed` and `exported` too — an exported sheet whose bookings changed has a
+            // revision due ("Revision due" in the cell).
+            var bookingsChange = change.bucketArgument
+            bookingsChange["changed"] = change.changed
+            bookingsChange["exported"] = change.exported
+            out["bookingsChange"] = bookingsChange
             return out
         }
         rows = CanonicalBusinessEngine.payrunSnapshotRows(

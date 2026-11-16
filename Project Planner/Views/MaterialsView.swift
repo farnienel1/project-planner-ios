@@ -341,6 +341,7 @@ private struct OperativeMaterialsView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                        .disabled(!OfflinePolicy.isEnabled(.deleteMaterialLine, isOnline: smartCache.isOnline))
                                         .accessibilityIdentifier("operativeMaterials.row.\(material.id).delete")
                                 }
                             }
@@ -638,7 +639,9 @@ struct AddMaterialView: View {
                         handleSubmitAllTapped()
                     }
                     .accessibilityIdentifier("addMaterial.submitAll")
-                    .disabled(materialEntries.allSatisfy { $0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || isSaving)
+                    .disabled(materialEntries.allSatisfy { $0.materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } || isSaving
+                        // RULEBOOK §2: material lines are online only (not in `OFFLINE_ACTIONS`).
+                        || !OfflinePolicy.isEnabled(.saveMaterialLine, isOnline: smartCache.isOnline))
                 }
             }
         }

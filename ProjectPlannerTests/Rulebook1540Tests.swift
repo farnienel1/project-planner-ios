@@ -321,8 +321,8 @@ final class Rulebook1540Tests: XCTestCase {
 
     // MARK: Mirror
 
-    /// The packed rulebook must be 1.54.0 or later. The exact version is `RulebookParityTests`' job (script stamp ==
-    /// `docs/RULEBOOK.md`), so later syncs do not have to edit this test (1.55.0 made this "at least").
+    /// 1.54.0 or later; the exact version is `RulebookParityTests`' job (as `Rulebook1311Tests`), so a later sync
+    /// (1.54.1) does not have to edit this test.
     func testRulebookIs1540() throws {
         let version = try XCTUnwrap(CanonicalBusinessEngine.rulebookStamp()?.version)
         XCTAssertNotEqual(version.compare("1.54.0", options: .numeric), .orderedAscending, "rulebook \(version) is older than 1.54.0")

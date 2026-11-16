@@ -197,7 +197,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                     Button("Save") { Task { await save() } }
                         .fontWeight(.semibold)
                         .accessibilityIdentifier("materialsAddWithCatalogue.save")
-                        .disabled(!canSave || isSaving)
+                        // RULEBOOK §2: material lines are online only (not in `OFFLINE_ACTIONS`).
+                        .disabled(!canSave || isSaving || !OfflinePolicy.isEnabled(.saveMaterialLine, isOnline: smartCache.isOnline))
                 }
             }
             .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
@@ -724,7 +725,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                 item,
                 organizationId: organizationId,
                 firebaseBackend: firebaseBackend,
-                isOnline: smartCache.isOnline
+                isOnline: smartCache.isOnline,
+                opened: existingMaterial
             )
             if existingMaterial == nil {
                 let managerEmails = Set(project.managerIds.compactMap { id in

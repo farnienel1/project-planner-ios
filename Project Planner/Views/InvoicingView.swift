@@ -1001,13 +1001,21 @@ enum TimesheetDraftStore {
     }
 
     /// RULEBOOK 1.55.0 §8: the invoice number and revision note a document of this draft carries (`TimesheetRevisionCopy`).
+    /// The invoice number comes from the ORIGINAL's stored id and stored `userId` (review of #344): the version's own
+    /// id read back to its original; a draft read before 1.55.0 uses `timesheetDocumentId` of the sheet's person.
     static func revisionCopy(for draft: TimesheetDraft, subjectId: String, weekStart: Date, total: Double, currency: String) -> TimesheetRevisionCopy {
-        TimesheetRevisionCopy.make(
-            subjectId: subjectId,
-            startDayKey: CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart) ?? "",
+        let original = CanonicalBusinessEngine.parseTimesheetRevisionDocId(draft.versionDocumentId)?.baseDocumentId
+            ?? CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart).flatMap {
+                CanonicalBusinessEngine.timesheetDocumentId(userId: subjectId, startDayKey: $0)
+            }
+            ?? ""
+        return TimesheetRevisionCopy.make(
+            originalDocumentId: original,
+            storedUserId: draft.originalStoredUserId,
             revision: draft.revision,
             total: total,
             previousExportedTotal: draft.previousVersionExportedTotal,
+            previousKnown: draft.previousVersionKnown == true,
             currency: currency
         )
     }
@@ -1021,6 +1029,7 @@ enum TimesheetDraftStore {
         weekStart: Date,
         writer: AppUser,
         writerIsSubject: Bool,
+        liveLines: [TimesheetPayrollLineItem],
         firebaseBackend: FirebaseBackend,
         organizationId: String
     ) async -> (documentId: String?, message: String?) {
@@ -1047,7 +1056,11 @@ enum TimesheetDraftStore {
             return (nil, check.message.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNotExportedMessage : check.message)
         }
         do {
-            let result = try await firebaseBackend.createTimesheetRevision(organizationId: organizationId, previousDocumentId: latest.documentId)
+            let result = try await firebaseBackend.createTimesheetRevision(
+                organizationId: organizationId,
+                previousDocumentId: latest.documentId,
+                liveLines: liveLines.map(\.rulebookTotalsJSON)
+            )
             switch result.status {
             case "created": return (result.documentId, nil)
             case "exists": return (nil, CanonicalBusinessEngine.timesheetRevisionOpenMessage)
@@ -1215,6 +1228,8 @@ enum TimesheetDraftStore {
         guard let draft = prepared.draft else { return prepared.refusal ?? rosterNotLoadedMessage }
         var fields = asFirestoreMap(draft)
         var frozenEntriesChanged = false
+        /// RULEBOOK 1.55.0 §8: the person changed entries on a revision (refused, `TIMESHEET_REVISION_EXTRAS_MESSAGE`).
+        var revisionEntriesRefused = false
         /// RULEBOOK 1.54.0 §8: why a change to the late extras was not saved (`timesheetOwnerCanAddLateExtras`).
         var lateExtrasRefusal: String?
         if !reviewer {
@@ -1235,6 +1250,15 @@ enum TimesheetDraftStore {
                 return !firestoreValuesEqual(value, server?[key])
             }
             fields = fields.filter { keep.contains($0.key) }
+            // RULEBOOK 1.55.0 §8 (review of #344): a revision carries the entries exactly as exported — the person never
+            // changes price work, expenses or late extras on it (the rules refuse it); they go on the next timesheet.
+            if (CanonicalBusinessEngine.parseTimesheetRevisionDocId(server?["__documentId"] as? String)?.revision ?? 0) > 0 {
+                for key in ["expenseEntries", "priceWorkEntries", "lateExtras"] {
+                    guard let value = fields[key] else { continue }
+                    if !firestoreValuesEqual(value, server?[key]) { revisionEntriesRefused = true }
+                    fields.removeValue(forKey: key)
+                }
+            }
             // RULEBOOK 1.30.1 / 1.45.0 §8 `timesheetOwnerEntriesError({ previous, next, organizationId, ownerUserIds })`:
             // the owner's added or edited entries are checked — price work needs a job number, an expense at least one
             // piece of evidence, and evidence must be in the owner's own claim folder. Entries they did not touch (older
@@ -1277,7 +1301,9 @@ enum TimesheetDraftStore {
                     approvedAt: firestoreDate(server?["approvedAt"]),
                     exportedAt: nil,
                     exportedAtStored: CanonicalBusinessEngine.timesheetExportedFieldSet(server?["exportedAt"]),
-                    selfSigned: subject.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+                    selfSigned: subject.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false,
+                    // RULEBOOK 1.55.0 §8: read from the stored version (a revision's entries are frozen for the person).
+                    revision: CanonicalBusinessEngine.parseTimesheetRevisionDocId(server?["__documentId"] as? String)?.revision
                 )
                 if !latePermission.allowed {
                     fields.removeValue(forKey: "lateExtras")
@@ -1406,7 +1432,7 @@ enum TimesheetDraftStore {
                 save(local, userId: userId, weekStart: weekStart, organizationId: organizationId)
             }
         }
-        if !reviewer && !frozenEntriesChanged {
+        if !reviewer && !frozenEntriesChanged && !revisionEntriesRefused {
             // RULEBOOK 1.45.0 §8 `timesheetEntryEvidenceToDelete`: removed files go only inside the §24 undo window.
             let evidenceAfter = draft.expenseEntries.flatMap(\.evidence) + draft.priceWorkEntries.flatMap(\.evidence)
             await firebaseBackend.discardRemovedTimesheetEvidence(before: evidenceBefore, after: evidenceAfter)
@@ -1415,6 +1441,7 @@ enum TimesheetDraftStore {
             return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
         }
         if let lateExtrasRefusal { return lateExtrasRefusal }
+        if revisionEntriesRefused { return CanonicalBusinessEngine.timesheetRevisionExtrasMessage }
         return nil
     }
 
@@ -1788,6 +1815,8 @@ enum TimesheetDraftStore {
             output.revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(readId)?.revision ?? 0
         }
         output.previousVersionExportedTotal = (map["__previousExportedTotal"] as? NSNumber)?.doubleValue
+        output.previousVersionKnown = map["__previousVersionKnown"] as? Bool
+        output.originalStoredUserId = (map["__originalUserId"] as? String) ?? (output.revision == 0 ? map["userId"] as? String : nil)
 
         if let reviewMap = map["payrollLineReviews"] as? [String: [String: Any]] {
             var reviews: [String: TimesheetPayrollLineReview] = [:]
@@ -2588,13 +2617,20 @@ private struct MyTimesheetView: View {
     private func createRevisionAndOpen() {
         guard !isCreatingRevision, let user = userStore.displayUser,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        // The live lines decide which labour decisions the revision keeps: only once bookings and pay inputs loaded.
+        if let blocked = payInputsBlockMessage {
+            saveErrorMessage = blocked
+            return
+        }
         isCreatingRevision = true
+        let lines = payrollLines
         Task {
             let result = await TimesheetDraftStore.createRevision(
                 subject: user,
                 weekStart: week.start,
                 writer: user,
                 writerIsSubject: true,
+                liveLines: lines,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
@@ -2642,10 +2678,14 @@ private struct MyTimesheetView: View {
 
     private var managerHasSigned: Bool { draft.managerSignedAt != nil }
 
+    /// RULEBOOK 1.55.0 §8: this sheet is a revision (REV N).
+    private var isRevision: Bool { (draft.revision ?? 0) > 0 }
+
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals`: this sheet's totals as the invoice will have them
     /// — review decisions apply once the line manager has signed (web `draftTimesheetTotals`).
     private var ownerTotals: RulebookTimesheetTotals? {
-        TimesheetTotalsSource.totals(lines: payrollLines, draft: draftForFigures, decided: managerHasSigned, subject: userStore.displayUser, period: week.start...week.end)
+        // RULEBOOK 1.55.0 (review of #344): a revision is priced `decided` for everyone (its copied decisions stand).
+        TimesheetTotalsSource.totals(lines: payrollLines, draft: draftForFigures, decided: managerHasSigned || isRevision, subject: userStore.displayUser, period: week.start...week.end)
     }
 
     /// The same sheet at the amounts the person entered (`timesheetTotals` in `raw` mode, no labour reviews), for the
@@ -2653,6 +2693,10 @@ private struct MyTimesheetView: View {
     private var submittedTotals: RulebookTimesheetTotals? {
         var unreviewed = draftForFigures
         unreviewed.payrollLineReviews = [:]
+        // RULEBOOK 1.55.0: a revision is signed at its decided figures (the copied decisions stand).
+        if isRevision {
+            return TimesheetTotalsSource.totals(lines: payrollLines, draft: draftForFigures, decided: true, subject: userStore.displayUser, period: week.start...week.end)
+        }
         return TimesheetTotalsSource.totals(lines: payrollLines, draft: unreviewed, decided: false, subject: userStore.displayUser, period: week.start...week.end)
     }
 
@@ -3650,7 +3694,8 @@ private struct MyTimesheetView: View {
         return CanonicalBusinessEngine.timesheetOwnerCanAddExtras(
             managerSignedAt: draft.managerSignedAt,
             approvedAt: draft.approvedAt,
-            selfSigned: selfSigned
+            selfSigned: selfSigned,
+            revision: draft.revision
         )
     }
 
@@ -3663,7 +3708,8 @@ private struct MyTimesheetView: View {
             approvedAt: draft.approvedAt,
             exportedAt: draft.exportedAt,
             exportedAtStored: draft.exportedAtStored,
-            selfSigned: selfSigned
+            selfSigned: selfSigned,
+            revision: draft.revision
         )
     }
 
@@ -3995,7 +4041,8 @@ private struct MyTimesheetView: View {
             managerSignedAt: draft.managerSignedAt,
             approvedAt: draft.approvedAt,
             viewerIsOwner: true,
-            selfSigned: selfSigned
+            selfSigned: selfSigned,
+            revision: draft.revision
         )
     }
 
@@ -5048,7 +5095,12 @@ struct OperativeTimesheetsView: View {
             exportMessage = "Failed: no signed-in manager/admin to receive the export email."
             return
         }
-        let recipientEmail = exporter.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The email function's `timesheet_export` sends only to the caller's own sign-in (ID token) email (web #334):
+        // the signed-in Auth email, else the users-document copy.
+        let recipientEmail = TimesheetExportRecipient.email(
+            authEmail: Auth.auth().currentUser?.email,
+            profileEmail: exporter.email
+        )
 
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
@@ -5796,7 +5848,8 @@ private struct OperativeTimesheetReviewView: View {
         TimesheetTotalsSource.totals(
             lines: payrollSummary.lineItems,
             draft: draftForFigures,
-            decided: managerHasSigned || canManagerReview,
+            // RULEBOOK 1.55.0: a revision is priced `decided` for everyone.
+            decided: managerHasSigned || canManagerReview || (draft.revision ?? 0) > 0,
             reviewing: canManagerReview && !managerHasSigned,
             subject: operative,
             period: week.start...week.end
@@ -6227,14 +6280,21 @@ private struct OperativeTimesheetReviewView: View {
     private func createRevisionForPerson() {
         guard !isCreatingRevision, let viewer = userStore.displayUser,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        // The live lines decide which labour decisions the revision keeps: only once bookings and pay inputs loaded.
+        if let blocked = payInputsBlockMessage {
+            saveErrorMessage = blocked
+            return
+        }
         isCreatingRevision = true
         let subject = operative
+        let lines = payrollSummary.lineItems
         Task {
             let result = await TimesheetDraftStore.createRevision(
                 subject: subject,
                 weekStart: week.start,
                 writer: viewer,
                 writerIsSubject: false,
+                liveLines: lines,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
@@ -7907,7 +7967,8 @@ private enum InvoicePDFGenerationSupport {
         // RULEBOOK 1.10.0 §8 `timesheetInvoiceRows`: the signed snapshot first, else the live lines; PAYE and leave
         // lines never go on an invoice. 1.53.0 (B12): `decided` once the line manager has signed (their review
         // decisions apply), `raw` before (the owner's draft at the amounts entered).
-        let extrasMode: TimesheetInvoiceRows.ExtrasMode = draft.managerSignedAt != nil ? .decided : .raw
+        // RULEBOOK 1.55.0: a revision's invoice is `decided` (its copied decisions stand).
+        let extrasMode: TimesheetInvoiceRows.ExtrasMode = draft.managerSignedAt != nil || (draft.revision ?? 0) > 0 ? .decided : .raw
         let rows = TimesheetInvoiceRows.rows(
             for: currentUser, summary: summary, draft: draft, extrasMode: extrasMode, period: period.startDate...period.endDate
         )
@@ -8881,38 +8942,50 @@ private enum TimesheetExportHelper {
         }
         guard !attachments.isEmpty else { return delivery }
 
-        let html = managerExportEmailHTML(
-            recipientName: recipientName,
+        // The authenticated `sendEmail` function, template `timesheet_export` (web docs/EMAIL_FUNCTION.md): it renders
+        // `managerExportEmailHTML` itself and sends only to an active member of the organisation (the exporter).
+        guard let orgId = organization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines),
+              !orgId.isEmpty else {
+            delivery.emailProblem = "no organisation is open"
+            return delivery
+        }
+        let files = attachments.map { (fileName: $0.fileName, data: $0.data) }
+        // Over the function's 10 MB / 80-file limit: send the backup links only, when every file has one.
+        let fits = AppEmailPayload.attachmentsFit(files)
+        if !fits && downloadLinks.count < attachments.count {
+            delivery.emailProblem = "the timesheet PDFs are larger than the 10 MB email limit; download them from the backup links instead"
+            return delivery
+        }
+        let data = AppEmailPayload.timesheetExportData(
             weekTitle: week.title,
             paymentRunStamp: paymentRunStamp,
-            organizationName: organizationName,
-            attachmentNames: attachments.map(\.fileName),
-            downloadLinks: downloadLinks,
-            timesheetCount: attachments.count
+            timesheetCount: attachments.count,
+            downloadLinks: downloadLinks
         )
-        let resend = ResendEmailService()
-        let payload = attachments.map { (fileName: $0.fileName, data: $0.data) }
-        let emailSubject = ExportTextEscaping.sanitizeEmailSubject(
-            "Signed timesheets for filing — \(paymentRunStamp) — \(organizationName)"
-        )
-        let emailFromName = ExportTextEscaping.sanitizeFromDisplayName(organizationName)
-        var sent = await resend.sendTimesheetExportEmail(
-            to: recipientEmail,
-            subject: emailSubject,
-            htmlContent: html,
-            pdfAttachments: payload,
-            fromName: emailFromName
-        )
-        if !sent {
-            sent = await resend.sendTimesheetExportEmail(
-                to: recipientEmail,
-                subject: emailSubject,
-                htmlContent: html,
-                pdfAttachments: payload,
-                fromName: emailFromName
-            )
+        // One id for this export, reused on the retry, so a send that went but timed out is never emailed twice.
+        let requestId = UUID().uuidString
+        var lastError: Error?
+        for _ in 0..<2 {
+            do {
+                _ = try await AppEmailClient.send(
+                    template: .timesheetExport,
+                    organizationId: orgId,
+                    to: [recipientEmail],
+                    data: data,
+                    attachments: fits ? files : [],
+                    requestId: requestId
+                )
+                lastError = nil
+                break
+            } catch MaterialRequestEmailError.refused(let status, let reason) where status >= 400 && status < 500 {
+                // A refusal (bad data, not allowed, too large) will not change on a retry.
+                lastError = MaterialRequestEmailError.refused(status: status, reason: reason)
+                break
+            } catch {
+                lastError = error
+            }
         }
-        if !sent { delivery.emailProblem = resend.errorMessage ?? "email delivery failed" }
+        if let lastError { delivery.emailProblem = AppEmailClient.message(for: lastError) }
         return delivery
     }
     static func paymentRunDateStamp(for week: WeekRange) -> String {
@@ -8975,42 +9048,5 @@ private enum TimesheetExportHelper {
         }
     }
 
-    private static func managerExportEmailHTML(
-        recipientName: String,
-        weekTitle: String,
-        paymentRunStamp: String,
-        organizationName: String,
-        attachmentNames: [String],
-        downloadLinks: [(fileName: String, url: String)] = [],
-        timesheetCount: Int
-    ) -> String {
-        let safeRecipient = ExportTextEscaping.escapeHTML(recipientName)
-        let safeWeekTitle = ExportTextEscaping.escapeHTML(weekTitle)
-        let safeStamp = ExportTextEscaping.escapeHTML(paymentRunStamp)
-        let safeOrganization = ExportTextEscaping.escapeHTML(organizationName)
-        let list: String
-        if downloadLinks.isEmpty {
-            list = attachmentNames.map { "<li>\(ExportTextEscaping.escapeHTML($0))</li>" }.joined()
-        } else {
-            list = downloadLinks.map { link in
-                let href = ExportTextEscaping.escapeHTMLAttributeURL(link.url)
-                let name = ExportTextEscaping.escapeHTML(link.fileName)
-                return "<li><a href=\"\(href)\">\(name)</a></li>"
-            }.joined()
-        }
-        let attachNote = downloadLinks.isEmpty
-            ? "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(safeStamp)</strong> (\(safeWeekTitle)) from <strong>\(safeOrganization)</strong> \(timesheetCount == 1 ? "is" : "are") attached for your records."
-            : "\(timesheetCount) signed-off timesheet PDF\(timesheetCount == 1 ? "" : "s") for payment run <strong>\(safeStamp)</strong> (\(safeWeekTitle)) from <strong>\(safeOrganization)</strong> \(timesheetCount == 1 ? "is" : "are") attached, with backup download links below."
-        return """
-        <html><body style="font-family:Arial,sans-serif;max-width:720px;margin:0 auto;padding:20px;">
-        <h2 style="color:#0D67ED;">Signed timesheets for filing</h2>
-        <p>Hello \(safeRecipient),</p>
-        <p>\(attachNote)</p>
-        <p>Each file is named: <em>User Name timesheet for payment run date \(safeStamp)</em>.</p>
-        <ul>\(list)</ul>
-        <p style="color:#666;font-size:13px;">These timesheets were counter-signed and exported from Operative Timesheets → Signed off.</p>
-        </body></html>
-        """
-    }
 }
 

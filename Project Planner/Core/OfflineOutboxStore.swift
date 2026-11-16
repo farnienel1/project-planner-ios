@@ -454,7 +454,8 @@ final class OfflineOutboxStore: ObservableObject {
     }
 
     /// The payload of an older and a newer queued save of one booking as one: the newer booking copy, the changed
-    /// fields added up (a create stays a create), the older baseline fingerprint.
+    /// fields added up (a create stays a create), the older baseline fingerprint and the older copy before the first
+    /// edit (`previousBooking`, for the §25 overtime reopen notice).
     private static func mergedSavePayload(
         older: OfflineOutboxEntry,
         newer: OfflineOutboxEntry,
@@ -469,7 +470,9 @@ final class OfflineOutboxStore: ObservableObject {
             return try? encoder.encode(OfflineSaveBookingPayload(
                 booking: n.booking,
                 changedFields: fields,
-                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint)
+                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint),
+                // §25 reopen: the booking as last synced, before the older (first) edit.
+                previousBooking: fields == nil ? nil : (o.previousBooking ?? n.previousBooking)
             ))
         case .saveManagerSiteBooking:
             guard let o = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: older.payload),
@@ -478,7 +481,8 @@ final class OfflineOutboxStore: ObservableObject {
             return try? encoder.encode(OfflineSaveManagerSiteBookingPayload(
                 booking: n.booking,
                 changedFields: fields,
-                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint)
+                baselineFingerprint: fields == nil ? nil : (o.baselineFingerprint ?? n.baselineFingerprint),
+                previousBooking: fields == nil ? nil : (o.previousBooking ?? n.previousBooking)
             ))
         default:
             return nil

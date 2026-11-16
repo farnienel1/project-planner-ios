@@ -13,11 +13,11 @@
 import Foundation
 @preconcurrency import FirebaseFirestore
 
-/// RULEBOOK 1.55.0 §8: which version of each pay run `FirebaseBackend.listTimesheetStates` gives — `latest` (lists,
-/// My Timesheets, User Timesheets: `timesheetLatestVersion`), `reports` (weekly report feed: `timesheetReportVersion`,
-/// so an open revision leaves the previous exported version in force) or `all` (every stored version).
+/// RULEBOOK 1.55.0 §8: which version of each pay run `FirebaseBackend.listTimesheetStates` gives — `latest`
+/// (`timesheetLatestVersion`: lists, My Timesheets, User Timesheets and, owner decision J4, the weekly report) or `all`
+/// (every stored version, grouped by the caller).
 nonisolated enum TimesheetListVersions: Sendable {
-    case latest, reports, all
+    case latest, all
 }
 
 /// One stored version of a pay run's timesheet (`timesheetVersionsForPeriod`), with its stored Firestore data as read
@@ -164,6 +164,19 @@ extension CanonicalBusinessEngine {
         revisionText("TIMESHEET_REVISION_NOT_EXPORTED_MESSAGE", fallback: "Only an exported timesheet can have a revision.")
     }
 
+    /// `TIMESHEET_REVISION_EXTRAS_MESSAGE` — a revision's entries are frozen for the person.
+    nonisolated static var timesheetRevisionExtrasMessage: String {
+        revisionText(
+            "TIMESHEET_REVISION_EXTRAS_MESSAGE",
+            fallback: "This is a revision of an exported timesheet — add price work or expenses to your next timesheet."
+        )
+    }
+
+    /// `TIMESHEET_REVISION_DIFFERENCE_UNKNOWN` — the previous version has no signed snapshot.
+    nonisolated static var timesheetRevisionDifferenceUnknown: String {
+        revisionText("TIMESHEET_REVISION_DIFFERENCE_UNKNOWN", fallback: "Difference not available (older export)")
+    }
+
     nonisolated static var timesheetEarlierVersionsLabel: String {
         revisionText("TIMESHEET_EARLIER_VERSIONS_LABEL", fallback: "Earlier versions")
     }
@@ -203,9 +216,10 @@ extension CanonicalBusinessEngine {
         callJSON("timesheetRevisionLabel", arguments: [revision ?? 0]) as? String ?? ""
     }
 
-    /// `timesheetInvoiceNumber({ subjectId, startDayKey })` — "TS-20261101-6A9632"; nil when not usable.
-    nonisolated static func timesheetInvoiceNumber(subjectId: String, startDayKey: String) -> String? {
-        let input: [String: Any] = ["subjectId": subjectId, "startDayKey": startDayKey]
+    /// `timesheetInvoiceNumber({ documentId, userId })` — "TS-{stamp}-6A9632", built only from the ORIGINAL's stored id
+    /// and stored `userId` (never the viewer's or a current users id); nil when not usable.
+    nonisolated static func timesheetInvoiceNumber(originalDocumentId: String, storedUserId: String?) -> String? {
+        let input: [String: Any] = ["documentId": originalDocumentId, "userId": storedUserId ?? ""]
         guard let number = callJSON("timesheetInvoiceNumber", arguments: [input]) as? String, !number.isEmpty else { return nil }
         return number
     }
@@ -230,7 +244,8 @@ extension CanonicalBusinessEngine {
         return (amount, text)
     }
 
-    /// `timesheetExportedTotal(data)` — a stored version's signed-snapshot invoice total. `data` is the stored document.
+    /// `timesheetExportedTotal(data)` — a stored version's signed-snapshot invoice total; nil when it has no signed
+    /// snapshot (the difference is then unknown, `TIMESHEET_REVISION_DIFFERENCE_UNKNOWN`). `data` is the stored document.
     nonisolated static func timesheetExportedTotal(_ data: [String: Any]) -> Double? {
         (callJSON("timesheetExportedTotal", arguments: [FirebaseBackend.firestoreJSON(data)]) as? NSNumber)?.doubleValue
     }
@@ -261,7 +276,7 @@ extension CanonicalBusinessEngine {
         }
     }
 
-    /// Picks a version of `chain` with the script's chooser (`timesheetLatestVersion` / `timesheetReportVersion` /
+    /// Picks a version of `chain` with the script's chooser (`timesheetLatestVersion` /
     /// `timesheetEarlierVersions`) and maps its answer back to the chain's entries by document id.
     private nonisolated static func pickVersions(_ function: String, _ chain: [TimesheetVersionInfo]) -> [TimesheetVersionInfo]? {
         guard !chain.isEmpty else { return [] }
@@ -284,9 +299,20 @@ extension CanonicalBusinessEngine {
         pickVersions("timesheetLatestVersion", chain)?.first
     }
 
-    /// `timesheetReportVersion(chain)` — the latest exported or signed-off version (weekly report, Payrun Snapshot).
-    nonisolated static func timesheetReportVersion(_ chain: [TimesheetVersionInfo]) -> TimesheetVersionInfo? {
-        pickVersions("timesheetReportVersion", chain)?.first
+    /// `timesheetRevisionReportState({ revision, exported, signedOff, change })` (owner decision J4): `due` / `open` /
+    /// `none`, whether the pay run counts as approved, and the report label ("Revision due", "REV 1 waiting for
+    /// signature"). Nil when the script did not answer.
+    nonisolated static func timesheetRevisionReportState(
+        revision: Int?,
+        exported: Bool,
+        signedOff: Bool,
+        change: RulebookSignedTimesheetChange?
+    ) -> (state: String, label: String)? {
+        let changeJSON: Any = change.map { ["changed": $0.changed, "exported": $0.exported] as [String: Any] } ?? NSNull()
+        let input: [String: Any] = ["revision": revision ?? 0, "exported": exported, "signedOff": signedOff, "change": changeJSON]
+        guard let row = callJSON("timesheetRevisionReportState", arguments: [input]) as? [String: Any],
+              let state = row["state"] as? String else { return nil }
+        return (state, row["label"] as? String ?? "")
     }
 
     /// `timesheetEarlierVersions(chain)` — the versions before the latest, newest first (read only).
@@ -323,12 +349,16 @@ extension CanonicalBusinessEngine {
     nonisolated static func timesheetRevisionCreateFields(
         previousDocumentId: String,
         previousData: [String: Any],
-        writerUserId: String
+        writerUserId: String,
+        liveLines: [[String: Any]]? = nil
     ) -> (documentId: String, revision: Int, fields: [String: Any])? {
-        let input: [String: Any] = [
+        // Owner decision 16 Nov (finding 6 = a): `liveLines` (id, `bookingFingerprint`, amount, paid hours) — the labour
+        // decisions are kept only for bookings unchanged since (`timesheetRevisionLabourReviews`); none → all dropped.
+        var input: [String: Any] = [
             "previous": ["documentId": previousDocumentId, "data": FirebaseBackend.firestoreJSON(previousData)],
             "writerUserId": writerUserId,
         ]
+        if let liveLines { input["liveLines"] = liveLines }
         guard let row = callJSON("timesheetRevisionCreateFields", arguments: [input]) as? [String: Any],
               let documentId = row["documentId"] as? String, !documentId.isEmpty,
               let revision = (row["revision"] as? NSNumber)?.intValue,
@@ -336,7 +366,10 @@ extension CanonicalBusinessEngine {
         let copied = Set(timesheetRevisionCopiedFields)
         var fields: [String: Any] = [:]
         for (key, value) in scriptFields {
-            if copied.contains(key) {
+            if key == "payrollLineReviews", let kept = value as? [String: Any], let stored = previousData[key] as? [String: Any] {
+                // The labour decisions the script kept: each written exactly as stored (a part of the stored map).
+                fields[key] = stored.filter { kept[$0.key] != nil }
+            } else if copied.contains(key) {
                 guard let stored = previousData[key] else { continue }
                 fields[key] = stored
             } else {
@@ -370,24 +403,40 @@ nonisolated struct TimesheetRevisionCopy: Equatable, Sendable {
     /// "REV 1", or "" for the original.
     let label: String
     let invoiceNumber: String
-    /// "+£44.12", or nil for the original / when the previous version's total is not known.
+    /// "+£44.12", `TIMESHEET_REVISION_DIFFERENCE_UNKNOWN` (the previous version has no signed snapshot), or nil.
     let differenceText: String?
     /// "REV 1 · +£44.12 from the previous version" for documents, or "".
     let note: String
 
-    static func make(subjectId: String, startDayKey: String, revision: Int?, total: Double?, previousExportedTotal: Double?, currency: String) -> TimesheetRevisionCopy {
+    /// `originalDocumentId` and `storedUserId` are the ORIGINAL's stored id and stored `userId` (never the viewer's).
+    /// `previousKnown`: the previous version was read (its total may still be unknown — no signed snapshot).
+    static func make(
+        originalDocumentId: String,
+        storedUserId: String?,
+        revision: Int?,
+        total: Double?,
+        previousExportedTotal: Double?,
+        previousKnown: Bool,
+        currency: String
+    ) -> TimesheetRevisionCopy {
         let rev = max(0, revision ?? 0)
-        let base = CanonicalBusinessEngine.timesheetInvoiceNumber(subjectId: subjectId, startDayKey: startDayKey) ?? ""
+        let base = CanonicalBusinessEngine.timesheetInvoiceNumber(originalDocumentId: originalDocumentId, storedUserId: storedUserId) ?? ""
         let number = base.isEmpty ? "" : (CanonicalBusinessEngine.timesheetInvoiceNumberForRevision(base, revision: rev) ?? base)
         let label = CanonicalBusinessEngine.timesheetRevisionLabel(rev)
         guard rev > 0 else { return TimesheetRevisionCopy(label: label, invoiceNumber: number, differenceText: nil, note: "") }
-        let difference = CanonicalBusinessEngine.timesheetRevisionDifference(total: total, previousTotal: previousExportedTotal, currency: currency)
-        return TimesheetRevisionCopy(
-            label: label,
-            invoiceNumber: number,
-            differenceText: difference?.text,
-            note: difference.map { "\(label) · \($0.text) from the previous version" } ?? label
-        )
+        let difference = previousExportedTotal == nil
+            ? nil
+            : CanonicalBusinessEngine.timesheetRevisionDifference(total: total, previousTotal: previousExportedTotal, currency: currency)
+        let differenceText = difference?.text ?? (previousKnown ? CanonicalBusinessEngine.timesheetRevisionDifferenceUnknown : nil)
+        let note: String
+        if let difference {
+            note = "\(label) · \(difference.text) from the previous version"
+        } else if let differenceText {
+            note = "\(label) · \(differenceText)"
+        } else {
+            note = label
+        }
+        return TimesheetRevisionCopy(label: label, invoiceNumber: number, differenceText: differenceText, note: note)
     }
 }
 

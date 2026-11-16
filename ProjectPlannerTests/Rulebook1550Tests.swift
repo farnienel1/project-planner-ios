@@ -7,7 +7,7 @@ import FirebaseFirestore
 /// reports, earlier versions read only); when a revision is due; who may create one; the exact create shape (copied
 /// fields as stored); one row per pay run from the list query; the read copy's version; the new
 /// `timesheet_revision_to_sign` notice; the Payrun Snapshot and weekly report check line. Expected values checked in node
-/// against the packed script (rulebook 1.55.0, web w155-timesheet-revisions 7abe7f8).
+/// against the packed script (rulebook 1.55.0, web w155-timesheet-revisions 4c99d33).
 @MainActor
 final class Rulebook1550Tests: XCTestCase {
     private let original = "timesheet_u1_1793404800"
@@ -77,7 +77,11 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.timesheetRevisionDocId(baseDocumentId: original, revision: 100))
         XCTAssertEqual(CanonicalBusinessEngine.timesheetRevisionLabel(1), "REV 1")
         XCTAssertEqual(CanonicalBusinessEngine.timesheetRevisionLabel(0), "")
-        XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumber(subjectId: "6a9632ba-xyz", startDayKey: "2026-11-01"), "TS-20261101-6A9632")
+        // Built only from the ORIGINAL's stored id and stored userId (review of #344).
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumber(originalDocumentId: "timesheet_6a9632ba-xyz_1793404800", storedUserId: "6a9632ba-xyz"), "TS-1793404800-6A9632")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumber(originalDocumentId: original, storedUserId: "u1"), "TS-1793404800-U1")
+        // An id ending `_rev0` is neither an original nor a revision.
+        XCTAssertNil(CanonicalBusinessEngine.parseTimesheetRevisionDocId(original + "_rev0"))
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumberForRevision("TS-20261101-6A9632", revision: 1), "TS-20261101-6A9632-REV1")
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumberForRevision("TS-20261101-6A9632", revision: 0), "TS-20261101-6A9632")
         // A revision id names the same person (`timesheetDocumentSubjectId`).
@@ -92,12 +96,20 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.timesheetRevisionDifference(total: 1, previousTotal: nil, currency: "GBP"))
         // The previous version's total is read from its frozen snapshot, never stored.
         XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.timesheetExportedTotal(signedSheet(exported: true))), 632.35, accuracy: 0.0001)
-        let copy = TimesheetRevisionCopy.make(subjectId: "6a9632ba", startDayKey: "2026-11-01", revision: 1, total: 676.47, previousExportedTotal: 632.35, currency: "GBP")
-        XCTAssertEqual(copy.invoiceNumber, "TS-20261101-6A9632-REV1")
+        let copy = TimesheetRevisionCopy.make(originalDocumentId: original, storedUserId: "u1", revision: 1, total: 676.47,
+                                              previousExportedTotal: 632.35, previousKnown: true, currency: "GBP")
+        XCTAssertEqual(copy.invoiceNumber, "TS-1793404800-U1-REV1")
         XCTAssertEqual(copy.note, "REV 1 · +£44.12 from the previous version")
-        let originalCopy = TimesheetRevisionCopy.make(subjectId: "6a9632ba", startDayKey: "2026-11-01", revision: 0, total: 632.35, previousExportedTotal: nil, currency: "GBP")
-        XCTAssertEqual(originalCopy.invoiceNumber, "TS-20261101-6A9632")
+        let originalCopy = TimesheetRevisionCopy.make(originalDocumentId: original, storedUserId: "u1", revision: 0, total: 632.35,
+                                                      previousExportedTotal: nil, previousKnown: false, currency: "GBP")
+        XCTAssertEqual(originalCopy.invoiceNumber, "TS-1793404800-U1")
         XCTAssertEqual(originalCopy.note, "")
+        // A previous version with no signed snapshot: the difference is unknown, never a figure without its labour.
+        XCTAssertNil(CanonicalBusinessEngine.timesheetExportedTotal(["userId": "u1"]))
+        let unknown = TimesheetRevisionCopy.make(originalDocumentId: original, storedUserId: "u1", revision: 1, total: 676.47,
+                                                 previousExportedTotal: nil, previousKnown: true, currency: "GBP")
+        XCTAssertEqual(unknown.differenceText, CanonicalBusinessEngine.timesheetRevisionDifferenceUnknown)
+        XCTAssertEqual(unknown.note, "REV 1 · Difference not available (older export)")
     }
 
     // MARK: Versions
@@ -108,8 +120,16 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertEqual(versions.map(\.exported), [true, false])
         // Lists and the period page: the latest version (the open revision).
         XCTAssertEqual(CanonicalBusinessEngine.timesheetLatestVersion(versions)?.documentId, revision1)
-        // Weekly report and Payrun Snapshot: the open revision leaves the exported original in force.
-        XCTAssertEqual(CanonicalBusinessEngine.timesheetReportVersion(versions)?.documentId, original)
+        // Weekly report and Payrun Snapshot (owner decision J4): the latest version; an open revision is not approved.
+        let open = try XCTUnwrap(CanonicalBusinessEngine.timesheetRevisionReportState(revision: 1, exported: false, signedOff: false, change: nil))
+        XCTAssertEqual(open.state, "open")
+        XCTAssertEqual(open.label, "REV 1 waiting for signature")
+        let due = try XCTUnwrap(CanonicalBusinessEngine.timesheetRevisionReportState(
+            revision: 0, exported: true, signedOff: true, change: RulebookSignedTimesheetChange(json: ["changed": true, "exported": true])
+        ))
+        XCTAssertEqual(due.state, "due")
+        XCTAssertEqual(due.label, "Revision due")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetRevisionReportState(revision: 1, exported: true, signedOff: true, change: nil)?.state, "none")
         // Earlier versions, read only, under the latest.
         XCTAssertEqual(CanonicalBusinessEngine.timesheetEarlierVersions(versions).map(\.documentId), [original])
         // Each version keeps its stored Firestore values (a Timestamp stays a Timestamp).
@@ -127,23 +147,20 @@ final class Rulebook1550Tests: XCTestCase {
         // A revision row carries the previous version's exported total (the difference's base).
         let revisionRow = latest.first { ($0["__documentId"] as? String) == revision1 }
         XCTAssertEqual((revisionRow?["__previousExportedTotal"] as? NSNumber)?.doubleValue ?? 0, 632.35, accuracy: 0.0001)
-        let reports = FirebaseBackend.collapseTimesheetVersions(rows, versions: .reports)
-        XCTAssertEqual(Set(reports.compactMap { $0["__documentId"] as? String }), [original, "jobTypes"])
         let all = FirebaseBackend.collapseTimesheetVersions(rows, versions: .all)
         XCTAssertEqual(all.count, 3)
     }
 
     func testPickTimesheetRowReadsVersionsAsOneRow() throws {
         // `pickTimesheetRowForPeriod` rows carry `documentId` (1.55.0): an original and its revision are one row — the
-        // latest for lists, the latest exported or signed off with `versions: 'reports'`. (This device keeps one local
-        // copy per pay run — its latest version — so its own candidates never hold two versions.)
+        // latest version (lists and, owner decision J4, reports). (This device keeps one local copy per pay run — its
+        // latest version — so its own candidates never hold two versions.)
         let period: [String: Any] = ["startDayKey": "2026-11-01", "endDayKey": "2026-11-15"]
         let rows: [[String: Any]] = [
             ["startDayKey": "2026-11-01", "endDayKey": "2026-11-15", "documentId": original, "exported": true],
             ["startDayKey": "2026-11-01", "endDayKey": "2026-11-15", "documentId": revision1],
         ]
         XCTAssertEqual((CanonicalBusinessEngine.callJSON("pickTimesheetRowForPeriod", arguments: [rows, period]) as? NSNumber)?.intValue, 1)
-        XCTAssertEqual((CanonicalBusinessEngine.callJSON("pickTimesheetRowForPeriod", arguments: [rows, period, ["versions": "reports"]]) as? NSNumber)?.intValue, 0)
     }
 
     func testReadCopyKnowsItsVersion() throws {
@@ -242,6 +259,8 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertNotNil(made.fields["extraEntryReviews"])
         // A copied key stored as null stays null (never "removed" against the previous version).
         XCTAssertTrue(made.fields["lateExtras"] is NSNull)
+        // No live lines: every labour decision is dropped (pending again).
+        XCTAssertNil(made.fields["payrollLineReviews"])
         // Never signatures, the snapshot, notes, exportedAt or any figure.
         for key in ["operativeSignedAt", "managerSignedAt", "weeklyReportOverride", "managerNote", "exportedAt", "operativeSignedByName"] {
             XCTAssertNil(made.fields[key], key)
@@ -250,6 +269,30 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertTrue(Set(made.fields.keys).isSubset(of: allowed))
         // Only an exported version can have a revision.
         XCTAssertNil(CanonicalBusinessEngine.timesheetRevisionCreateFields(previousDocumentId: original, previousData: signedSheet(exported: false), writerUserId: "u1"))
+    }
+
+    func testRevisionKeepsLabourDecisionsOnlyForUnchangedBookings() throws {
+        var previous = signedSheet(exported: true)
+        previous["weeklyReportOverride"] = [
+            "approvedAt": timestamp("2026-11-16T10:00:00Z"),
+            "lines": [["id": "op-b1", "bookingFingerprint": "FP1", "amount": 100, "paidHours": 8, "decision": "edited"],
+                      ["id": "op-b2", "bookingFingerprint": "FP2", "amount": 50, "paidHours": 4, "decision": "approved"]],
+        ] as [String: Any]
+        previous["payrollLineReviews"] = ["op-b1": ["decision": "edited", "revisedAmount": 90], "op-b2": ["decision": "declined"]]
+        let live: [[String: Any]] = [["id": "op-b1", "bookingFingerprint": "FP1", "amount": 100, "paidHours": 8],
+                                     ["id": "op-b2", "bookingFingerprint": "FPX", "amount": 50, "paidHours": 4]]
+        let made = try XCTUnwrap(CanonicalBusinessEngine.timesheetRevisionCreateFields(previousDocumentId: original, previousData: previous, writerUserId: "u1", liveLines: live))
+        let reviews = try XCTUnwrap(made.fields["payrollLineReviews"] as? [String: Any])
+        XCTAssertEqual(Set(reviews.keys), ["op-b1"])
+        XCTAssertEqual((reviews["op-b1"] as? [String: Any])?["decision"] as? String, "edited")
+    }
+
+    func testRevisionEntriesAreFrozenForThePerson() {
+        let extras = CanonicalBusinessEngine.timesheetOwnerCanAddExtras(managerSignedAt: nil, approvedAt: nil, selfSigned: false, revision: 1)
+        XCTAssertFalse(extras.allowed)
+        XCTAssertEqual(extras.message, CanonicalBusinessEngine.timesheetRevisionExtrasMessage)
+        XCTAssertFalse(CanonicalBusinessEngine.canEditTimesheetEntry(managerSignedAt: nil, approvedAt: nil, viewerIsOwner: true, selfSigned: false, revision: 1).allowed)
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetOwnerCanAddExtras(managerSignedAt: nil, approvedAt: nil, selfSigned: false, revision: 0).allowed)
     }
 
     func testRevisionEntryIdsAreTheOriginals() throws {

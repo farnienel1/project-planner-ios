@@ -179,34 +179,6 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         return ids.isEmpty || ids.isSubset(of: Set(completedItemIds))
     }
 
-    /// Whether this user appears on any explicit assignment list (operative and/or manager rows).
-    func isAssignedToUser(
-        userEmail: String?,
-        operatives: [Operative],
-        managers: [Manager],
-        isOperativeMode: Bool
-    ) -> Bool {
-        let raw = Self.normalizedEmail(userEmail)
-        guard !raw.isEmpty else { return false }
-        if isOperativeMode {
-            guard let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }) else { return false }
-            return allAssignedOperativeIds.contains(op.id)
-        }
-        if let mgr = managers.first(where: { Self.normalizedEmail($0.email) == raw }),
-           allAssignedManagerIds.contains(mgr.id) {
-            return true
-        }
-        if let op = operatives.first(where: { Self.normalizedEmail($0.email) == raw }),
-           allAssignedOperativeIds.contains(op.id) {
-            return true
-        }
-        return false
-    }
-
-    private static func normalizedEmail(_ value: String?) -> String {
-        value?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-    }
-
     /// True when `createdBy` matches the signed-in user (full name or email, as stored when the task was created).
     func isCreatedByCurrentUser(_ user: AppUser?) -> Bool {
         guard let user = user else { return false }

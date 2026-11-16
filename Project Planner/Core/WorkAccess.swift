@@ -191,32 +191,21 @@ enum WorkAccess {
         signedInOperative(email: email, firstName: nil, surname: nil, operatives: operatives)
     }
 
+    /// The jobs of the tasks assigned to `currentUser` (RULEBOOK §23 `tasksAssignedToViewer`, every id they go by).
     static func taskAssignedProjectIds(
         currentUser: AppUser?,
         taskStore: ProjectTaskStore,
         operatives: [Operative],
-        managers: [Manager]
+        managers: [Manager],
+        organizationUsers: [AppUser] = []
     ) -> Set<UUID> {
-        guard let currentUser else { return [] }
-        var ids = Set<UUID>()
-        for task in taskStore.tasks {
-            let asOp = task.isAssignedToUser(
-                userEmail: currentUser.email,
-                operatives: operatives,
-                managers: managers,
-                isOperativeMode: true
-            )
-            let asStaff = task.isAssignedToUser(
-                userEmail: currentUser.email,
-                operatives: operatives,
-                managers: managers,
-                isOperativeMode: false
-            )
-            if asOp || asStaff {
-                ids.insert(task.projectId)
-            }
-        }
-        return ids
+        Set(TaskAssignmentRulebook.assignedTasks(
+            taskStore.tasks,
+            viewer: currentUser,
+            organizationUsers: organizationUsers,
+            operatives: operatives,
+            managers: managers
+        ).map(\.projectId))
     }
 
     /// User ids booked onto the job (any non-cancelled booking) or assigned a task on it.

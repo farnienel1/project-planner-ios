@@ -57,6 +57,8 @@ struct HomeView: View {
     // Navigation states for menu items
     @State private var showingClientsView = false
     @State private var showingQuickMenu = false
+    /// The menu's "Reset my password" result (sent, or why not).
+    @State private var resetPasswordMessage: String?
     @State private var isCustomisingQuickActions = false
     @State private var showingAddQuickActionPicker = false
     @State private var showingQuickActionCustomizeHint = false
@@ -375,8 +377,24 @@ struct HomeView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .mainMenuResetPassword)) { _ in
             if let email = firebaseBackend.currentUser?.email {
-                Task { try? await firebaseBackend.resetPassword(email: email) }
+                // Review of #242: the result is shown, never swallowed.
+                Task {
+                    do {
+                        try await firebaseBackend.resetPassword(email: email)
+                        resetPasswordMessage = "A password reset email has been sent to \(email)."
+                    } catch {
+                        resetPasswordMessage = "The password reset email was not sent: \(error.localizedDescription)"
+                    }
+                }
             }
+        }
+        .alert("Reset password", isPresented: Binding(
+            get: { resetPasswordMessage != nil },
+            set: { if !$0 { resetPasswordMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { resetPasswordMessage = nil }
+        } message: {
+            Text(resetPasswordMessage ?? "")
         }
         .sheet(isPresented: $showingQuickMenu) {
             QuickMenuSheet()
@@ -1482,31 +1500,18 @@ struct HomeView: View {
     }
     
     private var assignedTasksCount: Int {
+        // RULEBOOK §23 `tasksAssignedToViewer`: the open tasks assigned to the person under any id they go by — the
+        // same rule as the Home task figures (`homeOverviewMetrics`) and the Tasks "Assigned to me" list.
+        let taskCount = TaskAssignmentRulebook.assignedTasks(
+            taskStore.tasks.filter { !$0.isCompleted },
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ).count
         if userStore.isOperativeMode() {
-            let em = userStore.currentUser.map {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            } ?? ""
-            guard !em.isEmpty,
-                  let operative = operativeStore.allOperatives.first(where: {
-                      $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-                  }) else {
-                return operativeQualificationExpiryReminderCount
-            }
-            let taskCount = taskStore.tasks.filter { task in
-                !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
-            }.count
             return taskCount + operativeQualificationExpiryReminderCount
         } else {
-            let email = userStore.currentUser?.email
-            let taskCount = taskStore.tasks.filter { task in
-                !task.isCompleted
-                    && task.isAssignedToUser(
-                        userEmail: email,
-                        operatives: operativeStore.allOperatives,
-                        managers: operativeStore.allManagers,
-                        isOperativeMode: false
-                    )
-            }.count
             return taskCount + pendingHolidayApprovalsCount
         }
     }

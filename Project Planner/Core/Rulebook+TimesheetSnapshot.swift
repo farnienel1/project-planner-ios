@@ -242,11 +242,14 @@ extension CanonicalBusinessEngine {
     nonisolated static func timesheetOwnerCanAddExtras(
         managerSignedAt: Date?,
         approvedAt: Date?,
-        selfSigned: Bool
+        selfSigned: Bool,
+        revision: Int? = nil
     ) -> RulebookTimesheetExtrasPermission {
+        // RULEBOOK 1.55.0 §8: `revision` (REV N) — never on a revision (`TIMESHEET_REVISION_EXTRAS_MESSAGE`).
         let sheet: [String: Any] = [
             "managerSignedAt": instantArgument(managerSignedAt),
             "approvedAt": instantArgument(approvedAt),
+            "revision": revision ?? 0,
         ]
         return RulebookTimesheetExtrasPermission(
             json: callJSON("timesheetOwnerCanAddExtras", arguments: [sheet, ["selfSigned": selfSigned]])

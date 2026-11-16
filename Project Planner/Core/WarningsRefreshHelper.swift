@@ -33,6 +33,20 @@ enum WarningsRefreshHelper {
     private static let minRefreshInterval: TimeInterval = 45
 
     @MainActor private static let bookingScheduler: WarningsBookingScanScheduler = makeBookingScheduler()
+    /// Re-scans when the signed-in viewer changes (their profile loads, a role change): the scan waits for it
+    /// (`WarningInputsReadiness.viewerLoaded`) and its scope decides every row (review of #242).
+    @MainActor private static var viewerObserver: NSObjectProtocol?
+
+    @MainActor
+    private static func observeViewerChanges() {
+        guard viewerObserver == nil else { return }
+        viewerObserver = NotificationCenter.default.addObserver(forName: .jobAccessViewerDidChange, object: nil, queue: .main) { _ in
+            Task { @MainActor in
+                guard bookingInputs != nil else { return }
+                bookingScheduler.noteBookingChange()
+            }
+        }
+    }
 
     /// Home must not start a live scan while Weekly Report is open.
     @MainActor static var isWeeklyReportVisible = false
@@ -54,6 +68,7 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) {
+        observeViewerChanges()
         bookingInputs = BookingScanInputs(
             operativeStore: operativeStore,
             bookingStore: bookingStore,
@@ -277,7 +292,8 @@ enum WarningsRefreshHelper {
             operativesLoaded: !operativeStore.isLoading && loaded(operativeStore.finishedLoadOrganizationId),
             rosterLoaded: loaded(userStore.organizationUsersFinishedLoadOrganizationId),
             annualLeaveLoaded: !holidayStore.isLoading && loaded(holidayStore.finishedLoadOrganizationId),
-            jobsLoaded: !projectStore.isLoading && loaded(projectStore.finishedLoadOrganizationId)
+            jobsLoaded: !projectStore.isLoading && loaded(projectStore.finishedLoadOrganizationId),
+            viewerLoaded: !JobAccessContext.viewerPending
         )
     }
 
@@ -321,6 +337,7 @@ enum WarningsRefreshHelper {
         firebaseBackend: FirebaseBackend,
         appSettings: AppSettingsStore
     ) {
+        observeViewerChanges()
         bookingInputs = BookingScanInputs(
             operativeStore: operativeStore,
             bookingStore: bookingStore,

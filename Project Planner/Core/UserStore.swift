@@ -3845,38 +3845,55 @@ class UserStore: ObservableObject {
              
              // MARK: - Resend Invitation Email
              
-             func resendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String) async {
-                 guard let firebaseBackend = firebaseBackend else { return }
-                 
-                 // Use FirebaseBackend's sendInvitationEmail method
-                 await firebaseBackend.sendInvitationEmail(
+             /// Resends the set-up email for `invitationId` of `organizationId`. Nil when sent, else why not.
+             @discardableResult
+             func resendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String, organizationId: String? = nil) async -> String? {
+                 guard let firebaseBackend = firebaseBackend else { return "the app is still loading" }
+                 return await firebaseBackend.sendInvitationEmail(
                      email: email,
                      firstName: firstName,
                      surname: surname,
-                     invitationId: invitationId
+                     invitationId: invitationId,
+                     organizationId: organizationId
                  )
              }
              
-             func sendSignUpEmailWithVerification(email: String, firstName: String, surname: String, invitationId: String) async -> Bool {
-                 guard let firebaseBackend = firebaseBackend else { return false }
-                 await firebaseBackend.sendInvitationEmail(
+             /// The sign-up (set-up) email for a new invitation. Nil when sent, else why not.
+             func sendSignUpEmailWithVerification(email: String, firstName: String, surname: String, invitationId: String, organizationId: String? = nil) async -> String? {
+                 guard let firebaseBackend = firebaseBackend else { return "the app is still loading" }
+                 return await firebaseBackend.sendInvitationEmail(
                      email: email,
                      firstName: firstName,
                      surname: surname,
-                     invitationId: invitationId
+                     invitationId: invitationId,
+                     organizationId: organizationId
                  )
-                 return true
+             }
+             
+             /// The organisation open on this device — every invitation Manage Users writes is for it (AGENTS rule 2;
+             /// never `user.organizationId`, the person's home company). Throws when none is open.
+             func requireOpenOrganizationId() throws -> String {
+                 let id = firebaseBackend?.currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                 guard !id.isEmpty else {
+                     throw NSError(
+                         domain: "UserStore",
+                         code: 400,
+                         userInfo: [NSLocalizedDescriptionKey: "Organization not loaded. Please wait a moment and try again."]
+                     )
+                 }
+                 return id
              }
              
              /// Sends a password reset email (new verification code) to the user. Use for active/verified users.
-             func sendPasswordResetEmail(to email: String) async -> Bool {
-                 guard let firebaseBackend = firebaseBackend else { return false }
+             /// Nil when sent, else why not.
+             func sendPasswordResetEmail(to email: String) async -> String? {
+                 guard let firebaseBackend = firebaseBackend else { return "the app is still loading" }
                  do {
                      try await firebaseBackend.resetPassword(email: email)
-                     return true
+                     return nil
                  } catch {
                      print("🔥🔥🔥 DEBUG: Error sending password reset email: \(error)")
-                     return false
+                     return error.localizedDescription
                  }
              }
     

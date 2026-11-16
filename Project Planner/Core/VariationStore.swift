@@ -37,15 +37,13 @@ final class VariationStore: ObservableObject {
     }
 
     func start(firebaseBackend: FirebaseBackend) {
-        if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
-            attachListeners(firebaseBackend: firebaseBackend, orgId: orgId)
-            return
-        }
-        Task {
-            guard let orgId = await firebaseBackend.resolveOrganizationIdForFirebaseWrites(preferredFallback: nil),
-                  !orgId.isEmpty else { return }
-            attachListeners(firebaseBackend: firebaseBackend, orgId: orgId)
-        }
+        // AGENTS rule 2: only the open organisation. With none open yet nothing is attached; the list view calls
+        // `start` again when `currentOrganization` changes (never the home company in `users/{uid}`).
+        guard let orgId = FirebaseBackend.openOrganizationIdForWrites(
+            requested: nil,
+            openOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+        ) else { return }
+        attachListeners(firebaseBackend: firebaseBackend, orgId: orgId)
     }
 
     private func attachListeners(firebaseBackend: FirebaseBackend, orgId: String) {
