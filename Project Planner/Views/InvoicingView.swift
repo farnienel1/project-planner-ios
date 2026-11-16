@@ -40,6 +40,33 @@ struct InvoicingView: View {
     }
 
     private var canShowMyTimesheets: Bool { userStore.canAccessMyTimesheets() }
+
+    /// Shown while the person's own pay is not known yet (`UserStore.ownPayReady`): loading, or the read failed.
+    @ViewBuilder
+    private var ownPayWaitingCard: some View {
+        if userStore.ownPayLoadFailed {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.exclamationmark",
+                description: Text(PrivatePayOverlayReadiness.ownFailedMessage)
+            )
+        } else if userStore.isOffline {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.slash",
+                description: Text(PrivatePayOverlayReadiness.ownOfflineMessage)
+            )
+        } else {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(PrivatePayOverlayReadiness.loadingMessage)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 24)
+            .accessibilityIdentifier("timesheets.ownPayLoading")
+        }
+    }
     private var canShowOperativeTimesheets: Bool { userStore.canAccessOperativeTimesheets() }
     private var showTimesheetsDisabledMessage: Bool { userStore.shouldShowTimesheetsDisabledMessage() }
     private var isAdminViewer: Bool {
@@ -54,7 +81,15 @@ struct InvoicingView: View {
                     hubNavyHeader
 
                     VStack(alignment: .leading, spacing: 14) {
-                        if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
+                        if !userStore.ownPayReady && canShowOperativeTimesheets {
+                            // A line manager whose own pay is still loading: their My Timesheets card is not decided yet.
+                            ownPayWaitingCard
+                        }
+                        if !userStore.ownPayReady && !canShowOperativeTimesheets {
+                            // RULEBOOK §8 (review of #240): whether this person has My Timesheets is decided from their
+                            // own pay, which is not known yet — a loading state, never "Timesheets unavailable".
+                            ownPayWaitingCard
+                        } else if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
                             overtimeHubCard
                         } else if !userStore.canAccessTimesheetsSurface() {
@@ -2354,7 +2389,8 @@ private struct MyTimesheetView: View {
         return PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .ownPay
         )
     }
 
@@ -3800,6 +3836,24 @@ private struct MyTimesheetView: View {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
             return nil
         }
+        // A signature that completes the sheet never saves without its snapshot: while pay inputs (bookings, history or
+        // the pay-profile overlays) are not ready, the save is refused rather than saved unfrozen.
+        if let current = userStore.displayUser,
+           let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+               draft: draft,
+               user: current,
+               writerIsReviewer: TimesheetApprovalPolicy.writerIsReviewer(
+                   writerId: current.id,
+                   writer: current,
+                   subjectUserId: current.id,
+                   subject: current
+               ),
+               blockMessage: payInputsBlockMessage,
+               rebuildSnapshot: rebuildSnapshot
+           ) {
+            saveErrorMessage = refusal
+            return nil
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
@@ -4017,7 +4071,7 @@ struct OperativeTimesheetsView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization, scope: .othersPay)
     }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF.
@@ -4149,7 +4203,7 @@ struct OperativeTimesheetsView: View {
                         } else {
                             ForEach(filteredExportedHistory) { row in
                                 NavigationLink {
-                                    OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                                    OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                         .environmentObject(firebaseBackend)
                                         .environmentObject(userStore)
                                         .environmentObject(bookingStore)
@@ -4159,9 +4213,9 @@ struct OperativeTimesheetsView: View {
                                         .environmentObject(notificationService)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        initialsAvatar(for: row.user)
+                                        initialsAvatar(for: live(row.user))
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                            Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
                                             Text(row.week.title)
@@ -4174,7 +4228,7 @@ struct OperativeTimesheetsView: View {
                                             }
                                         }
                                         Spacer()
-                                        statusPill(for: row.draft, user: row.user)
+                                        statusPill(for: row.draft, user: live(row.user))
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
                                             .foregroundStyle(.tertiary)
@@ -4225,7 +4279,7 @@ struct OperativeTimesheetsView: View {
                     } else {
                     ForEach(awaitingRows) { row in
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                            OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -4235,26 +4289,26 @@ struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                initialsAvatar(for: row.user)
+                                initialsAvatar(for: live(row.user))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                    Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
-                                    let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
+                                    let draft = TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start)
+                                    let summary = operativeSummary(for: live(row.user), draft: draft, week: row.week)
                                     Text(summary.map { "\(row.week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? row.week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
-                                        Text("Line manager: \(lineManagerName(for: row.user))")
+                                        Text("Line manager: \(lineManagerName(for: live(row.user)))")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
                                 statusPill(
-                                    for: TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start),
-                                    user: row.user
+                                    for: TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start),
+                                    user: live(row.user)
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
@@ -4419,6 +4473,9 @@ struct OperativeTimesheetsView: View {
         // Rows were built only on appear and after the first fetch. When the roster arrives or is replaced
         // later, rebuild from the people now in scope and fetch their timesheets, instead of keeping the
         // first (empty or cached) list.
+        // The rows keep each person: rebuilt when roster pay is laid over again (review of #240), never priced from a
+        // copy kept from before the pay profiles arrived.
+        .onChange(of: userStore.payOverlayVersion) { _, _ in rebuildAwaitingRows() }
         .task(id: managerScopeUsers.map(\.id)) {
             let ids = managerScopeUsers.map(\.id)
             guard let previous = listScopeIds else {
@@ -4467,7 +4524,8 @@ struct OperativeTimesheetsView: View {
             return
         }
         // RULEBOOK 1.47.0 §8: a sheet waiting for the person to sign the changed bookings again is not signed.
-        let waitingForOwner = userStore.currentUser.flatMap {
+        // RULEBOOK §8: the viewer's own record with their pay profile laid over (PAYE days are not timesheet lines).
+        let waitingForOwner = userStore.currentUserWithPay.flatMap {
             SignedTimesheetChangeContext.shared.change(draft: ownSheet, user: $0, period: week)
         }?.waitingForPerson == true
         ownSheetExportNotice = CanonicalBusinessEngine.timesheetExportOwnSheetNotice(
@@ -4734,7 +4792,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: week.start
-            )
+            ),
+            scope: .othersPay
         ) {
             exportMessage = blocked
             return
@@ -4760,12 +4819,26 @@ struct OperativeTimesheetsView: View {
         var skippedElsewhere: [String] = []
         /// RULEBOOK 1.47.0 §8: sheets left out because their bookings changed since they were signed.
         var skippedChanged: [String] = []
+        /// Review of #240: people whose pay details could not be loaded (their pay-profile read failed).
+        var skippedPay: [String] = []
         /// RULEBOOK 1.54.0 §8: sheets left out because late extras wait for the line manager.
         var skippedLateExtras: [String] = []
-        for op in targets {
+        for target in targets {
+            // RULEBOOK §8 (review of #240): the person as the roster holds them now, pay laid over.
+            let op = live(target)
             guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
+            }
+            // The pay gate for this person, checked again for each one (review of #240): still loading stops the export;
+            // their pay could not be loaded skips and names them.
+            if let blocked = PrivatePayOverlayReadiness.blockMessage(scope: .forPerson(op)) {
+                if blocked == PrivatePayOverlayReadiness.loadingMessage {
+                    exportMessage = blocked
+                    return
+                }
+                skippedPay.append(name(op))
+                continue
             }
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
                 userId: op.id,
@@ -4935,6 +5008,10 @@ struct OperativeTimesheetsView: View {
             let line = "\(skippedLateExtras.joined(separator: ", ")): \(CanonicalBusinessEngine.timesheetLateExtrasExportSkippedMessage)"
             exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         }
+        if !skippedPay.isEmpty {
+            let line = "\(skippedPay.joined(separator: ", ")): \(PrivatePayOverlayReadiness.exportSkippedMessage)"
+            exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        }
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
@@ -4953,7 +5030,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: row.week.start
-            )
+            ),
+            scope: .forPerson(live(row.user))
         ) {
             exportMessage = blocked
             return
@@ -4961,7 +5039,7 @@ struct OperativeTimesheetsView: View {
         var sheet = row.draft
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
-                userId: row.user.id,
+                userId: live(row.user).id,
                 weekStart: row.week.start,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
@@ -4974,15 +5052,15 @@ struct OperativeTimesheetsView: View {
             return
         }
         let taxIds = await InvoicePDFGenerationSupport.taxIdsForExport(
-            subject: row.user,
+            subject: live(row.user),
             requested: includeTaxIdsInExport,
             userStore: userStore
         )
-        let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
+        let name = live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName
         let attachment: TimesheetExportHelper.PDFAttachment
         do {
             attachment = try TimesheetExportHelper.makeSheetPDF(
-            operative: row.user,
+            operative: live(row.user),
             week: row.week,
             draft: sheet,
             bookingStore: bookingStore,
@@ -5107,6 +5185,9 @@ struct OperativeTimesheetsView: View {
 
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
     /// (a declined expense never counts). Nil when the script did not answer.
+    /// RULEBOOK §8 (review of #240): a person kept on a row, as the roster holds them now (pay laid over).
+    private func live(_ user: AppUser) -> AppUser { UserStore.livePerson(user, in: userStore.organizationUsers) }
+
     private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
@@ -5190,9 +5271,20 @@ private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var holidayStore: HolidayStore
-    let operative: AppUser
+    /// The person as passed in. Pricing and decisions use `operative`, the person as the roster holds them now.
+    private let operativeSeed: AppUser
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
+
+    init(operative: AppUser, settings: OrganizationInvoicingSettings, week: WeekRange) {
+        self.operativeSeed = operative
+        self.settings = settings
+        self.week = week
+    }
+
+    /// RULEBOOK §8 (review of #240): the reviewed person with their pay laid over now — looked up again by id, never the
+    /// copy a list kept from before the roster's pay profiles arrived.
+    private var operative: AppUser { UserStore.livePerson(operativeSeed, in: userStore.organizationUsers) }
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
     /// RULEBOOK 1.47.0 §8: the counter-signature of a reopened sheet rebuilds its snapshot on the save that follows.
@@ -5206,7 +5298,8 @@ private struct OperativeTimesheetReviewView: View {
         if let blocked = PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .forPerson(operative)
         ) {
             return blocked
         }
@@ -6122,6 +6215,25 @@ private struct OperativeTimesheetReviewView: View {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
+        // A counter-signature never saves without its snapshot (review of #240): while pay inputs (bookings, history or
+        // the roster's pay-profile overlay) are not ready, the save is refused rather than saved unfrozen.
+        if let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+            draft: draft,
+            user: operative,
+            writerIsReviewer: userStore.displayUser.map {
+                TimesheetApprovalPolicy.writerIsReviewer(
+                    writerId: $0.id,
+                    writer: $0,
+                    subjectUserId: operative.id,
+                    subject: operative
+                )
+            },
+            blockMessage: payInputsBlockMessage,
+            rebuildSnapshot: rebuildSnapshotOnSave
+        ) {
+            saveErrorMessage = refusal
             return
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).

@@ -3466,7 +3466,7 @@ class FirebaseBackend: ObservableObject {
             batch.updateData(WriteMetadata.stamped(sharedChanges, userId: uid), forDocument: ref)
         }
         addPayProfileWrite(to: batch, subjectId: payProfileSubjectId, profileWrite: changes)
-        try await batch.commit()
+        try await commitPayBatch(batch)
     }
 
     /// RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: an `operatives` / `managers` row takes no pay
@@ -6637,7 +6637,7 @@ class FirebaseBackend: ObservableObject {
         // (`payProfileWriteFieldsFromProfileWrite`).
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
         guard !historyRows.isEmpty, let orgId = currentOrganization?.firestoreDocumentId else {
-            try await batch.commit()
+            try await commitPayBatch(batch)
             return
         }
         for row in historyRows {
@@ -6653,7 +6653,7 @@ class FirebaseBackend: ObservableObject {
                 .collection("operativeDayRateHistory").document(UUID().uuidString)
             batch.setData(WriteMetadata.stamped(fields, userId: uid), forDocument: ref)
         }
-        try await batch.commit()
+        try await commitPayBatch(batch)
     }
 
     /// Client heartbeat for “last seen”; merge-only so other writes are not replaced.

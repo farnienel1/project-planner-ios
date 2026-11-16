@@ -62,6 +62,8 @@ struct WeeklyReportView: View {
     @State private var generatedPDFURL: URL?
     @State private var showGeneratedSuccess = false
     @State private var message: String?
+    /// The report was refused because someone's pay could not be loaded: Retry reads the pay profiles again.
+    @State private var payGateFailed = false
     @State private var dayRateHistoryCollection = OperativeDayRateHistoryCollection.empty
     @State private var logoImage: UIImage?
     @State private var periodHighCount = 0
@@ -189,6 +191,15 @@ struct WeeklyReportView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
+                        }
+                        if payGateFailed {
+                            Button("Retry") {
+                                payGateFailed = false
+                                message = nil
+                                userStore.retryPayProfiles()
+                            }
+                            .font(.footnote.weight(.semibold))
+                            .accessibilityIdentifier("weeklyReport.payRetry")
                         }
                         Spacer(minLength: 24)
                     }
@@ -866,6 +877,7 @@ struct WeeklyReportView: View {
     private func generateReports() {
         isGenerating = true
         message = nil
+        payGateFailed = false
         showGeneratedSuccess = false
         Task {
             // The report's own range is scanned (§7); the live Warnings window is not used.
@@ -876,7 +888,7 @@ struct WeeklyReportView: View {
             // A failed pay-history read is a failure, never an empty history (`PayInputsLoad`): no report with
             // pay worked out from rates that did not load.
             let payInputs = await PayInputsLoad.loadHistory(firebaseBackend)
-            if let blocked = PayInputsLoad.blockMessage(state: payInputs.state, organization: firebaseBackend.currentOrganization) {
+            if let blocked = PayInputsLoad.blockMessage(state: payInputs.state, organization: firebaseBackend.currentOrganization, scope: .othersPay) {
                 await MainActor.run {
                     message = blocked
                     isGenerating = false
@@ -905,6 +917,17 @@ struct WeeklyReportView: View {
             if let failed = feed.calculationFailedMessage {
                 await MainActor.run {
                     message = failed
+                    isGenerating = false
+                }
+                return
+            }
+            // RULEBOOK §8 (pay strip, web #342): only the people this report prices are waited for; anyone of them whose
+            // pay could not be loaded is named, never priced as "Rate not set" or £0.
+            let gate = reportPayGate()
+            if gate.status != .ready {
+                await MainActor.run {
+                    message = gate.message ?? PrivatePayOverlayReadiness.loadingMessage
+                    payGateFailed = gate.status == .failed
                     isGenerating = false
                 }
                 return
@@ -1169,11 +1192,45 @@ struct WeeklyReportView: View {
 
     /// The weekly report's `weeklyReportPayRows` answer for the report range, with the people it names. Throws when
     /// the rulebook did not answer (pay is never shown from a partial calculation).
-    private func weeklyReportPay() throws -> (result: RulebookWeeklyReportPay, built: WeeklyReportPayInputs.Built) {
+    /// Web #342: the pay gate over the people this report prices (`pricedUserIds`) and the PAYE people of its overtime
+    /// section. Ready when the switch is off.
+    private func reportPayGate() -> ReportPayGate {
+        guard let built = try? weeklyReportPayInputs() else {
+            // The pricing itself fails later with its own calculation message.
+            return ReportPayGate(status: .ready, message: nil)
+        }
+        var ids = WeeklyReportPayInputs.pricedUserIds(built)
+        ids.formUnion(payeOvertimePeopleIds())
+        let people = userStore.organizationUsers.filter { ids.contains($0.id) }
+        return PrivatePayOverlayReadiness.reportGate(people: people)
+    }
+
+    /// The users whose ids name an overtime booking in the range (the PAYE overtime section reads their employment type).
+    private func payeOvertimePeopleIds() -> Set<String> {
+        let cal = CanonicalBusinessEngine.businessCalendar
+        let inRange: (Date) -> Bool = { date in
+            let day = cal.startOfDay(for: date)
+            return day >= reportStartDay && day <= reportEndDay
+        }
+        var keys = Set(bookingStore.bookings.filter { inRange($0.date) }.map { $0.storedOperativeId.lowercased() })
+        for booking in managerScheduleStore.managerSiteBookings where inRange(booking.date) {
+            keys.insert(booking.userId.lowercased())
+        }
+        let users = userStore.organizationUsers
+        let operatives = operativeStore.allOperatives
+        var out = Set<String>()
+        for user in users where !user.isAnonymisedDeletedProfile {
+            let ids = OvertimeScreenSupport.personIds(for: user, users: users, operatives: operatives)
+            if ids.contains(where: { keys.contains($0.lowercased()) }) { out.insert(user.id) }
+        }
+        return out
+    }
+
+    private func weeklyReportPayInputs() throws -> WeeklyReportPayInputs.Built {
         // The working-hours state with its history (§4.3): never one policy for every day. While it has not loaded the
         // report fails with its calculation error rather than price days on the wrong rules (review of #235).
         guard let organization = CanonicalBusinessEngine.openOrganizationPayrollPolicyState else { throw PayCalculationError() }
-        let built = WeeklyReportPayInputs.build(WeeklyReportPayInputs.Sources(
+        return WeeklyReportPayInputs.build(WeeklyReportPayInputs.Sources(
             users: userStore.organizationUsers,
             bookingNameUsers: userStore.bookingNameUsers,
             operatives: operativeStore.allOperatives,
@@ -1191,6 +1248,10 @@ struct WeeklyReportView: View {
             // RULEBOOK 1.53.0: the Role column is the user level (`userLevelLabel`); a person with no account is an operative.
             roleLabel: { user in Self.userLevelText(user) }
         ))
+    }
+
+    private func weeklyReportPay() throws -> (result: RulebookWeeklyReportPay, built: WeeklyReportPayInputs.Built) {
+        let built = try weeklyReportPayInputs()
         guard let result = CanonicalBusinessEngine.weeklyReportPayRows(built.input) else { throw PayCalculationError() }
         return (result, built)
     }
