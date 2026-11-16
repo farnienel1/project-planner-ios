@@ -376,21 +376,21 @@ struct InvoicingView: View {
         .buttonStyle(PPPressableButtonStyle())
         // RULEBOOK 1.47.0 §8: a yellow triangle when one of the person's signed sheets must be signed again.
         .overlay(alignment: .topTrailing) {
-            if ownSheetNeedsSigningAgain {
-                SignedTimesheetChangedTriangle()
+            if let message = ownSheetTriangleMessage {
+                SignedTimesheetChangedTriangle(message: message)
                     .padding(8)
             }
         }
     }
 
-    /// RULEBOOK 1.47.0 §8: any of the person's own signed, unexported sheets of the last six pay runs waits for them
-    /// to sign again (`signedTimesheetBookingChanges` → `waitingFor == "person"`).
-    private var ownSheetNeedsSigningAgain: Bool {
+    /// RULEBOOK 1.47.0 / 1.55.0 §8: the triangle's popup on the My Timesheets entry (signed sheet changed, or a revision
+    /// due on an exported one), or nil when there is no triangle.
+    private var ownSheetTriangleMessage: String? {
         let _ = landingVersion
         let _ = bookingStore.revision
         let _ = managerScheduleStore.revision
-        guard let user = userStore.displayUser else { return false }
-        return SignedTimesheetChangeContext.shared.ownSheetNeedsSigningAgain(user: user, settings: settings)
+        guard let user = userStore.displayUser else { return nil }
+        return SignedTimesheetChangeContext.shared.ownSheetTriangleMessage(user: user, settings: settings)
     }
 
     @ViewBuilder
@@ -427,8 +427,8 @@ struct InvoicingView: View {
                     .buttonStyle(PPMenuRowButtonStyle())
                     // RULEBOOK 1.47.0 §8: the yellow triangle next to My Timesheets.
                     .overlay(alignment: .trailing) {
-                        if ownSheetNeedsSigningAgain {
-                            SignedTimesheetChangedTriangle()
+                        if let message = ownSheetTriangleMessage {
+                            SignedTimesheetChangedTriangle(message: message)
                                 .padding(.trailing, 30)
                         }
                     }
@@ -965,6 +965,97 @@ enum TimesheetDraftStore {
     static func listBucket(for draft: TimesheetDraft, hasLineManager: Bool, change: RulebookSignedTimesheetChange? = nil) -> String? {
         guard let fields = statusFields(for: draft) else { return nil }
         return CanonicalBusinessEngine.timesheetListBucket(fields, hasLineManager: hasLineManager, change: change)
+    }
+
+    // MARK: RULEBOOK 1.55.0 §8 — timesheet revisions
+
+    /// The version the draft was read from, as the script reads it (`timesheetVersionsForPeriod` of its document id and
+    /// its stored sign-off fields) — the latest version of its pay run as this device holds it. A draft read before
+    /// 1.55.0 (no `versionDocumentId`) is the original (`timesheetDocumentId`). [] when neither id is known.
+    static func latestVersionChain(for draft: TimesheetDraft, userId: String, weekStart: Date) -> [TimesheetVersionInfo] {
+        var documentId = draft.versionDocumentId ?? ""
+        if documentId.isEmpty,
+           let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart),
+           let canonical = CanonicalBusinessEngine.timesheetDocumentId(userId: userId, startDayKey: startKey) {
+            documentId = canonical
+        }
+        guard !documentId.isEmpty else { return [] }
+        var data = statusPayload(for: draft)
+        // The stored `exportedAt` as the rules test it decides "exported" (a copy read before 1.54.0 keeps its date).
+        if draft.exportedAtStored == false { data.removeValue(forKey: "exportedAt") }
+        if let snapshot = draft.weeklyReportOverride { data["weeklyReportOverride"] = ["approvedAt": snapshot.approvedAt.timeIntervalSince1970 * 1000] }
+        return CanonicalBusinessEngine.timesheetVersionsForPeriod([(documentId, data)])?.first ?? []
+    }
+
+    /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue({ chain, change })`: the draft is its pay run's latest version, exported,
+    /// and `change` (`signedTimesheetBookingChanges` of it) reads `exported` and `changed`. `.notDue` otherwise.
+    static func revisionDue(for draft: TimesheetDraft, userId: String, weekStart: Date, change: RulebookSignedTimesheetChange?) -> RulebookTimesheetRevisionDue {
+        guard change?.exported == true, change?.changed == true else { return .notDue }
+        let chain = latestVersionChain(for: draft, userId: userId, weekStart: weekStart)
+        return CanonicalBusinessEngine.timesheetRevisionDue(chain: chain, change: change) ?? .notDue
+    }
+
+    /// "REV 1" for a revision, "" for the original (`timesheetRevisionLabel`).
+    static func revisionLabel(for draft: TimesheetDraft) -> String {
+        CanonicalBusinessEngine.timesheetRevisionLabel(draft.revision)
+    }
+
+    /// RULEBOOK 1.55.0 §8: the invoice number and revision note a document of this draft carries (`TimesheetRevisionCopy`).
+    static func revisionCopy(for draft: TimesheetDraft, subjectId: String, weekStart: Date, total: Double, currency: String) -> TimesheetRevisionCopy {
+        TimesheetRevisionCopy.make(
+            subjectId: subjectId,
+            startDayKey: CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart) ?? "",
+            revision: draft.revision,
+            total: total,
+            previousExportedTotal: draft.previousVersionExportedTotal,
+            currency: currency
+        )
+    }
+
+    /// RULEBOOK 1.55.0 §8: creates the next revision of the pay run whose latest version this device read
+    /// (`firebaseBackend.createTimesheetRevision`), after `canCreateTimesheetRevision` allows it for this writer (the
+    /// person when `writerIsSubject`, else a reviewer). The chain is read fresh first. Returns the new revision's id, or a
+    /// message saying why nothing was created.
+    static func createRevision(
+        subject: AppUser,
+        weekStart: Date,
+        writer: AppUser,
+        writerIsSubject: Bool,
+        firebaseBackend: FirebaseBackend,
+        organizationId: String
+    ) async -> (documentId: String?, message: String?) {
+        let chain: [TimesheetVersionInfo]
+        do {
+            chain = try await firebaseBackend.loadTimesheetVersionChain(organizationId: organizationId, userId: subject.id, weekStart: weekStart)
+        } catch {
+            return (nil, "Couldn't create the revision: \(error.localizedDescription)")
+        }
+        // The `timesheetWriterIsReviewer` input, as `TimesheetApprovalPolicy.writerIsReviewer` builds it.
+        let reviewerInput: [String: Any] = [
+            "writerUserId": Auth.auth().currentUser?.uid ?? writer.id,
+            "subjectUserId": subject.id,
+            "writerIsAdmin": writer.isRosterAdmin,
+            "writerFormerIds": writer.formerUserIds,
+            "writerAliasIds": writer.sameEmailUserIds,
+            "subjectLineManagerIds": subject.lineManagerUserIds,
+            "roster": RulebookRosterSnapshot.roster,
+        ]
+        guard let check = CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: writerIsSubject) else {
+            return (nil, "Couldn't create the revision: the timesheet rules did not load. Try again.")
+        }
+        guard check.allowed, let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain) else {
+            return (nil, check.message.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNotExportedMessage : check.message)
+        }
+        do {
+            let result = try await firebaseBackend.createTimesheetRevision(organizationId: organizationId, previousDocumentId: latest.documentId)
+            switch result.status {
+            case "created": return (result.documentId, nil)
+            case "exists": return (nil, CanonicalBusinessEngine.timesheetRevisionOpenMessage)
+            default: return (nil, CanonicalBusinessEngine.timesheetRevisionNotExportedMessage)
+            }
+        } catch {
+            return (nil, "Couldn't create the revision: \(error.localizedDescription)")
+        }
     }
 
     static func parseTimesheetStatusFields(_ data: [String: Any]) -> CanonicalBusinessEngine.CanonicalTimesheetStatusFields? {
@@ -1690,6 +1781,13 @@ enum TimesheetDraftStore {
         output.extraEntryReviewsJSON = TimesheetLateExtrasSupport.reviewsJSONText(fromStoredSheet: map)
         // RULEBOOK 1.54.0 (review of #337): the stored `exportedAt` as the security rules test it.
         output.exportedAtStored = CanonicalBusinessEngine.timesheetExportedFieldSet(map["exportedAt"])
+        // RULEBOOK 1.55.0 §8: the version this copy was read from (its document id and REV number), and — on a
+        // revision — the previous version's exported total the read attached (`timesheetExportedTotal`).
+        if let readId = (map["__documentId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !readId.isEmpty {
+            output.versionDocumentId = readId
+            output.revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(readId)?.revision ?? 0
+        }
+        output.previousVersionExportedTotal = (map["__previousExportedTotal"] as? NSNumber)?.doubleValue
 
         if let reviewMap = map["payrollLineReviews"] as? [String: [String: Any]] {
             var reviews: [String: TimesheetPayrollLineReview] = [:]
@@ -2016,6 +2114,8 @@ private struct MyTimesheetsHubView: View {
             // its bucket follows the change (`timesheetListBucket(fields, hasLineManager, change)`).
             let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: week)
             if change?.waitingForPerson == true { return true }
+            // RULEBOOK 1.55.0 §8: an exported sheet with a revision due is pending too (the person signs the update).
+            if SignedTimesheetChangeContext.shared.revisionDue(draft: draft, user: user, period: week).due { return true }
             guard countersigned else { return false }
             return TimesheetApprovalPolicy.awaitingManagerSignOff(draft: draft, user: user, change: change)
         }
@@ -2134,7 +2234,9 @@ private struct MyTimesheetsHubView: View {
                         symbol: "calendar",
                         tint: PPColor.brand,
                         family: .plan,
-                        bookingsChanged: mustSignAgain(currentWeek)
+                        bookingsChanged: mustSignAgain(currentWeek) || revisionDue(for: currentWeek).due,
+                        triangleMessage: revisionDue(for: currentWeek).message,
+                        revisionLabel: revisionLabel(for: currentWeek)
                     ) {
                         MyTimesheetView(settings: settings, week: currentWeek)
                             .environmentObject(firebaseBackend)
@@ -2153,16 +2255,22 @@ private struct MyTimesheetsHubView: View {
                                 .padding(.bottom, -10)
                             ForEach(pending, id: \.start) { week in
                                 let changed = mustSignAgain(week)
+                                // RULEBOOK 1.55.0 §8: a revision due on an exported sheet.
+                                let due = revisionDue(for: week)
                                 hubCard(
                                     title: week.title,
-                                    subtitle: changed ? CanonicalBusinessEngine.signedTimesheetChangedStatus : "Timesheet pending manager signature",
-                                    detail: changed
+                                    subtitle: due.due ? CanonicalBusinessEngine.timesheetRevisionDueStatus
+                                        : changed ? CanonicalBusinessEngine.signedTimesheetChangedStatus : "Timesheet pending manager signature",
+                                    detail: due.due ? (due.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage)
+                                        : changed
                                         ? CanonicalBusinessEngine.signedTimesheetChangedMessage
                                         : "You signed — waiting for your line manager to counter-sign.",
                                     symbol: "clock.fill",
                                     tint: PPFamily.trade.bottom,
                                     family: .trade,
-                                    bookingsChanged: changed
+                                    bookingsChanged: changed || due.due,
+                                    triangleMessage: due.due ? (due.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage) : nil,
+                                    revisionLabel: revisionLabel(for: week)
                                 ) {
                                     MyTimesheetView(settings: settings, week: week)
                                         .environmentObject(firebaseBackend)
@@ -2200,7 +2308,9 @@ private struct MyTimesheetsHubView: View {
                                     symbol: "clock.arrow.circlepath",
                                     tint: .secondary,
                                     family: .system,
-                                    bookingsChanged: mustSignAgain(week)
+                                    bookingsChanged: mustSignAgain(week) || revisionDue(for: week).due,
+                                    triangleMessage: revisionDue(for: week).message,
+                                    revisionLabel: revisionLabel(for: week)
                                 ) {
                                     MyTimesheetView(settings: settings, week: week)
                                         .environmentObject(firebaseBackend)
@@ -2240,6 +2350,8 @@ private struct MyTimesheetsHubView: View {
     private func pastSubtitle(for week: WeekRange) -> String {
         guard let user = userStore.displayUser else { return "Previous period" }
         let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
+        // RULEBOOK 1.55.0 §8: an exported sheet whose bookings changed since has an update to sign.
+        if revisionDue(for: week).due { return CanonicalBusinessEngine.timesheetRevisionDueStatus }
         if TimesheetApprovalPolicy.isExported(draft) { return "Exported" }
         // RULEBOOK 1.47.0 §8: a reopened sheet is not signed off.
         if mustSignAgain(week) { return CanonicalBusinessEngine.signedTimesheetChangedStatus }
@@ -2280,6 +2392,8 @@ private struct MyTimesheetsHubView: View {
         tint: Color,
         family: PPFamily,
         bookingsChanged: Bool = false,
+        triangleMessage: String? = nil,
+        revisionLabel: String = "",
         @ViewBuilder destination: () -> Destination
     ) -> some View {
         NavigationLink {
@@ -2291,9 +2405,15 @@ private struct MyTimesheetsHubView: View {
                     Text(title)
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text(subtitle)
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(tint)
+                    HStack(spacing: 6) {
+                        Text(subtitle)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(tint)
+                        // RULEBOOK 1.55.0 §8: "REV 1" beside the status of a revision.
+                        if !revisionLabel.isEmpty {
+                            TimesheetRevisionBadge(label: revisionLabel)
+                        }
+                    }
                     Text(detail)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -2314,7 +2434,7 @@ private struct MyTimesheetsHubView: View {
         // RULEBOOK 1.47.0 §8: the yellow triangle on a sheet whose bookings changed since the person signed it.
         .overlay(alignment: .topTrailing) {
             if bookingsChanged {
-                SignedTimesheetChangedTriangle()
+                SignedTimesheetChangedTriangle(message: triangleMessage ?? CanonicalBusinessEngine.signedTimesheetChangedMessage)
                     .padding(6)
             }
         }
@@ -2332,6 +2452,21 @@ private struct MyTimesheetsHubView: View {
 
     private func mustSignAgain(_ week: WeekRange) -> Bool {
         bookingChange(for: week)?.waitingForPerson == true
+    }
+
+    /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue` for the person's own sheet of `week` (exported, bookings changed since).
+    private func revisionDue(for week: WeekRange) -> RulebookTimesheetRevisionDue {
+        let _ = bookingStore.revision
+        let _ = managerScheduleStore.revision
+        guard let user = userStore.displayUser else { return .notDue }
+        let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
+        return SignedTimesheetChangeContext.shared.revisionDue(draft: draft, user: user, period: week)
+    }
+
+    /// "REV 1" when the sheet stored for `week` is a revision (`timesheetRevisionLabel`), else "".
+    private func revisionLabel(for week: WeekRange) -> String {
+        guard let user = userStore.displayUser else { return "" }
+        return TimesheetDraftStore.revisionLabel(for: TimesheetDraftStore.load(userId: user.id, weekStart: week.start))
     }
 }
 
@@ -2430,6 +2565,50 @@ private struct MyTimesheetView: View {
     /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
     /// invoiced and no blank sheet is opened until a Retry reads it.
     @State private var periodLoadFailed = false
+    /// RULEBOOK 1.55.0 §8: "Review and sign again" is creating the revision.
+    @State private var isCreatingRevision = false
+
+    /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue`: this exported sheet's bookings changed since — the person signs an
+    /// update (a revision). Before export nothing changes from 1.47.0.
+    private var revisionDue: RulebookTimesheetRevisionDue {
+        guard TimesheetApprovalPolicy.isExported(draft) else { return .notDue }
+        return TimesheetDraftStore.revisionDue(for: draft, userId: currentUserId, weekStart: week.start, change: bookingChange)
+    }
+
+    /// RULEBOOK 1.55.0 §8: the versions before the one shown, read only (`timesheetEarlierVersions`).
+    private var earlierVersions: [TimesheetVersionInfo] {
+        let chain = TimesheetVersionChainCache.chain(for: draft.versionDocumentId)
+        guard chain.last?.documentId == draft.versionDocumentId else { return [] }
+        return CanonicalBusinessEngine.timesheetEarlierVersions(chain)
+    }
+
+    /// RULEBOOK 1.55.0 §8: "Review and sign again" on an exported sheet whose revision is due — the person's own write
+    /// creates `…_rev{N}` (`canCreateTimesheetRevision` with `writerIsSubject`), then the revision opens in the normal
+    /// sign flow (it is unsigned, priced from the live bookings).
+    private func createRevisionAndOpen() {
+        guard !isCreatingRevision, let user = userStore.displayUser,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isCreatingRevision = true
+        Task {
+            let result = await TimesheetDraftStore.createRevision(
+                subject: user,
+                weekStart: week.start,
+                writer: user,
+                writerIsSubject: true,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            )
+            await MainActor.run {
+                isCreatingRevision = false
+                saveErrorMessage = result.message
+                if result.message != nil { Feedback.play(.actionRefused) }
+            }
+            if result.documentId != nil {
+                await refreshDraftFromCloud()
+                await MainActor.run { listenToServerTimesheet() }
+            }
+        }
+    }
 
     /// RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: the stored snapshot has no labour lines, the period's live
     /// bookings (loaded) have some, and the sheet was not exported.
@@ -2599,9 +2778,15 @@ private struct MyTimesheetView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                Text(week.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Text(week.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    // RULEBOOK 1.55.0 §8: "REV 1" on a revision.
+                    if !TimesheetDraftStore.revisionLabel(for: draft).isEmpty {
+                        TimesheetRevisionBadge(label: TimesheetDraftStore.revisionLabel(for: draft))
+                    }
+                }
 
                 if let saveErrorMessage {
                     Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
@@ -2915,6 +3100,34 @@ private struct MyTimesheetView: View {
                 // again (`SIGNED_TIMESHEET_CHANGED_MESSAGE`).
                 if mustSignAgain {
                     SignedTimesheetChangedBanner(message: bookingChange?.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage)
+                }
+                // RULEBOOK 1.55.0 §8: exported and a booking changed since — the exported sheet stays as it was; the
+                // person signs an update (a revision).
+                if revisionDue.due {
+                    SignedTimesheetChangedBanner(message: revisionDue.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage)
+                    Button(action: createRevisionAndOpen) {
+                        Label(
+                            isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetReviewAndSignRevisionLabel,
+                            systemImage: "pencil.and.scribble"
+                        )
+                        .frame(maxWidth: .infinity)
+                        .fontWeight(.semibold)
+                        .padding(.vertical, 14)
+                        .background(Color.blue)
+                        .foregroundStyle(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .accessibilityIdentifier("timesheets.reviewAndSignRevision")
+                    .buttonStyle(.plain)
+                    .disabled(isCreatingRevision)
+                    // RULEBOOK §2: signing is online only.
+                    .onlineOnly(isOnline: smartCache.isOnline)
+                }
+                if !earlierVersions.isEmpty {
+                    TimesheetEarlierVersionsList(versions: earlierVersions)
+                        .padding(14)
+                        .background(Color(.systemBackground))
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 if bookingCheckUnavailable {
                     // Review of #234 (B): a signed sheet whose bookings cannot be read says so, with Retry.
@@ -3698,7 +3911,9 @@ private struct MyTimesheetView: View {
             key: Self.liveTimesheetKey,
             organizationId: orgId,
             userId: currentUserId,
-            weekStart: week.start
+            weekStart: week.start,
+            // RULEBOOK 1.55.0 §8: the version loaded (a revision once one exists), never also the frozen original.
+            documentId: draft.versionDocumentId
         ) {
             if isEditingTimesheet {
                 serverTimesheetChangedWhileEditing = true
@@ -3995,7 +4210,8 @@ private struct MyTimesheetView: View {
             if let current = userStore.displayUser {
                 TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &updated, user: current)
             }
-            if updated.managerSignedAt != remote.managerSignedAt {
+            // RULEBOOK 1.55.0 §8 ("lock all"): an exported version is never saved again.
+            if updated.managerSignedAt != remote.managerSignedAt, !TimesheetApprovalPolicy.isExported(remote) {
                 draft = updated
                 saveDraft()
             } else {
@@ -4262,7 +4478,7 @@ struct OperativeTimesheetsView: View {
                                             }
                                         }
                                         Spacer()
-                                        statusPill(for: row.draft, user: live(row.user))
+                                        statusPill(for: row.draft, user: live(row.user), period: row.week)
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
                                             .foregroundStyle(.tertiary)
@@ -4297,6 +4513,14 @@ struct OperativeTimesheetsView: View {
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 8)
+                                // RULEBOOK 1.55.0 §8: the pay run's earlier versions, read only, each with its PDF.
+                                if !row.earlier.isEmpty {
+                                    TimesheetEarlierVersionsList(versions: row.earlier) { version in
+                                        downloadEarlierVersionPDF(version, of: row)
+                                    }
+                                    .padding(.horizontal, 14)
+                                    .padding(.bottom, 8)
+                                }
                                 if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 66)
                                 }
@@ -4342,7 +4566,8 @@ struct OperativeTimesheetsView: View {
                                 Spacer()
                                 statusPill(
                                     for: TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start),
-                                    user: live(row.user)
+                                    user: live(row.user),
+                                    period: row.week
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
@@ -4391,7 +4616,8 @@ struct OperativeTimesheetsView: View {
                                 Spacer()
                                 statusPill(
                                     for: TimesheetDraftStore.load(userId: operative.id, weekStart: week.start),
-                                    user: operative
+                                    user: operative,
+                                    period: week
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
@@ -4684,10 +4910,23 @@ struct OperativeTimesheetsView: View {
         .background(Capsule().fill(color.opacity(0.14)))
     }
 
+    /// The row's status with — RULEBOOK 1.55.0 §8 — "REV N" beside it on a revision (`timesheetRevisionLabel`).
+    private func statusPill(for draft: TimesheetDraft, user: AppUser, period: WeekRange) -> some View {
+        HStack(spacing: 4) {
+            let label = TimesheetDraftStore.revisionLabel(for: draft)
+            if !label.isEmpty { TimesheetRevisionBadge(label: label) }
+            statusPillCore(for: draft, user: user, period: period)
+        }
+    }
+
     @ViewBuilder
-    private func statusPill(for draft: TimesheetDraft, user: AppUser) -> some View {
+    private func statusPillCore(for draft: TimesheetDraft, user: AppUser, period: WeekRange) -> some View {
         let bucket = TimesheetApprovalPolicy.listBucket(draft: draft, user: user, period: week)
-        if TimesheetApprovalPolicy.isExported(draft) {
+        if TimesheetApprovalPolicy.isExported(draft),
+           SignedTimesheetChangeContext.shared.revisionDue(draft: draft, user: user, period: period).due {
+            // RULEBOOK 1.55.0 §8: exported, and a booking changed since — a revision is due.
+            statusPillLabel(CanonicalBusinessEngine.timesheetRevisionDueStatus, symbol: "exclamationmark.triangle.fill", color: Color(.systemYellow))
+        } else if TimesheetApprovalPolicy.isExported(draft) {
             statusPillLabel("Exported", symbol: "tray.and.arrow.up.fill", color: .secondary)
         } else if SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: week)?.waitingForPerson == true {
             // RULEBOOK 1.47.0 §8: back with the person to sign again.
@@ -5078,7 +5317,12 @@ struct OperativeTimesheetsView: View {
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
-            if let draft = fresh.draft, draft.exportedAt != nil { sheet = draft }
+            // RULEBOOK 1.55.0 §8: only a fresh copy of the SAME version (an earlier version, or an open revision on
+            // top, never replaces the version this row shows).
+            if let draft = fresh.draft, draft.exportedAt != nil,
+               row.draft.versionDocumentId == nil || draft.versionDocumentId == row.draft.versionDocumentId {
+                sheet = draft
+            }
         }
         let rebuilt = sheet.weeklyReportOverride == nil
         if rebuilt && !confirmedRebuild {
@@ -5123,6 +5367,18 @@ struct OperativeTimesheetsView: View {
         }
     }
 
+    /// RULEBOOK 1.55.0 §8: Download PDF of an earlier (frozen) version under an Exported row — built from that
+    /// version's own stored copy (its snapshot), with its invoice number and REV label; never re-stamped.
+    private func downloadEarlierVersionPDF(_ version: TimesheetVersionInfo, of row: ExportedTimesheetHistoryRow) {
+        let chain = TimesheetVersionChainCache.chain(for: version.documentId)
+        guard let decoded = TimesheetDraftStore.decodeFirestoreMap(FirebaseBackend.versionRow(version, chain: chain)) else {
+            exportMessage = "Couldn't read this version of the timesheet."
+            return
+        }
+        let earlierRow = ExportedTimesheetHistoryRow(id: "\(row.id)|\(version.documentId)", user: row.user, week: row.week, draft: decoded)
+        Task { await downloadExportedPDF(earlierRow, confirmedRebuild: false) }
+    }
+
     /// Keep exported timesheets discoverable across many pay periods (not just the current filter week).
     private func loadExportedHistory() async {
         await MainActor.run { isLoadingExportedHistory = true }
@@ -5138,6 +5394,8 @@ struct OperativeTimesheetsView: View {
 
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         var byId: [String: ExportedTimesheetHistoryRow] = [:]
+        /// RULEBOOK 1.55.0 §8: rows built from a pay run's version chain (one per pay run).
+        var chainRows: [String: ExportedTimesheetHistoryRow] = [:]
         // RULEBOOK 1.31.0 §8: a sheet stored without `userId` is matched by its document id
         // (`timesheetDocumentSubjectId`) against every id of the person (`personIdSet`: own, former and same-email
         // ids), never dropped. Each such sheet is listed under one person only.
@@ -5156,7 +5414,9 @@ struct OperativeTimesheetsView: View {
                let listed = try? await firebaseBackend.listTimesheetStates(
                    organizationId: orgId,
                    userId: user.id,
-                   limit: 400
+                   limit: 400,
+                   // RULEBOOK 1.55.0 §8: every version, grouped below into one row per pay run.
+                   versions: .all
                ) {
                 let personIds = Set(RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers).map { $0.lowercased() })
                 let unownedForUser = unownedRows.filter { row in
@@ -5167,7 +5427,39 @@ struct OperativeTimesheetsView: View {
                     return true
                 }
                 let cloudRows = listed + unownedForUser
-                for row in cloudRows {
+                // RULEBOOK 1.55.0 §8: an original and its revisions are one pay run — the row shows the latest EXPORTED
+                // version, with the earlier versions under it (read only). Rows that are not timesheet versions stay.
+                let chains = CanonicalBusinessEngine.timesheetVersionsForPeriod(cloudRows.compactMap { row in
+                    (row["__documentId"] as? String).map { id in (documentId: id, data: row.filter { entry in !entry.key.hasPrefix("__") }) }
+                }) ?? []
+                var chained = Set<String>()
+                for chain in chains {
+                    for version in chain { chained.insert(version.documentId) }
+                    TimesheetVersionChainCache.remember(chain)
+                    guard let shownIndex = chain.lastIndex(where: { $0.exported }) else { continue }
+                    let shown = chain[shownIndex]
+                    let row = FirebaseBackend.versionRow(shown, chain: chain)
+                    guard let weekStart = firestoreDate(row["weekStart"]),
+                          let day = TimesheetDraftStore.organizationDay(weekStart),
+                          let decoded = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
+                    TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
+                    weekStarts.insert(day)
+                    let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
+                    // The local copy of the pay run is its LATEST version: only saved when that is the one shown.
+                    if shownIndex == chain.count - 1 {
+                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
+                    }
+                    let period = TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: end, settings: settings)
+                    let rowId = "\(user.id)|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? "")|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? "")"
+                    chainRows[rowId] = ExportedTimesheetHistoryRow(
+                        id: rowId,
+                        user: user,
+                        week: period,
+                        draft: decoded,
+                        earlier: CanonicalBusinessEngine.timesheetEarlierVersions(Array(chain[...shownIndex]))
+                    )
+                }
+                for row in cloudRows where !chained.contains((row["__documentId"] as? String) ?? "") {
                     guard let weekStart = firestoreDate(row["weekStart"]),
                           let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }
                     TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
@@ -5188,6 +5480,8 @@ struct OperativeTimesheetsView: View {
                 let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
                 let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? ""
                 let rowId = "\(user.id)|\(startKey)|\(endKey)"
+                // RULEBOOK 1.55.0 §8: a pay run read with its versions keeps that row (latest exported version).
+                if chainRows[rowId] != nil { continue }
                 byId[rowId] = ExportedTimesheetHistoryRow(
                     id: rowId,
                     user: user,
@@ -5197,6 +5491,7 @@ struct OperativeTimesheetsView: View {
             }
         }
 
+        for (rowId, row) in chainRows { byId[rowId] = row }
         let sorted = byId.values.sorted { lhs, rhs in
             let l = lhs.draft.exportedAt ?? .distantPast
             let r = rhs.draft.exportedAt ?? .distantPast
@@ -5274,6 +5569,8 @@ private struct ExportedTimesheetHistoryRow: Identifiable {
     let user: AppUser
     let week: WeekRange
     let draft: TimesheetDraft
+    /// RULEBOOK 1.55.0 §8: the pay run's earlier versions (before the one this row shows), newest first, read only.
+    var earlier: [TimesheetVersionInfo] = []
 }
 
 private enum ManagerTimesheetListTab {
@@ -5286,9 +5583,10 @@ private enum ManagerTimesheetListTab {
         case .awaiting:
             return "Operative signed — yellow pending clock until you counter-sign."
         case .signedOff:
-            return "Counter-signed and ready. Email and export sends timesheet PDFs to your email for filing. To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab."
+            return "Counter-signed and ready. Email and export sends timesheet PDFs to your email for filing. Once exported a timesheet never changes; a correction is made as a revision."
         case .exported:
-            return "Exported timesheets stay here for years. Open a row to edit agreed days, price work or expenses; those changes feed the weekly report."
+            // RULEBOOK 1.55.0 §8: exported timesheets never change; corrections are revisions (REV 1, REV 2 …).
+            return "Exported timesheets stay here for years and never change. A correction is made as a revision (REV 1, REV 2 …); earlier versions are listed under the latest."
         }
     }
 }
@@ -5405,9 +5703,9 @@ private struct OperativeTimesheetReviewView: View {
 
     private var canManagerReview: Bool {
         guard viewerIsReviewer else { return false }
-        if TimesheetApprovalPolicy.isExported(draft) {
-            return TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative)
-        }
+        // RULEBOOK 1.55.0 §8 / §16 ("lock all"): an exported timesheet never changes, admins included — a correction is
+        // a revision (Create revision below).
+        if TimesheetApprovalPolicy.isExported(draft) { return false }
         // RULEBOOK 1.47.0 §8: while the person must sign the changed bookings again nothing is reviewed or
         // counter-signed; once they have, the line manager reviews and counter-signs again.
         if bookingChange?.waitingForPerson == true { return false }
@@ -5608,9 +5906,15 @@ private struct OperativeTimesheetReviewView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(operative.fullName.isEmpty ? operative.email : operative.fullName)
                 .font(.title3.weight(.semibold))
-            Text(week.title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text(week.title)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                // RULEBOOK 1.55.0 §8: "REV 1" on a revision.
+                if !TimesheetDraftStore.revisionLabel(for: draft).isEmpty {
+                    TimesheetRevisionBadge(label: TimesheetDraftStore.revisionLabel(for: draft))
+                }
+            }
             statusLine
             if let saveErrorMessage {
                 Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
@@ -5886,11 +6190,96 @@ private struct OperativeTimesheetReviewView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 
+    /// RULEBOOK 1.55.0 §8: the versions before the one shown, read only (`timesheetEarlierVersions`).
+    private var earlierVersions: [TimesheetVersionInfo] {
+        let chain = TimesheetVersionChainCache.chain(for: draft.versionDocumentId)
+        guard chain.last?.documentId == draft.versionDocumentId else { return [] }
+        return CanonicalBusinessEngine.timesheetEarlierVersions(chain)
+    }
+
+    /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue` of the subject's exported sheet (bookings changed since export).
+    private var revisionDue: RulebookTimesheetRevisionDue {
+        guard TimesheetApprovalPolicy.isExported(draft) else { return .notDue }
+        return TimesheetDraftStore.revisionDue(for: draft, userId: operative.id, weekStart: week.start, change: bookingChange)
+    }
+
+    /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision`: this viewer (an admin or the person's line manager,
+    /// `timesheetWriterIsReviewer`) may create the next revision of this exported latest version ("Create revision").
+    private var reviewerMayCreateRevision: Bool {
+        guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return false }
+        let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: operative.id, weekStart: week.start)
+        let reviewerInput: [String: Any] = [
+            "writerUserId": viewer.id,
+            "subjectUserId": operative.id,
+            "writerIsAdmin": viewer.isRosterAdmin,
+            "writerFormerIds": viewer.formerUserIds,
+            "writerAliasIds": viewer.sameEmailUserIds,
+            "subjectLineManagerIds": operative.lineManagerUserIds,
+            "roster": RulebookRosterSnapshot.roster,
+        ]
+        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)?.allowed == true
+    }
+
+    @State private var isCreatingRevision = false
+
+    /// RULEBOOK 1.55.0 §8: a reviewer's "Create revision" — creates `…_rev{N}`, tells the person
+    /// (`timesheet_revision_to_sign`), then shows the new (open) revision.
+    private func createRevisionForPerson() {
+        guard !isCreatingRevision, let viewer = userStore.displayUser,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isCreatingRevision = true
+        let subject = operative
+        Task {
+            let result = await TimesheetDraftStore.createRevision(
+                subject: subject,
+                weekStart: week.start,
+                writer: viewer,
+                writerIsSubject: false,
+                firebaseBackend: firebaseBackend,
+                organizationId: orgId
+            )
+            if let created = result.documentId {
+                await notificationService.notifyTimesheetRevisionToSign(subject: subject, revisionDocumentId: created, weekStart: week.start)
+                await refreshDraftFromCloud()
+                await MainActor.run { listenToServerTimesheet() }
+            }
+            await MainActor.run {
+                isCreatingRevision = false
+                saveErrorMessage = result.message
+            }
+        }
+    }
+
     @ViewBuilder
     private var reviewSignOffSection: some View {
         // RULEBOOK 1.47.0 §8: the reviewer's note — back with the person, counter-sign again, or (exported) a warning.
-        if let note = bookingChange?.reviewerMessage {
+        // RULEBOOK 1.55.0 §8: on an exported sheet whose bookings changed, the revision note instead.
+        if revisionDue.due {
+            SignedTimesheetChangedBanner(message: revisionDue.reviewerMessage ?? CanonicalBusinessEngine.timesheetRevisionDueReviewerMessage)
+        } else if let note = bookingChange?.reviewerMessage {
             SignedTimesheetChangedBanner(message: note)
+        }
+        if reviewerMayCreateRevision {
+            VStack(alignment: .leading, spacing: 6) {
+                Button(action: createRevisionForPerson) {
+                    Label(isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetCreateRevisionLabel, systemImage: "doc.badge.plus")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .foregroundStyle(.white)
+                        .background(Color.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .accessibilityIdentifier("operativeTimesheetReview.createRevision")
+                .buttonStyle(.plain)
+                .disabled(isCreatingRevision)
+                .onlineOnly(isOnline: smartCache.isOnline)
+                Text(CanonicalBusinessEngine.timesheetCreateRevisionHelp)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        if !earlierVersions.isEmpty {
+            TimesheetEarlierVersionsList(versions: earlierVersions)
         }
         if bookingChange?.lateExtrasOnly == true {
             // RULEBOOK 1.54.0 §8: only late extras wait — each ✓ / ✕ saves with the snapshot; no counter-signature.
@@ -5923,7 +6312,10 @@ private struct OperativeTimesheetReviewView: View {
                     .foregroundStyle(Color.green)
                     .background(Color.green.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                Text("To edit this timesheet, please go to the signed off timesheets page, export it and then edit within the exported timesheets tab.")
+                // RULEBOOK 1.55.0 §8: once exported a timesheet never changes; a correction is a revision.
+                Text(TimesheetApprovalPolicy.isExported(draft)
+                     ? "Exported timesheets never change. A correction is made as a revision (REV 1, REV 2 …), signed again by the person and you."
+                     : "Signed off. Once exported it never changes; a later correction is made as a revision.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -6346,7 +6738,9 @@ private struct OperativeTimesheetReviewView: View {
             key: Self.liveTimesheetKey,
             organizationId: orgId,
             userId: operative.id,
-            weekStart: week.start
+            weekStart: week.start,
+            // RULEBOOK 1.55.0 §8: the version loaded (a revision once one exists), never also the frozen original.
+            documentId: draft.versionDocumentId
         ) {
             if isEditingReview {
                 serverTimesheetChangedWhileEditing = true
@@ -7452,20 +7846,29 @@ private enum InvoicePDFGenerationSupport {
             operatives: operatives,
             dayRateHistoryCollection: history
         )
-        guard let url = InvoicePDFBuilder.makePDF(
-            context: InvoicePDFBuilder.Context(
-                organizationName: orgName,
-                userName: userName,
-                vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
-                utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
-                generatedAt: Date(),
-                periodTitle: period.title,
-                periodDateRange: period.dateRangeText,
-                lineItems: rows,
-                totalAmount: total,
-                rateChangeNotes: notes
-            )
-        ) else { return nil }
+        // RULEBOOK 1.55.0 §8: the invoice number and, on a revision, the difference from the previous version.
+        let copy = TimesheetDraftStore.revisionCopy(
+            for: TimesheetDraftStore.load(userId: currentUser.id, weekStart: period.startDate),
+            subjectId: currentUser.id,
+            weekStart: period.startDate,
+            total: total,
+            currency: OrganizationRulebookContext.currencyCode
+        )
+        var context = InvoicePDFBuilder.Context(
+            organizationName: orgName,
+            userName: userName,
+            vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+            utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
+            generatedAt: Date(),
+            periodTitle: period.title,
+            periodDateRange: period.dateRangeText,
+            lineItems: rows,
+            totalAmount: total,
+            rateChangeNotes: notes
+        )
+        context.invoiceNumber = copy.invoiceNumber
+        context.revisionNote = copy.note
+        guard let url = InvoicePDFBuilder.makePDF(context: context) else { return nil }
         return (url, evidence, userName)
     }
 
@@ -8028,6 +8431,10 @@ private enum InvoicePDFBuilder {
         var periodMetaLabel: String = "INVOICE PERIOD"
         var totalLabel: String = "Total invoice amount"
         var emptyStateMessage: String = "No work entries were found for this invoice period."
+        /// RULEBOOK 1.55.0 §8: "TS-20261101-6A9632" (+ "-REV1" on a revision; `timesheetInvoiceNumberForRevision`).
+        var invoiceNumber: String = ""
+        /// RULEBOOK 1.55.0 §8: "REV 1 · +£44.12 from the previous version" (`TimesheetRevisionCopy.note`), or "".
+        var revisionNote: String = ""
     }
 
     static func makePDF(context: Context) -> URL? {
@@ -8112,6 +8519,16 @@ private enum InvoicePDFBuilder {
         drawMeta(label: context.periodMetaLabel, value: context.periodDateRange, x: rightX, y: metaTop + 40)
 
         var nextRowY = metaTop + 80
+        // RULEBOOK 1.55.0 §8: the invoice number on every invoice and timesheet, and on a revision what changed.
+        if !context.invoiceNumber.isEmpty || !context.revisionNote.isEmpty {
+            if !context.invoiceNumber.isEmpty {
+                drawMeta(label: "INVOICE NO.", value: context.invoiceNumber, x: leftX, y: nextRowY)
+            }
+            if !context.revisionNote.isEmpty {
+                drawMeta(label: "REVISION", value: context.revisionNote, x: rightX, y: nextRowY)
+            }
+            nextRowY += 40
+        }
         if let vat = context.vatNumber {
             drawMeta(label: "VAT NUMBER", value: vat, x: leftX, y: nextRowY)
         }
@@ -8354,25 +8771,34 @@ private enum TimesheetExportHelper {
         let fileName = timesheetPDFFileName(userName: userName, paymentRunStamp: paymentRunStamp)
         var notes = signatureNotes(for: draft)
         if let rebuiltNote { notes.insert(rebuiltNote, at: 0) }
-        guard let pdfURL = InvoicePDFBuilder.makePDF(
-            context: InvoicePDFBuilder.Context(
-                organizationName: organizationName,
-                userName: userName,
-                vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
-                utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
-                generatedAt: Date(),
-                periodTitle: "Signed timesheet",
-                periodDateRange: periodRangeText,
-                lineItems: rows,
-                totalAmount: grandTotal,
-                rateChangeNotes: notes,
-                documentTitle: "Timesheet",
-                preferredFileName: fileName,
-                periodMetaLabel: "PAYMENT RUN",
-                totalLabel: "Total timesheet amount",
-                emptyStateMessage: "No work entries were found for this timesheet period."
-            )
-        ) else {
+        // RULEBOOK 1.55.0 §8: the invoice number ("-REV1" on a revision) and the difference from the previous version.
+        let copy = TimesheetDraftStore.revisionCopy(
+            for: draft,
+            subjectId: operative.id,
+            weekStart: week.start,
+            total: grandTotal,
+            currency: OrganizationRulebookContext.currencyCode
+        )
+        var context = InvoicePDFBuilder.Context(
+            organizationName: organizationName,
+            userName: userName,
+            vatNumber: taxIds.flatMap { $0.vatNumber.isEmpty ? nil : $0.vatNumber },
+            utrNumber: taxIds.flatMap { $0.utrNumber.isEmpty ? nil : $0.utrNumber },
+            generatedAt: Date(),
+            periodTitle: "Signed timesheet",
+            periodDateRange: periodRangeText,
+            lineItems: rows,
+            totalAmount: grandTotal,
+            rateChangeNotes: notes,
+            documentTitle: "Timesheet",
+            preferredFileName: fileName,
+            periodMetaLabel: "PAYMENT RUN",
+            totalLabel: "Total timesheet amount",
+            emptyStateMessage: "No work entries were found for this timesheet period."
+        )
+        context.invoiceNumber = copy.invoiceNumber
+        context.revisionNote = copy.note
+        guard let pdfURL = InvoicePDFBuilder.makePDF(context: context) else {
             throw PDFBuildError(message: "the PDF could not be drawn")
         }
         guard let data = try? Data(contentsOf: pdfURL) else {

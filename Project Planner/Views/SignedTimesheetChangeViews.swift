@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import FirebaseFirestore
 
 /// A small yellow warning triangle. Tapping it shows `SIGNED_TIMESHEET_CHANGED_MESSAGE` with an OK button.
 struct SignedTimesheetChangedTriangle: View {
@@ -55,6 +56,76 @@ struct SignedTimesheetChangedBanner: View {
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("timesheets.bookingsChangedBanner")
+    }
+}
+
+/// RULEBOOK 1.55.0 §8: "REV 1" beside a timesheet's status (`timesheetRevisionLabel`). Layout only.
+struct TimesheetRevisionBadge: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.caption2.weight(.bold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .foregroundStyle(Color(.systemIndigo))
+            .background(Color(.systemIndigo).opacity(0.14), in: Capsule())
+            .accessibilityLabel(label)
+            .accessibilityIdentifier("timesheets.revisionBadge")
+    }
+}
+
+/// RULEBOOK 1.55.0 §8: the earlier versions of a pay run, read only, under the version shown (`timesheetEarlierVersions`,
+/// newest first; `TIMESHEET_EARLIER_VERSIONS_LABEL`, `TIMESHEET_ORIGINAL_VERSION_LABEL`). Each row names its version and
+/// when it was exported; `onDownload` (when given) shares that version's PDF. Layout only.
+struct TimesheetEarlierVersionsList: View {
+    let versions: [TimesheetVersionInfo]
+    var onDownload: ((TimesheetVersionInfo) -> Void)? = nil
+
+    private func title(_ version: TimesheetVersionInfo) -> String {
+        version.revision == 0
+            ? CanonicalBusinessEngine.timesheetOriginalVersionLabel
+            : CanonicalBusinessEngine.timesheetRevisionLabel(version.revision)
+    }
+
+    private func exportedText(_ version: TimesheetVersionInfo) -> String? {
+        guard let stamp = version.data["exportedAt"] as? Timestamp else { return nil }
+        return "Exported \(stamp.dateValue().formatted(date: .abbreviated, time: .shortened))"
+    }
+
+    var body: some View {
+        if !versions.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(CanonicalBusinessEngine.timesheetEarlierVersionsLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(versions, id: \.documentId) { version in
+                    HStack(spacing: 8) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(title(version))
+                                .font(.footnote.weight(.semibold))
+                            if let exported = exportedText(version) {
+                                Text(exported)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer(minLength: 8)
+                        if let onDownload {
+                            Button {
+                                onDownload(version)
+                            } label: {
+                                Label("Download PDF", systemImage: "arrow.down.doc")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityIdentifier("timesheets.earlierVersion.\(version.revision).downloadPDF")
+                        }
+                    }
+                }
+            }
+            .accessibilityIdentifier("timesheets.earlierVersions")
+        }
     }
 }
 
