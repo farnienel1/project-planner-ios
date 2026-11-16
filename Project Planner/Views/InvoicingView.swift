@@ -4182,7 +4182,8 @@ struct OperativeTimesheetsView: View {
             return
         }
         // RULEBOOK 1.47.0 §8: a sheet waiting for the person to sign the changed bookings again is not signed.
-        let waitingForOwner = userStore.currentUser.flatMap {
+        // RULEBOOK §8: the viewer's own record with their pay profile laid over (PAYE days are not timesheet lines).
+        let waitingForOwner = userStore.currentUserWithPay.flatMap {
             SignedTimesheetChangeContext.shared.change(draft: ownSheet, user: $0, period: week)
         }?.waitingForPerson == true
         ownSheetExportNotice = CanonicalBusinessEngine.timesheetExportOwnSheetNotice(

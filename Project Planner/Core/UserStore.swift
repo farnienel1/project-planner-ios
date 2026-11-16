@@ -16,7 +16,11 @@ import FirebaseFirestore
 class UserStore: ObservableObject {
     @Published var currentUser: AppUser? {
         // RULEBOOK 1.10.0 §17: the job and booking read plans follow the signed-in profile.
-        didSet { refreshJobAccessContext() }
+        didSet {
+            refreshJobAccessContext()
+            // RULEBOOK §8: the signed-in person's own pay profile (`currentUserWithPay`, `OwnPayOverlay.swift`).
+            scheduleOwnPayOverlay()
+        }
     }
     /// When set, tab visibility and `can*` helpers use a simulated role. Identity and Firestore still use `currentUser`.
     @Published var roleTestingPreset: RoleTestingPreset?
@@ -28,12 +32,21 @@ class UserStore: ObservableObject {
             RulebookRosterSnapshot.update(organizationUsers)
             refreshJobAccessContext()
             schedulePrivatePayOverlay()
+            scheduleOwnPayOverlay()
         }
     }
     /// Bumped by every roster change, so an overlay that finishes after a newer roster arrived is dropped.
     private var privatePayOverlayGeneration = 0
     /// True while the overlay's own result is being published (it must not schedule another read).
     private var publishingPrivatePayOverlay = false
+    /// True while a roster pay overlay is running (`privatePay` on). Pay screens wait (`PrivatePayOverlayReadiness`).
+    private(set) var rosterPayOverlayPending = false
+    /// Roster ids (lower case) whose pay was read from a pay profile by the last overlay (`privatePay` on).
+    private(set) var rosterPayOverlaidIds: Set<String> = []
+    /// RULEBOOK §8: the signed-in person's own pay-profile read (`OwnPayOverlay.swift`; nothing while `privatePay` is off).
+    @Published var ownPayOverlay = OwnPayOverlayState()
+    /// Bumped by every own-pay read, so a read that finishes after a newer one started is dropped.
+    var ownPayOverlayGeneration = 0
     /// RULEBOOK 1.31.0 §11: every `users` document of the open organisation, unfolded (one row per document, not per
     /// email), from the last roster load plus live changes. `organizationUserDocumentsOrganizationId` names its company.
     private(set) var organizationUserDocuments: [AppUser] = []
@@ -122,12 +135,24 @@ class UserStore: ObservableObject {
     private func schedulePrivatePayOverlay() {
         guard !publishingPrivatePayOverlay else { return }
         privatePayOverlayGeneration &+= 1
-        guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty else { return }
+        guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty else {
+            rosterPayOverlayPending = false
+            if !SecuritySwitchContext.privatePay || organizationUsers.isEmpty { rosterPayOverlaidIds = [] }
+            publishPayOverlayReadiness()
+            return
+        }
         let generation = privatePayOverlayGeneration
         let roster = organizationUsers
+        rosterPayOverlayPending = true
+        publishPayOverlayReadiness()
         Task { @MainActor [weak self] in
-            let overlaid = await firebaseBackend.overlayRosterPayIfPrivate(roster)
-            guard let self, generation == self.privatePayOverlayGeneration, overlaid != roster else { return }
+            let result = await firebaseBackend.overlayRosterPayIfPrivateWithIds(roster)
+            let overlaid = result.users
+            guard let self, generation == self.privatePayOverlayGeneration else { return }
+            self.rosterPayOverlaidIds = result.overlaidIds
+            self.rosterPayOverlayPending = false
+            self.publishPayOverlayReadiness()
+            guard overlaid != roster else { return }
             self.publishingPrivatePayOverlay = true
             self.organizationUsers = overlaid
             self.publishingPrivatePayOverlay = false
@@ -136,6 +161,7 @@ class UserStore: ObservableObject {
 
     /// A switch changed: on → lay the pay profiles over; off → read the roster again, so no overlaid value stays.
     private func securitySwitchesChanged() {
+        scheduleOwnPayOverlay(force: true)
         if SecuritySwitchContext.privatePay {
             schedulePrivatePayOverlay()
         } else {
@@ -176,6 +202,7 @@ class UserStore: ObservableObject {
 
     /// Writes `users/{uid}.lastSeenAt` (merge). Call from app foreground; throttled to ~2 minutes.
     func recordCurrentUserLastSeenIfDue() async {
+        retryOwnPayOverlayIfFailed()
         guard let firebaseBackend = firebaseBackend else { return }
         guard let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty else { return }
         let now = Date()
@@ -224,8 +251,11 @@ class UserStore: ObservableObject {
     }
     
     /// Effective user for UI and permission helpers (respects role testing).
+    /// RULEBOOK §8: built from `currentUserWithPay` (the signed-in person's own pay profile laid over while `privatePay`
+    /// is on; the users document as stored while it is off), so every screen reading the person's own employment type
+    /// or rates through `displayUser` keeps working after the strip.
     var displayUser: AppUser? {
-        guard let base = currentUser else { return nil }
+        guard let base = currentUserWithPay else { return nil }
         guard let preset = roleTestingPreset else { return base }
         return Self.applyRoleTesting(preset, to: base)
     }
@@ -1133,6 +1163,7 @@ class UserStore: ObservableObject {
         organizationUserDocumentsOrganizationId = nil
         organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
+        rosterPayOverlaidIds = []
         currentUser = nil
         roleTestingPreset = nil
         errorMessage = nil
@@ -1341,7 +1372,8 @@ class UserStore: ObservableObject {
     /// Self-employed users can submit their own timesheets. PAYE users keep access until the open pay run is paid
     /// when that period still includes self-employed days (e.g. after switching from self-employed to PAYE).
     func canAccessMyTimesheets() -> Bool {
-        guard let user = displayUser else { return false }
+        // RULEBOOK §8: never decided on a stripped users document before the person's own pay profile was read.
+        guard ownPayReady, let user = displayUser else { return false }
         let settings = firebaseBackend?.currentOrganization?.settings.invoicing ?? .default
         return TimesheetPayrollPolicy.canAccessMyTimesheets(user: user, settings: settings)
     }
@@ -1419,7 +1451,7 @@ class UserStore: ObservableObject {
 
     /// User has a timesheet-eligible role but is PAYE with no remaining self-employed days in the open pay run.
     func shouldShowTimesheetsDisabledMessage() -> Bool {
-        guard let user = displayUser else { return false }
+        guard ownPayReady, let user = displayUser else { return false }
         guard user.employmentType(on: Date()) != .selfEmployed else { return false }
         guard !canAccessMyTimesheets() else { return false }
         return isTimesheetEligibleRole(user)

@@ -43,7 +43,9 @@ enum PayInputsLoad {
     static func blockMessage(state: PayInputsLoadState, organization: Organization?) -> String? {
         guard organization != nil else { return organisationNotLoadedMessage }
         switch state {
-        case .loaded: return nil
+        // RULEBOOK §8 (privatePay on): rates and employment types come from the pay profiles; nothing is priced,
+        // signed, invoiced, exported or reported until those overlays have finished (`PrivatePayOverlayReadiness`).
+        case .loaded: return PrivatePayOverlayReadiness.blockMessage
         case .loading: return historyLoadingMessage
         case .failed(let message): return message
         }

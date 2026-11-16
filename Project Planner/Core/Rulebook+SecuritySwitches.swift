@@ -352,8 +352,14 @@ extension FirebaseBackend {
     /// read (`payProfileReadPlan` + `overlayPayProfile`, own id, else a `formerUserIds` id). While it is off the users
     /// documents are shown unchanged — a stale pay profile left by an older build must never replace them.
     func overlayRosterPayIfPrivate(_ users: [AppUser]) async -> [AppUser] {
+        await overlayRosterPayIfPrivateWithIds(users).users
+    }
+
+    /// `overlayRosterPayIfPrivate` plus the ids (lower case) of the rows whose pay profile was read and laid over. A row
+    /// not listed holds no readable pay while `privatePay` is on (its stripped employment type is not an answer).
+    func overlayRosterPayIfPrivateWithIds(_ users: [AppUser]) async -> (users: [AppUser], overlaidIds: Set<String>) {
         guard SecuritySwitchContext.privatePay,
-              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return users }
+              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return (users, []) }
         let roster = users.map(\.payAccessSubject)
         let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster, roster: roster)
         var profiles: [String: [String: Any]] = [:]
@@ -370,12 +376,15 @@ extension FirebaseBackend {
                 }
             }
         }
-        guard !profiles.isEmpty else { return users }
-        return users.map { user in
+        guard !profiles.isEmpty else { return (users, []) }
+        var overlaidIds = Set<String>()
+        let shown = users.map { user in
             // RULEBOOK 1.26.1 §8: the same `payEditorStartingValues` record the pay editors start from.
             let profileId = ([user.id] + user.formerUserIds).first { profiles[$0] != nil }
+            if profileId != nil { overlaidIds.insert(user.id.lowercased()) }
             return profileId.map { user.payShown(with: profiles[$0], profileId: $0, privatePay: true) } ?? user
         }
+        return (shown, overlaidIds)
     }
 
     /// RULEBOOK 1.27.0 §8 (owner decision 7): while `privatePay` is on, each catalogue `operatives` row

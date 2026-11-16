@@ -225,7 +225,11 @@ class NotificationService: ObservableObject {
     private func performTimesheetSubmissionReminderRefresh() async {
         let noticeType = CanonicalBusinessEngine.timesheetSubmissionNoticeType
             ?? AppNotification.NotificationType.timesheetSubmissionReminder.rawValue
-        guard let user = userStore?.currentUser, user.isActive, user.participatesInTimesheets() else {
+        // RULEBOOK §8: while `privatePay` is on, who takes part depends on the person's own pay profile (the stripped
+        // users document reads as self-employed). Decide only once it has been read (`UserStore.scheduleOwnPayOverlay`
+        // refreshes this when it finishes), and on the record with it laid over.
+        if userStore?.ownPayReady == false { return }
+        guard let user = userStore?.currentUserWithPay, user.isActive, user.participatesInTimesheets() else {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return
         }
@@ -1466,7 +1470,14 @@ class NotificationService: ObservableObject {
             before.personId,
             roster: recipientRoster,
             catalogue: recipientCatalogue
-        ), let person = users.first(where: { $0.id == accountId }), person.isPayeEmployment else { return }
+        ), let person = users.first(where: { $0.id == accountId }) else { return }
+        // RULEBOOK §8: a person whose pay this phone could not read (privatePay on, the stripped users document) is not
+        // known to be self-employed: skip the PAYE pre-check and let `overtimeLineReopened` decide.
+        guard OvertimeReopenNotice.mayBePaye(
+            person,
+            privatePay: SecuritySwitchContext.privatePay,
+            payProfileReadIds: userStore?.payProfileReadIds ?? []
+        ) else { return }
         // The editor may not read another person's overtime (only admins, the person and their line manager may).
         let records = await backend.readOvertimeRecords(userId: accountId)
         let organization = OvertimeOrganizationDocument.document(backend.currentOrganization)
