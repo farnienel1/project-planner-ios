@@ -237,7 +237,7 @@ extension UserStore {
     /// Reads the signed-in person's pay profile again when the key changed (or `force`). Nothing is read while
     /// `privatePay` is off or not yet known.
     func scheduleOwnPayOverlay(force: Bool = false, attempt: Int = 0) {
-        let orgId = firebaseBackend?.currentOrganization?.firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let orgId = firebaseBackend?.currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let key = Self.ownPayKey(user: currentUser, organizationId: orgId)
         guard SecuritySwitchContext.privatePay, let user = currentUser, let firebaseBackend, !orgId.isEmpty else {
             ownPayOverlayGeneration &+= 1
