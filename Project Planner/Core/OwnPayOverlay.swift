@@ -33,9 +33,6 @@ enum PayOverlayLoad: Equatable {
 enum PayOverlayScope: Equatable {
     case ownPay
     case othersPay
-    /// Everyone at once (the weekly report): refused while anyone's pay could not be loaded, or while the last answer
-    /// came from this phone's cache — never "Rate not set" or £0 for a person whose pay is unknown.
-    case wholeTeam
     /// One person: every id they go by (lower case) and the name the message shows.
     case person(ids: [String], name: String)
 
@@ -100,6 +97,45 @@ struct RosterPayFields: Equatable {
     }
 }
 
+/// Pay-profile writes waiting for their batch to commit. A committed write posts `.payProfileSaved` (subject id and the
+/// fields written), so the saver's own pay is read again and the roster's last good overlay takes the saved values —
+/// never an older profile laid back over the edited row (review of #240).
+@MainActor
+enum PayProfileSaveRegistry {
+    private static var pending: [ObjectIdentifier: [(subjectId: String, fields: [String: Any])]] = [:]
+
+    static func note(_ batch: WriteBatch, subjectId: String, fields: [String: Any]) {
+        pending[ObjectIdentifier(batch), default: []].append((subjectId, fields))
+    }
+
+    static func committed(_ batch: WriteBatch) {
+        let saves = pending.removeValue(forKey: ObjectIdentifier(batch)) ?? []
+        for save in saves {
+            NotificationCenter.default.post(
+                name: .payProfileSaved,
+                object: nil,
+                userInfo: ["subjectId": save.subjectId, "fields": save.fields]
+            )
+        }
+    }
+
+    static func discard(_ batch: WriteBatch) {
+        pending.removeValue(forKey: ObjectIdentifier(batch))
+    }
+}
+
+extension Notification.Name {
+    /// A pay-profile write committed (`PayProfileSaveRegistry`): userInfo `subjectId`, `fields`.
+    static let payProfileSaved = Notification.Name("payProfileSaved")
+}
+
+/// Whether a report may be built from the people's pay (`PrivatePayOverlayReadiness.reportGate`).
+struct ReportPayGate: Equatable {
+    var status: PayOverlayLoad
+    /// What the screen shows instead of the report: nil when ready, or while the organisation itself loads.
+    var message: String?
+}
+
 /// Reads `payProfiles` documents (the own-pay overlay). `FirebaseBackend` in the app; a fake in tests.
 @MainActor
 protocol PayProfileReading: AnyObject {
@@ -131,15 +167,18 @@ struct OwnPayOverlayState: Equatable {
 enum PrivatePayOverlayReadiness {
     static let loadingMessage = "Loading pay details…"
     static let ownFailedMessage = "Your pay details could not be loaded, so pay cannot be worked out. Check your connection and try again."
+    /// The hub while the phone is offline and the person's own pay is not known.
+    static let ownOfflineMessage = "Connect to the internet to load your pay details."
     static func personFailedMessage(_ name: String) -> String {
         "Pay details for \(name) could not be loaded, so their pay cannot be worked out. Check your connection and try again."
     }
     /// Export: the people left out because their pay details could not be loaded.
     static let exportSkippedMessage = "pay details could not be loaded, so not exported. Try again."
     static let rosterFailedMessage = "Pay details for the team could not be loaded, so pay cannot be worked out. Check your connection and try again."
-    static let rosterFromCacheMessage = "Pay details could only be read from this phone's copy. Connect to the internet and try again."
-    static func teamFailedMessage(_ names: [String]) -> String {
-        "Pay details for \(names.joined(separator: ", ")) could not be loaded, so the report cannot be worked out. Check your connection and try again."
+    /// The weekly report and the Payrun Snapshot (web #342 `reportPayGate`): the organisation could not be read.
+    static let reportFailedMessage = "Could not load pay details, so this report cannot be built yet. Try again."
+    static func reportPeopleFailedMessage(_ names: [String]) -> String {
+        "Could not load pay details for \(names.joined(separator: ", ")), so this report cannot be built yet. Try again."
     }
 
     private(set) static var own: PayOverlayLoad = .ready
@@ -204,21 +243,52 @@ enum PrivatePayOverlayReadiness {
             case .loading: return loadingMessage
             case .failed: return rosterFailedMessage
             }
-        case .wholeTeam:
-            switch roster {
-            case .loading: return loadingMessage
-            case .failed: return rosterFailedMessage
-            case .ready: break
-            }
-            if !failedPersonIds.isEmpty {
-                return failedPersonNames.isEmpty ? rosterFailedMessage : teamFailedMessage(failedPersonNames)
-            }
-            return rosterFromCache ? rosterFromCacheMessage : nil
         case .person(let ids, let name):
             if roster == .loading { return loadingMessage }
             if roster == .failed || ids.contains(where: failedPersonIds.contains) { return personFailedMessage(name) }
             return nil
         }
+    }
+
+    /// Web #342 `reportPayGate` + `reportGatePeople`: a report that prices or labels `people` (only those it prices:
+    /// the weekly report's priced people, the Payrun Snapshot's row people) is built only when each one's pay is known.
+    /// The organisation loading: loading with no message (the screen shows "Loading…"). The organisation failed, or any
+    /// of `people` failed: refused, naming them, with Retry. A last good server overlay that covers them is enough
+    /// (offline too: rulebook §2, weekly reports are read-only offline); anyone else never blocks it.
+    static func reportGate(
+        people: [AppUser],
+        switchesKnown: Bool,
+        privatePay: Bool,
+        roster: PayOverlayLoad,
+        failedPersonIds: Set<String>
+    ) -> ReportPayGate {
+        guard switchesKnown else { return ReportPayGate(status: .loading, message: nil) }
+        guard privatePay else { return ReportPayGate(status: .ready, message: nil) }
+        switch roster {
+        case .failed: return ReportPayGate(status: .failed, message: reportFailedMessage)
+        case .loading: return ReportPayGate(status: .loading, message: nil)
+        case .ready: break
+        }
+        var seen = Set<String>()
+        let failed = people
+            .filter { person in
+                let ids = ([person.id] + person.formerUserIds + person.sameEmailUserIds).map { $0.lowercased() }
+                return ids.contains(where: failedPersonIds.contains) && seen.insert(person.id.lowercased()).inserted
+            }
+            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
+            .sorted()
+        guard failed.isEmpty else { return ReportPayGate(status: .failed, message: reportPeopleFailedMessage(failed)) }
+        return ReportPayGate(status: .ready, message: nil)
+    }
+
+    static func reportGate(people: [AppUser]) -> ReportPayGate {
+        reportGate(
+            people: people,
+            switchesKnown: SecuritySwitchContext.hasRead,
+            privatePay: SecuritySwitchContext.privatePay,
+            roster: roster,
+            failedPersonIds: failedPersonIds
+        )
     }
 
     static func blockMessage(scope: PayOverlayScope) -> String? {
@@ -299,7 +369,8 @@ extension UserStore {
     /// read runs — or a finished, answered read (no profile at all). A failed read with no record is never decidable.
     static func ownPayDecidable(_ state: OwnPayOverlayState, key: String) -> Bool {
         guard state.key == key else { return false }
-        return state.record != nil || (state.finished && state.readable)
+        // A "no profile" answered only from this phone's cache (offline) is unknown, never the stripped document.
+        return state.record != nil || (state.finished && state.readable && !state.answeredFromCache)
     }
 
     /// Whether the person's own pay may be priced and signed for `key` (`PrivatePayOverlayReadiness`, scope `.ownPay`):
@@ -326,6 +397,40 @@ extension UserStore {
 
     /// The key of the people a roster overlay priced: the organisation, the viewer (the read plan follows them) and every
     /// id of every person, lower case and sorted. A snapshot with the same key is the same set of people.
+    /// The last good roster overlay with the pay fields a committed save wrote to `payProfiles/{subjectId}` merged in, so
+    /// it is never laid back over the edited row with the old values.
+    static func rosterPayCacheAfterSave(
+        _ cache: RosterPayProfileCache?,
+        subjectId: String,
+        fields: [String: Any]
+    ) -> RosterPayProfileCache? {
+        guard var cache else { return nil }
+        var profile = cache.profiles[subjectId] ?? [:]
+        for (key, value) in fields { profile[key] = value }
+        cache.profiles[subjectId] = profile
+        cache.failedIds.remove(subjectId.lowercased())
+        return cache
+    }
+
+    /// Whether a saved pay profile is the signed-in person's own (their id or a former id, without case).
+    static func payProfileSaveIsOwn(subjectId: String, user: AppUser?) -> Bool {
+        guard let user else { return false }
+        let key = subjectId.lowercased()
+        return ([user.id] + user.formerUserIds).contains { $0.lowercased() == key }
+    }
+
+    /// A committed pay-profile save (review of #240): the own pay is read again; the roster's last good overlay takes the
+    /// saved values and the roster is read again.
+    func payProfileSaved(subjectId: String, fields: [String: Any]) {
+        if Self.payProfileSaveIsOwn(subjectId: subjectId, user: currentUser) {
+            scheduleOwnPayOverlay(force: true)
+        }
+        if let updated = Self.rosterPayCacheAfterSave(rosterPayProfileCache, subjectId: subjectId, fields: fields) {
+            rosterPayProfileCache = updated
+        }
+        schedulePrivatePayOverlay()
+    }
+
     /// The organisation and viewer part of `rosterPaySubjectsKey`: profiles read for this scope may be laid over the
     /// people still present while a changed set of people is read.
     static func rosterPayScopeKey(organizationId: String, viewerId: String?) -> String {
@@ -596,6 +701,7 @@ extension UserStore {
         PrivatePayOverlayReadiness.update(
             own: own, roster: roster, failedPersonIds: failed, failedPersonNames: names, rosterFromCache: fromCache
         )
+        payOverlayVersion &+= 1
         // Pay screens compute their block message in `body`: redraw them when it changes.
         objectWillChange.send()
     }

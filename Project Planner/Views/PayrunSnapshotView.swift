@@ -32,6 +32,9 @@ struct PayrunSnapshotView: View {
     @State private var sheetDrafts: [TimesheetDraft?] = []
     @State private var loadError: String?
     @State private var rows: [PayrunSnapshotRow] = []
+    /// RULEBOOK §8 (pay strip, web #342): the rows label each person's employment type from their pay, so they show only
+    /// when the pay of every person with a row is known.
+    @State private var payGate = ReportPayGate(status: .ready, message: nil)
     @State private var opened: PayrunSnapshotLink?
     @State private var didPickDefault = false
 
@@ -114,10 +117,21 @@ struct PayrunSnapshotView: View {
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(PPColor.danger)
                         .padding(.top, 12)
-                } else if inputs == nil {
+                } else if inputs == nil || payGate.status == .loading {
                     ProgressView("Loading…")
                         .frame(maxWidth: .infinity)
                         .padding(.top, 24)
+                } else if payGate.status == .failed {
+                    VStack(spacing: 10) {
+                        Text(payGate.message ?? PrivatePayOverlayReadiness.reportFailedMessage)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(PPColor.danger)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Retry") { userStore.retryPayProfiles() }
+                            .font(.footnote.weight(.semibold))
+                            .accessibilityIdentifier("payrunSnapshot.payRetry")
+                    }
+                    .padding(.top, 12)
                 } else if current != nil {
                     PPGroupLabel(text: CanonicalBusinessEngine.payrunSnapshotText("PAYRUN_SNAPSHOT_LABEL", fallback: "Payrun Snapshot"))
                     if rows.isEmpty {
@@ -156,6 +170,8 @@ struct PayrunSnapshotView: View {
         .onChange(of: kind) { _, _ in recompute() }
         .onChange(of: customStart) { _, _ in recompute() }
         .onChange(of: customEnd) { _, _ in recompute() }
+        // Roster pay arriving (or its readiness changing) relabels the rows (review of #240).
+        .onReceive(userStore.$payOverlayVersion.dropFirst()) { _ in recompute() }
         .navigationDestination(item: $opened) { link in
             destination(link)
         }
@@ -217,6 +233,7 @@ struct PayrunSnapshotView: View {
     private func recompute() {
         guard let inputs, let current = period(periods) else {
             rows = []
+            payGate = ReportPayGate(status: .ready, message: nil)
             return
         }
         let jobs = projectStore.projects + projectStore.smallWorks
@@ -265,6 +282,9 @@ struct PayrunSnapshotView: View {
             bookings: bookings,
             operatives: operatives
         )
+        // Web #342 `reportGatePeople`: only the people who get a row are waited for.
+        let rowPeople = rows.compactMap { personById[$0.personId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()] }
+        payGate = PrivatePayOverlayReadiness.reportGate(people: rowPeople)
     }
 
     // MARK: Where a cell opens

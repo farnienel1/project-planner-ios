@@ -505,21 +505,106 @@ final class PayStripReadyTests: XCTestCase {
 
     // MARK: Third review
 
-    func testWeeklyReportRefusesWhileAnyonesPayIsUnknownAndNamesThem() {
-        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
-        func report() -> String? { PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .wholeTeam) }
-        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready, failedPersonIds: ["op-1"], failedPersonNames: ["Pat Payee"])
-        XCTAssertEqual(report(), PrivatePayOverlayReadiness.teamFailedMessage(["Pat Payee"]), "never priced as Rate not set / £0")
-        XCTAssertNil(
-            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay),
-            "the team list and the others' reviews go on"
+    func testReportsWaitOnlyForThePeopleTheyPriceAndNameThem() {
+        let priced = stripped(id: "OP-1")
+        let other = stripped(id: "OP-2")
+        func gate(_ people: [AppUser], roster: PayOverlayLoad = .ready, failed: Set<String> = []) -> ReportPayGate {
+            PrivatePayOverlayReadiness.reportGate(
+                people: people, switchesKnown: true, privatePay: true, roster: roster, failedPersonIds: failed
+            )
+        }
+        XCTAssertEqual(gate([priced], failed: ["op-2"]).status, .ready, "someone with no rows never blocks it")
+        let refused = gate([priced, other], failed: ["op-1"])
+        XCTAssertEqual(refused.status, .failed)
+        XCTAssertEqual(refused.message, PrivatePayOverlayReadiness.reportPeopleFailedMessage(["Pat Payee"]), "named, never priced as Rate not set / £0")
+        var alias = stripped(id: "OP-9")
+        alias.formerUserIds = ["Old-1"]
+        XCTAssertEqual(gate([alias], failed: ["old-1"]).status, .failed, "matched over every id, without case")
+        XCTAssertEqual(gate([priced], roster: .loading), ReportPayGate(status: .loading, message: nil), "Loading… while the organisation loads")
+        XCTAssertEqual(gate([priced], roster: .failed).message, PrivatePayOverlayReadiness.reportFailedMessage)
+        XCTAssertEqual(
+            PrivatePayOverlayReadiness.reportGate(people: [priced], switchesKnown: true, privatePay: false, roster: .failed, failedPersonIds: ["op-1"]).status,
+            .ready
         )
-        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready, rosterFromCache: true)
-        XCTAssertEqual(report(), PrivatePayOverlayReadiness.rosterFromCacheMessage, "not from this phone's copy")
-        PrivatePayOverlayReadiness.update(own: .ready, roster: .failed)
-        XCTAssertEqual(report(), PrivatePayOverlayReadiness.rosterFailedMessage)
-        PrivatePayOverlayReadiness.update(own: .failed, roster: .ready)
-        XCTAssertNil(report(), "the admin's own read does not block it")
+    }
+
+    func testAReusedLastGoodServerOverlayLetsTheReportRunOffline() {
+        let roster = [stripped(id: "OP-1")]
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
+        let good = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")])
+        let offline = RosterPayOverlayResult(users: roster, profiles: [:], failedUserIds: [], fromCache: true)
+        let merged = UserStore.rosterPayAfterResult(roster, result: offline, cache: good, key: key)
+        XCTAssertNotNil(merged.cache, "the last good server overlay is kept, so the people are covered")
+        XCTAssertTrue(merged.failedIds.isEmpty)
+        XCTAssertEqual(
+            PrivatePayOverlayReadiness.reportGate(
+                people: roster, switchesKnown: true, privatePay: true, roster: .ready, failedPersonIds: merged.failedIds
+            ).status,
+            .ready,
+            "rulebook §2: read-only offline from the last synced data"
+        )
+    }
+
+    func testPricedPeopleAreThoseOfTheBookingsWeeksAndSheets() {
+        let a = stripped(id: "OP-A")
+        let b = stripped(id: "OP-B")
+        let people: [String: WeeklyReportPayInputs.Person] = [
+            "OP-A": WeeklyReportPayInputs.Person(id: "OP-A", name: "A", role: "", user: a, operative: nil, ids: ["OP-A", "Old-A"], operativeIds: []),
+            "OP-B": WeeklyReportPayInputs.Person(id: "OP-B", name: "B", role: "", user: b, operative: nil, ids: ["OP-B"], operativeIds: []),
+        ]
+        let built = WeeklyReportPayInputs.Built(
+            input: ["bookings": [["personId": "old-a"]], "timesheetWeeks": [], "sheets": []],
+            people: people
+        )
+        XCTAssertEqual(WeeklyReportPayInputs.pricedUserIds(built), ["OP-A"], "without case, over every id; B has no rows")
+    }
+
+    func testRowsAreLookedUpAgainWithTheirPayLaidOver() {
+        let kept = stripped(id: "OP-1")
+        let live = overlaid(kept, profile: payeProfile("OP-1"))
+        var differentCase = live
+        differentCase.id = "op-1"
+        XCTAssertEqual(UserStore.livePerson(kept, in: [differentCase]).employmentType, .paye)
+        XCTAssertEqual(UserStore.livePerson(kept, in: []), kept, "not on the roster: as kept")
+    }
+
+    func testASavedProfileIsLaidOverNotTheOldOne() {
+        let roster = [stripped(id: "OP-1")]
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
+        let cache = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")], failedIds: ["op-1"])
+        let saved = UserStore.rosterPayCacheAfterSave(cache, subjectId: "OP-1", fields: ["employmentType": "self_employed", "dayRate": 220])
+        let shown = UserStore.rosterPayAfterSnapshot(roster, cache: saved, key: key)
+        XCTAssertEqual(shown.users.first?.employmentType, .selfEmployed)
+        XCTAssertEqual(shown.users.first?.dayRate, 220)
+        XCTAssertTrue(shown.failedIds.isEmpty)
+        var me = stripped(id: "ME")
+        me.formerUserIds = ["INVITE-1"]
+        XCTAssertTrue(UserStore.payProfileSaveIsOwn(subjectId: "invite-1", user: me), "own pay read again after a save")
+        XCTAssertFalse(UserStore.payProfileSaveIsOwn(subjectId: "OP-1", user: me))
+    }
+
+    func testPrivatePayWithNoOrganisationYetIsLoadingNotReady() {
+        let store = UserStore()
+        store.organizationUsers = [stripped(id: "OP-1")]
+        XCTAssertEqual(store.rosterPayOverlayLoad, .loading)
+        SecuritySwitchContext.update(config: ["privatePay": false])
+        store.organizationUsers = [stripped(id: "OP-2")]
+        XCTAssertEqual(store.rosterPayOverlayLoad, .ready)
+    }
+
+    func testOfflineCachedNoProfileIsUnknown() {
+        let user = stripped()
+        let key = UserStore.ownPayKey(user: user, organizationId: nil)
+        let state = UserStore.ownPayStateAfterRead(
+            key: key, previous: OwnPayOverlayState(key: key), record: nil, readable: true, offline: true, fromCache: true
+        )
+        XCTAssertFalse(UserStore.ownPayDecidable(state, key: key), "never settles My Timesheets on the stripped document")
+        let store = UserStore()
+        store.currentUser = user
+        store.ownPayOverlay = state
+        XCTAssertFalse(store.ownPayReady)
+        XCTAssertFalse(store.canAccessMyTimesheets())
+        XCTAssertFalse(store.shouldShowTimesheetsDisabledMessage())
     }
 
     func testEveryoneFailedIsNeverReady() {

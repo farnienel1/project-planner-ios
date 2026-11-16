@@ -113,6 +113,28 @@ enum WeeklyReportPayInputs {
         return Built(input: input, people: people)
     }
 
+    /// Web #342 `pricedUserIds`: the users documents whose pay this report reads — the people of its bookings, approved
+    /// timesheet weeks and timesheets in the range, matched over every id each person goes by, without case (first
+    /// person wins), as `weeklyReportPayRows` matches them. The report waits only for these people's pay.
+    static func pricedUserIds(_ built: Built) -> Set<String> {
+        var owner: [String: Person] = [:]
+        for person in built.people.values.sorted(by: { $0.id < $1.id }) {
+            for id in [person.id] + person.ids {
+                let key = normalizedId(id)
+                if !key.isEmpty, owner[key] == nil { owner[key] = person }
+            }
+        }
+        var out = Set<String>()
+        func note(_ id: Any?) {
+            guard let id = id as? String, let person = owner[normalizedId(id)], let user = person.user else { return }
+            out.insert(user.id)
+        }
+        for row in built.input["bookings"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        for row in built.input["timesheetWeeks"] as? [[String: Any]] ?? [] { note(row["userId"]) }
+        for row in built.input["sheets"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        return out
+    }
+
     /// `weeklyReportLeaveRows` people: every person with all their ids and their email.
     static func leavePeople(_ people: [String: Person]) -> [[String: Any]] {
         people.values.sorted { $0.id < $1.id }.map { person in

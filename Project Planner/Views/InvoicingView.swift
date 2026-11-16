@@ -50,6 +50,12 @@ struct InvoicingView: View {
                 systemImage: "wifi.exclamationmark",
                 description: Text(PrivatePayOverlayReadiness.ownFailedMessage)
             )
+        } else if userStore.isOffline {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.slash",
+                description: Text(PrivatePayOverlayReadiness.ownOfflineMessage)
+            )
         } else {
             HStack(spacing: 10) {
                 ProgressView()
@@ -3912,7 +3918,7 @@ struct OperativeTimesheetsView: View {
                         } else {
                             ForEach(filteredExportedHistory) { row in
                                 NavigationLink {
-                                    OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                                    OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                         .environmentObject(firebaseBackend)
                                         .environmentObject(userStore)
                                         .environmentObject(bookingStore)
@@ -3922,9 +3928,9 @@ struct OperativeTimesheetsView: View {
                                         .environmentObject(notificationService)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        initialsAvatar(for: row.user)
+                                        initialsAvatar(for: live(row.user))
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                            Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
                                             Text(row.week.title)
@@ -3937,7 +3943,7 @@ struct OperativeTimesheetsView: View {
                                             }
                                         }
                                         Spacer()
-                                        statusPill(for: row.draft, user: row.user)
+                                        statusPill(for: row.draft, user: live(row.user))
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
                                             .foregroundStyle(.tertiary)
@@ -3988,7 +3994,7 @@ struct OperativeTimesheetsView: View {
                     } else {
                     ForEach(awaitingRows) { row in
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                            OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -3998,26 +4004,26 @@ struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                initialsAvatar(for: row.user)
+                                initialsAvatar(for: live(row.user))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                    Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
-                                    let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
+                                    let draft = TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start)
+                                    let summary = operativeSummary(for: live(row.user), draft: draft, week: row.week)
                                     Text(summary.map { "\(row.week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? row.week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
-                                        Text("Line manager: \(lineManagerName(for: row.user))")
+                                        Text("Line manager: \(lineManagerName(for: live(row.user)))")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
                                 statusPill(
-                                    for: TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start),
-                                    user: row.user
+                                    for: TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start),
+                                    user: live(row.user)
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
@@ -4182,6 +4188,9 @@ struct OperativeTimesheetsView: View {
         // Rows were built only on appear and after the first fetch. When the roster arrives or is replaced
         // later, rebuild from the people now in scope and fetch their timesheets, instead of keeping the
         // first (empty or cached) list.
+        // The rows keep each person: rebuilt when roster pay is laid over again (review of #240), never priced from a
+        // copy kept from before the pay profiles arrived.
+        .onChange(of: userStore.payOverlayVersion) { _, _ in rebuildAwaitingRows() }
         .task(id: managerScopeUsers.map(\.id)) {
             let ids = managerScopeUsers.map(\.id)
             guard let previous = listScopeIds else {
@@ -4709,7 +4718,7 @@ struct OperativeTimesheetsView: View {
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: row.week.start
             ),
-            scope: .forPerson(row.user)
+            scope: .forPerson(live(row.user))
         ) {
             exportMessage = blocked
             return
@@ -4717,7 +4726,7 @@ struct OperativeTimesheetsView: View {
         var sheet = row.draft
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
-                userId: row.user.id,
+                userId: live(row.user).id,
                 weekStart: row.week.start,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
@@ -4730,15 +4739,15 @@ struct OperativeTimesheetsView: View {
             return
         }
         let taxIds = await InvoicePDFGenerationSupport.taxIdsForExport(
-            subject: row.user,
+            subject: live(row.user),
             requested: includeTaxIdsInExport,
             userStore: userStore
         )
-        let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
+        let name = live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName
         let attachment: TimesheetExportHelper.PDFAttachment
         do {
             attachment = try TimesheetExportHelper.makeSheetPDF(
-            operative: row.user,
+            operative: live(row.user),
             week: row.week,
             draft: sheet,
             bookingStore: bookingStore,
@@ -4863,6 +4872,9 @@ struct OperativeTimesheetsView: View {
 
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
     /// (a declined expense never counts). Nil when the script did not answer.
+    /// RULEBOOK §8 (review of #240): a person kept on a row, as the roster holds them now (pay laid over).
+    private func live(_ user: AppUser) -> AppUser { UserStore.livePerson(user, in: userStore.organizationUsers) }
+
     private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
@@ -4946,9 +4958,20 @@ private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var holidayStore: HolidayStore
-    let operative: AppUser
+    /// The person as passed in. Pricing and decisions use `operative`, the person as the roster holds them now.
+    private let operativeSeed: AppUser
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
+
+    init(operative: AppUser, settings: OrganizationInvoicingSettings, week: WeekRange) {
+        self.operativeSeed = operative
+        self.settings = settings
+        self.week = week
+    }
+
+    /// RULEBOOK §8 (review of #240): the reviewed person with their pay laid over now — looked up again by id, never the
+    /// copy a list kept from before the roster's pay profiles arrived.
+    private var operative: AppUser { UserStore.livePerson(operativeSeed, in: userStore.organizationUsers) }
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
     /// RULEBOOK 1.47.0 §8: the counter-signature of a reopened sheet rebuilds its snapshot on the save that follows.
