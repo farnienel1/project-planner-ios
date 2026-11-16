@@ -138,6 +138,41 @@ final class Rulebook1500UploadTests: XCTestCase {
         XCTAssertEqual(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + prepared.objectName, data: prepared.data, declaredContentType: prepared.contentType), "image/png")
     }
 
+    /// HEIC and WebP certificates pass the pick-time check (as `OperativeQualificationsEditorView` runs it) and are
+    /// redrawn to JPEG by `prepareFileData` (only a PNG stays a PNG).
+    func testHEICAndWebPCertificatesPassAndAreRedrawnToJPEG() throws {
+        let kind = StorageUploadPolicy.uploadKind(for: .qualificationCertificate)
+        // 8×8 lossless WebP (RIFF…WEBP), checked in node against the packed script: `image/webp`, allowed.
+        let webp = try XCTUnwrap(Data(base64Encoded: "UklGRhwAAABXRUJQVlA4TA8AAAAvB8ABAAcQ/Y/+ByKi/wEA"))
+        var samples: [(name: String, data: Data, types: Set<String>)] = [("certificate.webp", webp, ["image/webp"])]
+        if let heic = encodedHEIC(solidImage(size: 16)) {
+            samples.append(("certificate.heic", heic, ["image/heic", "image/heif"]))
+        }
+        for sample in samples {
+            let picked = CanonicalBusinessEngine.uploadAllowed(
+                kind: kind, fileName: sample.name, contentType: nil, sizeBytes: 1, headBytes: sample.data
+            )
+            XCTAssertTrue(picked.allowed, sample.name)
+            XCTAssertTrue(sample.types.contains(picked.contentType ?? ""), sample.name)
+            XCTAssertNil(StorageUploadPolicy.refusal(
+                family: .qualificationCertificate,
+                fileExtension: (sample.name as NSString).pathExtension,
+                contentType: nil,
+                byteCount: sample.data.count
+            ), sample.name)
+            let prepared = try StorageUploadPolicy.prepareFileData(
+                sample.data, originalFileName: sample.name, declaredContentType: nil, family: .qualificationCertificate,
+                uid: "TEST-uid", unixMilliseconds: 1_793_750_000_000
+            )
+            XCTAssertEqual(prepared.contentType, "image/jpeg", sample.name)
+            XCTAssertTrue(prepared.objectName.hasSuffix(".jpg"), sample.name)
+            XCTAssertEqual(prepared.data.prefix(3), Data([0xFF, 0xD8, 0xFF]), sample.name)
+        }
+        if samples.count < 2 {
+            throw XCTSkip("ImageIO cannot encode HEIC on this runner; the WebP certificate was checked.")
+        }
+    }
+
     func testPrepareFileDataRefusesARenamedSVGAndKeepsAPDF() throws {
         XCTAssertThrowsError(try StorageUploadPolicy.prepareFileData(
             svg, originalFileName: "site.jpg", declaredContentType: nil, family: .workFile,
@@ -229,6 +264,17 @@ final class Rulebook1500UploadTests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    private func encodedHEIC(_ image: UIImage) -> Data? {
+        guard let cgImage = image.cgImage else { return nil }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil) else {
+            return nil
+        }
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return data as Data
+    }
 
     private func solidImage(size: CGFloat) -> UIImage {
         let format = UIGraphicsImageRendererFormat()
