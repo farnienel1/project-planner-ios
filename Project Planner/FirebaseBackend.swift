@@ -11100,15 +11100,36 @@ extension FirebaseBackend {
     /// review or export made on web shows without reopening it. `onServerChange` runs for confirmed server copies
     /// only (this device's own unsent write and cache copies are skipped). `key` names the screen's listener;
     /// the screen stops it with `stopLiveListener(key:)` when it closes.
+    /// RULEBOOK 1.55.0 §8: listens to the pay run's LATEST version (`timesheetLatestVersion` — a revision once one
+    /// exists), never also the frozen original. `documentId` is the version the screen loaded (`versionDocumentId`);
+    /// without it the version chain is read first.
     func listenTimesheetState(
         key: String,
         organizationId: String,
         userId: String,
         weekStart: Date,
+        documentId: String? = nil,
         onServerChange: @escaping @MainActor () -> Void
     ) {
         guard let ref = try? timesheetStateDocumentRef(organizationId: normalizedOrganizationId(organizationId), userId: userId, weekStart: weekStart) else { return }
-        let documentId = ref.documentID
+        if let loaded = Self.versionDocumentId(documentId, ofCanonical: ref.documentID) {
+            attachTimesheetListener(key: key, organizationId: organizationId, documentId: loaded, onServerChange: onServerChange)
+            return
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let chain = (try? await self.loadTimesheetVersionChain(organizationId: normalizedOrganizationId(organizationId), canonicalRef: ref)) ?? []
+            let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain)?.documentId ?? ref.documentID
+            self.attachTimesheetListener(key: key, organizationId: organizationId, documentId: latest, onServerChange: onServerChange)
+        }
+    }
+
+    private func attachTimesheetListener(
+        key: String,
+        organizationId: String,
+        documentId: String,
+        onServerChange: @escaping @MainActor () -> Void
+    ) {
         listenOrganizationDocument(
             key: key,
             organizationId: organizationId,
@@ -11119,20 +11140,141 @@ extension FirebaseBackend {
         }
     }
 
+    /// RULEBOOK 1.55.0 §8: the pay run's LATEST version (`timesheetLatestVersion`): the canonical
+    /// `timesheet_{uid}_{unix}` document, then — once it is exported — `timesheetRevisionDocId(id, 1)`, `2`, … read
+    /// until one is missing (`loadTimesheetVersionChain`). The row carries `__documentId` (the version's own id, the one
+    /// a save, the listener and the entry ids use) and, on a revision, `__previousExportedTotal`
+    /// (`timesheetExportedTotal` of the version it corrects).
     func loadTimesheetState(
         organizationId: String,
         userId: String,
         weekStart: Date
     ) async throws -> [String: Any]? {
-        let snapshot = try await timesheetStateDocumentRef(
+        let ref = try timesheetStateDocumentRef(
             organizationId: organizationId,
             userId: userId,
             weekStart: weekStart
-        ).getDocument()
-        guard var data = snapshot.data() else { return nil }
+        )
+        let chain = try await loadTimesheetVersionChain(organizationId: organizationId, canonicalRef: ref)
+        guard let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain) else { return nil }
+        return Self.versionRow(latest, chain: chain)
+    }
+
+    /// A version as a timesheet row: its stored data with `__documentId` and, on a revision, `__previousExportedTotal`.
+    nonisolated static func versionRow(_ version: TimesheetVersionInfo, chain: [TimesheetVersionInfo]) -> [String: Any] {
+        var data = version.data
         // The sheet id `parseTimesheetEntries` derives entry ids from (as `listTimesheetStates` rows carry it).
-        data["__documentId"] = snapshot.documentID
+        data["__documentId"] = version.documentId
+        if version.revision > 0,
+           let previous = chain.first(where: { $0.revision == version.revision - 1 }),
+           let total = CanonicalBusinessEngine.timesheetExportedTotal(previous.data) {
+            data["__previousExportedTotal"] = total
+        }
         return data
+    }
+
+    /// RULEBOOK 1.55.0 §8 (web `readVersionChain`): every stored version of the pay run whose original is
+    /// `canonicalRef` — the original, then each revision while the version before it is exported, read until one is
+    /// missing. Oldest first (`timesheetVersionsForPeriod`). [] when the original does not exist. A read that fails
+    /// throws (never read as "no revision"). The chain is remembered for the screens (`TimesheetVersionChainCache`).
+    func loadTimesheetVersionChain(organizationId: String, canonicalRef: DocumentReference) async throws -> [TimesheetVersionInfo] {
+        let original = try await canonicalRef.getDocument()
+        guard let originalData = original.data() else { return [] }
+        var documents: [(documentId: String, data: [String: Any])] = [(original.documentID, originalData)]
+        var latestExported = CanonicalBusinessEngine.timesheetExportedFieldSet(originalData["exportedAt"])
+        var revision = 1
+        let settings = canonicalRef.parent
+        while latestExported, let nextId = CanonicalBusinessEngine.timesheetRevisionDocId(baseDocumentId: original.documentID, revision: revision) {
+            let next = try await settings.document(nextId).getDocument()
+            guard let data = next.data() else { break }
+            documents.append((next.documentID, data))
+            latestExported = CanonicalBusinessEngine.timesheetExportedFieldSet(data["exportedAt"])
+            revision += 1
+        }
+        guard let chain = CanonicalBusinessEngine.timesheetVersionsForPeriod(documents)?.first else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 500,
+                userInfo: [NSLocalizedDescriptionKey: "The timesheet rules did not load. Try again."]
+            )
+        }
+        TimesheetVersionChainCache.remember(chain)
+        return chain
+    }
+
+    /// The version chain of `userId`'s pay run starting `weekStart` (`loadTimesheetVersionChain`).
+    func loadTimesheetVersionChain(organizationId: String, userId: String, weekStart: Date) async throws -> [TimesheetVersionInfo] {
+        let ref = try timesheetStateDocumentRef(organizationId: organizationId, userId: userId, weekStart: weekStart)
+        return try await loadTimesheetVersionChain(organizationId: organizationId, canonicalRef: ref)
+    }
+
+    /// RULEBOOK 1.55.0 §8: `documentId` when it names a version of the sheet whose original is `canonical`
+    /// (`parseTimesheetRevisionDocId`); else nil.
+    nonisolated static func versionDocumentId(_ documentId: String?, ofCanonical canonical: String) -> String? {
+        guard let documentId, !documentId.isEmpty,
+              let ref = CanonicalBusinessEngine.parseTimesheetRevisionDocId(documentId),
+              ref.baseDocumentId == canonical else { return nil }
+        return ref.documentId
+    }
+
+    /// RULEBOOK 1.55.0 §8 / §16 ("lock all"): why a save to this stored version is refused — it is exported, and an
+    /// exported timesheet never changes (admins included). A correction is a revision.
+    static let exportedTimesheetLockedMessage = "This timesheet has been exported and can't be changed. A correction is made as a revision."
+
+    /// RULEBOOK 1.55.0 §8: creates the next revision of the pay run whose latest version is `previousDocumentId` — the
+    /// person's own write ("Review and sign again") or a reviewer's ("Create revision"). One transaction re-reads the
+    /// version it corrects (it must be exported) and the target (it must not exist) and creates ONLY the new document:
+    /// `timesheetRevisionCreateFields` + `revisionCreatedAt` (server time) + write metadata. Nothing else is written.
+    /// Returns `created`, `exists`, `not-exported` or `missing`, with the target id when known.
+    func createTimesheetRevision(organizationId: String, previousDocumentId: String) async throws -> (status: String, documentId: String?, revision: Int?) {
+        let writerId = Auth.auth().currentUser?.uid ?? ""
+        let settings = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings")
+        let previousRef = settings.document(previousDocumentId)
+        let answer = try await Self.runTimesheetRevisionCreate(db: db, settings: settings, previousRef: previousRef, writerId: writerId)
+        let parts = answer.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
+        let status = parts.first ?? "missing"
+        let documentId = parts.count > 1 && !parts[1].isEmpty ? parts[1] : nil
+        let revision = parts.count > 2 ? Int(parts[2]) : nil
+        return (status, documentId, revision)
+    }
+
+    /// The transaction of `createTimesheetRevision` (`nonisolated`: the block never runs on the main actor; it calls only
+    /// the packed script). Answers `status|documentId|revision`.
+    nonisolated private static func runTimesheetRevisionCreate(
+        db: Firestore,
+        settings: CollectionReference,
+        previousRef: DocumentReference,
+        writerId: String
+    ) async throws -> String {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let previous: DocumentSnapshot
+            do {
+                previous = try transaction.getDocument(previousRef)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let data = previous.data() else { return "missing||" }
+            guard let made = CanonicalBusinessEngine.timesheetRevisionCreateFields(
+                previousDocumentId: previous.documentID,
+                previousData: data,
+                writerUserId: writerId
+            ) else { return "not-exported||" }
+            let targetRef = settings.document(made.documentId)
+            let target: DocumentSnapshot
+            do {
+                target = try transaction.getDocument(targetRef)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            if target.exists { return "exists|\(made.documentId)|\(made.revision)" }
+            var fields = made.fields
+            fields["revisionCreatedAt"] = FieldValue.serverTimestamp()
+            transaction.setData(WriteMetadata.stamped(fields, userId: writerId.isEmpty ? nil : writerId), forDocument: targetRef)
+            return "created|\(made.documentId)|\(made.revision)"
+        }
+        return (answer as? String) ?? "missing||"
     }
 
     /// Writes the changed timesheet fields only (rulebook §6, §1 "Writes carry metadata").
@@ -11164,18 +11306,40 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "Could not identify this timesheet period."]
             )
         }
-        let ref = try timesheetStateDocumentRef(
+        let canonicalRef = try timesheetStateDocumentRef(
             organizationId: organizationId,
             userId: userId,
             weekStart: weekStart
         )
+        // RULEBOOK 1.55.0 §8: a save goes to the version the caller read (`__documentId` of `storedDocument`, the
+        // latest version — a revision once one exists), never also the canonical id. Without it the chain is read.
+        let ref: DocumentReference
+        let stored: [String: Any]?
         let exists: Bool
-        if let documentExists {
-            exists = documentExists
+        if let loadedId = Self.versionDocumentId(storedDocument?["__documentId"] as? String, ofCanonical: canonicalRef.documentID) {
+            ref = canonicalRef.parent.document(loadedId)
+            if let documentExists {
+                exists = documentExists
+            } else {
+                exists = try await ref.getDocument().exists
+            }
+            stored = exists ? storedDocument : nil
+        } else if let documentExists, !documentExists {
+            ref = canonicalRef
+            exists = false
+            stored = nil
         } else {
-            exists = try await ref.getDocument().exists
+            let chain = try await loadTimesheetVersionChain(organizationId: organizationId, canonicalRef: canonicalRef)
+            if let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain) {
+                ref = canonicalRef.parent.document(latest.documentId)
+                exists = true
+                stored = storedDocument ?? latest.data
+            } else {
+                ref = canonicalRef
+                exists = false
+                stored = nil
+            }
         }
-        let stored = exists ? storedDocument : nil
         var data = payload
         func putIfChanged(_ key: String, _ value: String) {
             if (stored?[key] as? String) != value { data[key] = value }
@@ -11193,6 +11357,14 @@ extension FirebaseBackend {
         putInstantIfChanged("weekEnd", endInstant)
         // Nothing changed on an existing sheet: no write at all.
         if exists && data.isEmpty { return }
+        // RULEBOOK 1.55.0 §8 / §16 ("lock all"): an exported version never changes — no iPhone save touches it, admins
+        // included. Only the period fields an older sheet lacks would be written: skipped quietly; anything else is
+        // refused with the reason (a correction is a revision).
+        if exists, CanonicalBusinessEngine.timesheetExportedFieldSet(stored?["exportedAt"]) {
+            let periodKeys: Set<String> = ["userId", "weekStartKey", "weekEndKey", "weekStart", "weekEnd"]
+            if Set(data.keys).isSubset(of: periodKeys) { return }
+            throw NSError(domain: "FirebaseBackend", code: 409, userInfo: [NSLocalizedDescriptionKey: Self.exportedTimesheetLockedMessage])
+        }
         let stamped = WriteMetadata.stamped(data, userId: Auth.auth().currentUser?.uid)
         if exists {
             try await ref.updateData(stamped)
@@ -11226,7 +11398,11 @@ extension FirebaseBackend {
         weeklyReportOverride: [String: Any],
         exportedAt: Date
     ) async throws -> String {
-        let ref = try timesheetStateDocumentRef(organizationId: organizationId, userId: userId, weekStart: weekStart)
+        let canonicalRef = try timesheetStateDocumentRef(organizationId: organizationId, userId: userId, weekStart: weekStart)
+        // RULEBOOK 1.55.0 §8: Export stamps the pay run's LATEST version (an open revision once one exists), never the
+        // frozen original; the transaction still refuses a version that is already exported.
+        let chain = try await loadTimesheetVersionChain(organizationId: organizationId, canonicalRef: canonicalRef)
+        let ref = CanonicalBusinessEngine.timesheetLatestVersion(chain).map { canonicalRef.parent.document($0.documentId) } ?? canonicalRef
         return try await Self.runTimesheetExportStamp(
             db: db,
             ref: ref,
@@ -11284,7 +11460,8 @@ extension FirebaseBackend {
     func listTimesheetStates(
         organizationId: String,
         userId: String,
-        limit: Int = 200
+        limit: Int = 200,
+        versions: TimesheetListVersions = .latest
     ) async throws -> [[String: Any]] {
         // Query by userId only, then sort/limit in memory.
         // Ordering by weekStart requires a composite index that may not exist yet and was
@@ -11308,17 +11485,46 @@ extension FirebaseBackend {
             )
             throw error
         }
-        let rows: [[String: Any]] = snapshot.documents.map { doc in
-            var row = doc.data()
-            row["__documentId"] = doc.documentID
-            return row
-        }
+        let rows = Self.collapseTimesheetVersions(
+            snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) },
+            versions: versions
+        )
         let sorted = rows.sorted { lhs, rhs in
             let left = (lhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
             let right = (rhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
             return left > right
         }
         return Array(sorted.prefix(max(1, limit)))
+    }
+
+    /// RULEBOOK 1.55.0 §8 (web `collapseVersionRows`): one row per pay run of each original — the version `versions`
+    /// names (`timesheetLatestVersion` / `timesheetReportVersion`, the script's choice), or every version for `all`.
+    /// Settings documents that are not timesheets pass through. Each row carries `__documentId` (and, on a revision,
+    /// `__previousExportedTotal`). Without a script answer every row is kept, as before 1.55.0.
+    nonisolated static func collapseTimesheetVersions(
+        _ documents: [(documentId: String, data: [String: Any])],
+        versions: TimesheetListVersions
+    ) -> [[String: Any]] {
+        func plain(_ row: (documentId: String, data: [String: Any])) -> [String: Any] {
+            var data = row.data
+            data["__documentId"] = row.documentId
+            return data
+        }
+        guard let chains = CanonicalBusinessEngine.timesheetVersionsForPeriod(documents) else { return documents.map(plain) }
+        var out: [[String: Any]] = []
+        var inChains = Set<String>()
+        for chain in chains {
+            for version in chain { inChains.insert(version.documentId) }
+            let picked: [TimesheetVersionInfo]
+            switch versions {
+            case .latest: picked = CanonicalBusinessEngine.timesheetLatestVersion(chain).map { [$0] } ?? []
+            case .reports: picked = CanonicalBusinessEngine.timesheetReportVersion(chain).map { [$0] } ?? []
+            case .all: picked = chain
+            }
+            out.append(contentsOf: picked.map { versionRow($0, chain: chain) })
+        }
+        for row in documents where !inChains.contains(row.documentId) { out.append(plain(row)) }
+        return out
     }
 
     /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
