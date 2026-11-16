@@ -2205,7 +2205,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .taskCompleted, .taskCreated: return .taskAssigned
         case .holidayRequestSubmitted: return .annualLeaveRequests
         case .holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou: return .annualLeaveDecisions
-        case .timesheetPendingManagerSignoff, .timesheetSignedByManager: return .timesheetSignoff
+        case .timesheetPendingManagerSignoff, .timesheetSignedByManager, .timesheetBookingsChanged: return .timesheetSignoff
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded, .materialOrderPlaced: return .materialAdded
         // `notificationPreferenceKeyForType` maps hs_toolbox_reminder to the toolbox talk toggle.

@@ -36,6 +36,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
         case holidayBookedForYou = "holiday_booked_for_you"
         case timesheetPendingManagerSignoff = "timesheet_pending_manager_signoff"
         case timesheetSignedByManager = "timesheet_signed_by_manager"
+        /// RULEBOOK 1.54.0 §8, §13: "Your signed timesheet has changed" — written by the server (Cloud Functions
+        /// `timesheetBookingsChangedNotice`), never by iOS. Push, toggle `timesheetSignOff`; opens My Timesheets on that
+        /// pay run (`notificationDestination` kind `timesheetMine`).
+        case timesheetBookingsChanged = "timesheet_bookings_changed"
         case lineManagerPeerUpdate = "line_manager_peer_update"
         /// Older iOS rows. The rulebook has no `material_added`: no device push, no toggle, no destination.
         case materialAdded = "material_added"

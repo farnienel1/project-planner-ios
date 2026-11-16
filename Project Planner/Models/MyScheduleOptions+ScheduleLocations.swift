@@ -68,24 +68,4 @@ extension MyScheduleOptions {
             }
         }
     }
-
-    /// Whether a manager-site booking should appear in UI/reports driven by schedule options.
-    func includesManagerScheduleLocation(_ booking: ManagerSiteBooking) -> Bool {
-        switch booking.locationType {
-        case .project, .smallWork:
-            return true
-        case .office:
-            return showOffice
-        case .workingFromHome:
-            return showWorkingFromHome
-        case .siteSurvey:
-            return showSiteSurvey
-        case .custom:
-            let name = booking.customLocationName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if name.isEmpty { return false }
-            return customItems.contains { custom in
-                custom.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(name) == .orderedSame
-            }
-        }
-    }
 }

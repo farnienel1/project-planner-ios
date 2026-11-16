@@ -165,6 +165,51 @@ struct TimesheetDraft: Codable {
     /// Local only (never stored): the record was just written and its server time is pending, so the next save sends
     /// `operativeSignedBookingsAt = FieldValue.serverTimestamp()` once.
     var operativeSignedBookingsAtPending: Bool? = nil
+    /// RULEBOOK 1.54.0 §8: price work and expenses the person added after the line manager signed (`lateExtras`, until
+    /// exported). Read with `parseTimesheetLateExtras`; nil when the stored sheet has no `lateExtras` array, so a sheet
+    /// without them keeps its stored shape. Kept on every save (never dropped).
+    var lateExtras: [TimesheetLateExtra]? = nil
+    /// RULEBOOK 1.54.0 §8: the stored review map (`extraEntryReviews`) as plain JSON text, read only — a late extra pays
+    /// only by a review there (`timesheetLateExtraDecision`). Never written back by this field (reviews are written as
+    /// dotted `extraEntryReviews.{id}` fields by `timesheetEntryReviewWriteFields`).
+    var extraEntryReviewsJSON: String? = nil
+    /// RULEBOOK 1.54.0 (review of #337): the stored `exportedAt` is set as the security rules test it
+    /// (`timesheetExportedFieldSet`). Read only, never written.
+    var exportedAtStored: Bool? = nil
+}
+
+/// RULEBOOK 1.54.0 §8: one late extra — a price work or expense entry added after the line manager signed. Its own
+/// fields and `kind` are stored (`lateExtraStoredRow`), never a decision. The decision in effect comes only from the
+/// review map (`timesheetLateExtraDecision`, read into `lateState` / `lateReason` when the sheet was read); a reviewer's
+/// on-screen decision (`managerDecision`, `managerRevisedAmount`) is local until their save writes the review.
+struct TimesheetLateExtra: Codable, Identifiable, Hashable {
+    /// The id as stored (stored case). A new late extra gets an upper-case UUID string.
+    var id: String
+    /// `priceWork` | `expense`.
+    var kind: String
+    var title: String
+    var details: String
+    var jobNumber: String
+    /// Price work only.
+    var agreedManagerName: String = ""
+    /// Expense: the date; price work: the start date.
+    var date: Date
+    /// Price work only.
+    var endDate: Date? = nil
+    var amount: Double
+    var receiptName: String? = nil
+    var evidence: [PayeClaimEvidence] = []
+    /// The stored row's fingerprint (`parseTimesheetLateExtras`); never written back. Nil on a new late extra.
+    var reviewFingerprint: String? = nil
+    /// `timesheetLateExtraDecision(...).state` when read: `approved` | `declined` | `pending` | `ignored`. Nil on a new one.
+    var lateState: String? = nil
+    /// `timesheetLateExtraDecision(...).reason` when read (`id-taken`, `id-unusable`, …).
+    var lateReason: String? = nil
+    /// The reviewer's decision on screen (local only; seeded from the late decision).
+    var managerDecision: TimesheetManagerDecision = .pending
+    var managerRevisedAmount: Double? = nil
+
+    var isPriceWork: Bool { kind == "priceWork" }
 }
 
 /// Shared iOS + web contract. Field names match Firestore `weeklyReportOverride`.
@@ -224,4 +269,8 @@ struct TimesheetWeeklyReportMoneyLine: Codable, Hashable, Identifiable {
     var date: Date
     var amount: Double
     var decision: TimesheetManagerDecision
+    /// RULEBOOK 1.54.0 §8: an approved late extra's row (`timesheetLateExtrasSnapshotRows`); nil on every other row.
+    var lateExtra: Bool? = nil
+    /// RULEBOOK 1.54.0 §8: the late extra's fingerprint when it was approved.
+    var entryFingerprint: String? = nil
 }
