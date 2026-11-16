@@ -51,6 +51,9 @@ class UserStore: ObservableObject {
     /// Bumped whenever roster pay is laid over again or the pay readiness changes, so screens that keep their own rows
     /// (User Timesheets, the Payrun Snapshot) rebuild them from the current pay (review of #240).
     @Published private(set) var payOverlayVersion = 0
+
+    /// Bumps `payOverlayVersion` (the overlay code in `OwnPayOverlay.swift` cannot set it directly).
+    func bumpPayOverlayVersion() { payOverlayVersion &+= 1 }
     /// Re-reads failed or cache-answered pay profiles when the phone comes back online.
     private var onlineCancellable: AnyCancellable?
     /// The pay this store laid over each roster row (raw → shown), so the next overlay starts from the raw rows.

@@ -701,7 +701,7 @@ extension UserStore {
         PrivatePayOverlayReadiness.update(
             own: own, roster: roster, failedPersonIds: failed, failedPersonNames: names, rosterFromCache: fromCache
         )
-        payOverlayVersion &+= 1
+        bumpPayOverlayVersion()
         // Pay screens compute their block message in `body`: redraw them when it changes.
         objectWillChange.send()
     }
