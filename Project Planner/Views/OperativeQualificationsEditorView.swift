@@ -44,7 +44,7 @@ struct OperativeQualificationsEditorView: View {
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
 
-    /// RULEBOOK 1.50.0: every photo type and PDF (photos are sent as JPEG until the 1.50.0 Storage rules are published).
+    /// RULEBOOK 1.50.0: every photo type and PDF.
     private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .heif, .webP]
 
     init(
@@ -530,8 +530,8 @@ struct OperativeQualificationsEditorView: View {
         }
 
         // RULEBOOK 1.50.0 §24: a certificate is a photo (JPEG, PNG, HEIC/HEIF, WebP) or a PDF. The rulebook reads the
-        // name, size and first bytes (`uploadAllowed`); a photo is judged on 40 MB here and redrawn (as a JPEG until
-        // the 1.50.0 Storage rules are published) before its 10 MB cap is checked.
+        // name, size and first bytes (`uploadAllowed`); a photo is judged on 40 MB here and redrawn (a PNG stays PNG,
+        // anything else becomes JPEG) before its 10 MB cap is checked.
         let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
         if let size = attrs[.size] as? Int64,
            let message = StorageUploadPolicy.refusal(

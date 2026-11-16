@@ -38,16 +38,6 @@ enum StorageUploadPolicy {
     static let healthSafetyTalksFolder = "talks"
     static let healthSafetyOtherFolder = "other"
 
-    /// RULEBOOK 1.50.0 (web `lib/security/uploadGuard.ts` `STORAGE_RULES_1_50_PUBLISHED`): the Storage rules live before
-    /// 1.50.0 take PDF and JPEG only for certificates. Until the owner publishes the 1.50.0 `storage.rules` (after
-    /// `minimumIosBuild` is raised to this build), certificate photos are redrawn to JPEG and anything else is refused
-    /// with `certificateJPEGOrPDFMessage`. Set to true in the release after that publish. Every other kind the rulebook
-    /// allows is already accepted by the old rules.
-    static let storageRules150Published = false
-    /// Web `CERTIFICATE_JPEG_OR_PDF_MESSAGE` (same words).
-    static let certificateJPEGOrPDFMessage =
-        "Certificates are saved as a PDF or a JPEG photo for now. Save this one as a JPEG or PDF and try again."
-
     /// Web `PHOTO_MAX_EDGE` / `PHOTO_TARGET_BYTES`: a redrawn photo is at most 2560 px on its long edge and about 2.5 MB.
     static let photoMaxPixelDimension: CGFloat = 2560
     static let photoTargetBytes = 2_621_440
@@ -130,9 +120,6 @@ enum StorageUploadPolicy {
         )
         guard decision.allowed, let type = decision.contentType, !type.isEmpty else {
             throw failure(decision.message ?? CanonicalBusinessEngine.uploadNoAnswerMessage, oversize: decision.reason == "too_large")
-        }
-        if !storageRules150Published, kind == "qualification_certificate", type != "application/pdf", type != "image/jpeg" {
-            throw failure(certificateJPEGOrPDFMessage, oversize: false)
         }
         return type
     }
@@ -396,8 +383,8 @@ enum StorageUploadPolicy {
     }
 
     /// Web `stripPhotoLocation`: PNG stays PNG (falls back to JPEG above about 2.5 MB); a logo is never made a JPEG
-    /// unless it was one; a certificate is always JPEG until the 1.50.0 Storage rules are published (and stays JPEG —
-    /// it is drawn for printing); everything else becomes JPEG.
+    /// unless it was one; everything else becomes JPEG. Certificates follow the same rule since the 1.50.0 Storage rules
+    /// are live (web #333).
     private static func redrawnPhoto(_ data: Data, sourceType: String, family: StorageUploadFamily) throws -> OutputBytes {
         let image = try preparablePhoto(from: data)
         let cap = maxBytes(for: family)
@@ -407,9 +394,9 @@ enum StorageUploadPolicy {
         switch family {
         case .companyLogo:
             wantsPNG = sourceType != "image/jpeg"
-        case .qualificationCertificate, .timesheetPDF:
+        case .timesheetPDF:
             wantsPNG = false
-        case .profilePhoto, .siteAuditPhoto, .taskImage, .workFile, .variationEvidence:
+        case .profilePhoto, .qualificationCertificate, .siteAuditPhoto, .taskImage, .workFile, .variationEvidence:
             wantsPNG = sourceType == "image/png"
         }
         if wantsPNG {
