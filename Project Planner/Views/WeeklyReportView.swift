@@ -1227,7 +1227,6 @@ struct WeeklyReportView: View {
     }
 
     private func weeklyReportPayInputs() throws -> WeeklyReportPayInputs.Built {
-        let options = appSettings.settings.myScheduleOptions
         // The working-hours state with its history (§4.3): never one policy for every day. While it has not loaded the
         // report fails with its calculation error rather than price days on the wrong rules (review of #235).
         guard let organization = CanonicalBusinessEngine.openOrganizationPayrollPolicyState else { throw PayCalculationError() }
@@ -1247,8 +1246,7 @@ struct WeeklyReportView: View {
             sheets: timesheetFeed.sheets,
             viewer: userStore.payViewerRow,
             // RULEBOOK 1.53.0: the Role column is the user level (`userLevelLabel`); a person with no account is an operative.
-            roleLabel: { user in Self.userLevelText(user) },
-            includesManagerBooking: { options.includesManagerScheduleLocation($0) }
+            roleLabel: { user in Self.userLevelText(user) }
         ))
     }
 

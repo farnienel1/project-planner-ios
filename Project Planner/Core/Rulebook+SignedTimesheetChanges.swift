@@ -72,6 +72,11 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
     let message: String?
     /// The reviewer's note (counter-sign blocked, counter-sign again, or the exported warning), else nil.
     let reviewerMessage: String?
+    /// RULEBOOK 1.54.0 §8 `timesheetChangesWithLateExtras`: late extras wait for the line manager.
+    let lateExtrasWaiting: Bool
+    /// RULEBOOK 1.54.0: the bookings themselves changed (1.47.0). False when only late extras wait — nothing is signed
+    /// again or re-priced, and the signed snapshot's figures stand.
+    let bookingsChanged: Bool
 
     init?(json: Any?) {
         guard let row = json as? [String: Any], let changed = row["changed"] as? Bool else { return nil }
@@ -85,7 +90,12 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
         self.removedBookingIds = row["removedBookingIds"] as? [String] ?? []
         self.message = row["message"] as? String
         self.reviewerMessage = row["reviewerMessage"] as? String
+        self.lateExtrasWaiting = row["lateExtrasWaiting"] as? Bool ?? false
+        self.bookingsChanged = row["bookingsChanged"] as? Bool ?? changed
     }
+
+    /// RULEBOOK 1.54.0: only late extras wait (no booking change) — the reviewer decides them; nobody signs again.
+    var lateExtrasOnly: Bool { reopened && lateExtrasWaiting && !bookingsChanged }
 
     /// The person must review and sign again (the yellow triangle and popup on My Timesheets).
     var waitingForPerson: Bool { reopened && waitingFor == "person" }
@@ -177,7 +187,8 @@ extension CanonicalBusinessEngine {
         tombstonedBookingIds: [[String: Any]]? = nil,
         personIds: [String]?,
         liveLoaded: Bool,
-        selfSigned: Bool
+        selfSigned: Bool,
+        lateExtras: RulebookLateExtrasSummary? = nil
     ) -> RulebookSignedTimesheetChange? {
         var input: [String: Any] = [
             "sheet": sheet,
@@ -188,7 +199,13 @@ extension CanonicalBusinessEngine {
         input["liveBookings"] = liveBookings.map { $0 as Any } ?? NSNull()
         input["tombstonedBookingIds"] = tombstonedBookingIds.map { $0 as Any } ?? NSNull()
         input["personIds"] = personIds.map { $0 as Any } ?? NSNull()
-        return RulebookSignedTimesheetChange(json: callJSON("signedTimesheetBookingChanges", arguments: [input]))
+        let raw = callJSON("signedTimesheetBookingChanges", arguments: [input])
+        // RULEBOOK 1.54.0 §8 `timesheetChangesWithLateExtras(bookingChange, late)`: one answer for the bookings and the
+        // late extras (lists, counts, the export guard, the Payrun Snapshot). A sheet without late extras is unchanged.
+        if let lateExtras, raw != nil {
+            return timesheetChangesWithLateExtras(bookingChange: raw, late: lateExtras)
+        }
+        return RulebookSignedTimesheetChange(json: raw)
     }
 
     /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingRecord(liveLines, liveBookings)`: what the person signs, stored as
@@ -455,7 +472,9 @@ enum SignedTimesheetChanges {
             liveBookings: documents,
             personIds: SignedTimesheetChangeInputs.personIds(user: user, operatives: inputs.operatives, users: inputs.users),
             liveLoaded: inputs.liveLoaded,
-            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user),
+            // RULEBOOK 1.54.0 §8: late extras waiting for the line manager (`timesheetLateExtrasSummary`).
+            lateExtras: TimesheetLateExtrasSupport.summary(draft)
         )
     }
 
@@ -529,11 +548,17 @@ final class SignedTimesheetChangeContext {
         func ms(_ date: Date?) -> String { date.map { String(Int64($0.timeIntervalSince1970 * 1000)) } ?? "-" }
         let record = (draft.operativeSignedBookings ?? []).map { "\($0.bookingId):\($0.fingerprint):\($0.personId):\($0.place)" }
         let snapshot = (draft.weeklyReportOverride?.lines ?? []).map { "\($0.id):\($0.bookingFingerprint ?? "")" }
+        // RULEBOOK 1.54.0: late extras, the stored reviews and the snapshot's money rows decide the answer too.
+        let money = ((draft.weeklyReportOverride?.priceWork ?? []) + (draft.weeklyReportOverride?.expenses ?? []))
+            .map { "\($0.id):\($0.amount):\($0.lateExtra == true)" }
+        let late = (draft.lateExtras ?? []).map { "\($0.id):\($0.reviewFingerprint ?? ""):\($0.amount):\($0.lateState ?? "")" }
         return [
             ms(draft.operativeSignedAt), ms(draft.managerSignedAt), ms(draft.exportedAt), ms(draft.approvedAt),
             ms(draft.invoiceGeneratedAt),
             ms(draft.operativeSignedBookingsAt), ms(draft.operativeSignedBookingsSignedAt),
             ms(draft.weeklyReportOverride?.approvedAt), record.joined(separator: ","), snapshot.joined(separator: ","),
+            money.joined(separator: ","), late.joined(separator: ","), draft.extraEntryReviewsJSON ?? "-",
+            draft.exportedAtStored == true ? "x" : "-",
         ].joined(separator: "|")
     }
 
@@ -607,7 +632,11 @@ final class SignedTimesheetChangeContext {
         ).loaded
         // The person's ids come from the operatives list too (web third review #325): nothing reads as changed before.
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-        guard loaded, orgId != nil, operativeStore.finishedLoadOrganizationId == orgId, !operativeStore.isLoading else { return nil }
+        guard loaded, orgId != nil, operativeStore.finishedLoadOrganizationId == orgId, !operativeStore.isLoading else {
+            // RULEBOOK 1.54.0 (web `periodBookingChanges`): late extras need no bookings — waiting ones still put the
+            // sheet with the line manager.
+            return CanonicalBusinessEngine.timesheetChangesWithLateExtras(bookingChange: nil, late: TimesheetLateExtrasSupport.summary(draft))
+        }
         let key = [
             user.id,
             String(Int64(period.start.timeIntervalSince1970)),

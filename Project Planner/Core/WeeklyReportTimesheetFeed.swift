@@ -301,7 +301,9 @@ struct WeeklyReportTimesheetFeed {
                 guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { continue }
                 // RULEBOOK 1.47.0 §8: a fully signed sheet reopened by a booking change is not an approved week — the
                 // report shows its live bookings.
-                if change?.reopened == true { continue }
+                // RULEBOOK 1.54.0 §8: late extras waiting for the line manager never take a signed sheet out of the feed
+                // (its signed money stands; only approved late extras are in its snapshot).
+                if change?.reopened == true && change?.bookingsChanged != false { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
                 var working = draft
@@ -329,7 +331,10 @@ struct WeeklyReportTimesheetFeed {
                     // Built in memory for this report only. Producing a report never writes anyone's
                     // timesheet (§7: reports are not stored); the snapshot is written by their sign-off.
                 }
-                guard let override = working.weeklyReportOverride else { continue }
+                // RULEBOOK 1.54.0 (third review of #337): a snapshot's late-extra rows count only while that late extra is
+                // still approved at the same amount (`timesheetSnapshotMoneyRowsCurrent`); an exported sheet stays as signed.
+                guard let override = TimesheetLateExtrasSupport.draftWithCurrentLateRows(working).weeklyReportOverride
+                    ?? working.weeklyReportOverride else { continue }
                 let aliases = StaffEmailIdentity.userIds(sharing: user.email, in: users)
                 weeks.append(
                     ApprovedWeek(
@@ -373,7 +378,9 @@ struct WeeklyReportTimesheetFeed {
             row["sheet"] = NSNull()
             return row
         }
-        row["sheet"] = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
+        // RULEBOOK 1.54.0 (fourth review of #337): the check line reads the snapshot's late rows only while still
+        // approved, with the late extras and their reviews (`TimesheetLateExtrasSupport.rulebookSheet`).
+        row["sheet"] = TimesheetLateExtrasSupport.rulebookSheet(TimesheetLateExtrasSupport.draftWithCurrentLateRows(draft))
         if let status = CanonicalBusinessEngine.callJSON("parseTimesheetStatusFields", arguments: [TimesheetDraftStore.statusPayload(for: draft)]),
            !(status is NSNull) {
             row["status"] = status

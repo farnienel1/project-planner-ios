@@ -11213,6 +11213,74 @@ extension FirebaseBackend {
         }
     }
 
+    /// RULEBOOK 1.54.0 (third review of #337, web `stampTimesheetExport`): Export's stamp. In one transaction it re-reads
+    /// the stored sheet and writes ONLY the export fields — the signed snapshot and `exportedAt` (+ write metadata) —
+    /// never a whole sheet from the copy Export loaded, so a late extra the person added, edited or deleted meanwhile is
+    /// never written back over. It refuses (writes nothing) when the stored sheet is already exported, or when its late
+    /// extras now wait for the line manager with the snapshot about to be written (`timesheetLateExtrasSummary`).
+    /// Returns `stamped`, `already-exported`, `late-extras-waiting` or `missing`.
+    func stampTimesheetExport(
+        organizationId: String,
+        userId: String,
+        weekStart: Date,
+        weeklyReportOverride: [String: Any],
+        exportedAt: Date
+    ) async throws -> String {
+        let ref = try timesheetStateDocumentRef(organizationId: organizationId, userId: userId, weekStart: weekStart)
+        return try await Self.runTimesheetExportStamp(
+            db: db,
+            ref: ref,
+            override: RulebookJSONBox(object: ["weeklyReportOverride": weeklyReportOverride]),
+            exportedAt: exportedAt,
+            userId: Auth.auth().currentUser?.uid
+        )
+    }
+
+    /// The transaction of `stampTimesheetExport`. `nonisolated` so the block never runs on the main actor; it calls
+    /// only the packed script (`timesheetExportedFieldSet`, `timesheetLateExtrasSummary`) on the stored JSON.
+    nonisolated private static func runTimesheetExportStamp(
+        db: Firestore,
+        ref: DocumentReference,
+        override: RulebookJSONBox,
+        exportedAt: Date,
+        userId: String?
+    ) async throws -> String {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let stored = snapshot.data() else { return "missing" }
+            if CanonicalBusinessEngine.timesheetExportedFieldSet(stored["exportedAt"]) { return "already-exported" }
+            let snapshotFields = override.object["weeklyReportOverride"] ?? NSNull()
+            var sheet = FirebaseBackend.firestoreJSON(stored) as? [String: Any] ?? [:]
+            sheet["weeklyReportOverride"] = FirebaseBackend.firestoreJSON(snapshotFields)
+            if let late = sheet["lateExtras"] as? [Any], !late.isEmpty {
+                // The reader's fingerprints are the stored rows' own (`timesheetEntryFingerprint`), so none is passed.
+                guard let summary = CanonicalBusinessEngine.timesheetLateExtrasSummary(
+                    sheet: sheet,
+                    entryFingerprints: [:],
+                    exportedAtStored: false,
+                    sheetDocId: snapshot.documentID
+                ) else {
+                    errorPointer?.pointee = NSError(
+                        domain: "FirebaseBackend", code: 500,
+                        userInfo: [NSLocalizedDescriptionKey: "The timesheet rules did not load. Try again."]
+                    )
+                    return nil
+                }
+                if summary.waitingForLineManager { return "late-extras-waiting" }
+            }
+            let fields: [String: Any] = ["weeklyReportOverride": snapshotFields, "exportedAt": Timestamp(date: exportedAt)]
+            transaction.updateData(WriteMetadata.stamped(fields, userId: userId), forDocument: ref)
+            return "stamped"
+        }
+        return (answer as? String) ?? "missing"
+    }
+
     func listTimesheetStates(
         organizationId: String,
         userId: String,
