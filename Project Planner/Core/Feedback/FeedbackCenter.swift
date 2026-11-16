@@ -2,7 +2,7 @@
 //  FeedbackCenter.swift
 //  Project Planner
 //
-//  Feedback sounds and haptics (docs/design/feedback/feedback-sounds-haptics-guide.md, v1.0, 16 Nov 2026). Not a
+//  Feedback sounds and haptics (docs/design/feedback/feedback-sounds-haptics-guide.md, v1.1, 16 Nov 2026). Not a
 //  business rule and not in the rulebook (§15 "Platform-specific (not synced)"): a short sound and a tap played AFTER
 //  an action this person took on this phone has succeeded, been saved to the offline queue, or been refused. It never
 //  changes what the action does — saves, the offline queue, data, banners and navigation are untouched (platform
@@ -48,18 +48,17 @@ nonisolated enum FeedbackHaptic: String, CaseIterable, Equatable {
 nonisolated enum FeedbackEvent: String, CaseIterable, Equatable {
     case bookingSaved
     case bookingEdited
-    /// Also the OT screen's "Send for approval" (owner decision 2, 16 Nov: the app has no booking request).
+    /// In the guide; no feature yet (the app has no booking request flow).
     case bookingRequested
-    /// Also the OT screen's "Return" and the price work and expense review Approve (owner decision 2, 16 Nov).
+    /// In the guide; no feature yet.
     case bookingApproved
     case bookingDeclined
     case bookingDeleted
     case leaveRequested
-    /// Approved leave saved directly (self-booked, or booked for someone), and a leave edit or cancellation request
-    /// (owner decision 5: "saved").
+    /// Approved leave saved directly (self-booked, or booked for someone).
     case leaveBooked
     case leaveApproved
-    /// A declined request, a refused cancellation, and leave removed (owner decision 5: "removed").
+    /// A declined request, or a refused cancellation request.
     case leaveDeclined
     case warningResolved
     case allWarningsClear
@@ -67,6 +66,18 @@ nonisolated enum FeedbackEvent: String, CaseIterable, Equatable {
     case timesheetSaved
     case userInvited
     case savedOffline
+    /// Guide v1.1: an existing leave booking changed, or a cancellation request sent (owner decision 5).
+    case leaveEdited
+    /// Guide v1.1: leave removed, including an accepted cancellation request (owner decision 5).
+    case leaveRemoved
+    /// Guide v1.1: the PAYE "Send for approval" (owner decision 2).
+    case overtimeSent
+    /// Guide v1.1: "Return" by a line manager or admin (owner decision 2).
+    case overtimeReturned
+    /// Guide v1.1: price work or expense review Approve with at least one item approved (owner decision 2).
+    case claimsApproved
+    /// Guide v1.1: price work or expense review Approve with every decided item rejected (owner decision 2).
+    case claimsDeclined
     case actionRefused
     case warningShown
 
@@ -89,6 +100,12 @@ nonisolated enum FeedbackEvent: String, CaseIterable, Equatable {
         case .timesheetSaved: return .success
         case .userInvited: return .sent
         case .savedOffline: return .queued
+        case .leaveEdited: return .success
+        case .leaveRemoved: return .removed
+        case .overtimeSent: return .sent
+        case .overtimeReturned: return .approved
+        case .claimsApproved: return .approved
+        case .claimsDeclined: return .removed
         case .actionRefused: return .error
         case .warningShown: return nil
         }
@@ -113,6 +130,12 @@ nonisolated enum FeedbackEvent: String, CaseIterable, Equatable {
         case .timesheetSaved: return .success
         case .userInvited: return .sent
         case .savedOffline: return .sent
+        case .leaveEdited: return .success
+        case .leaveRemoved: return .removed
+        case .overtimeSent: return .sent
+        case .overtimeReturned: return .success
+        case .claimsApproved: return .success
+        case .claimsDeclined: return .removed
         case .actionRefused: return .error
         case .warningShown: return .warn
         }
@@ -158,6 +181,12 @@ enum FeedbackDecision {
     /// A save that reports a refusal message (nil when saved): timesheets, OT, claims, invites.
     static func event(refusal: String?, success: FeedbackEvent) -> FeedbackEvent {
         refusal == nil ? success : .actionRefused
+    }
+
+    /// A price work or expense review Approve: `claimsApproved` when any decided item was approved, `claimsDeclined`
+    /// when every decided item was rejected (guide v1.1 §4).
+    static func claimsReviewed(decisions: [String]) -> FeedbackEvent {
+        decisions.contains("approved") ? .claimsApproved : .claimsDeclined
     }
 
     /// An annual leave save: Pending sync on this phone (`HolidayStore.isPendingSync`) → `savedOffline`.

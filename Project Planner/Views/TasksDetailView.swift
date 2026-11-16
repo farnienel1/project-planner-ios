@@ -474,7 +474,7 @@ struct TasksDetailView: View {
             if request.cancellationRequestedAt != nil {
                 let removed = await holidayStore.deleteBooking(request)
                 // Owner decision 5: accepting a cancellation removes the leave ("removed").
-                Feedback.play(removed, success: .leaveDeclined)
+                Feedback.play(removed, success: .leaveRemoved)
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
                         userId: ownerId,

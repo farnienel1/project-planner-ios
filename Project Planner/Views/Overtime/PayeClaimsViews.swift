@@ -649,8 +649,9 @@ struct PayeClaimsRangeView: View {
             try await firebaseBackend.savePayeClaimReviews(writes)
             decisions = [:]
             notice = message
-            // Owner decision 2: the price work / expense review Approve plays the `approved` sound.
-            Feedback.play(.bookingApproved)
+            // Guide v1.1 §4 (owner decision 2): `claimsApproved` when any decided item was approved, else
+            // `claimsDeclined`.
+            Feedback.play(FeedbackDecision.claimsReviewed(decisions: writes.compactMap { $0.fields["decision"] as? String }))
         } catch {
             notice = error.localizedDescription.isEmpty ? "The review could not be saved." : error.localizedDescription
             Feedback.play(.actionRefused)

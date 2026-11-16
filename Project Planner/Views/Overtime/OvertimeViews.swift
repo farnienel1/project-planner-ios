@@ -1292,8 +1292,8 @@ struct OvertimeLinesView: View {
                 rangeEnd: range.end
             )
             message = "Sent for approval."
-            // Owner decision 2: "Send for approval" plays the `sent` sound (the guide's booking request event).
-            Feedback.play(.bookingRequested)
+            // Guide v1.1 §4 (owner decision 2): "Send for approval" plays its own event, the `sent` sound.
+            Feedback.play(.overtimeSent)
         }
         if !sent { Feedback.play(.actionRefused) }
     }
@@ -1324,8 +1324,8 @@ struct OvertimeLinesView: View {
             // RULEBOOK 1.33.0 `overtimeReturnMessage`: "Returned 5 lines. …".
             message = result.message
         }
-        // Owner decision 2: the Return plays the `approved` sound (the guide's booking approval event).
-        Feedback.play(returned ? .bookingApproved : .actionRefused)
+        // Guide v1.1 §4 (owner decision 2): the Return plays its own event, the `approved` sound.
+        Feedback.play(returned ? .overtimeReturned : .actionRefused)
     }
 
     /// Generate overtime report: the saved copy (`overtimeReportSnapshot`), then the PDF through the share sheet.

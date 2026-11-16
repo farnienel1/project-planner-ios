@@ -1,6 +1,6 @@
 # Project Planner: sound and haptic feedback guide (web + iOS)
 
-**Version 1.0, 16 Nov 2026.** This is the single shared spec for feedback sounds (web and iOS) and haptics (iOS only).
+**Version 1.1, 16 Nov 2026.** This is the single shared spec for feedback sounds (web and iOS) and haptics (iOS only).
 
 Put an identical copy in both repos at `docs/design/feedback/feedback-sounds-haptics-guide.md`. Web is the source; iOS copies it, the same way it mirrors the rulebook.
 
@@ -88,6 +88,12 @@ Each platform calls **one** function with a named event, for example `Feedback.p
 | `timesheetSaved` | A timesheet draft, overtime report, expense or price-work line is saved | success | success |
 | `userInvited` | A new user is added or an invite is sent | sent | sent |
 | `savedOffline` | iOS only: the action was saved to the offline queue (instead of the success event) | queued | sent |
+| `leaveEdited` | An existing leave booking is changed, or a cancellation request is sent (owner decision 5, 16 Nov) | success | success |
+| `leaveRemoved` | Someone's leave is removed by a manager or admin (owner decision 5, 16 Nov) | removed | removed |
+| `overtimeSent` | A PAYE person's overtime is sent with "Send for approval" (owner decision 2, 16 Nov; reuses the `bookingRequested` sound) | sent | sent |
+| `overtimeReturned` | A line manager or admin presses "Return overtime" (owner decision 2; reuses the `bookingApproved` sound) | approved | success |
+| `claimsApproved` | Price work or expense review: Approve saved with at least one item approved (owner decision 2) | approved | success |
+| `claimsDeclined` | Price work or expense review: Approve saved with every decided item rejected (owner decision 2) | removed | removed |
 | `actionRefused` | The server or rules refused a save, request or approval, or it failed | error | error |
 | `warningShown` | A blocking warning is shown on save (e.g. unpaid break, clash) | none | warn |
 
@@ -98,7 +104,7 @@ Each platform calls **one** function with a named event, for example `Feedback.p
 ## 5. Settings (device-only)
 
 - **iOS:** My Profile / Settings → "Sounds" toggle (default **on**) and "Haptics" toggle (default **on**). Under them: "Applies to this iPhone only." plus a "Play a sample" row.
-- **Web:** My Profile / Settings → "Sounds" toggle. The default is an **owner decision**; we recommend **on**. Text under it: "Applies to this browser only." plus a "Play a sample" button.
+- **Web:** Settings → Personal card → "Sounds" toggle, default **on** (owner decision 1, 16 Nov). Text under it: "Applies to this browser only." plus a "Play a sample" button.
 - **Storage:**
   - iOS: `UserDefaults` keys `pp.feedback.sounds`, `pp.feedback.haptics`.
   - Web: `localStorage` key `pp.feedback.sounds`, wrapped in try/catch; if storage is unavailable, use the default.
@@ -176,3 +182,10 @@ if __name__ == '__main__':
 - **Additive only:** the feedback call goes **after** the existing success or refusal handling. No save payload, store, calculation, permission, route or navigation destination changes (platform guardrail 7).
 - **Prove it:** the same booking, leave request and warning resolve, done before and after, produce identical Firestore documents and identical figures on Daily Overview, the weekly report and timesheets.
 - **Feedback can never break an action.** If audio or haptics fail (no audio device, blocked autoplay, missing file), it's swallowed silently and the action carries on.
+
+---
+
+## Changelog
+
+- **1.1, 16 Nov 2026** (owner decisions 1–13, 16 Nov, recorded in web `docs/OWNER_DECISIONS.md`). Six events added to §4 for features that exist today: `leaveEdited`, `leaveRemoved`, `overtimeSent`, `overtimeReturned`, `claimsApproved`, `claimsDeclined`. They reuse the existing sounds; no new sound file. `bookingRequested`, `bookingApproved` and `bookingDeclined` stay in the table but have no feature yet (there is no booking-request flow). A sound plays only after the person's own action on this device, never from a listener, another person's change, page load or autosave. A partly saved bulk action plays `actionRefused`; "nothing new to save" plays no sound. Web default: Sounds **on**. iOS copies this file again (it is the source).
+- **1.0, 16 Nov 2026.** First version.

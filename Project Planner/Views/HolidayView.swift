@@ -498,7 +498,7 @@ struct HolidayView: View {
                                 // Owner decision 5: a leave edit plays "saved" (Pending sync: the queued tick).
                                 Feedback.play(FeedbackDecision.leaveEvent(
                                     pendingSync: holidayStore.isPendingSync(updated),
-                                    success: .leaveBooked
+                                    success: .leaveEdited
                                 ))
                             }
                         } catch {
@@ -538,7 +538,7 @@ struct HolidayView: View {
                                     Task {
                                         let result = await holidayStore.deleteBooking(booking)
                                         // Owner decision 5: removing leave plays "removed".
-                                        Feedback.play(result, success: .leaveDeclined)
+                                        Feedback.play(result, success: .leaveRemoved)
                                     }
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
@@ -1955,7 +1955,7 @@ struct HolidayView: View {
             if request.cancellationRequestedAt != nil {
                 let removed = await holidayStore.deleteBooking(request)
                 // Owner decision 5: accepting a cancellation removes the leave ("removed").
-                Feedback.play(removed, success: .leaveDeclined)
+                Feedback.play(removed, success: .leaveRemoved)
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
@@ -2118,7 +2118,7 @@ struct HolidayView: View {
                     successMessage = "Annual leave removed."
                     showSuccess = true
                     // Owner decision 5: removing leave plays "removed".
-                    Feedback.play(result, success: .leaveDeclined)
+                    Feedback.play(result, success: .leaveRemoved)
                 }
             }
         }
@@ -2139,7 +2139,7 @@ struct HolidayView: View {
                 return
             }
             // Owner decision 5: a cancellation request plays "saved" (Pending sync: the queued tick).
-            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveBooked))
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveEdited))
             // Approvers are told now, or once the outbox confirms a request made offline (§2).
             await notificationService.notifyHolidayRequestSubmittedWhenSynced(
                 leaveNotice(for: booking, requesterUserId: uid, requesterName: requesterName(for: booking), cancellation: true),

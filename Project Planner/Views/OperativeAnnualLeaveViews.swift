@@ -337,7 +337,7 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                             Task {
                                 let result = await holidayStore.deleteBooking(booking)
                                 // Owner decision 5: removing leave plays "removed".
-                                Feedback.play(result, success: .leaveDeclined)
+                                Feedback.play(result, success: .leaveRemoved)
                             }
                         },
                         onNo: { bookingPendingRemoval = nil }
@@ -441,7 +441,7 @@ private struct OperativeAnnualLeaveRequestsListView: View {
             if request.cancellationRequestedAt != nil {
                 let removed = await holidayStore.deleteBooking(request)
                 // Owner decision 5: accepting a cancellation removes the leave ("removed").
-                Feedback.play(removed, success: .leaveDeclined)
+                Feedback.play(removed, success: .leaveRemoved)
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
@@ -1618,7 +1618,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             successMessage = "Annual leave booking updated."
             showSuccess = true
             // Owner decision 5: a leave edit plays "saved".
-            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveBooked))
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveEdited))
         } catch {
             errorMessage = error.localizedDescription
             showError = true
@@ -1633,7 +1633,7 @@ struct OperativeAnnualLeaveCalendarView: View {
         defer { isSaving = false }
         let removed = await holidayStore.deleteBooking(booking)
         // Owner decision 5: removing leave plays "removed".
-        Feedback.play(removed, success: .leaveDeclined)
+        Feedback.play(removed, success: .leaveRemoved)
         if let err = holidayStore.errorMessage, !err.isEmpty {
             errorMessage = err
             showError = true

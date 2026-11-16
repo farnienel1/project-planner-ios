@@ -2,7 +2,7 @@ import AVFoundation
 import XCTest
 @testable import Project_Planner
 
-/// Feedback sounds and haptics (docs/design/feedback/feedback-sounds-haptics-guide.md v1.0; owner decisions 16 Nov).
+/// Feedback sounds and haptics (docs/design/feedback/feedback-sounds-haptics-guide.md v1.1; owner decisions 16 Nov).
 /// Not a rulebook rule: a sound and a haptic AFTER an outcome the app already decided. These tests hold the event table
 /// to guide §4, the service to §1/§3/§5, every call site to the outcome it reads, and the stores to "writes unchanged".
 @MainActor
@@ -83,12 +83,18 @@ final class FeedbackCenterTests: XCTestCase {
         .timesheetSaved: (.success, .success),
         .userInvited: (.sent, .sent),
         .savedOffline: (.queued, .sent),
+        .leaveEdited: (.success, .success),
+        .leaveRemoved: (.removed, .removed),
+        .overtimeSent: (.sent, .sent),
+        .overtimeReturned: (.approved, .success),
+        .claimsApproved: (.approved, .success),
+        .claimsDeclined: (.removed, .removed),
         .actionRefused: (.error, .error),
         .warningShown: (nil, .warn),
     ]
 
     func testEveryEventMapsToExactlyTheGuideSoundAndHaptic() {
-        XCTAssertEqual(FeedbackEvent.allCases.count, 18)
+        XCTAssertEqual(FeedbackEvent.allCases.count, 24, "guide v1.1 §4")
         XCTAssertEqual(Set(Self.guideTable.keys), Set(FeedbackEvent.allCases))
         for event in FeedbackEvent.allCases {
             guard let expected = Self.guideTable[event] else {
@@ -256,6 +262,8 @@ final class FeedbackCenterTests: XCTestCase {
         XCTAssertEqual(FeedbackDecision.event(refusal: "Couldn't save", success: .timesheetSigned), .actionRefused)
         XCTAssertEqual(FeedbackDecision.leaveEvent(pendingSync: true, success: .leaveRequested), .savedOffline)
         XCTAssertEqual(FeedbackDecision.leaveEvent(pendingSync: false, success: .leaveBooked), .leaveBooked)
+        XCTAssertEqual(FeedbackDecision.claimsReviewed(decisions: ["rejected", "approved"]), .claimsApproved)
+        XCTAssertEqual(FeedbackDecision.claimsReviewed(decisions: ["rejected", "rejected"]), .claimsDeclined)
     }
 
     func testADeleteIsReadFromWhatTheStoreShowsAfterwards() {
@@ -467,6 +475,12 @@ final class FeedbackCenterTests: XCTestCase {
         ("Views/HolidayView.swift", "let savedPending = created.contains { holidayStore.isPendingSync($0) }", "success: selfBooks ? .leaveBooked : .leaveRequested", 1_000),
         ("Views/HolidayView.swift", "let result = await holidayStore.approveBooking(request, approvedByUserId: uid)", "Feedback.play(result, success: .leaveApproved)", 80),
         ("Views/HolidayView.swift", "let result = await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)", "Feedback.play(result, success: .leaveDeclined)", 80),
+        ("Views/HolidayView.swift", "let removed = await holidayStore.deleteBooking(request)", "Feedback.play(removed, success: .leaveRemoved)", 200),
+        ("Views/HolidayView.swift", "await holidayStore.requestCancellation(booking, by: uid)", "success: .leaveEdited", 500),
+        ("Views/HolidayView.swift", "try await holidayStore.saveBooking(updated)", "success: .leaveEdited", 600),
+        ("Views/TasksDetailView.swift", "let removed = await holidayStore.deleteBooking(request)", "Feedback.play(removed, success: .leaveRemoved)", 200),
+        ("Views/OperativeAnnualLeaveViews.swift", "let removed = await holidayStore.deleteBooking(booking)", "Feedback.play(removed, success: .leaveRemoved)", 200),
+        ("Views/OperativeAnnualLeaveViews.swift", "successMessage = \"Annual leave booking updated.\"", "success: .leaveEdited", 300),
         ("Views/TasksDetailView.swift", "let result = await holidayStore.approveBooking(request, approvedByUserId: uid)", "Feedback.play(result, success: .leaveApproved)", 80),
         ("Views/TasksDetailView.swift", "let result = await holidayStore.rejectBooking(request, rejectedByUserId: uid)", "Feedback.play(result, success: .leaveDeclined)", 80),
         ("Views/OperativeAnnualLeaveViews.swift", "let result = await holidayStore.approveBooking(booking, approvedByUserId: uid)", "Feedback.play(result, success: .leaveApproved)", 80),
@@ -483,9 +497,9 @@ final class FeedbackCenterTests: XCTestCase {
         ("Views/Overtime/PayeClaimsViews.swift", "\n            notice = PayeClaimReportPDF.notice(made)", "Feedback.play(.timesheetSaved)", 200),
         ("Views/Overtime/PayeClaimsViews.swift", "saving = nil\n            dismiss()", "Feedback.play(.timesheetSaved)", 200),
         // owner decision 2
-        ("Views/Overtime/OvertimeViews.swift", "message = \"Sent for approval.\"", "Feedback.play(.bookingRequested)", 300),
-        ("Views/Overtime/OvertimeViews.swift", "message = result.message", "Feedback.play(returned ? .bookingApproved : .actionRefused)", 300),
-        ("Views/Overtime/PayeClaimsViews.swift", "notice = message", "Feedback.play(.bookingApproved)", 200),
+        ("Views/Overtime/OvertimeViews.swift", "message = \"Sent for approval.\"", "Feedback.play(.overtimeSent)", 300),
+        ("Views/Overtime/OvertimeViews.swift", "message = result.message", "Feedback.play(returned ? .overtimeReturned : .actionRefused)", 300),
+        ("Views/Overtime/PayeClaimsViews.swift", "notice = message", "FeedbackDecision.claimsReviewed(decisions: writes.compactMap", 300),
         // userInvited
         ("Views/AddUserView.swift", "errorMessage = userStore.errorMessage ?? \"Failed to add this person. Please try again.\"", "Feedback.play(success ? .userInvited : .actionRefused)", 300),
         ("Views/AddUserView.swift", "errorMessage = userStore.errorMessage ?? \"Failed to create user. Please try again.\"", "Feedback.play(success ? .userInvited : .actionRefused)", 300),
