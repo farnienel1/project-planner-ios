@@ -1679,8 +1679,12 @@ struct ProjectDetailView: View {
         replaces: [RulebookBookingReplaceRef] = []
     ) async -> String? {
         guard let target = ScheduleWeekGrid.saveTarget(for: request.person, jobType: project.isSmallWorksDocument ? .smallWorks : .catA) else {
+            Feedback.play(.actionRefused)
             return "This person cannot be booked from here."
         }
+        Feedback.prepare()
+        /// Feedback guide §4: this Quick Add's own outcome (saved, Pending sync, or refused).
+        var saveResult: BookingSaveResult = .saved
         switch target {
         case .operativeBookings(let operativeId):
             // A catalogue row, else the operative-level account itself (booked under its users id, web #262), when
@@ -1690,13 +1694,15 @@ struct ProjectDetailView: View {
                 .flatMap { user in AccountLabourBooking.bookingOperative(for: user, operatives: operativeStore.allOperatives) }
                 .flatMap { row in row.id == operativeId ? row : nil }
             guard let operative = operativeStore.allOperatives.first(where: { $0.id == operativeId }) ?? accountRow else {
+                Feedback.play(.actionRefused)
                 return "No operative profile is linked to this person."
             }
             guard let bookedBy = firebaseBackend.currentUser?.uid else {
+                Feedback.play(.actionRefused)
                 return "Not signed in."
             }
             if replaces.isEmpty {
-                await bookingStore.bookOperative(
+                saveResult = await bookingStore.bookOperative(
                     operative,
                     on: request.day,
                     timeSlot: draft.timeSlot,
@@ -1719,7 +1725,10 @@ struct ProjectDetailView: View {
                     workEndTime: draft.workEnd
                 )
                 booking.updatedAt = Date()
-                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) { return problem }
+                if let problem = await bookingStore.addBookingReplacing(booking, replaces: replaces, managerBookings: managerScheduleStore.managerSiteBookings) {
+                    Feedback.play(.actionRefused)
+                    return problem
+                }
             }
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             // 1.33.1: the notice follows on its own task, so "Saving…" ends when the booking is saved, not when every
@@ -1749,13 +1758,15 @@ struct ProjectDetailView: View {
                 workEndTime: draft.workEnd
             )
             if replaces.isEmpty {
-                await managerScheduleStore.saveBooking(booking)
+                saveResult = await managerScheduleStore.saveBooking(booking)
             } else if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: replaces, labourBookings: bookingStore.bookings) {
+                Feedback.play(.actionRefused)
                 return problem
             }
         }
         ScheduleChangeNotifier.postBookingStoreDidChange()
         quickAddRequest = nil
+        Feedback.play(saveResult, success: .bookingSaved)
         return nil
     }
 
@@ -1888,6 +1899,7 @@ struct ProjectDetailView: View {
                 if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
                     labourDeleteRefusalMessage = message
                 }
+                Feedback.play(bookingStore.deleteOutcome(of: booking), success: .bookingDeleted)
             }
         }
     }
@@ -1962,6 +1974,7 @@ struct ProjectDetailView: View {
                                     session: BookingWriteSession(organizationId: savingOrganizationId)
                                 )
                                 queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
+                                Feedback.play(result, success: .bookingEdited)
                             }
                         }
                     }
@@ -2016,6 +2029,7 @@ struct ProjectDetailView: View {
                                     session: BookingWriteSession(organizationId: savingOrganizationId)
                                 )
                                 queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
+                                Feedback.play(result, success: .bookingEdited)
                             }
                         }
                     }
@@ -2025,7 +2039,10 @@ struct ProjectDetailView: View {
                 // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
                 onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     bookingEditTarget = nil
-                    Task { await managerScheduleStore.deleteBooking(booking) }
+                    Task {
+                        await managerScheduleStore.deleteBooking(booking)
+                        Feedback.play(managerScheduleStore.deleteOutcome(of: booking), success: .bookingDeleted)
+                    }
                 } : nil
             )
         case .subcontractor(let booking, _, _):

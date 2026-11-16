@@ -1289,6 +1289,7 @@ private extension DailyOverviewView {
                 if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
                     labourDeleteRefusalMessage = message
                 }
+                Feedback.play(bookingStore.deleteOutcome(of: booking), success: .bookingDeleted)
             }
         }
     }
@@ -1364,7 +1365,10 @@ private extension DailyOverviewView {
                 // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
                 onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     bookingEditTarget = nil
-                    Task { await managerScheduleStore.deleteBooking(booking) }
+                    Task {
+                        await managerScheduleStore.deleteBooking(booking)
+                        Feedback.play(managerScheduleStore.deleteOutcome(of: booking), success: .bookingDeleted)
+                    }
                 } : nil
             )
         case .subcontractor(let booking, _, _):
@@ -1446,7 +1450,8 @@ private extension DailyOverviewView {
         ) : []
         leaveGate.runSingle(rows: rows, afterDismiss: true) {
             Task {
-                await bookingStore.updateBooking(updated)
+                let result = await bookingStore.updateBooking(updated)
+                Feedback.play(result, success: .bookingEdited)
             }
         }
     }
@@ -1485,7 +1490,8 @@ private extension DailyOverviewView {
         ) : []
         leaveGate.runSingle(rows: rows, afterDismiss: true) {
             Task {
-                await managerScheduleStore.saveBooking(updated)
+                let result = await managerScheduleStore.saveBooking(updated)
+                Feedback.play(result, success: .bookingEdited)
             }
         }
     }

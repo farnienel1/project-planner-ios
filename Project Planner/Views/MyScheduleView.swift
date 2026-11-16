@@ -710,6 +710,7 @@ fileprivate struct ManagerCustomHoursSheet: View {
                )
            }).first {
             breakWarningMessage = warning
+            Feedback.play(.warningShown)
             return
         }
         onSave(s, e, breakRemoved, overtimeRate)
@@ -844,6 +845,7 @@ struct ManagerScheduleContentView: View {
                 if let message = await bookingStore.deleteBookingReportingRefusal(booking) {
                     labourDeleteRefusalMessage = message
                 }
+                Feedback.play(bookingStore.deleteOutcome(of: booking), success: .bookingDeleted)
             }
         }
     }
@@ -1179,14 +1181,20 @@ struct ManagerScheduleContentView: View {
                         policy: policy
                     ) : []
                     leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                        Task { await managerScheduleStore.saveBooking(updated) }
+                        Task {
+                            let result = await managerScheduleStore.saveBooking(updated)
+                            Feedback.play(result, success: .bookingEdited)
+                        }
                     }
                 },
                 onCancel: { managerBookingEditTarget = nil },
                 // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
                 onDelete: managerScheduleStore.canDeleteBooking(booking) ? {
                     managerBookingEditTarget = nil
-                    Task { await managerScheduleStore.deleteBooking(booking) }
+                    Task {
+                        await managerScheduleStore.deleteBooking(booking)
+                        Feedback.play(managerScheduleStore.deleteOutcome(of: booking), success: .bookingDeleted)
+                    }
                 } : nil
             )
         }
@@ -1228,8 +1236,9 @@ struct ManagerScheduleContentView: View {
                     ) : []
                     leaveGate.runSingle(rows: rows, afterDismiss: true) {
                         Task {
-                            await bookingStore.updateBooking(updated)
+                            let result = await bookingStore.updateBooking(updated)
                             ScheduleChangeNotifier.postBookingStoreDidChange()
+                            Feedback.play(result, success: .bookingEdited)
                         }
                     }
                 },
@@ -1547,12 +1556,19 @@ struct ManagerScheduleContentView: View {
                 }
                 guard !keptDays.isEmpty else { return }
             Task { @MainActor in
+                Feedback.prepare()
+                /// Feedback guide §4: the replaced booking's delete and each day's save, one sound for the action.
+                var results: [BookingSaveResult] = []
                 if let rid = replaceBookingId,
                    let existing = self.managerScheduleStore.managerSiteBookings.first(where: { $0.id == rid }) {
                     await self.managerScheduleStore.deleteBooking(existing)
+                    let deleted = self.managerScheduleStore.deleteOutcome(of: existing)
+                    if case .refused = deleted { results.append(deleted) }
                 }
+                // Each day saves on its own task, started here exactly as before; the sound waits for them all.
+                var saves: [Task<BookingSaveResult, Never>] = []
                 for day in keptDays {
-                    self.saveBooking(
+                    if let save = self.saveBooking(
                         date: day,
                         timeSlot: timeSlot,
                         locationType: locationType,
@@ -1562,8 +1578,15 @@ struct ManagerScheduleContentView: View {
                         workEndTime: workEnd,
                         isBreakRemoved: breakRemoved,
                         overtimeRate: overtimeRate
-                    )
+                    ) {
+                        saves.append(save)
+                    }
                 }
+                for save in saves {
+                    let result = await save.value
+                    results.append(result)
+                }
+                Feedback.play(results: results, success: .bookingSaved)
             }
             }
         }
@@ -1909,7 +1932,10 @@ struct ManagerScheduleContentView: View {
                                     },
                                     // RULEBOOK 1.33.0 §2 `bookingRemoveAction`.
                                     onDelete: bookingStore.canDeleteBooking(b) ? {
-                                        Task { await bookingStore.deleteBooking(b) }
+                                        Task {
+                                            await bookingStore.deleteBooking(b)
+                                            Feedback.play(bookingStore.deleteOutcome(of: b), success: .bookingDeleted)
+                                        }
                                     } : nil,
                                     pendingSyncEntityId: b.id.uuidString,
                                     clashMarker: clashMarkers[b.id.uuidString]
@@ -1945,7 +1971,10 @@ struct ManagerScheduleContentView: View {
             onEdit: { beginEditManagerBooking(b) },
             // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
             onDelete: managerScheduleStore.canDeleteBooking(b) ? {
-                Task { await managerScheduleStore.deleteBooking(b) }
+                Task {
+                    await managerScheduleStore.deleteBooking(b)
+                    Feedback.play(managerScheduleStore.deleteOutcome(of: b), success: .bookingDeleted)
+                }
             } : nil,
             pendingSyncEntityId: b.id.uuidString,
             clashMarker: clashMarker
@@ -2091,6 +2120,8 @@ struct ManagerScheduleContentView: View {
         .padding(.bottom, 12)
     }
 
+    /// Returns the save's task (started at once, as before) so the action plays one feedback sound for every day.
+    @discardableResult
     private func saveBooking(
         date: Date,
         timeSlot: ManagerTimeSlot,
@@ -2101,8 +2132,8 @@ struct ManagerScheduleContentView: View {
         workEndTime: String? = nil,
         isBreakRemoved: Bool = false,
         overtimeRate: Double? = nil
-    ) {
-        guard let uid = firebaseBackend.currentUser?.uid else { return }
+    ) -> Task<BookingSaveResult, Never>? {
+        guard let uid = firebaseBackend.currentUser?.uid else { return nil }
         let b = ManagerSiteBooking(
             userId: uid,
             date: date,
@@ -2119,7 +2150,7 @@ struct ManagerScheduleContentView: View {
                 ? CanonicalBusinessEngine.createOtMultiplierOverride(chosen: overtimeRate, on: date)
                 : nil
         )
-        Task {
+        return Task {
             await managerScheduleStore.saveBooking(b)
         }
     }

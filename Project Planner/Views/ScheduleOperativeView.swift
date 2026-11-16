@@ -1820,6 +1820,7 @@ struct ScheduleOperativeView: View {
     
     private func proceedWithBooking() {
         isBooking = true
+        Feedback.prepare()
         
         Task {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
@@ -1992,6 +1993,8 @@ struct ScheduleOperativeView: View {
                 case .nothingToSave:
                     saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: ScheduleBookingSaveOutcome.nothingToSaveMessage)
                 }
+                // Feedback guide §4: one sound for the whole Confirm, from this save's own outcome.
+                Feedback.play(outcome, success: .bookingSaved)
                 if outcome.clearsSelection {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()

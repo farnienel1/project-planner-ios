@@ -26,6 +26,12 @@ import XCTest
 /// sets a "remaining this year" figure; `inviteRemainingOverride` returns nil (a joiner is pro rata from their start
 /// date, and extra days are an adjustment with a reason). Its hash was recomputed with this test's own extraction.
 /// Every other recorded hash is unchanged.
+///
+/// New baseline (feedback sounds and haptics, docs/design/feedback/feedback-sounds-haptics-guide.md §4, owner decision
+/// 10, 16 Nov — additive, no saved-data change): `createUser()` gains `Feedback.play(...)` lines only — `userInvited`
+/// after the existing success / failure handling, and `actionRefused` after each existing refusal message. The invite,
+/// its fields and every check are unchanged. Its hash was recomputed with this test's own extraction. Every other
+/// recorded hash is unchanged.
 final class AddUserSavedDataGuardTests: XCTestCase {
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -53,7 +59,7 @@ final class AddUserSavedDataGuardTests: XCTestCase {
         ("Project Planner/Views/AddUserView.swift", "private var tradeRequiredAndValid: Bool {", "daefbd43eb0126d1b33bae743904a37098bd1fa98fed61a7027fd4f7a71c3c5c"),
         ("Project Planner/Views/AddUserView.swift", "private var canProceed: Bool {", "f761028506ed7bc29bc0fd97fc2a9c2b601288218e751ce7fb51659aab2d6edb"),
         ("Project Planner/Views/AddUserView.swift", "private var permissionItems: [(title: String, isEnabled: Bool)] {", "5f76ebc97e2930051e69ce0887f282e12163a915c3790fd5e91506a4244fa8de"),
-        ("Project Planner/Views/AddUserView.swift", "private func createUser() {", "2a1793230f0b66215eb5723ed8c27a843ef5fdd3a342ad837e2ef33114b0036d"),
+        ("Project Planner/Views/AddUserView.swift", "private func createUser() {", "f53bdbc8a119a5b62f7884b422b3f66e9789a65c5e16b0bdaa250da12d801df1"),
         ("Project Planner/Views/AddUserView.swift", "private func selectAccountType(_ type: InvitedAccountType) {", "a846baaaebb8e47e6ec8c2bedc84cb80b245c804d8ac41033a4a47324a5b7f46"),
         ("Project Planner/Views/AddUserView.swift", "private func isValidEmail(_ email: String) -> Bool {", "ac5ea654949375615d90976779a1e2f18161b42a663942ca9619b587cb7dd855"),
         ("Project Planner/Views/AddUserView.swift", "private var dayRateBindingForSelectedType: Binding<String> {", "1f7fc10c322c040b92c27ab0caeb97182b6f0a1456cdb6f2a7928f32d8f6cffa"),

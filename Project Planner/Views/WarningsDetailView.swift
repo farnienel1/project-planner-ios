@@ -1066,9 +1066,15 @@ struct WarningsDetailView: View {
         let removedBy = userStore.currentUser?.fullName
             ?? userStore.currentUser?.email
             ?? "An admin"
+        var dismissedAny = false
         for item in warningsToDismiss(warning) {
-            warningsService.dismissWarning(item)
+            if warningsService.dismissWarning(item) { dismissedAny = true }
         }
+        // Feedback guide §4, owner decisions 6 and 11: on this phone's own update, `allWarningsClear` once this
+        // person's Warnings list is empty.
+        Feedback.play(dismissedAny
+            ? FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)
+            : .actionRefused)
         Task {
             await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
         }
@@ -1118,6 +1124,7 @@ struct WarningsDetailView: View {
             // Never rescan while the sheet is open — hide this row and ask Home to refresh after dismiss.
             warningsService.dismissWarning(warning)
             NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+            playClashBookingDeleted(bookingStore.deleteOutcome(of: booking))
         }
     }
 
@@ -1129,6 +1136,7 @@ struct WarningsDetailView: View {
                 await managerScheduleStore.deleteBooking(booking)
                 warningsService.dismissWarning(warning)
                 NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+                playClashBookingDeleted(managerScheduleStore.deleteOutcome(of: booking))
             }
             return
         }
@@ -1137,7 +1145,18 @@ struct WarningsDetailView: View {
                 await bookingStore.deleteBooking(opBooking)
                 warningsService.dismissWarning(warning)
                 NotificationCenter.default.post(name: .warningsNeedsHomeRefresh, object: nil)
+                playClashBookingDeleted(bookingStore.deleteOutcome(of: opBooking))
             }
+        }
+    }
+
+    /// Feedback guide §4 for a double-booking row's remove: the delete's own outcome; when this person's Warnings list is now
+    /// empty, `allWarningsClear` (owner decision 11).
+    private func playClashBookingDeleted(_ result: BookingSaveResult) {
+        if result == .saved, warningsService.activeWarnings.isEmpty {
+            Feedback.play(.allWarningsClear)
+        } else {
+            Feedback.play(result, success: .bookingDeleted)
         }
     }
 
@@ -1152,6 +1171,10 @@ struct WarningsDetailView: View {
         WarningResolutionStore.shared.setActor(userStore.displayUser)
         if !warningsService.approveWarning(warning) {
             refreshMessage = "Only admins and managers can approve clashes."
+            Feedback.play(.actionRefused)
+        } else {
+            // Feedback guide §4, owner decision 6: the phone's own immediate update.
+            Feedback.play(FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count))
         }
     }
 

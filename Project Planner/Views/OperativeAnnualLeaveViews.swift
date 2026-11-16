@@ -334,7 +334,11 @@ private struct OperativeAnnualLeaveApprovedListView: View {
                         onYes: {
                             guard let booking = bookingPendingRemoval else { return }
                             bookingPendingRemoval = nil
-                            Task { await holidayStore.deleteBooking(booking) }
+                            Task {
+                                let result = await holidayStore.deleteBooking(booking)
+                                // Owner decision 5: removing leave plays "removed".
+                                Feedback.play(result, success: .leaveDeclined)
+                            }
                         },
                         onNo: { bookingPendingRemoval = nil }
                     )
@@ -435,7 +439,9 @@ private struct OperativeAnnualLeaveRequestsListView: View {
         guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
-                await holidayStore.deleteBooking(request)
+                let removed = await holidayStore.deleteBooking(request)
+                // Owner decision 5: accepting a cancellation removes the leave ("removed").
+                Feedback.play(removed, success: .leaveDeclined)
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
@@ -456,7 +462,8 @@ private struct OperativeAnnualLeaveRequestsListView: View {
                 )
                 return
             } else {
-                await holidayStore.approveBooking(request, approvedByUserId: uid)
+                let result = await holidayStore.approveBooking(request, approvedByUserId: uid)
+                Feedback.play(result, success: .leaveApproved)
             }
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: true, decidedByName: approverName)
@@ -478,7 +485,11 @@ private struct OperativeAnnualLeaveRequestsListView: View {
             // Refuse the cancellation (§9): the leave stays approved; the requester is told
             // (`holidayDecisionRecipients`) and the other line managers (`lineManagerPeerRecipients`).
             Task {
-                guard await holidayStore.refuseCancellation(request) else { return }
+                guard await holidayStore.refuseCancellation(request) else {
+                    Feedback.play(.actionRefused)
+                    return
+                }
+                Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(request), success: .leaveDeclined))
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancellationRefused(
@@ -500,7 +511,8 @@ private struct OperativeAnnualLeaveRequestsListView: View {
             return
         }
         Task {
-            await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            let result = await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            Feedback.play(result, success: .leaveDeclined)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: false, decidedByName: approverName)
             await notifyAnnualLeavePeerManagers(
@@ -1539,6 +1551,7 @@ struct OperativeAnnualLeaveCalendarView: View {
             guard let booking = created.first else {
                 errorMessage = "Annual leave could not be booked."
                 showError = true
+                Feedback.play(.actionRefused)
                 return
             }
 
@@ -1559,9 +1572,12 @@ struct OperativeAnnualLeaveCalendarView: View {
             selectedDay = nil
             successMessage = "Annual leave booked."
             showSuccess = true
+            // Owner decision 5: approved leave booked for someone plays leaveBooked.
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveBooked))
         } catch {
             errorMessage = error.localizedDescription
             showError = true
+            Feedback.play(.actionRefused)
         }
     }
 
@@ -1601,9 +1617,12 @@ struct OperativeAnnualLeaveCalendarView: View {
             selectedDay = nil
             successMessage = "Annual leave booking updated."
             showSuccess = true
+            // Owner decision 5: a leave edit plays "saved".
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveBooked))
         } catch {
             errorMessage = error.localizedDescription
             showError = true
+            Feedback.play(.actionRefused)
         }
     }
 
@@ -1612,7 +1631,9 @@ struct OperativeAnnualLeaveCalendarView: View {
         guard canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
-        await holidayStore.deleteBooking(booking)
+        let removed = await holidayStore.deleteBooking(booking)
+        // Owner decision 5: removing leave plays "removed".
+        Feedback.play(removed, success: .leaveDeclined)
         if let err = holidayStore.errorMessage, !err.isEmpty {
             errorMessage = err
             showError = true
@@ -1661,7 +1682,8 @@ struct OperativeAnnualLeaveCalendarView: View {
               canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
-        await holidayStore.approveBooking(booking, approvedByUserId: uid)
+        let result = await holidayStore.approveBooking(booking, approvedByUserId: uid)
+        Feedback.play(result, success: .leaveApproved)
         let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
         await notifyDecision(to: booking, approved: true, decidedByName: approverName)
         await notifyAnnualLeavePeerManagers(
@@ -1685,7 +1707,8 @@ struct OperativeAnnualLeaveCalendarView: View {
               canDecide(booking) else { return }
         isSaving = true
         defer { isSaving = false }
-        await holidayStore.rejectBooking(booking, rejectedByUserId: uid)
+        let result = await holidayStore.rejectBooking(booking, rejectedByUserId: uid)
+        Feedback.play(result, success: .leaveDeclined)
         let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
         await notifyDecision(to: booking, approved: false, decidedByName: approverName)
         await notifyAnnualLeavePeerManagers(

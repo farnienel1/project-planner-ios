@@ -3393,12 +3393,14 @@ private struct MyTimesheetView: View {
         // Nothing is signed (or frozen) until pay can be worked out from loaded inputs.
         if let blocked = payInputsBlockMessage {
             saveErrorMessage = blocked
+            Feedback.play(.actionRefused)
             return
         }
         // RULEBOOK 1.47.0 §8: what the person signs is recorded only once every input has loaded (the roster and the
         // operatives list too).
         guard RulebookRosterSnapshot.hasLoaded, operativesLoaded else {
             saveErrorMessage = TimesheetDraftStore.rosterNotLoadedMessage
+            Feedback.play(.actionRefused)
             return
         }
         let signedByName = userStore.displayUser?.fullName.isEmpty == false
@@ -3425,12 +3427,14 @@ private struct MyTimesheetView: View {
         ) else {
             draft = previous
             saveErrorMessage = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+            Feedback.play(.actionRefused)
             return
         }
         if let current = userStore.displayUser {
             TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &draft, user: current)
         }
-        saveDraft(rebuildSnapshot: rebuild)
+        let signSave = saveDraft(rebuildSnapshot: rebuild)
+        playTimesheetFeedback(signSave, success: .timesheetSigned)
         guard let current = userStore.displayUser else { return }
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
@@ -3488,10 +3492,36 @@ private struct MyTimesheetView: View {
         }
     }
 
+    /// Feedback guide §4 for one owner save of this sheet: waits for the cloud save the action started (it does not
+    /// change when or how it runs) and plays `success`, or `actionRefused` when it was refused. A save that never
+    /// started because it was refused (`saveDraft` returned nil with an organisation open) plays the refusal.
+    private func playTimesheetFeedback(_ save: Task<String?, Never>?, success: FeedbackEvent) {
+        guard let save else {
+            if firebaseBackend.currentOrganization?.firestoreDocumentId != nil {
+                Feedback.play(.actionRefused)
+            }
+            return
+        }
+        Task {
+            let message = await save.value
+            Feedback.play(FeedbackDecision.event(refusal: message, success: success))
+        }
+    }
+
     /// Applies an entry change, saves the sheet and waits for the save. On a refusal the sheet goes back to how it was
-    /// and the message is returned (the entry sheet then discards any file it just uploaded).
+    /// and the message is returned (the entry sheet then discards any file it just uploaded). Plays the feedback for
+    /// the save (guide §4 `timesheetSaved`, or `actionRefused`).
     private func applyEntryChange(
         clearingSignatures: Bool = false,
+        _ change: (inout TimesheetDraft) -> Void
+    ) async -> String? {
+        let message = await applyEntryChangeSaving(clearingSignatures: clearingSignatures, change)
+        Feedback.play(FeedbackDecision.event(refusal: message, success: .timesheetSaved))
+        return message
+    }
+
+    private func applyEntryChangeSaving(
+        clearingSignatures: Bool,
         _ change: (inout TimesheetDraft) -> Void
     ) async -> String? {
         guard !periodLoadFailed else { return TimesheetDraftStore.periodReadFailedMessage }
@@ -5128,7 +5158,8 @@ private struct OperativeTimesheetReviewView: View {
                 showingManagerSignSheet: $showingManagerSignSheet,
                 userStore: userStore,
                 notificationService: notificationService,
-                onSaveDraft: saveDraft,
+                onSaveDraft: { saveDraft() },
+                onCounterSignSave: { saveDraft() },
                 counterSignAllowed: counterSignAllowedNow
             ))
     }
@@ -5663,11 +5694,14 @@ private struct OperativeTimesheetReviewView: View {
         .padding(.vertical, 2)
     }
 
-    private func saveDraft() {
+    /// Returns the cloud save's task (started here, as before) so the counter-signature can play its feedback once the
+    /// save has answered (guide §4). Nil when nothing was sent.
+    @discardableResult
+    private func saveDraft() -> Task<String?, Never>? {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
-            return
+            return nil
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
@@ -5702,18 +5736,18 @@ private struct OperativeTimesheetReviewView: View {
         )
         if let refusal {
             saveErrorMessage = refusal
-            return
+            return nil
         }
         }
         rebuildSnapshotOnSave = false
         TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return nil }
         let snapshot = draft
         let writer = userStore.displayUser
         let subject = operative
-        Task {
+        return Task {
             // Owner-or-reviewer partial write, plus changed `extraEntryReviews` (`timesheetEntryReviewWriteFields`).
-            saveErrorMessage = await TimesheetDraftStore.saveToCloud(
+            let message = await TimesheetDraftStore.saveToCloud(
                 snapshot,
                 userId: subject.id,
                 weekStart: week.start,
@@ -5723,6 +5757,8 @@ private struct OperativeTimesheetReviewView: View {
                 writer: writer,
                 subject: subject
             )
+            saveErrorMessage = message
+            return message
         }
     }
 
@@ -5860,6 +5896,9 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     let userStore: UserStore
     let notificationService: NotificationService
     let onSaveDraft: () -> Void
+    /// The same save as `onSaveDraft`, returning its task so the counter-signature plays its feedback once the save
+    /// has answered (feedback guide §4 `timesheetSigned`).
+    let onCounterSignSave: () -> Task<String?, Never>?
     /// RULEBOOK 1.47.0 §8: whether the counter-signature may be saved now (the review screen's check; it shows why not).
     let counterSignAllowed: () -> Bool
 
@@ -6028,6 +6067,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 // before the booking-change check could run, nor a sheet waiting for the person.
                 guard counterSignAllowed() else {
                     showingManagerSignSheet = false
+                    Feedback.play(.actionRefused)
                     return
                 }
                 guard TimesheetDraftStore.applySignOff(
@@ -6038,7 +6078,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     signedByUserId: userStore.displayUser?.id,
                     signatureImageBase64: signatureImageData.base64EncodedString()
                 ) else { return }
-                onSaveDraft()
+                let counterSignSave = onCounterSignSave()
                 let signer = draft.managerSignedByName ?? "Line manager"
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
                 Task {
@@ -6056,6 +6096,15 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     )
                 }
                 showingManagerSignSheet = false
+                // Feedback guide §4: once the counter-signature's save has answered (it is not delayed by this).
+                if let counterSignSave {
+                    Task {
+                        let message = await counterSignSave.value
+                        Feedback.play(FeedbackDecision.event(refusal: message, success: .timesheetSigned))
+                    }
+                } else {
+                    Feedback.play(.actionRefused)
+                }
             }
         }
         .presentationDetents([.large])

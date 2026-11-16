@@ -472,7 +472,9 @@ struct TasksDetailView: View {
         Task {
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             if request.cancellationRequestedAt != nil {
-                await holidayStore.deleteBooking(request)
+                let removed = await holidayStore.deleteBooking(request)
+                // Owner decision 5: accepting a cancellation removes the leave ("removed").
+                Feedback.play(removed, success: .leaveDeclined)
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
                         userId: ownerId,
@@ -483,7 +485,8 @@ struct TasksDetailView: View {
                 await notificationService.loadNotifications()
                 return
             }
-            await holidayStore.approveBooking(request, approvedByUserId: uid)
+            let result = await holidayStore.approveBooking(request, approvedByUserId: uid)
+            Feedback.play(result, success: .leaveApproved)
             await notifyDecision(to: request, approved: true, decidedByName: name)
             await notificationService.loadNotifications()
         }
@@ -494,7 +497,11 @@ struct TasksDetailView: View {
         Task {
             if request.cancellationRequestedAt != nil {
                 // Refuse the cancellation: the leave stays approved (`holidayDecisionRecipients` is told).
-                guard await holidayStore.refuseCancellation(request) else { return }
+                guard await holidayStore.refuseCancellation(request) else {
+                    Feedback.play(.actionRefused)
+                    return
+                }
+                Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(request), success: .leaveDeclined))
                 if let ownerId = request.userId {
                     let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                     await notificationService.notifyAnnualLeaveCancellationRefused(
@@ -506,7 +513,8 @@ struct TasksDetailView: View {
                 await notificationService.loadNotifications()
                 return
             }
-            await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            let result = await holidayStore.rejectBooking(request, rejectedByUserId: uid)
+            Feedback.play(result, success: .leaveDeclined)
             let name = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             await notifyDecision(to: request, approved: false, decidedByName: name)
             await notificationService.loadNotifications()

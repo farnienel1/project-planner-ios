@@ -1158,15 +1158,20 @@ struct OvertimeLinesView: View {
         reports = (try? await firebaseBackend.loadOvertimeReports(userId: subjectId)) ?? []
     }
 
-    private func run(_ work: () async throws -> Void) async {
+    /// Returns false when the work threw (its message is shown), for the feedback sound only.
+    @discardableResult
+    private func run(_ work: () async throws -> Void) async -> Bool {
         busy = true
         message = nil
+        var succeeded = true
         do {
             try await work()
         } catch {
             message = error.localizedDescription
+            succeeded = false
         }
         busy = false
+        return succeeded
     }
 
     /// The person's red X: `overtimeStrikeOutcome` — trim, delete after `OVERTIME_DELETE_WARNING` (1.33.0), or not allowed.
@@ -1265,7 +1270,8 @@ struct OvertimeLinesView: View {
             message = fallback ?? CanonicalBusinessEngine.overtimeText("OVERTIME_NO_LINES_MESSAGE", fallback: "There is no overtime in this range.")
             return
         }
-        await run {
+        Feedback.prepare()
+        let sent = await run {
             guard let requestId = try await firebaseBackend.sendOvertimeRequest(
                 requester: subject,
                 rangeStart: range.start,
@@ -1286,7 +1292,10 @@ struct OvertimeLinesView: View {
                 rangeEnd: range.end
             )
             message = "Sent for approval."
+            // Owner decision 2: "Send for approval" plays the `sent` sound (the guide's booking request event).
+            Feedback.play(.bookingRequested)
         }
+        if !sent { Feedback.play(.actionRefused) }
     }
 
     /// Return overtime (1.33.0, one transaction from `overtimeReturnWrites`), then "… has returned your overtime request".
@@ -1297,7 +1306,8 @@ struct OvertimeLinesView: View {
         requesterIds: [String]
     ) async {
         guard let viewer = viewerUser else { return }
-        await run {
+        Feedback.prepare()
+        let returned = await run {
             let result = try await firebaseBackend.returnOvertimeRequest(
                 requestId: request.id,
                 decisions: decisions,
@@ -1314,12 +1324,14 @@ struct OvertimeLinesView: View {
             // RULEBOOK 1.33.0 `overtimeReturnMessage`: "Returned 5 lines. …".
             message = result.message
         }
+        // Owner decision 2: the Return plays the `approved` sound (the guide's booking approval event).
+        Feedback.play(returned ? .bookingApproved : .actionRefused)
     }
 
     /// Generate overtime report: the saved copy (`overtimeReportSnapshot`), then the PDF through the share sheet.
     private func generateReport(lines: [OvertimeLine]) async {
         guard let subject else { return }
-        await run {
+        let generated = await run {
             guard let report = try await firebaseBackend.saveOvertimeReport(
                 person: subject,
                 companyName: firebaseBackend.currentOrganization?.name ?? "",
@@ -1331,7 +1343,10 @@ struct OvertimeLinesView: View {
             let logo = await OvertimeReportPDF.loadLogo(firebaseBackend.currentOrganization?.companyLogoURL)
             shareURL = OvertimeReportPDF.makeFile(report: report, logo: logo, users: userStore.organizationUsers)
             message = "Report saved. Send it to payroll yourself."
+            // Guide §4 `timesheetSaved`: the OT report is saved.
+            Feedback.play(.timesheetSaved)
         }
+        if !generated { Feedback.play(.actionRefused) }
     }
 }
 

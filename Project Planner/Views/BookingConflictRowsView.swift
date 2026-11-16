@@ -332,10 +332,14 @@ final class BookingConflictGate: ObservableObject {
         if afterDismiss {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 450_000_000)
-                self?.pending = next
+                guard let self else { return }
+                self.pending = next
+                // Feedback guide §4 `warningShown`: the double-booking and leave list stops this save (haptic only).
+                Feedback.play(.warningShown)
             }
         } else {
             pending = next
+            Feedback.play(.warningShown)
         }
     }
 

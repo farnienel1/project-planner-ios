@@ -649,8 +649,11 @@ struct PayeClaimsRangeView: View {
             try await firebaseBackend.savePayeClaimReviews(writes)
             decisions = [:]
             notice = message
+            // Owner decision 2: the price work / expense review Approve plays the `approved` sound.
+            Feedback.play(.bookingApproved)
         } catch {
             notice = error.localizedDescription.isEmpty ? "The review could not be saved." : error.localizedDescription
+            Feedback.play(.actionRefused)
         }
     }
 
@@ -687,8 +690,11 @@ struct PayeClaimsRangeView: View {
             }
             shareURL = made.url
             notice = PayeClaimReportPDF.notice(made)
+            // Guide §4 `timesheetSaved`: the report is saved.
+            Feedback.play(.timesheetSaved)
         } catch {
             notice = error.localizedDescription
+            Feedback.play(.actionRefused)
         }
     }
 }
@@ -1121,6 +1127,7 @@ struct AddPayeClaimSheet: View {
         } catch {
             saving = nil
             self.error = error.localizedDescription
+            Feedback.play(.actionRefused)
             return
         }
         do {
@@ -1149,11 +1156,14 @@ struct AddPayeClaimSheet: View {
             }
             saving = nil
             dismiss()
+            // Guide §4 `timesheetSaved`: a price work or expense item is saved.
+            Feedback.play(.timesheetSaved)
         } catch {
             // 1.30.0: a refused or failed save leaves no copy behind where line managers and admins could read it.
             await firebaseBackend.discardPayeClaimEvidence(uploaded)
             saving = nil
             self.error = error.localizedDescription
+            Feedback.play(.actionRefused)
         }
     }
 }

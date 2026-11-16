@@ -193,10 +193,29 @@ private struct HSCardShadow: ViewModifier {
 // MARK: - Haptics
 
 enum HSHaptic {
+    /// Kept between calls so `prepareOutcome()` readies the same generators the outcome haptics fire
+    /// (feedback guide §3). The haptics themselves are unchanged.
+    private static let notification = UINotificationFeedbackGenerator()
+    private static let lightImpact = UIImpactFeedbackGenerator(style: .light)
+    private static let rigidImpact = UIImpactFeedbackGenerator(style: .rigid)
+
     static func tap()     { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
     static func select()  { UISelectionFeedbackGenerator().selectionChanged() }
-    static func success() { UINotificationFeedbackGenerator().notificationOccurred(.success) }
-    static func warn()    { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+    static func success() { notification.notificationOccurred(.success) }
+    static func warn()    { notification.notificationOccurred(.warning) }
+    /// Feedback guide §3 `sent` (also `queued`): something sent off for someone else, or saved for sync.
+    static func sent()    { lightImpact.impactOccurred() }
+    /// Feedback guide §3 `removed`: neutral, not negative.
+    static func removed() { rigidImpact.impactOccurred(intensity: 0.6) }
+    /// Feedback guide §3 `error`: refused or failed.
+    static func error()   { notification.notificationOccurred(.error) }
+
+    /// Readies the outcome haptics when a confirming button is pressed (feedback guide §3).
+    static func prepareOutcome() {
+        notification.prepare()
+        lightImpact.prepare()
+        rigidImpact.prepare()
+    }
 }
 
 // MARK: - Compatibility wrappers (existing H&S call sites)

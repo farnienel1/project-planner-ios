@@ -432,16 +432,21 @@ class BookingStore: ObservableObject {
         return nil
     }
 
-    func addBooking(_ booking: Booking) async {
+    /// Returns this booking's own outcome (saved, queued as Pending sync, or refused) for the feedback sound (guide
+    /// §4); what is written is unchanged.
+    @discardableResult
+    func addBooking(_ booking: Booking) async -> BookingSaveResult {
         // RULEBOOK §1: stored at organisation-zone midnight of its day (`BookingDay`), whatever picker made it.
         var booking = booking
         booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let refusal = writeRefusal([booking]) {
             errorMessage = refusal
-            return
+            return .refused(refusal)
         }
         bookings.append(booking)
-        await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
+        let results = await saveData(writes: [BookingWrite(booking: booking, changedFields: nil)])
+        // A booking the save never reported on was not written (as the Scheduling wizard reads it).
+        return results[booking.id] ?? .refused("This booking could not be saved.")
     }
 
     /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov): Replace — the new booking and each replaced booking's delete with its
@@ -531,8 +536,10 @@ class BookingStore: ObservableObject {
         )
     }
     
-    /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes).
-    func updateBooking(_ booking: Booking) async {
+    /// Saves only the fields that changed against the copy on this device (RULEBOOK §1 partial writes). Returns this
+    /// edit's own outcome for the feedback sound (guide §4); what is written is unchanged.
+    @discardableResult
+    func updateBooking(_ booking: Booking) async -> BookingSaveResult {
         await updateBookingReturningResult(booking)
     }
 
@@ -715,6 +722,17 @@ class BookingStore: ObservableObject {
         return errorMessage ?? "This booking could not be deleted."
     }
 
+    /// Feedback (guide §4), read right after `deleteBooking` from the same state the screens show — writes nothing:
+    /// still on this phone → refused (as `deleteBookingReportingRefusal` reads it); gone but Pending sync (queued in the
+    /// outbox, or held by Firestore after its wait) → queued; gone → saved.
+    func deleteOutcome(of booking: Booking) -> BookingSaveResult {
+        BookingDeleteOutcome.decide(
+            stillOnPhone: bookings.contains(where: { $0.id == booking.id }),
+            pendingSync: isPendingSync(booking),
+            refusal: errorMessage ?? "This booking could not be deleted."
+        )
+    }
+
     /// RULEBOOK 1.33.0 §2 (owner decision 4 Nov "Offline delete on iOS"): deletes a labour booking with its tombstone.
     /// Offline (or when the connection drops) the delete is queued with `bookingDeleteFingerprint` of this device's
     /// copy and shows "Pending sync"; a booking created offline and deleted before it synced sends nothing. A day on a
@@ -844,6 +862,8 @@ class BookingStore: ObservableObject {
     
     // MARK: - Booking Creation
     
+    /// Returns the booking's own outcome (`addBooking`) for the feedback sound; what is written is unchanged.
+    @discardableResult
     func bookOperative(
         _ operative: Operative,
         on date: Date,
@@ -856,7 +876,7 @@ class BookingStore: ObservableObject {
         isBreakRemoved: Bool = false,
         otMultiplierOverride: Double? = nil,
         bookingGroupId: String? = nil
-    ) async {
+    ) async -> BookingSaveResult {
         // Update updatedAt when creating
         var updatedBooking = Booking(
             operativeId: operative.id,
@@ -873,7 +893,7 @@ class BookingStore: ObservableObject {
         )
         updatedBooking.updatedAt = Date()
         
-        await addBooking(updatedBooking)
+        return await addBooking(updatedBooking)
     }
     
     func bookOperatives(
@@ -1418,6 +1438,14 @@ nonisolated enum BookingSaveResult: Equatable {
     var keepsBooking: Bool {
         if case .refused = self { return false }
         return true
+    }
+}
+
+/// Feedback (guide §4): what a delete did, from what the store shows afterwards (`deleteOutcome(of:)`). Pure.
+enum BookingDeleteOutcome {
+    static func decide(stillOnPhone: Bool, pendingSync: Bool, refusal: String) -> BookingSaveResult {
+        if stillOnPhone { return .refused(refusal) }
+        return pendingSync ? .queued(BookingStore.pendingSyncMessage) : .saved
     }
 }
 
