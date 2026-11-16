@@ -3329,18 +3329,6 @@ class FirebaseBackend: ObservableObject {
         return downloadURL.absoluteString
     }
 
-    /// RULEBOOK 1.54.1 §16 / §24 (web): a timesheet export is stored as `timesheetExports/{uploader uid}_{seconds}_{file}`
-    /// — the storage rules let a non-admin create (and read back) only their own. The packed script here is 1.54.0,
-    /// whose `timesheetExportStoragePath` has no uploader yet, so its path (organisation, folder, name) gets the uid
-    /// put in front of the file name. Remove once iOS syncs 1.54.1 and calls the four-argument rule.
-    static func timesheetExportPathWithUploader(_ path: String, uploaderUid: String) -> String? {
-        let uid = uploaderUid.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !uid.isEmpty, let slash = path.lastIndex(of: "/") else { return nil }
-        let name = path[path.index(after: slash)...]
-        if name.hasPrefix("\(uid)_") { return path }
-        return String(path[...slash]) + "\(uid)_" + String(name)
-    }
-
     func uploadTimesheetExportPDF(_ data: Data, fileName: String, organizationId: String) async throws -> String {
         if let message = StorageUploadPolicy.timesheetRefusal(data: data, fileName: fileName) {
             let oversize = data.count > StorageUploadPolicy.standardMaxBytes
@@ -3350,13 +3338,15 @@ class FirebaseBackend: ObservableObject {
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: "\\", with: "-")
         let stamp = Int(Date().timeIntervalSince1970)
+        // RULEBOOK 1.54.1 §16 / §24: `timesheetExportStoragePath` with the exporter's uid →
+        // `timesheetExports/{uid}_{seconds}_{file}`, the only name the Storage rules let a non-admin create and read.
         guard let uid = currentUser?.uid ?? Auth.auth().currentUser?.uid,
-              let rulebookPath = CanonicalBusinessEngine.timesheetExportStoragePath(
+              let path = CanonicalBusinessEngine.timesheetExportStoragePath(
                 organizationId: organizationId,
                 fileName: sanitized,
-                stampSeconds: stamp
-              ),
-              let path = Self.timesheetExportPathWithUploader(rulebookPath, uploaderUid: uid) else {
+                stampSeconds: stamp,
+                uploaderUid: uid
+              ) else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not store the timesheet export."])
         }
         let storageRef = storage.reference().child(path)
@@ -6997,6 +6987,19 @@ class FirebaseBackend: ObservableObject {
 #endif
     }
     
+    /// RULEBOOK 1.54.1 §13 (hand-off): every inbox row a person causes carries `actorUserId` = the signed-in uid,
+    /// whether or not the caller passed it; a scheduled type nobody caused (`SCHEDULED_NOTIFICATION_TYPES`:
+    /// `timesheet_submission_reminder`, `deadline_reminder`, `deadline_due`) never carries one.
+    static func notificationActorUserId(type: String, passed: String?, signedInUid: String?) -> String? {
+        let scheduled = CanonicalBusinessEngine.constant("SCHEDULED_NOTIFICATION_TYPES", as: [String].self)
+            ?? ["deadline_reminder", "deadline_due", "timesheet_submission_reminder"]
+        if scheduled.contains(type.trimmingCharacters(in: .whitespacesAndNewlines)) { return nil }
+        let given = passed?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !given.isEmpty { return given }
+        let uid = signedInUid?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return uid.isEmpty ? nil : uid
+    }
+
     func saveNotification(
         _ notification: AppNotification,
         organizationId: String,
@@ -7028,7 +7031,11 @@ class FirebaseBackend: ObservableObject {
             message: notification.message,
             detail: notification.detail,
             userId: notification.userId,
-            actorUserId: actorUserId,
+            actorUserId: Self.notificationActorUserId(
+                type: notification.typeText,
+                passed: actorUserId,
+                signedInUid: currentUser?.uid ?? Auth.auth().currentUser?.uid
+            ),
             relatedId: Self.notificationRelatedId(for: notification),
             requiresPermission: notification.requiresPermission,
             deepLinkUserId: notification.deepLinkUserId,

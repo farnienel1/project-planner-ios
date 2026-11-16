@@ -467,10 +467,22 @@ final class IOSScanFixesTests: XCTestCase {
     func testTimesheetExportGoesToTheSignInEmailAndIsStoredUnderTheUploader() {
         XCTAssertEqual(TimesheetExportRecipient.email(authEmail: " me@sign.in ", profileEmail: "old@profile.test"), "me@sign.in")
         XCTAssertEqual(TimesheetExportRecipient.email(authEmail: nil, profileEmail: " old@profile.test "), "old@profile.test")
-        let path = CanonicalBusinessEngine.timesheetExportStoragePath(organizationId: "ORG-1", fileName: "Ada timesheet.pdf", stampSeconds: 1_800_000_000)
-        let stored = FirebaseBackend.timesheetExportPathWithUploader(path ?? "", uploaderUid: "uid123")
+        let stored = CanonicalBusinessEngine.timesheetExportStoragePath(
+            organizationId: "ORG-1", fileName: "Ada timesheet.pdf", stampSeconds: 1_800_000_000, uploaderUid: "uid123"
+        )
         XCTAssertEqual(stored, "organizations/ORG-1/timesheetExports/uid123_1800000000_Ada_timesheet.pdf")
-        XCTAssertEqual(FirebaseBackend.timesheetExportPathWithUploader(stored ?? "", uploaderUid: "uid123"), stored, "never twice")
-        XCTAssertNil(FirebaseBackend.timesheetExportPathWithUploader("organizations/ORG-1/timesheetExports/1_a.pdf", uploaderUid: " "))
+        let body = try? functionBody("uploadTimesheetExportPDF", in: (try? source("Project Planner/FirebaseBackend.swift")) ?? "")
+        XCTAssertTrue(body?.contains("uploaderUid: uid") == true)
+        XCTAssertFalse((try? source("Project Planner/FirebaseBackend.swift"))?.contains("timesheetExportPathWithUploader") ?? true, "the stopgap is gone")
+    }
+
+    /// Rulebook 1.54.1 hand-off: every row a person causes carries the actor; scheduled rows never do.
+    func testNotificationsCarryTheActorExceptScheduledOnes() {
+        XCTAssertEqual(FirebaseBackend.notificationActorUserId(type: "task_created", passed: nil, signedInUid: "uid-1"), "uid-1")
+        XCTAssertEqual(FirebaseBackend.notificationActorUserId(type: "task_created", passed: "uid-2", signedInUid: "uid-1"), "uid-2")
+        for type in ["timesheet_submission_reminder", "deadline_reminder", "deadline_due"] {
+            XCTAssertNil(FirebaseBackend.notificationActorUserId(type: type, passed: "uid-1", signedInUid: "uid-1"), type)
+        }
+        XCTAssertNil(FirebaseBackend.notificationActorUserId(type: "task_created", passed: nil, signedInUid: nil))
     }
 }
