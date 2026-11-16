@@ -461,4 +461,16 @@ final class IOSScanFixesTests: XCTestCase {
         XCTAssertFalse(message.contains("Connect to the internet"))
         XCTAssertTrue(MaterialRequestSendRetry.isTimeout(MaterialRequestEmailError.timedOut))
     }
+
+    /// Web #334 / rulebook 1.54.1: the export email goes to the sign-in email, and the backup is stored under the
+    /// uploader's uid so a non-admin's upload is not refused.
+    func testTimesheetExportGoesToTheSignInEmailAndIsStoredUnderTheUploader() {
+        XCTAssertEqual(TimesheetExportRecipient.email(authEmail: " me@sign.in ", profileEmail: "old@profile.test"), "me@sign.in")
+        XCTAssertEqual(TimesheetExportRecipient.email(authEmail: nil, profileEmail: " old@profile.test "), "old@profile.test")
+        let path = CanonicalBusinessEngine.timesheetExportStoragePath(organizationId: "ORG-1", fileName: "Ada timesheet.pdf", stampSeconds: 1_800_000_000)
+        let stored = FirebaseBackend.timesheetExportPathWithUploader(path ?? "", uploaderUid: "uid123")
+        XCTAssertEqual(stored, "organizations/ORG-1/timesheetExports/uid123_1800000000_Ada_timesheet.pdf")
+        XCTAssertEqual(FirebaseBackend.timesheetExportPathWithUploader(stored ?? "", uploaderUid: "uid123"), stored, "never twice")
+        XCTAssertNil(FirebaseBackend.timesheetExportPathWithUploader("organizations/ORG-1/timesheetExports/1_a.pdf", uploaderUid: " "))
+    }
 }

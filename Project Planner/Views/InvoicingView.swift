@@ -4775,7 +4775,12 @@ struct OperativeTimesheetsView: View {
             exportMessage = "Failed: no signed-in manager/admin to receive the export email."
             return
         }
-        let recipientEmail = exporter.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The email function's `timesheet_export` sends only to the caller's own sign-in (ID token) email (web #334):
+        // the signed-in Auth email, else the users-document copy.
+        let recipientEmail = TimesheetExportRecipient.email(
+            authEmail: Auth.auth().currentUser?.email,
+            profileEmail: exporter.email
+        )
 
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default

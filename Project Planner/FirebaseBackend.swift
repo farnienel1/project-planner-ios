@@ -3329,6 +3329,18 @@ class FirebaseBackend: ObservableObject {
         return downloadURL.absoluteString
     }
 
+    /// RULEBOOK 1.54.1 §16 / §24 (web): a timesheet export is stored as `timesheetExports/{uploader uid}_{seconds}_{file}`
+    /// — the storage rules let a non-admin create (and read back) only their own. The packed script here is 1.54.0,
+    /// whose `timesheetExportStoragePath` has no uploader yet, so its path (organisation, folder, name) gets the uid
+    /// put in front of the file name. Remove once iOS syncs 1.54.1 and calls the four-argument rule.
+    static func timesheetExportPathWithUploader(_ path: String, uploaderUid: String) -> String? {
+        let uid = uploaderUid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !uid.isEmpty, let slash = path.lastIndex(of: "/") else { return nil }
+        let name = path[path.index(after: slash)...]
+        if name.hasPrefix("\(uid)_") { return path }
+        return String(path[...slash]) + "\(uid)_" + String(name)
+    }
+
     func uploadTimesheetExportPDF(_ data: Data, fileName: String, organizationId: String) async throws -> String {
         if let message = StorageUploadPolicy.timesheetRefusal(data: data, fileName: fileName) {
             let oversize = data.count > StorageUploadPolicy.standardMaxBytes
@@ -3338,11 +3350,13 @@ class FirebaseBackend: ObservableObject {
             .replacingOccurrences(of: "/", with: "-")
             .replacingOccurrences(of: "\\", with: "-")
         let stamp = Int(Date().timeIntervalSince1970)
-        guard let path = CanonicalBusinessEngine.timesheetExportStoragePath(
-            organizationId: organizationId,
-            fileName: sanitized,
-            stampSeconds: stamp
-        ) else {
+        guard let uid = currentUser?.uid ?? Auth.auth().currentUser?.uid,
+              let rulebookPath = CanonicalBusinessEngine.timesheetExportStoragePath(
+                organizationId: organizationId,
+                fileName: sanitized,
+                stampSeconds: stamp
+              ),
+              let path = Self.timesheetExportPathWithUploader(rulebookPath, uploaderUid: uid) else {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Could not store the timesheet export."])
         }
         let storageRef = storage.reference().child(path)

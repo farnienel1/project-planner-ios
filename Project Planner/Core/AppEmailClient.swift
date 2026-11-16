@@ -161,3 +161,12 @@ enum AppEmailClient {
         }
     }
 }
+
+/// Who a timesheet export email goes to: the signed-in person's own sign-in email (the email function's
+/// `timesheet_export` sends only to the caller's ID-token email, web #334), else the users-document copy.
+enum TimesheetExportRecipient {
+    static func email(authEmail: String?, profileEmail: String) -> String {
+        let auth = authEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return auth.isEmpty ? profileEmail.trimmingCharacters(in: .whitespacesAndNewlines) : auth
+    }
+}
