@@ -237,10 +237,9 @@ extension CanonicalBusinessEngine {
         if let storedSheet, let sheetJSON = timesheetJSONSafe(storedSheet) {
             guard let parsed = callJSON("parseTimesheetEntryReviews", arguments: [sheetJSON]) else { return nil }
             stored = parsed
-            signedSheet = [
-                "priceWorkEntries": sheetJSON["priceWorkEntries"] ?? NSNull(),
-                "expenseEntries": sheetJSON["expenseEntries"] ?? NSNull(),
-            ] as [String: Any]
+            // RULEBOOK 1.54.0 (final check of #337): the stored sheet itself — the writer works out the signed entries'
+            // ids (stored or derived) from it.
+            signedSheet = sheetJSON
         }
         var input: [String: Any] = [
             "stored": stored,

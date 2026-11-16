@@ -1243,6 +1243,8 @@ enum TimesheetDraftStore {
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
             }
+            // RULEBOOK 1.54.0 (final check of #337): a stored `exportedAt` is never written back changed or removed.
+            if storedExported { changed.removeValue(forKey: "exportedAt") }
             // RULEBOOK 1.54.0 §8 / §16 (third review of #337): an exported sheet with late extras is frozen — its review
             // map and snapshot are never changed (the security rules refuse those writes).
             if storedExported, let storedLate = server?["lateExtras"] as? [Any], !storedLate.isEmpty {

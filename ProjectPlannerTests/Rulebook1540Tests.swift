@@ -4,7 +4,7 @@ import XCTest
 /// RULEBOOK 1.54.0 (timesheet owner answers, 16 Nov) on iOS through `CanonicalBusinessEngine`: switched-off schedule
 /// places are paid, late extras (price work and expenses after the line manager signed), the new
 /// `timesheet_bookings_changed` notice and the Annual leave report's leave year. Expected values checked in node against
-/// the packed script (rulebook 1.54.0, sha256 93f99eeb…3ff417).
+/// the packed script (rulebook 1.54.0, sha256 f0b0f339…c46cb, web 05a8078).
 @MainActor
 final class Rulebook1540Tests: XCTestCase {
     private func ms(_ iso: String) -> Double {
@@ -165,6 +165,28 @@ final class Rulebook1540Tests: XCTestCase {
             storedSheet: sheet, entryRows: [row], reviewedByUserId: "m", reviewedAtMs: 1, exported: false, sheetDocId: "timesheet_u1_1"
         ))
         XCTAssertTrue(written.isEmpty)
+    }
+
+    /// Final check of #337 (`timesheetLateExtraRowProblem`): a late extra with no title or a reserved `__…__` id is ignored —
+    /// never waiting, never reviewed — and reads "Can't be reviewed — delete it and add it again".
+    func testUntitledOrReservedIdLateExtrasAreIgnored() throws {
+        var untitled = lateTaxi
+        untitled["id"] = "L1"
+        untitled["title"] = ""
+        var reserved = lateTaxi
+        reserved["id"] = "__x__"
+        let sheet = signedSheet(late: [untitled, reserved])
+        let summary = try XCTUnwrap(CanonicalBusinessEngine.timesheetLateExtrasSummary(sheet: sheet, entryFingerprints: [:], exportedAtStored: false))
+        XCTAssertFalse(summary.waitingForLineManager)
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetLateExtraLabel(state: "ignored", reason: "no-title"),
+            "Can't be reviewed — delete it and add it again"
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetLateExtraLabel(state: "ignored", reason: "id-unusable"),
+            "Can't be reviewed — delete it and add it again"
+        )
+        XCTAssertEqual(try invoiceRows(sheet).compactMap { $0["id"] as? String }, ["e1"])
     }
 
     func testReviewerWritesALateReviewOnlyBeforeExport() throws {
