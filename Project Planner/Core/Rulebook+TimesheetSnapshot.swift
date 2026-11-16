@@ -186,12 +186,31 @@ extension CanonicalBusinessEngine {
     /// (PAYE days left out) whose booking was created AND last written on or before the sheet's approval (the later of
     /// `createdAt` / `updatedAt` ≤ the snapshot's `approvedAt`, else `managerSignedAt`). A booking added, moved or
     /// changed later, or with either time unknown, never re-prices a signed sheet. False for no snapshot, a snapshot with any labour line, an exported sheet, or no answer.
+    /// The 1.43.0 shape (no schedule-option flag): every line is a job line.
     nonisolated static func timesheetSnapshotNeedsRebuild(
         storedOverrideLineCount: Int?,
         overrideApprovedAt: Date?,
         exportedAt: Date?,
         managerSignedAt: Date?,
         liveLabourLines: [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)]
+    ) -> Bool {
+        timesheetSnapshotNeedsRebuild(
+            storedOverrideLineCount: storedOverrideLineCount,
+            overrideApprovedAt: overrideApprovedAt,
+            exportedAt: exportedAt,
+            managerSignedAt: managerSignedAt,
+            liveLabourLines: liveLabourLines.map {
+                (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt, bookingUpdatedAt: $0.bookingUpdatedAt, scheduleOptionPlace: false)
+            }
+        )
+    }
+
+    nonisolated static func timesheetSnapshotNeedsRebuild(
+        storedOverrideLineCount: Int?,
+        overrideApprovedAt: Date?,
+        exportedAt: Date?,
+        managerSignedAt: Date?,
+        liveLabourLines: [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?, scheduleOptionPlace: Bool)]
     ) -> Bool {
         var sheet: [String: Any] = [
             "exportedAt": instantArgument(exportedAt),
@@ -210,6 +229,8 @@ extension CanonicalBusinessEngine {
                 "isPayeDay": line.isPayeDay,
                 "bookingCreatedAt": instantArgument(line.bookingCreatedAt),
                 "bookingUpdatedAt": instantArgument(line.bookingUpdatedAt),
+                // RULEBOOK 1.54.0 (review of #337): a switched-off schedule place never repairs a signed snapshot.
+                "scheduleOptionPlace": line.scheduleOptionPlace,
             ]
         }
         return callJSON("timesheetSnapshotNeedsRebuild", arguments: [sheet, lines]) as? Bool ?? false

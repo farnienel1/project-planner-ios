@@ -137,7 +137,10 @@ extension TimesheetPayrollLineItem {
 /// their on-screen entry decisions apply.
 enum TimesheetTotalsSource {
     static func sheetJSON(_ draft: TimesheetDraft, reviewing: Bool) -> [String: Any] {
-        var sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft)) as? [String: Any] ?? [:]
+        // RULEBOOK 1.54.0 §8: the late extras and (only when there are some) the stored review map, with a reviewer's
+        // on-screen late decisions laid over it (`TimesheetLateExtrasSupport.rulebookSheet`). Without late extras this is
+        // the stored sheet exactly as before 1.54.0.
+        var sheet = TimesheetLateExtrasSupport.rulebookSheet(draft, reviewerPreview: reviewing)
         if reviewing {
             func entry(storedId: String?, id: UUID, amount: Double, decision: TimesheetManagerDecision, revised: Double?, fingerprint: String?) -> [String: Any] {
                 var row: [String: Any] = [
@@ -158,7 +161,12 @@ enum TimesheetTotalsSource {
                 }
             if let reviews = CanonicalBusinessEngine.timesheetEntryReviewsPreview(stored: NSNull(), entries: entries),
                !(reviews is NSNull) {
-                sheet["extraEntryReviews"] = reviews
+                if let late = sheet["extraEntryReviews"] as? [String: Any], let signed = reviews as? [String: Any] {
+                    // 1.54.0: the late extras' reviews stay; the signed entries' on-screen decisions are laid over them.
+                    sheet["extraEntryReviews"] = late.merging(signed) { _, onScreen in onScreen }
+                } else {
+                    sheet["extraEntryReviews"] = reviews
+                }
             }
         }
         return sheet

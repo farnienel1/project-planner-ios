@@ -163,6 +163,9 @@ enum TimesheetDraftAdjustments {
     static func extrasPendingReview(in draft: TimesheetDraft) -> Bool {
         draft.expenseEntries.contains { $0.managerDecision == .pending }
             || draft.priceWorkEntries.contains { $0.managerDecision == .pending }
+            // RULEBOOK 1.54.0 (web `extrasPendingReview`): a late extra waiting for the line manager's decision (an
+            // ignored one — its id is a signed entry's — never waits).
+            || (draft.lateExtras ?? []).contains { $0.managerDecision == .pending && $0.lateState != "ignored" }
     }
 
     // RULEBOOK 1.22.0 §8: sheet totals (labour, price work, expenses, total) are `CanonicalBusinessEngine.timesheetTotals`

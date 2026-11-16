@@ -60,6 +60,11 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     /// the standard line of a set-window Saturday / Sunday its counts-as (a full window = 1.00 day), else the weekday
     /// paid day. Day units are `paidHours / standardDayHours`. Nil on a line built without it.
     var standardDayHours: Double? = nil
+    /// RULEBOOK 1.54.0 (review of #337, never stored): a manager site booking at Office, Working from home, Site survey or
+    /// a custom place — paid from 1.54.0 whatever Schedule options say, but before 1.54.0 left off when that option was
+    /// switched off, so it never triggers or enters the repair of an already-signed snapshot
+    /// (`timesheetSnapshotNeedsRebuild` `scheduleOptionPlace`).
+    var scheduleOptionPlace: Bool = false
 }
 
 struct TimesheetPayrollSummary {
@@ -315,6 +320,7 @@ enum TimesheetPayrollCollector {
             // RULEBOOK 1.54.0 §4.8 / §8 (owner decision 16 Nov): a switched-off schedule option (Office, Working from
             // home, Site survey, a custom item) only leaves the pickers; bookings already made there are still paid.
             let day = cal.startOfDay(for: booking.date)
+            let firstLine = lineItems.count
             guard day >= rangeStart && day <= rangeEnd else { continue }
             let policy = dayPolicy(for: day)
             pushBooking(
@@ -328,6 +334,10 @@ enum TimesheetPayrollCollector {
                 createdAt: booking.createdAt,
                 updatedAt: booking.updatedAt
             )
+            // RULEBOOK 1.54.0 (review of #337): a place that is not a job is a schedule-option place.
+            if booking.locationType != .project && booking.locationType != .smallWork, firstLine < lineItems.count {
+                for index in firstLine..<lineItems.count { lineItems[index].scheduleOptionPlace = true }
+            }
         }
 
         // `overlappingBookingIds` over every paid booking (operative and manager), with the
@@ -434,8 +444,11 @@ enum TimesheetPayrollCollector {
     /// the booking's creation time. A mapping only.
     static func snapshotRebuildLines(
         _ lines: [TimesheetPayrollLineItem]
-    ) -> [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?)] {
-        lines.map { (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt, bookingUpdatedAt: $0.bookingUpdatedAt) }
+    ) -> [(isPayeDay: Bool, bookingCreatedAt: Date?, bookingUpdatedAt: Date?, scheduleOptionPlace: Bool)] {
+        lines.map {
+            (isPayeDay: $0.isPayeDay, bookingCreatedAt: $0.bookingCreatedAt, bookingUpdatedAt: $0.bookingUpdatedAt,
+             scheduleOptionPlace: $0.scheduleOptionPlace)
+        }
     }
 
     /// RULEBOOK 1.43.0 §8: what a timesheet line shows beside its rate line — `timesheetLineClockText(details)`, the clock
