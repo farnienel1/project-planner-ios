@@ -237,8 +237,8 @@ extension CanonicalBusinessEngine {
         if let storedSheet, let sheetJSON = timesheetJSONSafe(storedSheet) {
             guard let parsed = callJSON("parseTimesheetEntryReviews", arguments: [sheetJSON]) else { return nil }
             stored = parsed
-            // RULEBOOK 1.54.0 (final check of #337): the stored sheet itself — the writer works out the signed entries'
-            // ids (stored or derived) from it.
+            // RULEBOOK 1.54.0 (final check and verification of #337): the stored sheet itself, with its `lateExtras` and
+            // signed entries — the writer works out the signed ids and judges each late entry on its stored row.
             signedSheet = sheetJSON
         }
         var input: [String: Any] = [
@@ -415,14 +415,12 @@ enum TimesheetLateExtrasSupport {
         guard let late = draft.lateExtras, !late.isEmpty else { return sheet }
         var reviews = storedReviews(draft)
         if reviewerPreview {
-            let signed: [String: Any] = [
-                "priceWorkEntries": sheet["priceWorkEntries"] ?? NSNull(),
-                "expenseEntries": sheet["expenseEntries"] ?? NSNull(),
-            ]
+            // RULEBOOK 1.54.0 (verification of #337): the writer is given the sheet with its stored `lateExtras` and the
+            // signed entries, so it judges each late entry on its stored row (each entry carries its title too).
             if let previewed = CanonicalBusinessEngine.timesheetLateExtraReviewsPreview(
                 storedReviews: reviews,
                 lateRows: reviewEntryRows(draft),
-                signedSheet: signed,
+                signedSheet: sheet,
                 exported: exportedStored(draft)
             ) {
                 reviews = previewed

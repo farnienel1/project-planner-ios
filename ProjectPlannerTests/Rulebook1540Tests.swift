@@ -4,7 +4,7 @@ import XCTest
 /// RULEBOOK 1.54.0 (timesheet owner answers, 16 Nov) on iOS through `CanonicalBusinessEngine`: switched-off schedule
 /// places are paid, late extras (price work and expenses after the line manager signed), the new
 /// `timesheet_bookings_changed` notice and the Annual leave report's leave year. Expected values checked in node against
-/// the packed script (rulebook 1.54.0, sha256 f0b0f339…c46cb, web 05a8078).
+/// the packed script (rulebook 1.54.0, web b002c6f).
 @MainActor
 final class Rulebook1540Tests: XCTestCase {
     private func ms(_ iso: String) -> Double {
