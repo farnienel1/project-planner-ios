@@ -186,6 +186,7 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return "signature"
         case .timesheetSignedByManager: return "checkmark.seal.fill"
         case .timesheetBookingsChanged: return "exclamationmark.triangle.fill"
+        case .timesheetRevisionToSign: return "doc.badge.arrow.up"
         case .lineManagerPeerUpdate: return "person.2.fill"
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated, .variation, .variationRenumbered: return "plus.rectangle.on.folder"
         case .timesheetSubmissionReminder: return "clock.badge.exclamationmark"
@@ -225,6 +226,7 @@ struct NotificationRowView: View {
         case .timesheetPendingManagerSignoff: return .trade
         case .timesheetSignedByManager: return .sites
         case .timesheetBookingsChanged: return .trade
+        case .timesheetRevisionToSign: return .trade
         case .lineManagerPeerUpdate: return .people
         case .variationAdded, .variationFromTracker, .variationNumbersUpdated, .variation, .variationRenumbered: return .trade
         case .timesheetSubmissionReminder: return .trade

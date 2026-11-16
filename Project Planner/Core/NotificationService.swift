@@ -1380,6 +1380,39 @@ class NotificationService: ObservableObject {
         await saveNotification(notification)
     }
 
+    /// RULEBOOK 1.55.0 §8 / §13 (web `notifyTimesheetRevisionToSign`): `timesheet_revision_to_sign` when an admin or
+    /// line manager creates a revision of the person's exported timesheet ("Your timesheet has a revision to sign").
+    /// One row per revision (`timesheetRevisionNoticeKey(revision) + "|" + recipient`), to
+    /// `timesheetRevisionToSignRecipients(subject, actor, roster)` — never the person who created it. A revision the
+    /// person creates themself notifies nobody (the server already told them when it became due).
+    func notifyTimesheetRevisionToSign(subject: AppUser, revisionDocumentId: String, weekStart: Date) async {
+        guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId,
+              let key = CanonicalBusinessEngine.timesheetRevisionNoticeKey(revisionDocumentId),
+              let recipients = CanonicalBusinessEngine.timesheetRevisionToSignRecipients(
+                subject: RulebookPeople.person(subject),
+                actor: actorPerson,
+                roster: recipientRoster
+              ) else { return }
+        let weekDay = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
+        for recipientId in recipients {
+            let notification = AppNotification(
+                id: syntheticNotificationId(from: "\(key)|\(recipientId)"),
+                organizationId: organizationId,
+                type: .timesheetRevisionToSign,
+                title: CanonicalBusinessEngine.timesheetRevisionNoticeTitle,
+                message: CanonicalBusinessEngine.timesheetRevisionNoticeMessage,
+                userId: recipientId,
+                relatedId: nil,
+                isRead: false,
+                createdAt: Date(),
+                requiresPermission: nil,
+                deepLinkUserId: subject.id,
+                deepLinkWeekStart: weekDay
+            )
+            await saveNotification(notification)
+        }
+    }
+
     // MARK: - PAYE overtime (RULEBOOK 1.29.0 §13, §25)
 
     /// `overtime_request_submitted` to `overtimeRequestRecipients(requester, roster)` — the requester's active line

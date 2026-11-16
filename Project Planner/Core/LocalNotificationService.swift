@@ -121,6 +121,9 @@ class LocalNotificationService {
         case .timesheetBookingsChanged:
             content.title = "Your signed timesheet has changed"
             content.body = details.isEmpty ? CanonicalBusinessEngine.signedTimesheetChangedMessage : details
+        case .timesheetRevisionToSign:
+            content.title = CanonicalBusinessEngine.timesheetRevisionNoticeTitle
+            content.body = details.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNoticeMessage : details
         case .lineManagerPeerUpdate:
             content.title = "Line manager update"
             content.body = details.isEmpty ? "Another line manager actioned a shared request." : details
