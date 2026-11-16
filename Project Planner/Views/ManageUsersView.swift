@@ -2367,6 +2367,7 @@ struct EditUserView: View {
                     .environmentObject(holidayStore)
                     .environmentObject(operativeStore)
                     .environmentObject(userStore)
+                    .environmentObject(firebaseBackend)
             }
             .sheet(isPresented: $showingChangeUserType) {
                 changeUserTypeSheet
