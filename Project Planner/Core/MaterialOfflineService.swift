@@ -31,29 +31,24 @@ enum MaterialOfflineService {
         )
     }
 
+    /// RULEBOOK §2: material lines are not in `OFFLINE_ACTIONS`, so saving one is online only — offline it throws
+    /// `OnlineOnlyActionError` and nothing is queued; a connection failure while online is reported, never queued.
+    /// `opened` is the copy the user opened for an edit (nil for a new line): only their changes are written.
     static func saveMaterial(
         _ material: MaterialItem,
         organizationId: String,
         firebaseBackend: FirebaseBackend,
-        isOnline: Bool
+        isOnline: Bool,
+        opened: MaterialItem? = nil
     ) async throws -> MaterialOfflineSaveResult {
-        OfflineMaterialLocalStore.shared.upsert(material, organizationId: organizationId)
-
-        if !isOnline {
-            OfflineOutboxStore.shared.enqueueSaveMaterialItem(material, organizationId: organizationId)
-            return .queuedForSync
-        }
-
-        do {
-            try await firebaseBackend.saveMaterialItem(material, organizationId: organizationId)
-            OfflineMaterialLocalStore.shared.markSynced(materialId: material.id, projectId: material.projectId)
-            return .syncedImmediately
-        } catch where OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
-            OfflineOutboxStore.shared.enqueueSaveMaterialItem(material, organizationId: organizationId)
-            return .queuedForSync
-        }
+        try OfflinePolicy.requireAvailable(.saveMaterialLine, isOnline: isOnline)
+        try await firebaseBackend.saveMaterialItem(material, organizationId: organizationId, opened: opened)
+        // Clears a pending copy an older build may have left for this line.
+        OfflineMaterialLocalStore.shared.markSynced(materialId: material.id, projectId: material.projectId)
+        return .syncedImmediately
     }
 
+    /// RULEBOOK §2: online only (not in `OFFLINE_ACTIONS`); offline nothing is queued.
     static func deleteMaterial(
         _ materialId: UUID,
         projectId: UUID,
@@ -61,27 +56,16 @@ enum MaterialOfflineService {
         firebaseBackend: FirebaseBackend,
         isOnline: Bool
     ) async throws -> MaterialOfflineSaveResult {
-        OfflineMaterialLocalStore.shared.markPendingDelete(
-            materialId: materialId,
-            projectId: projectId,
-            organizationId: organizationId
-        )
-
-        if !isOnline {
-            OfflineOutboxStore.shared.enqueueDeleteMaterialItem(materialId, organizationId: organizationId)
-            return .queuedForSync
-        }
-
-        do {
-            try await firebaseBackend.deleteMaterialItem(materialId, organizationId: organizationId)
-            OfflineMaterialLocalStore.shared.markDeletedSynced(materialId: materialId)
-            return .syncedImmediately
-        } catch where OfflineWriteSupport.shouldQueue(error: error, isOnline: isOnline) {
-            OfflineOutboxStore.shared.enqueueDeleteMaterialItem(materialId, organizationId: organizationId)
-            return .queuedForSync
-        }
+        try OfflinePolicy.requireAvailable(.deleteMaterialLine, isOnline: isOnline)
+        try await firebaseBackend.deleteMaterialItem(materialId, organizationId: organizationId)
+        OfflineMaterialLocalStore.shared.markDeletedSynced(materialId: materialId)
+        return .syncedImmediately
     }
 
+    /// RULEBOOK §2: a quote or order email is online only (not in `OFFLINE_ACTIONS`): offline it throws and is never
+    /// queued, so it can never go out hours later. A dropped connection or a timeout is retried straight away with the
+    /// same `requestId` (`MaterialRequestSendRetry`); when that still fails the person is told and presses Send again
+    /// (the same email reuses its request id, `MaterialRequestRetryIds`, so it is never sent twice).
     static func sendMaterialRequest(
         _ request: MaterialOrderRequest,
         sendRecord: MaterialSendRecord?,
@@ -89,22 +73,18 @@ enum MaterialOfflineService {
         firebaseBackend: FirebaseBackend,
         isOnline: Bool
     ) async throws -> MaterialOfflineSaveResult {
-        if !isOnline {
-            OfflineOutboxStore.shared.enqueueSendMaterialRequest(
-                request,
-                sendRecord: sendRecord,
-                organizationId: organizationId
-            )
-            return .queuedForSync
-        }
+        try OfflinePolicy.requireAvailable(.sendMaterialRequest, isOnline: isOnline)
 
-        // Online: a dropped connection or a timeout is retried straight away (`MaterialRequestSendRetry`), with the
-        // same `requestId`, so the function sends it at most once (it answers a repeat from the first send, or 409
-        // "still sending"). Only when the quick retries also fail is the email queued for the next sync.
         // Only a request with an id is retried: without one the function cannot tell a retry from a new send.
         let canRetry = MaterialRequestEmailPayload.requestIdValue(request.requestId) != nil
+        var lastError: Error?
         let outcome = try await MaterialRequestSendRetry.perform(isOnline: isOnline, canRetry: canRetry) {
-            try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
+            do {
+                try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
+            } catch {
+                lastError = error
+                throw error
+            }
         }
         switch outcome {
         case .sent:
@@ -117,14 +97,10 @@ enum MaterialOfflineService {
             }
             return .syncedImmediately
         case .queue:
-            // Offline after the retries, or an earlier press of this same email (same `requestId`) is still sending:
-            // queue it with its request id; the replay is answered from that send, never emailed twice.
-            OfflineOutboxStore.shared.enqueueSendMaterialRequest(
-                request,
-                sendRecord: sendRecord,
-                organizationId: organizationId
-            )
-            return .queuedForSync
+            // Not queued any more (online only). "Still sending" keeps its own message; anything else is a
+            // connection problem the person retries when back online.
+            if let lastError, (lastError as? MaterialRequestEmailError) == .stillSending { throw lastError }
+            throw OnlineOnlyActionError(actionId: UnlistedOfflineAction.sendMaterialRequest.rawValue)
         }
     }
 

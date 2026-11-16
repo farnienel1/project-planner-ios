@@ -156,6 +156,14 @@ enum OfflineSyncCoordinator {
                     failed += 1
                     continue
                 }
+                if error is RecordDeletedElsewhereError {
+                    // RULEBOOK §1 `editOfMissingDocumentIsRefused`: a queued edit of a record deleted elsewhere (e.g.
+                    // a material line an older build queued) is final, never re-created and never retried.
+                    outbox.removeRefused(id: entry.id, message: RecordDeletedElsewhereError.message)
+                    postDropped(entry: entry)
+                    failed += 1
+                    continue
+                }
                 // `bookingReplayRefusedIsFinal({ code, isCreate })`: also final is not-found on an edit replay
                 // (the booking was deleted elsewhere; an edit never turns into a create).
                 // Any other queued edit: `replayRefusedIsFinal({ code, isCreate })` (RULEBOOK 1.9.0 §1).
@@ -326,15 +334,21 @@ enum OfflineSyncCoordinator {
         case .saveDeadlines:
             let payload = try decoder.decode(OfflineSaveDeadlinesPayload.self, from: entry.payload)
             let items = OfflineDeadlineCodec.items(from: payload.items)
-            let written = try await firebaseBackend.saveDeadlines(
-                items,
+            // Entries queued by an older build only (deadlines are online only now, RULEBOOK §2). They carry no
+            // loaded list, so only changes that cannot overwrite someone else's are applied (`saveDeadlineChanges`).
+            let result = try await firebaseBackend.saveDeadlineChanges(
+                base: nil,
+                next: items,
                 projectId: payload.projectId,
                 isSmallWorks: payload.isSmallWorks,
                 organizationId: entry.organizationId,
                 baseUpdatedAt: payload.baseUpdatedAt
             )
+            if !result.notApplied.isEmpty {
+                print("🔥🔥🔥 DEBUG: [OfflineSync] \(result.notApplied.count) queued deadline change(s) not applied: changed on another device")
+            }
             OfflineDeadlineLocalStore.shared.save(
-                items: written,
+                items: result.items,
                 projectId: payload.projectId,
                 organizationId: entry.organizationId,
                 updatedAt: Date()

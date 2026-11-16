@@ -1482,31 +1482,18 @@ struct HomeView: View {
     }
     
     private var assignedTasksCount: Int {
+        // RULEBOOK §23 `tasksAssignedToViewer`: the open tasks assigned to the person under any id they go by — the
+        // same rule as the Home task figures (`homeOverviewMetrics`) and the Tasks "Assigned to me" list.
+        let taskCount = TaskAssignmentRulebook.assignedTasks(
+            taskStore.tasks.filter { !$0.isCompleted },
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ).count
         if userStore.isOperativeMode() {
-            let em = userStore.currentUser.map {
-                $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            } ?? ""
-            guard !em.isEmpty,
-                  let operative = operativeStore.allOperatives.first(where: {
-                      $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == em
-                  }) else {
-                return operativeQualificationExpiryReminderCount
-            }
-            let taskCount = taskStore.tasks.filter { task in
-                !task.isCompleted && task.allAssignedOperativeIds.contains(operative.id)
-            }.count
             return taskCount + operativeQualificationExpiryReminderCount
         } else {
-            let email = userStore.currentUser?.email
-            let taskCount = taskStore.tasks.filter { task in
-                !task.isCompleted
-                    && task.isAssignedToUser(
-                        userEmail: email,
-                        operatives: operativeStore.allOperatives,
-                        managers: operativeStore.allManagers,
-                        isOperativeMode: false
-                    )
-            }.count
             return taskCount + pendingHolidayApprovalsCount
         }
     }

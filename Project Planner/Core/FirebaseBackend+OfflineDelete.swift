@@ -52,16 +52,32 @@ extension FirebaseBackend {
         // `canDeleteBooking` for the signed-in user on the live booking and its job. Nil (the security rules decide)
         // when this device cannot judge it: another organisation's queued item, no viewer yet, or the job not loaded.
         let openOrgId = normalizedOrganizationId(currentOrganization?.firestoreDocumentId ?? "")
+        let sameOrganization = !openOrgId.isEmpty && openOrgId == orgId
         let mayDelete: Bool? = live.flatMap {
             Self.offlineDeleteAllowed(
                 collection: collection,
                 data: $0,
-                sameOrganization: !openOrgId.isEmpty && openOrgId == orgId
+                sameOrganization: sameOrganization
             )
         }
-        let timeZone = OrganizationRulebookContext.timeZoneIdentifier
+        // The fingerprint holds an organisation-zone day, taken in the queued item's own company: compare it in that
+        // company's zone. Another company's zone is read from its document; when it cannot be read the fingerprint
+        // check is skipped (only the permission and tombstone checks apply), never compared in the wrong zone.
+        var entryCountryCode: String?? = .none
+        if !sameOrganization {
+            if let data = (try? await db.collection("organizations").document(orgId).getDocument(source: .server))?.data() {
+                entryCountryCode = .some(data["countryCode"] as? String)
+            }
+        }
+        let zone = Self.offlineDeleteTimeZone(
+            sameOrganization: sameOrganization,
+            openTimeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            entryCountryCode: entryCountryCode
+        )
+        let timeZone = zone ?? OrganizationRulebookContext.timeZoneIdentifier
+        let checkedFingerprint = zone == nil ? nil : fingerprint
         let first = Self.offlineDeleteDecision(
-            documentId: documentId, collection: collection, fingerprint: fingerprint,
+            documentId: documentId, collection: collection, fingerprint: checkedFingerprint,
             live: live, tombstoned: tombstoned, mayDelete: mayDelete, timeZone: timeZone
         )
         guard first == "apply" else { return first }
@@ -72,7 +88,7 @@ extension FirebaseBackend {
             tombstone: RulebookJSONBox(object: tombstone),
             documentId: documentId,
             collection: collection,
-            fingerprint: fingerprint,
+            fingerprint: checkedFingerprint,
             mayDelete: mayDelete,
             timeZone: timeZone
         )
@@ -93,6 +109,16 @@ extension FirebaseBackend {
             return false
         }
         return true
+    }
+
+    /// The time zone a queued delete's fingerprint is compared in: the open organisation's when the item is from the
+    /// open company; otherwise that company's (`organizationTimeZone` of its stored country, `entryCountryCode` = the
+    /// read country, `.some(nil)` when it stores none). Nil when the other company's document could not be read
+    /// (`entryCountryCode` = `.none`): the caller then skips the fingerprint check.
+    static func offlineDeleteTimeZone(sameOrganization: Bool, openTimeZone: String, entryCountryCode: String??) -> String? {
+        if sameOrganization { return openTimeZone }
+        guard case .some(let country) = entryCountryCode else { return nil }
+        return CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: country)
     }
 
     /// `offlineDeleteReplayDecision` for a live document read from Firestore.

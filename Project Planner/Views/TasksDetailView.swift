@@ -82,17 +82,15 @@ struct TasksDetailView: View {
     /// Home Tasks hub: assigned-to-me is always personal. Admins see every job's tasks in Active / Overdue / Completed.
     private var isAdminTaskHub: Bool { userStore.hasAdminAccess() }
 
-    private func taskBelongsInMyList(_ task: ProjectTask) -> Bool {
-        task.isAssignedToUser(
-            userEmail: userStore.currentUser?.email,
-            operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers,
-            isOperativeMode: userStore.isOperativeMode()
-        )
-    }
-
+    /// RULEBOOK §23 `tasksAssignedToViewer`: assigned under any id the person goes by (as web My tasks and Home).
     private var userRelevantTasks: [ProjectTask] {
-        taskStore.tasks.filter { taskBelongsInMyList($0) }
+        TaskAssignmentRulebook.assignedTasks(
+            taskStore.tasks,
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        )
     }
 
     private var hubScopeTasks: [ProjectTask] {
@@ -562,11 +560,12 @@ private struct MyTasksRedesignTaskCard: View {
     private var canCarryOut: Bool {
         guard !resolvedTask.isCompleted else { return false }
         if userStore.hasAdminAccess() { return true }
-        return resolvedTask.isAssignedToUser(
-            userEmail: userStore.currentUser?.email,
+        return TaskAssignmentRulebook.isAssigned(
+            resolvedTask,
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers,
-            isOperativeMode: userStore.isOperativeMode()
+            managers: operativeStore.allManagers
         )
     }
 

@@ -667,7 +667,8 @@ struct ProjectsView: View {
     private func refreshDeadlineAssignedProjectIds() async {
         guard userStore.isOperativeMode(),
               let userId = userStore.currentUser?.id,
-              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId else {
+              // AGENTS rule 2: the open organisation only (never `users/{uid}.organizationId`, the home company).
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             await MainActor.run { deadlineAssignedProjectIds = [] }
             return
         }

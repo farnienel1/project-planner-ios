@@ -163,7 +163,11 @@ private func isOfflineNetworkError(_ error: Error) -> Bool {
 @MainActor
 class FirebaseBackend: ObservableObject {
     @Published var isAuthenticated = false
-    @Published var currentUser: FirebaseAuth.User?
+    @Published var currentUser: FirebaseAuth.User? {
+        // Someone is signed in: until their profile loads, the warning and Daily Overview scopes show nobody
+        // (`JobAccessContext.viewerPending`), never the whole company.
+        didSet { JobAccessContext.updateSignedIn(currentUser != nil) }
+    }
     @Published var isLoading = false
     @Published var errorMessage: String?
     /// Bumped on every change to `currentOrganization` (settings, working hours, schedule options), so answers built
@@ -1218,20 +1222,24 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
         try RulebookRosterLists.requireInviteLevel(invitationData)
         try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
-        let orgName = currentOrganization?.name
-        await sendPasswordResetVerificationEmail(email: email, firstName: firstName, surname: surname, verificationCode: invitationId, fromName: orgName)
+        await sendPasswordResetVerificationEmail(email: invitationEmail, invitationId: invitationId, organizationId: organizationId)
     }
     
-    /// Sends the password reset email with a single link. No code – user clicks the link and sets new password on the website. From name = organisation name when set.
-    private func sendPasswordResetVerificationEmail(email: String, firstName: String, surname: String, verificationCode: String, fromName: String? = nil) async {
-        let resendService = ResendEmailService()
-        _ = await resendService.sendPasswordResetLinkEmail(
-            to: email,
-            firstName: firstName,
-            surname: surname,
-            token: verificationCode,
-            fromName: fromName
-        )
+    /// Sends the password reset email with a single link (no code): the person clicks it and sets a new password on the
+    /// website. Through the authenticated `sendEmail` function, template `password_reset_link` (web
+    /// docs/EMAIL_FUNCTION.md): the function renders the body and sends it only to the invitation's own email.
+    private func sendPasswordResetVerificationEmail(email: String, invitationId: String, organizationId: String) async {
+        do {
+            let result = try await AppEmailClient.send(
+                template: .passwordResetLink,
+                organizationId: organizationId,
+                to: [email],
+                data: AppEmailPayload.invitationData(invitationId: invitationId)
+            )
+            print("🔥🔥🔥 DEBUG: password reset link email sent (\(result.sentCount))")
+        } catch {
+            print("🔥🔥🔥 DEBUG: ❌ password reset link email not sent: \(AppEmailClient.message(for: error))")
+        }
     }
     
     func changePassword(currentPassword: String, newPassword: String) async throws {
@@ -3033,6 +3041,20 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.16.1 (§1 partial writes, health & safety file links): a `gs://` address is never stored as
         // `fileURL` — no app can open it, so the row would lose its View link. Retry the download address, then
         // remove the uploaded object and fail the upload so the screen shows the error and nothing is saved.
+        return try await downloadURLOrRemoveUpload(storageRef, path: path, organizationId: organizationId, userId: userId, logTag: "HealthSafety")
+    }
+
+    /// RULEBOOK §1 / §24: an upload stores a download URL only, never a `gs://` address (web shows stored links only
+    /// through `safeExternalUrl`, https only). Asks Storage for the download address up to
+    /// `healthSafetyDownloadURLAttempts` times; when it still fails, removes the uploaded object (the uploader's own
+    /// clean-up inside the undo window, `fileDeletePermission`) and throws so the screen shows the error.
+    private func downloadURLOrRemoveUpload(
+        _ storageRef: StorageReference,
+        path: String,
+        organizationId: String,
+        userId: String,
+        logTag: String
+    ) async throws -> String {
         var lastError: Error?
         for attempt in 0..<Self.healthSafetyDownloadURLAttempts {
             if attempt > 0 {
@@ -3043,7 +3065,7 @@ class FirebaseBackend: ObservableObject {
                 return downloadURL.absoluteString
             } catch {
                 lastError = error
-                print("⚠️ [HealthSafety] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
+                print("⚠️ [\(logTag)] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
             }
         }
         // RULEBOOK 1.25.0 §24 (`CanonicalBusinessEngine.fileDeletePermission`): the uploader's own clean-up inside the
@@ -3058,10 +3080,10 @@ class FirebaseBackend: ObservableObject {
             do {
                 try await storageRef.delete()
             } catch {
-                print("⚠️ [HealthSafety] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
+                print("⚠️ [\(logTag)] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
             }
         } else {
-            print("⚠️ [HealthSafety] Unlinked upload kept (\(cleanup.reason)): \(path)")
+            print("⚠️ [\(logTag)] Unlinked upload kept (\(cleanup.reason)): \(path)")
         }
         throw NSError(
             domain: "FirebaseBackend",
@@ -3153,15 +3175,8 @@ class FirebaseBackend: ObservableObject {
                 }
             }
         }
-        do {
-            let downloadURL = try await storageRef.downloadURL()
-            return downloadURL.absoluteString
-        } catch {
-            // Do not block Site Audit submission/PDF generation if public URL generation is denied.
-            // We keep a durable Storage URI that can be resolved later with authenticated SDK access.
-            print("⚠️ [SiteAudit] Uploaded image but could not fetch download URL: \(error.localizedDescription)")
-            return "gs://\(storageRef.bucket)/\(storageRef.fullPath)"
-        }
+        // RULEBOOK §1 / §24: never a `gs://` address (web shows https links only): retry, else fail the upload visibly.
+        return try await downloadURLOrRemoveUpload(storageRef, path: imagePath, organizationId: organizationId, userId: userId, logTag: "SiteAudit")
     }
 
     /// Profile photo for a user (managed from Manage Users). Overwrites prior object at this path.
@@ -7674,60 +7689,33 @@ class FirebaseBackend: ObservableObject {
             }
         
         // Send invitation email
-        await sendInvitationEmail(email: email, firstName: firstName, surname: surname, invitationId: invitationId)
+        await sendInvitationEmail(email: email, firstName: firstName, surname: surname, invitationId: invitationId, organizationId: organizationId)
     }
     
-    func sendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String) async {
+    /// The set-up email for an invitation, through the authenticated `sendEmail` function, template `invite_setup`
+    /// (web docs/EMAIL_FUNCTION.md): the function renders the welcome pack and sends it only to the email stored on
+    /// `invitations/{invitationId}` of `organizationId` (the open organisation when not given). There is no fallback
+    /// sender: a failed send is reported, and the admin can resend from Manage Users.
+    func sendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String, organizationId: String? = nil) async {
         print("🔥🔥🔥 DEBUG: Sending invitation email to: \(email)")
-        
-        let organizationName = CanonicalBusinessEngine.parseOrganizationName(
-            Organization.nameParsePayload(from: ["name": currentOrganization?.name ?? ""])
-        ) ?? ""
-        let resendService = ResendEmailService()
-        let success = await resendService.sendPasswordSetupEmail(
-            to: email,
-            firstName: firstName,
-            surname: surname,
-            invitationCode: invitationId,
-            fromName: organizationName.isEmpty ? nil : organizationName
-        )
-        
-        if success {
-            print("🔥🔥🔥 DEBUG: ✅ Invitation email sent successfully to: \(email)")
-        } else {
-            print("🔥🔥🔥 DEBUG: ❌ Failed to send invitation email to: \(email)")
-            // Fallback to plain text email via EmailService
-            let displayFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let helloName = displayFirst.isEmpty ? "there" : displayFirst
-            let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hello = trimmedSurname.isEmpty ? helloName : "\(helloName) \(trimmedSurname)"
-            let invitedLine = organizationName.isEmpty
-                ? "You have been invited to join the Project Planner system."
-                : "\(organizationName) has invited you to join them on Project Planner."
-            let subject = "Welcome to Project Planner - Set Up Your Account"
-            let body = """
-            Hello \(hello),
-            
-            \(invitedLine)
-            
-            To set up your account and create your password, please visit:
-            https://www.projectplanner.us/setup-password.html?token=\(invitationId)
-            
-            Once you've set up your password, you'll be able to access the Project Planner system.
-            
-            If you have any questions, please contact your administrator.
-            """
-            
-            let fallbackSuccess = await EmailService.shared.sendEmail(
-                recipient: email,
-                subject: subject,
-                body: body
+        guard let orgId = Self.openOrganizationIdForWrites(
+            requested: organizationId,
+            openOrganizationId: currentOrganization?.firestoreDocumentId
+        ) else {
+            print("🔥🔥🔥 DEBUG: ❌ Invitation email not sent: no organisation is open")
+            return
+        }
+        do {
+            let result = try await AppEmailClient.send(
+                template: .inviteSetup,
+                organizationId: orgId,
+                to: [email],
+                data: AppEmailPayload.invitationData(invitationId: invitationId)
             )
-            
-            if fallbackSuccess {
-                print("🔥🔥🔥 DEBUG: ✅ Fallback email sent successfully")
-            }
-            // Don't throw error - invitation is still created, admin can resend
+            print("🔥🔥🔥 DEBUG: ✅ Invitation email sent (\(result.sentCount)) to: \(email)")
+        } catch {
+            // Don't throw: the invitation is still created and the admin can resend it.
+            print("🔥🔥🔥 DEBUG: ❌ Failed to send invitation email to \(email): \(AppEmailClient.message(for: error))")
         }
     }
     
@@ -8102,16 +8090,17 @@ class FirebaseBackend: ObservableObject {
             invoicing: invoicing,
             reference: now
         )
-        let week = WeekRange.from(start: now)
-        // `bookingLoadStart`: the earlier of the warning window and this week, as web loads.
+        // `bookingLoadStart`: the earlier of the warning window and this week, as web loads. This week's Monday is the
+        // organisation's (`organizationWeekDayKeys`), never the phone's calendar or zone (RULEBOOK §1, guardrail 2).
         if let warningKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(bounds.start),
-           let weekKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(week.start),
+           let weekKey = CanonicalBusinessEngine.organizationWeekStartDayKey(containing: now),
            let start = CanonicalBusinessEngine.bookingLoadStart(loadedFromDayKey: nil, neededDayKeys: [weekKey, warningKey]),
            let startKey = start.startDayKey,
            let day = CanonicalBusinessEngine.date(fromDayKey: startKey) {
             return day
         }
-        return LaunchStartupPolicy.launchBookingLowerBound(warningStart: bounds.start, weekStart: week.start)
+        // The script did not answer: the earlier of the warning start and the device week (as before).
+        return LaunchStartupPolicy.launchBookingLowerBound(warningStart: bounds.start, weekStart: WeekRange.from(start: now).start)
     }
 
     func prepareLaunchScheduleQueryIfNeeded(now: Date = Date()) {
@@ -9835,26 +9824,33 @@ extension FirebaseBackend {
     /// Same path resolution as material writes so loads and listeners see newly saved rows.
     func resolveOrganizationIdForMaterials(preferredOrganizationId: String) async throws -> String {
         let preferredOrgId = normalizedOrganizationId(preferredOrganizationId)
-        do {
-            return try await ensureReadableOrganization(preferredOrgId)
-        } catch {
-            print("🔥🔥🔥 DEBUG: Preferred materials org \(preferredOrgId) was not readable: \(error.localizedDescription)")
-            let fallback = await resolveOrganizationIdForFirebaseWrites(preferredFallback: preferredOrganizationId)
-                ?? preferredOrgId
-            guard !fallback.isEmpty else {
-                throw NSError(
-                    domain: "FirebaseBackend",
-                    code: 400,
-                    userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
-                )
-            }
-            let orgId = try await ensureReadableOrganization(fallback)
-            print("🔥🔥🔥 DEBUG: Falling back materials org to \(orgId)")
-            return orgId
+        // AGENTS rule 2: the open organisation only. A read failure is reported, never answered with another
+        // company (the person's home company in `users/{uid}.organizationId`).
+        let target = await resolveOrganizationIdForFirebaseWrites(preferredFallback: preferredOrgId) ?? ""
+        guard !target.isEmpty else {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 400,
+                userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing. Open Settings → Force Reload Data, then retry."]
+            )
         }
+        return try await ensureReadableOrganization(target)
     }
     
-    func saveMaterialItem(_ material: MaterialItem, organizationId: String) async throws {
+    /// Whether a material save is a new line or an edit: an edit names the copy the user opened (`opened`); a line
+    /// saved by an older build without it is an edit when it carries `editedAt` (every edit screen sets it, a new
+    /// line never does).
+    static func materialSaveMode(material: MaterialItem, opened: MaterialItem?) -> RecordSaveMode {
+        (opened == nil && material.editedAt == nil) ? .create : .update
+    }
+
+    /// RULEBOOK §1 "Partial writes only" / `editOfMissingDocumentIsRefused`. A new line is created whole. An edit
+    /// writes only the fields the user changed against the copy they opened (`opened`, `materialLineWriteFields`), so a
+    /// field someone else changed meanwhile (status, quantity, notes) is never written back; an edit of a line that is
+    /// gone from the server is refused (`RecordDeletedElsewhereError`), never re-created. Online only (RULEBOOK §2:
+    /// material lines are not in `OFFLINE_ACTIONS`).
+    func saveMaterialItem(_ material: MaterialItem, organizationId: String, opened: MaterialItem? = nil) async throws {
+        let mode = Self.materialSaveMode(material: material, opened: opened)
         let orgId = try await resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId)
         do {
             try await ensureUserDocumentLinked(organizationId: orgId)
@@ -9869,6 +9865,9 @@ extension FirebaseBackend {
             .document(WorkDocumentKeys.storedId(for: material.id))
 
         let serverSnapshot = try await docRef.getDocument(source: .server)
+        if RecordWritePlan.action(mode: mode, documentExists: serverSnapshot.exists) == .refuseDeletedElsewhere {
+            throw RecordDeletedElsewhereError(collection: "materials", documentId: docRef.documentID)
+        }
         if serverSnapshot.exists,
            let serverData = serverSnapshot.data(),
            let serverMaterial = materialItemFromFirestoreDocument(serverSnapshot.documentID, serverData) {
@@ -9912,7 +9911,15 @@ extension FirebaseBackend {
         // `materialLineWriteFields` names against the server copy (never a full `setData`, which deleted fields the
         // other app writes). `addedAt` / `addedBy` / `addedByUserId` are never rewritten.
         if serverSnapshot.exists, let stored = serverSnapshot.data() {
-            guard let write = CanonicalBusinessEngine.peopleDocumentWrite("materialLineWriteFields", before: stored, next: data) else {
+            // The copy the user opened when there is one (only their own changes are sent); an older queued edit with
+            // no opened copy still diffs against the server copy.
+            let before: [String: Any]
+            if let opened, let openedData = Self.materialLinePayload(opened, addedByUserId: effectiveAddedByUserId) {
+                before = openedData
+            } else {
+                before = stored
+            }
+            guard let write = CanonicalBusinessEngine.peopleDocumentWrite("materialLineWriteFields", before: before, next: data) else {
                 throw CanonicalWriteUnavailableError(function: "materialLineWriteFields")
             }
             let changes = write.firestoreFields(from: data)
@@ -10133,35 +10140,25 @@ extension FirebaseBackend {
     
     // MARK: - Site Audits
 
-    /// Resolves the org document id for Firestore paths, preferring `users/{uid}.organizationId` from the server
-    /// so writes match Security Rules (exact reference id / casing from Firestore vs stale UI cache).
+    /// The organisation a read or write goes to: the organisation the caller names (the one open when the action
+    /// started, or the one a queued record belongs to), else the organisation open now (`currentOrganization`).
+    /// AGENTS rule 2 / RULEBOOK §14: `users/{uid}.organizationId` is the home company and is never rewritten by a
+    /// switch, so it is never used here — a person who switched to company B always reads and writes company B.
+    /// With no organisation named and none open the answer is nil and the caller refuses (never another company).
     func resolveOrganizationIdForFirebaseWrites(preferredFallback: String?) async -> String? {
-        let trimmedFallback = preferredFallback.map { normalizedOrganizationId($0) } ?? ""
-        guard let uid = currentUser?.uid else {
-            return trimmedFallback.isEmpty ? nil : trimmedFallback
-        }
-        do {
-            let snap = try await db.collection("users").document(uid).getDocument(source: .server)
-            if let data = snap.data(),
-               let fromUser = organizationIdFromFirestore(data["organizationId"]) {
-                let t = normalizedOrganizationId(fromUser)
-                if !t.isEmpty {
-                    print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites using users document org id: \(t)")
-                    return t
-                }
-            }
-        } catch {
-            print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites user read failed: \(error.localizedDescription)")
-        }
-        if !trimmedFallback.isEmpty {
-            print("🔥🔥🔥 DEBUG: resolveOrganizationIdForFirebaseWrites using caller fallback: \(trimmedFallback)")
-            return trimmedFallback
-        }
-        if let c = currentOrganization?.firestoreDocumentId {
-            let t = normalizedOrganizationId(c)
-            if !t.isEmpty { return t }
-        }
-        return nil
+        Self.openOrganizationIdForWrites(
+            requested: preferredFallback,
+            openOrganizationId: currentOrganization?.firestoreDocumentId
+        )
+    }
+
+    /// Pure rule behind `resolveOrganizationIdForFirebaseWrites` (tested): the requested organisation, else the open
+    /// one, else nil. There is no third source.
+    static func openOrganizationIdForWrites(requested: String?, openOrganizationId: String?) -> String? {
+        let named = requested?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !named.isEmpty { return named }
+        let open = openOrganizationId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return open.isEmpty ? nil : open
     }
 
     /// The organisation a queued site audit is written to: its own (`recordOrganizationId`), else the resolver's.
@@ -11968,32 +11965,77 @@ extension FirebaseBackend {
         return (items, updatedAt)
     }
 
-    @discardableResult
-    func saveDeadlines(
-        _ items: [DLDeadline],
-        project: Project,
-        organizationId: String,
-        baseUpdatedAt: Date? = nil
-    ) async throws -> [DLDeadline] {
-        try await saveDeadlines(
-            items,
-            projectId: project.id,
-            projectKey: project.documentId,
-            isSmallWorks: project.isSmallWorksDocument,
-            organizationId: organizationId,
-            baseUpdatedAt: baseUpdatedAt
-        )
+    /// What one save of a job's deadlines did: the list now stored, and the person's edits that were not applied
+    /// because someone else changed or deleted that deadline after it was loaded (shown to the person, never dropped
+    /// silently).
+    struct DeadlineSaveResult {
+        var items: [DLDeadline]
+        var notApplied: [DLDeadline]
     }
 
+    /// Lays one person's deadline changes over the list as stored now (RULEBOOK §1: never rewrite a whole document from
+    /// a possibly stale copy). `base` is the list the person loaded, `next` the list after their change. Only the
+    /// deadlines they added, edited or deleted are applied, each by id; a deadline someone else changed or deleted
+    /// since `base` keeps the stored copy and the person's version is returned in `notApplied`. App write plumbing —
+    /// the deadline fields themselves come from `parseDeadlineDocument` (there is no rulebook writer for the `items`
+    /// array yet; reported to web).
+    static func mergeDeadlineChanges(
+        stored: [DLDeadline],
+        base: [DLDeadline],
+        next: [DLDeadline]
+    ) -> (items: [DLDeadline], notApplied: [DLDeadline], changed: Bool) {
+        let baseById = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let nextIds = Set(next.map(\.id))
+        let storedIds = Set(stored.map(\.id))
+        var result = stored
+        var notApplied: [DLDeadline] = []
+        var changed = false
+        for item in next {
+            if let was = baseById[item.id] {
+                guard item != was else { continue }
+                // Edited by this person: applied only when the stored copy is still the one they loaded.
+                guard let index = result.firstIndex(where: { $0.id == item.id }), result[index] == was else {
+                    notApplied.append(item)
+                    continue
+                }
+                result[index] = item
+                changed = true
+            } else if !storedIds.contains(item.id) {
+                result.append(item)
+                changed = true
+            } else if let index = result.firstIndex(where: { $0.id == item.id }), result[index] != item {
+                // An id this person did not load but is stored (added on another device): the stored copy stays.
+                notApplied.append(item)
+            }
+        }
+        for was in base where !nextIds.contains(was.id) {
+            guard let index = result.firstIndex(where: { $0.id == was.id }) else { continue }
+            guard result[index] == was else {
+                notApplied.append(was)
+                continue
+            }
+            result.remove(at: index)
+            changed = true
+        }
+        return (result, notApplied, changed)
+    }
+
+    /// Saves one person's deadline changes for a job. Online only (RULEBOOK §2: deadlines are not in
+    /// `OFFLINE_ACTIONS`). The stored list is read from the server first — a failed read stops the save rather than
+    /// overwrite — then only the changed deadlines are laid over it (`mergeDeadlineChanges`) and `updatedAt` is the
+    /// server time. `base` nil is an entry an older build queued without the list it loaded: when the stored list has
+    /// not changed since `baseUpdatedAt` it is the base, otherwise only that entry's new deadlines are added and the
+    /// rest is reported as not applied.
     @discardableResult
-    func saveDeadlines(
-        _ items: [DLDeadline],
+    func saveDeadlineChanges(
+        base: [DLDeadline]?,
+        next items: [DLDeadline],
         projectId: UUID,
         projectKey: String? = nil,
         isSmallWorks: Bool,
         organizationId: String,
         baseUpdatedAt: Date? = nil
-    ) async throws -> [DLDeadline] {
+    ) async throws -> DeadlineSaveResult {
         // The job id as stored (RULEBOOK 1.7.0): the caller's, else the remembered stored id, else the UUID.
         let jobKey = projectKey ?? WorkDocumentKeys.storedId(for: projectId)
         guard currentUser != nil else {
@@ -12003,8 +12045,7 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: "You must be signed in to save deadlines."]
             )
         }
-        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
-            ?? normalizedOrganizationId(organizationId)
+        let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId) ?? ""
         guard !resolved.isEmpty else {
             throw NSError(
                 domain: "FirebaseBackend",
@@ -12022,37 +12063,44 @@ extension FirebaseBackend {
         try await validateDataIntegrity(organizationId: orgId)
 
         let ref = deadlinesStateDocumentRef(organizationId: orgId, projectKey: jobKey, isSmallWorks: isSmallWorks)
-        var itemsToWrite = items
-        if let baseUpdatedAt {
-            do {
-                let remoteDoc = try await ref.getDocument(source: .server)
-                if let data = remoteDoc.data(),
-                   let remoteUpdatedAt = (data["updatedAt"] as? Timestamp)?.dateValue(),
-                   remoteUpdatedAt > baseUpdatedAt.addingTimeInterval(0.4) {
-                    let remoteItems = Self.deadlines(fromDocument: ref.documentID, data: data, projectKey: jobKey) ?? []
-                    itemsToWrite = mergeDeadlinesFirstWriterWins(remote: remoteItems, local: items)
-                    print("🔥🔥🔥 DEBUG: [saveDeadlines] First writer already synced — merging local creates only")
-                }
-            } catch {
-                if !isOfflineNetworkError(error) && !isFirestorePermissionDenied(error) {
-                    print("🔥🔥🔥 DEBUG: [saveDeadlines] FWW remote read failed: \(error.localizedDescription)")
-                }
+        let remoteDoc = try await ref.getDocument(source: .server)
+        let remoteData = remoteDoc.data() ?? [:]
+        var stored: [DLDeadline] = []
+        if remoteDoc.exists {
+            guard let parsed = Self.deadlines(fromDocument: ref.documentID, data: remoteData, projectKey: jobKey) else {
+                throw CanonicalWriteUnavailableError(function: "parseDeadlineDocument")
             }
+            stored = parsed
         }
+        var effectiveBase = base ?? stored
+        var effectiveNext = items
+        var legacyNotApplied: [DLDeadline] = []
+        if base == nil, let baseUpdatedAt,
+           let remoteUpdatedAt = (remoteData["updatedAt"] as? Timestamp)?.dateValue(),
+           remoteUpdatedAt > baseUpdatedAt.addingTimeInterval(0.4) {
+            // An older queued list made before someone else's change: only its new deadlines are added.
+            let storedIds = Set(stored.map(\.id))
+            effectiveBase = stored
+            effectiveNext = stored + items.filter { !storedIds.contains($0.id) }
+            legacyNotApplied = items.filter { item in storedIds.contains(item.id) && !stored.contains(item) }
+        }
+        let merge = Self.mergeDeadlineChanges(stored: stored, base: effectiveBase, next: effectiveNext)
+        let notApplied = legacyNotApplied + merge.notApplied
+        guard merge.changed else { return DeadlineSaveResult(items: stored, notApplied: notApplied) }
 
         let payload: [String: Any] = [
-            "items": itemsToWrite.map(deadlineMap),
-            "updatedAt": Timestamp(date: Date()),
+            "items": merge.items.map(deadlineMap),
+            "updatedAt": FieldValue.serverTimestamp(),
             "projectId": jobKey
         ]
         try await ref.setData(payload, merge: true)
 
         try await writeDeadlineAssignments(
             projectKey: jobKey,
-            assigneeUserIds: itemsToWrite.flatMap(\.assigneeUserIds),
+            assigneeUserIds: merge.items.flatMap(\.assigneeUserIds),
             organizationId: orgId
         )
-        return itemsToWrite
+        return DeadlineSaveResult(items: merge.items, notApplied: notApplied)
     }
 
     /// RULEBOOK 1.7.0 §1 "Partial writes only": one job's assignees in `settings/deadlineAssignments` are written
@@ -12079,14 +12127,6 @@ extension FirebaseBackend {
             create["updatedAt"] = Timestamp(date: Date())
             try await ref.setData(create, merge: true)
         }
-    }
-
-    private func mergeDeadlinesFirstWriterWins(remote: [DLDeadline], local: [DLDeadline]) -> [DLDeadline] {
-        var byId = Dictionary(remote.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for item in local where byId[item.id] == nil {
-            byId[item.id] = item
-        }
-        return byId.values.sorted { $0.due < $1.due }
     }
 
     /// `jobIds`: the job list's stored document ids. With them each assignment key is mapped back to the job's stored

@@ -21,6 +21,12 @@ struct ProjectDeadlinesView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var siteAudits: [SiteAudit] = []
+    /// The deadlines as last loaded from (or written to) the server: what this person's changes are compared with, so
+    /// only their own changes are saved (`saveDeadlineChanges`).
+    @State private var serverBaseItems: [DLDeadline] = []
+    /// Saves run one after another, so each compares with the list the previous save wrote (two quick edits are never
+    /// read as a conflict with each other).
+    @State private var persistTask: Task<Void, Never>?
 
     private var canManage: Bool { !userStore.isOperativeMode() }
     private var contextKind: String { project.isSmallWorksDocument ? "Small Work" : "Project" }
@@ -66,7 +72,8 @@ struct ProjectDeadlinesView: View {
                     contextName: project.siteName,
                     contextRef: project.jobNumber,
                     contextKind: contextKind,
-                    canManage: canManage,
+                    // RULEBOOK §2: deadline changes are online only — the add and edit controls are off offline.
+                    canManage: canManage && OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline),
                     authorName: authorName,
                     people: people,
                     siteAudits: siteAudits.map { WorkAccess.siteAuditRef($0) },
@@ -90,8 +97,8 @@ struct ProjectDeadlinesView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "") {
-            let orgReady = !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "").isEmpty
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            let orgReady = organizationId() != nil
             guard orgReady else { return }
             store.bindPersistence { items in
                 await persistDeadlines(items)
@@ -130,8 +137,12 @@ struct ProjectDeadlinesView: View {
         )
     }
 
+    /// AGENTS rule 2: the open organisation only, never the person's home company (`users/{uid}.organizationId`).
     private func organizationId() -> String? {
-        firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId
+        FirebaseBackend.openOrganizationIdForWrites(
+            requested: nil,
+            openOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+        )
     }
 
     private func load(preferRemote: Bool = false) async {
@@ -150,14 +161,17 @@ struct ProjectDeadlinesView: View {
             if !preferRemote, smartCache.isOnline == false, let local {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
+                serverBaseItems = local.items
             } else {
                 let state = try await firebaseBackend.loadDeadlinesState(project: project, organizationId: orgId)
                 if smartCache.isOnline == false, let local {
                     store.replaceAll(local.items)
                     store.lastKnownUpdatedAt = local.updatedAt ?? state.updatedAt
+                    serverBaseItems = local.items
                 } else {
                     store.replaceAll(state.items)
                     store.lastKnownUpdatedAt = state.updatedAt
+                    serverBaseItems = state.items
                     OfflineDeadlineLocalStore.shared.save(
                         items: state.items,
                         projectId: project.id,
@@ -176,6 +190,7 @@ struct ProjectDeadlinesView: View {
             if let local = OfflineDeadlineLocalStore.shared.load(projectId: project.id, organizationId: orgId) {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
+                serverBaseItems = local.items
                 store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             } else {
                 errorMessage = error.localizedDescription
@@ -183,59 +198,66 @@ struct ProjectDeadlinesView: View {
         }
     }
 
+    /// RULEBOOK §2: deadlines are not in `OFFLINE_ACTIONS`, so a change is online only — offline it is put back and
+    /// the person is told; nothing is queued. Online, only this person's changes are laid over the stored list
+    /// (`saveDeadlineChanges`); a deadline someone else changed meanwhile is not overwritten, and the person is told
+    /// which of their changes did not apply.
     private func persistDeadlines(_ items: [DLDeadline]) async {
+        let previous = persistTask
+        let task = Task { @MainActor in
+            await previous?.value
+            await saveDeadlineChanges(items)
+        }
+        persistTask = task
+        await task.value
+    }
+
+    private func saveDeadlineChanges(_ items: [DLDeadline]) async {
         guard let orgId = organizationId() else { return }
-        OfflineDeadlineLocalStore.shared.save(
-            items: items,
-            projectId: project.id,
-            organizationId: orgId,
-            updatedAt: store.lastKnownUpdatedAt
-        )
-        if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
-            OfflineOutboxStore.shared.enqueueSaveDeadlines(
-                projectId: project.id,
-                isSmallWorks: project.isSmallWorksDocument,
-                items: items,
-                baseUpdatedAt: store.lastKnownUpdatedAt,
-                organizationId: orgId
-            )
+        guard OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline) else {
+            store.replaceAll(serverBaseItems)
+            errorMessage = OnlineOnlyActionError(actionId: UnlistedOfflineAction.saveDeadlines.rawValue).localizedDescription
             return
         }
         do {
-            let written = try await firebaseBackend.saveDeadlines(
-                items,
-                project: project,
+            let result = try await firebaseBackend.saveDeadlineChanges(
+                base: serverBaseItems,
+                next: items,
+                projectId: project.id,
+                projectKey: project.documentId,
+                isSmallWorks: project.isSmallWorksDocument,
                 organizationId: orgId,
                 baseUpdatedAt: store.lastKnownUpdatedAt
             )
+            serverBaseItems = result.items
             store.lastKnownUpdatedAt = Date()
-            if written.map(\.id) != items.map(\.id) || written.count != items.count {
-                store.replaceAll(written)
+            if result.items != items {
+                store.replaceAll(result.items)
             }
             OfflineDeadlineLocalStore.shared.save(
-                items: written,
+                items: result.items,
                 projectId: project.id,
                 organizationId: orgId,
                 updatedAt: store.lastKnownUpdatedAt
             )
-        } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache.isOnline) {
-                OfflineOutboxStore.shared.enqueueSaveDeadlines(
-                    projectId: project.id,
-                    isSmallWorks: project.isSmallWorksDocument,
-                    items: items,
-                    baseUpdatedAt: store.lastKnownUpdatedAt,
-                    organizationId: orgId
-                )
-            } else {
-                await MainActor.run { errorMessage = error.localizedDescription }
+            if !result.notApplied.isEmpty {
+                let titles = result.notApplied.map(\.title).joined(separator: ", ")
+                errorMessage = "Not saved — changed or deleted on another device: \(titles). Check it and try again."
             }
+        } catch {
+            store.replaceAll(serverBaseItems)
+            errorMessage = error.localizedDescription
         }
     }
 
     private func commit(_ draft: DLDeadline, localFileURL: URL?) async {
         guard let orgId = organizationId() else {
             errorMessage = "Cannot save without organization."
+            return
+        }
+        // RULEBOOK §2: deadlines are online only (not in `OFFLINE_ACTIONS`); nothing is saved on the device.
+        guard OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline) else {
+            errorMessage = OnlineOnlyActionError(actionId: UnlistedOfflineAction.saveDeadlines.rawValue).localizedDescription
             return
         }
         var item = draft
@@ -245,25 +267,21 @@ struct ProjectDeadlinesView: View {
             item.createdByUserId = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? ""
         }
         if let localFileURL {
-            if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
-                errorMessage = "Deadline saved on this device. Attach the file again when you’re back online."
-            } else {
-                do {
-                    let name = item.fileName ?? localFileURL.lastPathComponent
-                    let url = try await firebaseBackend.uploadHealthSafetyFile(
-                        localFileURL,
-                        organizationId: orgId,
-                        projectId: project.id,
-                        category: "deadlines",
-                        fileName: name
-                    )
-                    item.fileURL = url
-                    item.fileName = name
-                    item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
-                } catch {
-                    errorMessage = error.localizedDescription
-                    return
-                }
+            do {
+                let name = item.fileName ?? localFileURL.lastPathComponent
+                let url = try await firebaseBackend.uploadHealthSafetyFile(
+                    localFileURL,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    category: "deadlines",
+                    fileName: name
+                )
+                item.fileURL = url
+                item.fileName = name
+                item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
+            } catch {
+                errorMessage = error.localizedDescription
+                return
             }
         }
         if let auditId = item.siteAuditId,

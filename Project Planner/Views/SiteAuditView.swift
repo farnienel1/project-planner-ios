@@ -654,15 +654,13 @@ struct SiteAuditProjectsBrowserView: View {
             }
             return
         }
-        let email = userStore.currentUser?.email
-        let operative = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased() == (email ?? "").lowercased()
-        })
+        // RULEBOOK §23 `tasksAssignedToViewer`: every `operatives` row on the person's email, never the first one.
         var extras = WorkAccess.taskAssignedProjectIds(
             currentUser: userStore.currentUser,
             taskStore: taskStore,
-            operatives: operative.map { [$0] } ?? [],
-            managers: operativeStore.allManagers
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers,
+            organizationUsers: userStore.organizationUsers
         )
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId,
            let uid = userStore.currentUser?.id {
@@ -942,15 +940,12 @@ struct SiteAuditCreateFlowView: View {
 
     private func extraIdsForCurrentUser() -> Set<UUID> {
         guard userStore.isOperativeMode() else { return [] }
-        let email = userStore.currentUser?.email
-        let operative = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased() == (email ?? "").lowercased()
-        })
         return WorkAccess.taskAssignedProjectIds(
             currentUser: userStore.currentUser,
             taskStore: taskStore,
-            operatives: operative.map { [$0] } ?? [],
-            managers: operativeStore.allManagers
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers,
+            organizationUsers: userStore.organizationUsers
         )
     }
 

@@ -2544,33 +2544,21 @@ struct ProjectDetailView: View {
         if canViewAllTasksOnThisJob {
             return tasks
         }
-        let email = userStore.currentUser?.email
-        if userStore.isOperativeMode() {
-            if let operative = userStore.currentUser.flatMap({ operativeStore.operativeRow(for: $0) }) {
-                tasks = tasks.filter { task in
-                    task.allAssignedOperativeIds.contains(operative.id)
-                }
-            } else {
-                tasks = []
-            }
-        } else {
-            tasks = tasks.filter { task in
-                task.isAssignedToUser(
-                    userEmail: email,
-                    operatives: operativeStore.allOperatives,
-                    managers: operativeStore.allManagers,
-                    isOperativeMode: false
-                )
-            }
-        }
+        // RULEBOOK §23 `tasksAssignedToViewer`: assigned under any id the person goes by (users id, former and
+        // same-email ids, every `operatives` / `managers` row on their email), operative mode included.
+        tasks = TaskAssignmentRulebook.assignedTasks(
+            tasks,
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        )
         
         return tasks
     }
     
     private func filteredTasks(for scope: ProjectTaskListScope) -> [ProjectTask] {
         var tasks = myProjectTasksAfterFilters()
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         
         switch scope {
         case .active:
@@ -2579,20 +2567,16 @@ struct ProjectDetailView: View {
             tasks = tasks.filter { $0.isCompleted }
         case .assignedToMe:
             tasks = tasks.filter { !$0.isCompleted }
-            tasks = tasks.filter { task in
-                task.isAssignedToUser(
-                    userEmail: userStore.currentUser?.email,
-                    operatives: operativeStore.allOperatives,
-                    managers: operativeStore.allManagers,
-                    isOperativeMode: userStore.isOperativeMode()
-                )
-            }
+            tasks = TaskAssignmentRulebook.assignedTasks(
+                tasks,
+                viewer: userStore.currentUser,
+                organizationUsers: userStore.organizationUsers,
+                operatives: operativeStore.allOperatives,
+                managers: operativeStore.allManagers
+            )
         case .overdue:
-            tasks = tasks.filter { !$0.isCompleted }
-            tasks = tasks.filter { task in
-                guard let due = task.dueDate else { return false }
-                return cal.startOfDay(for: due) < startOfToday
-            }
+            // RULEBOOK §23 `isTaskOverdue`: due before today on the organisation day (never the phone's).
+            tasks = tasks.filter { CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate) }
         }
         
         if !projectTasksSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2608,14 +2592,12 @@ struct ProjectDetailView: View {
     
     private var projectMyTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
         let base = myProjectTasksAfterFilters()
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         let incomplete = base.filter { !$0.isCompleted }
         let todo = incomplete.filter { $0.status == .todo }.count
         let inProgress = incomplete.filter { $0.status == .inProgress }.count
-        let overdue = incomplete.filter { task in
-            guard let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
+        // RULEBOOK §23 `isTaskOverdue` on the organisation day.
+        let overdue = incomplete.filter {
+            CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate)
         }.count
         let done = base.filter { $0.isCompleted }.count
         return (todo, inProgress, overdue, done)
@@ -2940,12 +2922,10 @@ struct ProjectDetailView: View {
     private var tasksContent: some View {
         let stats = projectMyTasksStats
         let base = myProjectTasksAfterFilters()
-        let cal = Calendar.current
-        let startOfToday = cal.startOfDay(for: Date())
         let activeCount = base.filter { !$0.isCompleted }.count
-        let overdueCount = base.filter { !$0.isCompleted }.filter { task in
-            guard let due = task.dueDate else { return false }
-            return cal.startOfDay(for: due) < startOfToday
+        // RULEBOOK §23 `isTaskOverdue` on the organisation day (never the phone's calendar).
+        let overdueCount = base.filter {
+            CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate)
         }.count
         let completedCount = base.filter { $0.isCompleted }.count
         
@@ -6178,11 +6158,12 @@ struct CompletedTaskDetailView: View {
     private var canCarryOut: Bool {
         guard !displayTask.isCompleted else { return false }
         if userStore.hasAdminAccess() { return true }
-        return displayTask.isAssignedToUser(
-            userEmail: userStore.currentUser?.email,
+        return TaskAssignmentRulebook.isAssigned(
+            displayTask,
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers,
-            isOperativeMode: userStore.isOperativeMode()
+            managers: operativeStore.allManagers
         )
     }
 
@@ -6200,11 +6181,12 @@ struct CompletedTaskDetailView: View {
         let m = displayTask.allAssignedManagerIds.count
         let o = displayTask.allAssignedOperativeIds.count
         let total = m + o
-        let me = displayTask.isAssignedToUser(
-            userEmail: userStore.currentUser?.email,
+        let me = TaskAssignmentRulebook.isAssigned(
+            displayTask,
+            viewer: userStore.currentUser,
+            organizationUsers: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers,
-            isOperativeMode: userStore.isOperativeMode()
+            managers: operativeStore.allManagers
         )
         if me && total > 1 {
             let others = max(0, total - 1)

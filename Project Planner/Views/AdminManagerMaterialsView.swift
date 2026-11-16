@@ -178,6 +178,7 @@ struct AdminManagerMaterialsView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                                .disabled(!OfflinePolicy.isEnabled(.deleteMaterialLine, isOnline: smartCache.isOnline))
                                 .accessibilityIdentifier("adminManagerMaterials.row.\(material.id).delete")
                         }
                     }

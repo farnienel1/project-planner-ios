@@ -1173,21 +1173,21 @@ class NotificationService: ObservableObject {
             ?? userStore?.organizationUsers.first(where: { $0.id == userId })?.email
         let trimmedEmail = email?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedEmail.isEmpty else { return }
-        let firstName = userStore?.organizationUsers.first(where: { $0.email.lowercased() == trimmedEmail.lowercased() })?.firstName ?? ""
-        let greeting = firstName.isEmpty ? "Hello" : "Hello \(firstName)"
-        let plain = """
-        \(greeting),
-
-        \(message)
-
-        This was sent from Project Planner.
-        """
-        let html = MaterialRequestEmailBuilder.plainTextAsSimpleHTML(plain)
-        let sent = await ResendEmailService().sendEmail(
-            to: trimmedEmail,
-            subject: ExportTextEscaping.sanitizeEmailSubject("Annual leave cancelled"),
-            htmlContent: html
-        )
+        // The authenticated `sendEmail` function, template `leave_cancelled` (web docs/EMAIL_FUNCTION.md): it renders
+        // "<caller> has cancelled your annual leave request for <dateText>." and sends only to an active member.
+        let sent: Bool
+        do {
+            let result = try await AppEmailClient.send(
+                template: .leaveCancelled,
+                organizationId: organizationId,
+                to: [trimmedEmail],
+                data: AppEmailPayload.leaveCancelledData(dateText: dateText)
+            )
+            sent = result.sentCount > 0
+        } catch {
+            print("🔥🔥🔥 DEBUG: [HOLIDAY CANCEL EMAIL] not sent: \(AppEmailClient.message(for: error))")
+            sent = false
+        }
         print("🔥🔥🔥 DEBUG: [HOLIDAY CANCEL EMAIL] to=\(trimmedEmail) sent=\(sent)")
     }
 
