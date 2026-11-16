@@ -19,6 +19,27 @@ enum TimesheetWeeklyReportOverrideBuilder {
     /// Shown when the snapshot could not be checked against the rulebook; nothing is signed or saved.
     static let rulebookCheckFailedMessage = "Pay could not be checked against the timesheet rules. Try again; nothing was signed or saved."
 
+    /// Review of #240: a save that completes a sheet (or must rebuild its snapshot) while pay inputs are not ready —
+    /// `blockMessage` non-nil: bookings, rate history or the pay-profile overlays — is refused with that message, so a
+    /// counter-signature is never stored without a frozen snapshot. Nil when the save may go on: inputs ready, the sheet
+    /// is not fully signed by this save, it already has a snapshot that is kept, or it is an owner save that never
+    /// writes the snapshot (a line manager counter-signs it).
+    static func saveRefusalWhilePayInputsBlocked(
+        draft: TimesheetDraft,
+        user: AppUser,
+        writerIsReviewer: Bool?,
+        blockMessage: String?,
+        rebuildSnapshot: Bool
+    ) -> String? {
+        guard let blockMessage else { return nil }
+        if writerIsReviewer == false, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) { return nil }
+        guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { return nil }
+        guard draft.weeklyReportOverride == nil || (rebuildSnapshot && !TimesheetApprovalPolicy.isExported(draft)) else {
+            return nil
+        }
+        return blockMessage
+    }
+
     /// Returns `rulebookCheckFailedMessage` when the snapshot could not be built or re-applied safely (the draft's stored
     /// snapshot is then left exactly as it was, and the caller must not save); nil otherwise.
     @discardableResult

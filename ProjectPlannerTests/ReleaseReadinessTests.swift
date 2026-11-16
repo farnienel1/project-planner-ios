@@ -48,6 +48,9 @@ final class ReleaseReadinessTests: XCTestCase {
     // MARK: Pay inputs
 
     func testPayIsNotWorkedOutUntilTheHistoryAndOrganisationLoaded() {
+        // `platformConfig/app` answered with no switches on (pay is not waited for until it has, review of #240).
+        SecuritySwitchContext.update(config: nil)
+        PrivatePayOverlayReadiness.reset()
         let org = Organization(name: "TEST-Org")
         XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: org))
         XCTAssertEqual(PayInputsLoad.blockMessage(state: .failed("x"), organization: org), "x")

@@ -18,7 +18,10 @@ final class PayStripReadyTests: XCTestCase {
 
     override func tearDown() {
         SecuritySwitchContext.reset()
+        SecuritySwitchContext.setReadForTests(true)
         PrivatePayOverlayReadiness.reset()
+        RulebookRosterSnapshot.update([])
+        OrganizationRulebookContext.update(from: nil)
         super.tearDown()
     }
 
@@ -71,7 +74,8 @@ final class PayStripReadyTests: XCTestCase {
             key: UserStore.ownPayKey(user: user, organizationId: nil),
             finished: true,
             readable: true,
-            record: record
+            record: record,
+            recordConfirmed: record != nil
         )
         return store
     }
@@ -109,7 +113,7 @@ final class PayStripReadyTests: XCTestCase {
         store.ownPayOverlay = state
         XCTAssertEqual(store.displayUser, user, "privatePay off: displayUser is the users document exactly")
         XCTAssertTrue(store.ownPayReady)
-        XCTAssertNil(PrivatePayOverlayReadiness.blockMessage(privatePay: false, ownFinished: false, ownReadable: false, rosterFinished: false))
+        XCTAssertNil(PrivatePayOverlayReadiness.blockMessage(scope: .ownPay, switchesKnown: true, privatePay: false, own: .failed, roster: .failed))
     }
 
     func testAReadForAnotherOrganisationOrPersonIsNeverLaidOver() {
@@ -206,56 +210,235 @@ final class PayStripReadyTests: XCTestCase {
         XCTAssertFalse(waiting.ownPayReady)
     }
 
-    // MARK: Break 5 — the overtime "line reopened" notice
-
-    func testBreak5UnreadablePersonIsNotRuledOutAsSelfEmployed() {
-        let person = stripped(id: "OTHER-1")
-        XCTAssertTrue(
-            OvertimeReopenNotice.mayBePaye(person, privatePay: true, payProfileReadIds: []),
-            "privatePay on, pay not readable: let overtimeLineReopened decide"
-        )
-        XCTAssertFalse(
-            OvertimeReopenNotice.mayBePaye(person, privatePay: true, payProfileReadIds: ["other-1"]),
-            "pay read and self-employed: skip"
-        )
-        XCTAssertFalse(OvertimeReopenNotice.mayBePaye(person, privatePay: false, payProfileReadIds: []), "switch off: as before")
-        let paye = overlaid(person, profile: payeProfile("OTHER-1"))
-        XCTAssertTrue(OvertimeReopenNotice.mayBePaye(paye, privatePay: true, payProfileReadIds: ["other-1"]))
-    }
-
-    func testBreak5SignedInPersonCountsAsReadOnceTheirProfileIsRead() {
-        let store = self.store(signedIn: stripped(), profile: payeProfile())
-        XCTAssertTrue(store.payProfileReadIds.contains("paye-1"))
-    }
+    // MARK: Break 5 — the overtime "line reopened" notice (not changed here)
+    // The PAYE pre-check stays as it was (review of #240): `overtimeReopenedRecipients` returns nobody unless the roster
+    // row's employment type is PAYE, so skipping the pre-check gained nothing and added refused reads. Follow-up for the
+    // web agent (shared rule).
 
     // MARK: Break 6 — signing waits for the pay overlays
 
-    func testBreak6PayScreensWaitForThePayOverlays() {
-        XCTAssertEqual(
-            PrivatePayOverlayReadiness.blockMessage(privatePay: true, ownFinished: false, ownReadable: true, rosterFinished: true),
-            PrivatePayOverlayReadiness.loadingMessage
-        )
-        XCTAssertEqual(
-            PrivatePayOverlayReadiness.blockMessage(privatePay: true, ownFinished: true, ownReadable: true, rosterFinished: false),
-            PrivatePayOverlayReadiness.loadingMessage,
-            "a reviewer waits for the roster's pay profiles too"
-        )
-        XCTAssertEqual(
-            PrivatePayOverlayReadiness.blockMessage(privatePay: true, ownFinished: true, ownReadable: false, rosterFinished: true),
-            PrivatePayOverlayReadiness.ownFailedMessage
-        )
-        XCTAssertNil(PrivatePayOverlayReadiness.blockMessage(privatePay: true, ownFinished: true, ownReadable: true, rosterFinished: true))
+    func testBreak6PayScreensWaitForThePayOverlaysTheyPrice() {
+        func message(_ scope: PayOverlayScope, own: PayOverlayLoad, roster: PayOverlayLoad, privatePay: Bool = true) -> String? {
+            PrivatePayOverlayReadiness.blockMessage(
+                scope: scope, switchesKnown: true, privatePay: privatePay, own: own, roster: roster
+            )
+        }
+        XCTAssertEqual(message(.ownPay, own: .loading, roster: .ready), PrivatePayOverlayReadiness.loadingMessage)
+        XCTAssertEqual(message(.ownPay, own: .failed, roster: .ready), PrivatePayOverlayReadiness.ownFailedMessage)
+        XCTAssertEqual(message(.othersPay, own: .ready, roster: .loading), PrivatePayOverlayReadiness.loadingMessage)
+        XCTAssertNil(message(.ownPay, own: .ready, roster: .ready))
+        XCTAssertNil(message(.othersPay, own: .failed, roster: .failed, privatePay: false), "switch off: never waits")
 
         // Sign-off, counter-signature, invoices, exports and the weekly report all go through this gate.
         let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
-        PrivatePayOverlayReadiness.update(ownFinished: false, ownReadable: true, rosterFinished: true)
+        PrivatePayOverlayReadiness.update(own: .loading, roster: .ready)
         XCTAssertEqual(PayInputsLoad.blockMessage(state: .loaded, organization: organization), PrivatePayOverlayReadiness.loadingMessage)
-        PrivatePayOverlayReadiness.update(ownFinished: true, ownReadable: true, rosterFinished: true)
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready)
         XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization))
-        // privatePay off: never waits.
         SecuritySwitchContext.update(config: ["privatePay": false])
-        PrivatePayOverlayReadiness.update(ownFinished: false, ownReadable: false, rosterFinished: false)
+        PrivatePayOverlayReadiness.update(own: .failed, roster: .failed)
+        XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay))
+    }
+
+    // MARK: Review of #240, finding 1 — the switches not read yet
+
+    func testFinding1NothingIsDecidedOrSignedBeforeTheSwitchesAreRead() {
+        // Offline launch with no cached `platformConfig/app`: `privatePay` reads as false, but it is not known.
+        SecuritySwitchContext.reset()
+        SecuritySwitchContext.setReadForTests(false)
+        let store = UserStore()
+        store.currentUser = stripped()
+        XCTAssertFalse(SecuritySwitchContext.privatePay)
+        XCTAssertFalse(store.ownPayReady, "never decided on the stripped document while the switch is unknown")
+        XCTAssertFalse(store.canAccessMyTimesheets())
+        XCTAssertFalse(store.shouldShowTimesheetsDisabledMessage())
+        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
+        XCTAssertEqual(PayInputsLoad.blockMessage(state: .loaded, organization: organization), PrivatePayOverlayReadiness.loadingMessage)
+        XCTAssertEqual(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay),
+            PrivatePayOverlayReadiness.loadingMessage,
+            "no sign, counter-sign, export, invoice or weekly report either"
+        )
+
+        // The document answers with the switch off: everything decides on the users document as before.
+        SecuritySwitchContext.update(config: ["privatePay": false])
+        XCTAssertTrue(SecuritySwitchContext.hasRead)
+        XCTAssertTrue(store.ownPayReady)
         XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization))
+    }
+
+    func testFinding1TheFirstAnswerIsAnnouncedOnce() {
+        SecuritySwitchContext.reset()
+        SecuritySwitchContext.setReadForTests(false)
+        let first = expectation(forNotification: .securitySwitchesFirstRead, object: nil)
+        SecuritySwitchContext.update(config: nil)
+        wait(for: [first], timeout: 2)
+        let again = expectation(forNotification: .securitySwitchesFirstRead, object: nil)
+        again.isInverted = true
+        SecuritySwitchContext.update(config: nil)
+        wait(for: [again], timeout: 0.5)
+    }
+
+    // MARK: Finding 2 — a failed roster overlay
+
+    func testFinding2AFailedRosterOverlayBlocksOthersPayWithAMessage() {
+        let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
+        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: nil, key: key), .failed, "no good overlay: failed, never finished")
+        let otherPeople = RosterPayProfileCache(key: key + "x", profiles: [:])
+        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: otherPeople, key: key), .failed)
+        let samePeople = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")])
+        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: samePeople, key: key), .ready, "the last good overlay is still laid over")
+
+        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .failed)
+        XCTAssertEqual(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay),
+            PrivatePayOverlayReadiness.rosterFailedMessage,
+            "counter-sign, export, invoice and the weekly report say why"
+        )
+        XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .ownPay))
+    }
+
+    // MARK: Finding 3 — a failed own read
+
+    func testFinding3AFailedOwnReadKeepsTheLastGoodRecordElseHolds() throws {
+        let user = stripped()
+        let key = UserStore.ownPayKey(user: user, organizationId: nil)
+        let good = try XCTUnwrap(UserStore.ownPayRecord(user: user, reads: [(id: user.id, read: true, data: payeProfile())]).record)
+
+        // A confirmed record is kept after a refusal or a failure: decisions and signing go on from it.
+        let confirmed = OwnPayOverlayState(key: key, finished: true, readable: true, record: good, recordConfirmed: true)
+        let afterFailure = UserStore.ownPayStateAfterRead(key: key, previous: confirmed, record: nil, readable: false, offline: false)
+        XCTAssertEqual(afterFailure.record?.employmentType, .paye)
+        XCTAssertTrue(UserStore.ownPayDecidable(afterFailure, key: key))
+        XCTAssertEqual(UserStore.ownPayLoad(afterFailure, key: key), .ready)
+
+        // With no good record, both decisions hold and signing says the read failed.
+        let nothing = UserStore.ownPayStateAfterRead(key: key, previous: OwnPayOverlayState(key: key), record: nil, readable: false, offline: true)
+        XCTAssertNil(nothing.record)
+        XCTAssertFalse(UserStore.ownPayDecidable(nothing, key: key))
+        XCTAssertEqual(UserStore.ownPayLoad(nothing, key: key), .failed)
+        let store = UserStore()
+        store.currentUser = user
+        store.ownPayOverlay = nothing
+        XCTAssertFalse(store.ownPayReady, "the reminder refresh writes nothing while this is false")
+        XCTAssertFalse(store.canAccessMyTimesheets())
+        XCTAssertFalse(store.shouldShowTimesheetsDisabledMessage())
+
+        // Finding 5: the launch cache copy is dropped after a refusal (never "answered from the cache").
+        let provisional = OwnPayOverlayState(key: key, finished: false, readable: true, record: good, recordConfirmed: false)
+        let refused = UserStore.ownPayStateAfterRead(key: key, previous: provisional, record: nil, readable: false, offline: false)
+        XCTAssertNil(refused.record)
+        XCTAssertFalse(UserStore.ownPayDecidable(refused, key: key))
+    }
+
+    func testFinding5OnlyAnOfflineFailureMayUseThePhonesCopy() {
+        XCTAssertFalse(FirebaseBackend.payProfileReadErrorIsOffline(domain: "FIRFirestoreErrorDomain", code: 7), "permission denied")
+        XCTAssertTrue(FirebaseBackend.payProfileReadErrorIsOffline(domain: "FIRFirestoreErrorDomain", code: 14), "unavailable")
+        XCTAssertTrue(FirebaseBackend.payProfileReadErrorIsOffline(domain: "FIRFirestoreErrorDomain", code: 4), "deadline exceeded")
+        XCTAssertTrue(FirebaseBackend.payProfileReadErrorIsOffline(domain: NSURLErrorDomain, code: NSURLErrorNotConnectedToInternet))
+        XCTAssertFalse(FirebaseBackend.payProfileReadErrorIsOffline(domain: "FIRFirestoreErrorDomain", code: 5))
+    }
+
+    func testFinding8TheLaunchCopyDecidesMyTimesheetsButSigningWaitsForTheServer() throws {
+        let user = stripped()
+        let key = UserStore.ownPayKey(user: user, organizationId: nil)
+        let cached = try XCTUnwrap(UserStore.ownPayRecord(user: user, reads: [(id: user.id, read: true, data: payeProfile())]).record)
+        let store = UserStore()
+        store.currentUser = user
+        store.ownPayOverlay = OwnPayOverlayState(key: key, finished: false, readable: true, record: cached, recordConfirmed: false)
+        XCTAssertTrue(store.ownPayReady, "no hide-then-show of My Timesheets while the server read runs")
+        XCTAssertFalse(store.canAccessMyTimesheets(), "PAYE from the last good copy")
+        XCTAssertEqual(UserStore.ownPayLoad(store.ownPayOverlay, key: key), .loading, "signing waits for the server")
+    }
+
+    func testFinding9AnAdminsFailedOwnReadDoesNotBlockOthersSheets() {
+        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
+        PrivatePayOverlayReadiness.update(own: .failed, roster: .ready)
+        XCTAssertNil(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, bookings: (loaded: true, failed: false), scope: .othersPay),
+            "counter-signing others and the weekly report go on"
+        )
+        XCTAssertEqual(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .ownPay),
+            PrivatePayOverlayReadiness.ownFailedMessage
+        )
+    }
+
+    // MARK: Finding 4 — roster refreshes
+
+    func testFinding4ARefreshOfTheSamePeopleStaysReadyAndKeepsThePay() {
+        let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
+        XCTAssertEqual(
+            UserStore.rosterPaySubjectsKey(roster.reversed(), organizationId: "ORG", viewerId: "ADMIN"), key,
+            "order does not change the people"
+        )
+        let cache = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")])
+
+        // A new snapshot of the same people (stripped again): laid over at once, ready — no "Loading pay details…".
+        let same = UserStore.rosterPayAfterSnapshot(roster, cache: cache, key: key)
+        XCTAssertEqual(same.load, .ready)
+        XCTAssertEqual(same.users.first { $0.id == "OP-1" }?.employmentType, .paye)
+        XCTAssertEqual(same.users.first { $0.id == "OP-1" }?.dayRate, 180)
+
+        // Someone joined: not ready until the overlay of the new set answers.
+        let grown = roster + [stripped(id: "OP-3")]
+        let grownKey = UserStore.rosterPaySubjectsKey(grown, organizationId: "ORG", viewerId: "ADMIN")
+        XCTAssertNotEqual(grownKey, key)
+        let next = UserStore.rosterPayAfterSnapshot(grown, cache: cache, key: grownKey)
+        XCTAssertEqual(next.load, .loading)
+        XCTAssertEqual(next.users, grown)
+        XCTAssertEqual(UserStore.rosterPayAfterSnapshot(roster, cache: nil, key: key).load, .loading, "first overlay")
+    }
+
+    func testFinding4ACounterSignatureNeverSavesWithoutItsSnapshot() {
+        OrganizationRulebookContext.update(
+            from: Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company", creatorUserId: "TEST-FOUNDER")
+        )
+        let manager = AppUser(
+            id: "TEST-LM", email: "lm@example.test", organizationId: "TEST-ORG-STRIP", role: .manager,
+            firstName: "Line", surname: "Manager", isActive: true, passwordSet: true,
+            permissions: UserPermissions(manager: true)
+        )
+        var operative = AppUser(
+            id: "TEST-OP", email: "op@example.test", organizationId: "TEST-ORG-STRIP", role: .operative,
+            firstName: "Op", surname: "Erative", isActive: true, passwordSet: true,
+            permissions: UserPermissions(operativeMode: true), dayRate: 200, employmentType: .selfEmployed
+        )
+        operative.setLineManagerUserIds([manager.id])
+        RulebookRosterSnapshot.update([manager, operative])
+
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = thursday
+        draft.operativeSignedByName = "Op Erative"
+        draft.managerSignedAt = thursday.addingTimeInterval(60)
+        draft.managerSignedByName = "Line Manager"
+        XCTAssertTrue(TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative))
+        let loading = PrivatePayOverlayReadiness.loadingMessage
+        func refusal(_ d: TimesheetDraft, block: String?, reviewer: Bool? = true, rebuild: Bool = false) -> String? {
+            TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+                draft: d, user: operative, writerIsReviewer: reviewer, blockMessage: block, rebuildSnapshot: rebuild
+            )
+        }
+        // The roster refresh is in flight while the line manager counter-signs: refused, never saved unfrozen.
+        XCTAssertEqual(refusal(draft, block: loading), loading)
+        XCTAssertNil(refusal(draft, block: nil), "inputs ready: the snapshot is built and saved")
+        // A sheet that already holds its snapshot keeps it (a note, a review): the save goes on.
+        var frozen = draft
+        frozen.weeklyReportOverride = TimesheetWeeklyReportOverride(
+            approvedAt: thursday, approvedByUserId: manager.id, approvedByName: "Line Manager", selfSigned: false,
+            lines: [], priceWork: [], expenses: []
+        )
+        XCTAssertNil(refusal(frozen, block: loading))
+        XCTAssertEqual(refusal(frozen, block: loading, rebuild: true), loading, "a reopened sheet's rebuild waits too")
+        // Not completed by this save, or the owner's own save with a line manager: nothing to freeze.
+        var halfSigned = draft
+        halfSigned.managerSignedAt = nil
+        halfSigned.managerSignedByName = nil
+        XCTAssertNil(refusal(halfSigned, block: loading))
+        XCTAssertNil(refusal(draft, block: loading, reviewer: false))
     }
 
     // MARK: Break 7 — the PAYE note on Edit booking

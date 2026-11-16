@@ -2260,7 +2260,8 @@ private struct MyTimesheetView: View {
         return PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .ownPay
         )
     }
 
@@ -3515,6 +3516,24 @@ private struct MyTimesheetView: View {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
             return nil
         }
+        // A signature that completes the sheet never saves without its snapshot: while pay inputs (bookings, history or
+        // the pay-profile overlays) are not ready, the save is refused rather than saved unfrozen.
+        if let current = userStore.displayUser,
+           let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+               draft: draft,
+               user: current,
+               writerIsReviewer: TimesheetApprovalPolicy.writerIsReviewer(
+                   writerId: current.id,
+                   writer: current,
+                   subjectUserId: current.id,
+                   subject: current
+               ),
+               blockMessage: payInputsBlockMessage,
+               rebuildSnapshot: rebuildSnapshot
+           ) {
+            saveErrorMessage = refusal
+            return nil
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if let current = userStore.displayUser, payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
             // The owner's own save: with a line manager it never builds the approved snapshot.
@@ -3732,7 +3751,7 @@ struct OperativeTimesheetsView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization, scope: .othersPay)
     }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF.
@@ -4450,7 +4469,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: week.start
-            )
+            ),
+            scope: .othersPay
         ) {
             exportMessage = blocked
             return
@@ -4643,7 +4663,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: row.week.start
-            )
+            ),
+            scope: .othersPay
         ) {
             exportMessage = blocked
             return
@@ -4896,7 +4917,8 @@ private struct OperativeTimesheetReviewView: View {
         if let blocked = PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .othersPay
         ) {
             return blocked
         }
@@ -5668,6 +5690,25 @@ private struct OperativeTimesheetReviewView: View {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return
+        }
+        // A counter-signature never saves without its snapshot (review of #240): while pay inputs (bookings, history or
+        // the roster's pay-profile overlay) are not ready, the save is refused rather than saved unfrozen.
+        if let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+            draft: draft,
+            user: operative,
+            writerIsReviewer: userStore.displayUser.map {
+                TimesheetApprovalPolicy.writerIsReviewer(
+                    writerId: $0.id,
+                    writer: $0,
+                    subjectUserId: operative.id,
+                    subject: operative
+                )
+            },
+            blockMessage: payInputsBlockMessage,
+            rebuildSnapshot: rebuildSnapshotOnSave
+        ) {
+            saveErrorMessage = refusal
             return
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).

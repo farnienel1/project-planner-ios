@@ -39,10 +39,13 @@ class UserStore: ObservableObject {
     private var privatePayOverlayGeneration = 0
     /// True while the overlay's own result is being published (it must not schedule another read).
     private var publishingPrivatePayOverlay = false
-    /// True while a roster pay overlay is running (`privatePay` on). Pay screens wait (`PrivatePayOverlayReadiness`).
-    private(set) var rosterPayOverlayPending = false
-    /// Roster ids (lower case) whose pay was read from a pay profile by the last overlay (`privatePay` on).
-    private(set) var rosterPayOverlaidIds: Set<String> = []
+    /// Whether the roster's pay can be priced (`privatePay` on): ready, loading (no good overlay yet for this set of
+    /// people) or failed (a read was refused or failed and no good overlay exists). Pay screens about other people wait
+    /// for it (`PrivatePayOverlayReadiness`, scope `.othersPay`).
+    private(set) var rosterPayOverlayLoad: PayOverlayLoad = .ready
+    /// The last good roster overlay: the pay profiles read, for one organisation, viewer and set of people. A new roster
+    /// snapshot of the same people is laid over from it at once, so pay stays ready between snapshots (review of #240).
+    var rosterPayProfileCache: RosterPayProfileCache?
     /// RULEBOOK §8: the signed-in person's own pay-profile read (`OwnPayOverlay.swift`; nothing while `privatePay` is off).
     @Published var ownPayOverlay = OwnPayOverlayState()
     /// Bumped by every own-pay read, so a read that finishes after a newer one started is dropped.
@@ -122,6 +125,10 @@ class UserStore: ObservableObject {
         NotificationCenter.default.addObserver(forName: .securitySwitchesDidChange, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.securitySwitchesChanged() }
         }
+        // Own-pay decisions (My Timesheets, the timesheet reminder) wait until `platformConfig/app` has answered.
+        NotificationCenter.default.addObserver(forName: .securitySwitchesFirstRead, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.securitySwitchesFirstRead() }
+        }
     }
 
     deinit {
@@ -132,31 +139,58 @@ class UserStore: ObservableObject {
     /// pay profiles this viewer may see (`CanonicalBusinessEngine.payProfileReadPlan` + `overlayPayProfile`), so
     /// timesheets, invoices, the weekly report and people lists keep showing pay after the strip. While it is off this
     /// does nothing: the users documents are shown as stored.
-    private func schedulePrivatePayOverlay() {
+    func schedulePrivatePayOverlay(attempt: Int = 0) {
         guard !publishingPrivatePayOverlay else { return }
         privatePayOverlayGeneration &+= 1
-        guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty else {
-            rosterPayOverlayPending = false
-            if !SecuritySwitchContext.privatePay || organizationUsers.isEmpty { rosterPayOverlaidIds = [] }
+        guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
+            // Nothing to read: no roster pay is priced from pay profiles.
+            rosterPayOverlayLoad = .ready
+            if !SecuritySwitchContext.privatePay || organizationUsers.isEmpty { rosterPayProfileCache = nil }
             publishPayOverlayReadiness()
             return
         }
         let generation = privatePayOverlayGeneration
-        let roster = organizationUsers
-        rosterPayOverlayPending = true
+        let raw = organizationUsers
+        let key = Self.rosterPaySubjectsKey(raw, organizationId: orgId, viewerId: currentUser?.id)
+        // Same people as the last good overlay: lay it over now and stay ready while the refresh runs.
+        let applied = Self.rosterPayAfterSnapshot(raw, cache: rosterPayProfileCache, key: key)
+        rosterPayOverlayLoad = applied.load
+        if applied.users != raw {
+            publishingPrivatePayOverlay = true
+            organizationUsers = applied.users
+            publishingPrivatePayOverlay = false
+        }
         publishPayOverlayReadiness()
         Task { @MainActor [weak self] in
-            let result = await firebaseBackend.overlayRosterPayIfPrivateWithIds(roster)
-            let overlaid = result.users
+            let result = await firebaseBackend.overlayRosterPayIfPrivateResult(raw)
             guard let self, generation == self.privatePayOverlayGeneration else { return }
-            self.rosterPayOverlaidIds = result.overlaidIds
-            self.rosterPayOverlayPending = false
+            if result.failed {
+                // Reported, never "no profile": without a good overlay of these people, pay screens say so.
+                NSLog("PAY_PROFILE_ROSTER_OVERLAY_FAILED org=%@ attempt=%ld", orgId, attempt)
+                self.rosterPayOverlayLoad = Self.rosterPayLoadAfterFailure(cache: self.rosterPayProfileCache, key: key)
+                self.publishPayOverlayReadiness()
+                if attempt < 3 {
+                    try? await Task.sleep(nanoseconds: 15_000_000_000)
+                    guard generation == self.privatePayOverlayGeneration else { return }
+                    self.schedulePrivatePayOverlay(attempt: attempt + 1)
+                }
+                return
+            }
+            self.rosterPayProfileCache = RosterPayProfileCache(key: key, profiles: result.profiles)
+            self.rosterPayOverlayLoad = .ready
             self.publishPayOverlayReadiness()
-            guard overlaid != roster else { return }
+            guard result.users != self.organizationUsers else { return }
             self.publishingPrivatePayOverlay = true
-            self.organizationUsers = overlaid
+            self.organizationUsers = result.users
             self.publishingPrivatePayOverlay = false
         }
+    }
+
+    /// The app came back to the foreground: a failed roster overlay is tried again.
+    func retryRosterPayOverlayIfFailed() {
+        guard SecuritySwitchContext.privatePay, rosterPayOverlayLoad == .failed else { return }
+        schedulePrivatePayOverlay()
     }
 
     /// A switch changed: on → lay the pay profiles over; off → read the roster again, so no overlaid value stays.
@@ -203,6 +237,7 @@ class UserStore: ObservableObject {
     /// Writes `users/{uid}.lastSeenAt` (merge). Call from app foreground; throttled to ~2 minutes.
     func recordCurrentUserLastSeenIfDue() async {
         retryOwnPayOverlayIfFailed()
+        retryRosterPayOverlayIfFailed()
         guard let firebaseBackend = firebaseBackend else { return }
         guard let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty else { return }
         let now = Date()
@@ -1163,7 +1198,7 @@ class UserStore: ObservableObject {
         organizationUserDocumentsOrganizationId = nil
         organizationUsersFinishedLoadOrganizationId = nil
         organizationUserEmailClaims = nil
-        rosterPayOverlaidIds = []
+        rosterPayProfileCache = nil
         currentUser = nil
         roleTestingPreset = nil
         errorMessage = nil

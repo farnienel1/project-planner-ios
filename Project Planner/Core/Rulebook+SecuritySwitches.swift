@@ -16,6 +16,9 @@ import FirebaseAuth
 extension Notification.Name {
     /// A security switch changed for the open organisation (`securitySwitches`): pay reads and the read plans re-plan.
     static let securitySwitchesDidChange = Notification.Name("securitySwitchesDidChange")
+    /// `platformConfig/app` answered for the first time since launch (`SecuritySwitchContext.hasRead` turned true). Own
+    /// pay decisions held while the switches were unknown run then (`OwnPayOverlay.swift`).
+    static let securitySwitchesFirstRead = Notification.Name("securitySwitchesFirstRead")
     /// The `ghostAccounts` switch changed for the open organisation (RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b"):
     /// Add user shows or hides the Ghost account toggle.
     static let ghostAccountsSwitchDidChange = Notification.Name("ghostAccountsSwitchDidChange")
@@ -99,10 +102,16 @@ nonisolated enum SecuritySwitchContext {
         let panelBefore = dataCheckPanel
         let nextKey = next.flatMap { CanonicalBusinessEngine.rulebookMemoKey($0) } ?? "none"
         lock.lock()
+        let firstAnswer = !hasAnswered
         config = next
         configKey = nextKey
         hasAnswered = true
         lock.unlock()
+        if firstAnswer {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .securitySwitchesFirstRead, object: nil)
+            }
+        }
         if dataCheckPanel != panelBefore {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .dataCheckPanelSwitchDidChange, object: nil)
@@ -118,6 +127,13 @@ nonisolated enum SecuritySwitchContext {
             NotificationCenter.default.post(name: .securitySwitchesDidChange, object: nil)
             NotificationCenter.default.post(name: .jobReadPlanDidChange, object: nil)
         }
+    }
+
+    /// Tests: whether `platformConfig/app` reads as answered (`hasRead`), without touching the switches.
+    static func setReadForTests(_ read: Bool) {
+        lock.lock()
+        hasAnswered = read
+        lock.unlock()
     }
 
     /// Tests: forget the document.
@@ -352,39 +368,57 @@ extension FirebaseBackend {
     /// read (`payProfileReadPlan` + `overlayPayProfile`, own id, else a `formerUserIds` id). While it is off the users
     /// documents are shown unchanged — a stale pay profile left by an older build must never replace them.
     func overlayRosterPayIfPrivate(_ users: [AppUser]) async -> [AppUser] {
-        await overlayRosterPayIfPrivateWithIds(users).users
+        await overlayRosterPayIfPrivateResult(users).users
     }
 
-    /// `overlayRosterPayIfPrivate` plus the ids (lower case) of the rows whose pay profile was read and laid over. A row
-    /// not listed holds no readable pay while `privatePay` is on (its stripped employment type is not an answer).
-    func overlayRosterPayIfPrivateWithIds(_ users: [AppUser]) async -> (users: [AppUser], overlaidIds: Set<String>) {
+    /// `overlayRosterPayIfPrivate` with what it read: the pay profiles by document id (so the next roster snapshot can be
+    /// laid over at once, `layingRosterPayProfiles`) and whether a read failed or was refused. A failed read is never
+    /// "no profile" (review of #240): the caller marks the roster's pay not ready and retries.
+    func overlayRosterPayIfPrivateResult(_ users: [AppUser]) async -> RosterPayOverlayResult {
         guard SecuritySwitchContext.privatePay,
-              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return (users, []) }
+              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
+            return RosterPayOverlayResult(users: users, profiles: [:], failed: false)
+        }
         let roster = users.map(\.payAccessSubject)
         let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster, roster: roster)
         var profiles: [String: [String: Any]] = [:]
+        var failed = false
         let collection = db.collection("organizations").document(orgId).collection("payProfiles")
         switch plan {
         case .all:
-            if let snapshot = try? await collection.getDocuments() {
+            do {
+                let snapshot = try await collection.getDocuments()
                 for doc in snapshot.documents { profiles[doc.documentID] = doc.data() }
+            } catch {
+                failed = true
+                NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ %@", orgId, error.localizedDescription)
             }
         case .documents(let ids):
             for id in ids {
-                if let snapshot = try? await collection.document(id).getDocument(), snapshot.exists, let data = snapshot.data() {
-                    profiles[id] = data
+                do {
+                    let snapshot = try await collection.document(id).getDocument()
+                    if snapshot.exists, let data = snapshot.data() { profiles[id] = data }
+                } catch {
+                    failed = true
+                    NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ id=%@ %@", orgId, id, error.localizedDescription)
                 }
             }
         }
-        guard !profiles.isEmpty else { return (users, []) }
-        var overlaidIds = Set<String>()
-        let shown = users.map { user in
-            // RULEBOOK 1.26.1 §8: the same `payEditorStartingValues` record the pay editors start from.
+        return RosterPayOverlayResult(
+            users: Self.layingRosterPayProfiles(users, profiles: profiles),
+            profiles: profiles,
+            failed: failed
+        )
+    }
+
+    /// The roster with each person's pay profile laid over (`payShown`, RULEBOOK 1.26.1 §8: own id, else a
+    /// `formerUserIds` id). Rows with no profile in `profiles` are returned as given.
+    static func layingRosterPayProfiles(_ users: [AppUser], profiles: [String: [String: Any]]) -> [AppUser] {
+        guard !profiles.isEmpty else { return users }
+        return users.map { user in
             let profileId = ([user.id] + user.formerUserIds).first { profiles[$0] != nil }
-            if profileId != nil { overlaidIds.insert(user.id.lowercased()) }
             return profileId.map { user.payShown(with: profiles[$0], profileId: $0, privatePay: true) } ?? user
         }
-        return (shown, overlaidIds)
     }
 
     /// RULEBOOK 1.27.0 §8 (owner decision 7): while `privatePay` is on, each catalogue `operatives` row
