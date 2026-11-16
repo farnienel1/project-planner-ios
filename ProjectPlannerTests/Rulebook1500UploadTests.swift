@@ -120,23 +120,22 @@ final class Rulebook1500UploadTests: XCTestCase {
         XCTAssertThrowsError(try StorageUploadPolicy.checkedUploadContentType(storagePath: "elsewhere/u_1.pdf", data: pdf, declaredContentType: "application/pdf"))
     }
 
-    /// Until the 1.50.0 Storage rules are published, certificates go as JPEG or PDF only.
-    func testCertificatesAreJPEGOrPDFUntilTheRulesArePublished() throws {
-        XCTAssertFalse(StorageUploadPolicy.storageRules150Published)
+    /// The 1.50.0 Storage rules are live (web #333): certificates take every allowed photo type as well as JPEG and PDF,
+    /// and a PNG certificate stays a PNG when it is redrawn (web `stripPhotoLocation` `auto`).
+    func testCertificatesAcceptEveryAllowedPhotoType() throws {
         let base = "organizations/\(org)/operatives/X/qualifications/Q/certificates/"
         XCTAssertEqual(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + "u_1.jpg", data: jpeg, declaredContentType: "image/jpeg"), "image/jpeg")
+        XCTAssertEqual(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + "u_1.pdf", data: pdf, declaredContentType: "application/pdf"), "application/pdf")
         let png = try XCTUnwrap(solidImage(size: 8).pngData())
-        XCTAssertThrowsError(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + "u_1.png", data: png, declaredContentType: "image/png")) { error in
-            XCTAssertEqual(error.localizedDescription, StorageUploadPolicy.certificateJPEGOrPDFMessage)
-        }
-        // A PNG certificate picked by the person is redrawn to JPEG before upload.
+        XCTAssertEqual(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + "u_1.png", data: png, declaredContentType: "image/png"), "image/png")
         let prepared = try StorageUploadPolicy.prepareFileData(
             png, originalFileName: "certificate.png", declaredContentType: "", family: .qualificationCertificate,
             uid: "TEST-uid", unixMilliseconds: 1_793_750_000_000
         )
-        XCTAssertEqual(prepared.contentType, "image/jpeg")
-        XCTAssertTrue(prepared.objectName.hasSuffix(".jpg"))
-        XCTAssertEqual(prepared.data.prefix(3), Data([0xFF, 0xD8, 0xFF]))
+        XCTAssertEqual(prepared.contentType, "image/png")
+        XCTAssertTrue(prepared.objectName.hasSuffix(".png"))
+        XCTAssertEqual(prepared.data.prefix(4), Data([0x89, 0x50, 0x4E, 0x47]))
+        XCTAssertEqual(try StorageUploadPolicy.checkedUploadContentType(storagePath: base + prepared.objectName, data: prepared.data, declaredContentType: prepared.contentType), "image/png")
     }
 
     func testPrepareFileDataRefusesARenamedSVGAndKeepsAPDF() throws {

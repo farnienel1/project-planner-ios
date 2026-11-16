@@ -3282,8 +3282,7 @@ class FirebaseBackend: ObservableObject {
         }
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
-        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`); JPEG or PDF until the 1.50.0
-        // Storage rules are published (`StorageUploadPolicy.storageRules150Published`).
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`); every allowed photo type or PDF.
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
         )
