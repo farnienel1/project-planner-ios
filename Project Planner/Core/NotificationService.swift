@@ -227,10 +227,11 @@ class NotificationService: ObservableObject {
             ?? AppNotification.NotificationType.timesheetSubmissionReminder.rawValue
         // RULEBOOK §8: while `privatePay` is on, who takes part depends on the person's own pay profile (the stripped
         // users document reads as self-employed). Nothing is decided — no row written, none removed — before
-        // `platformConfig/app` has answered, or while the own record is not decidable (still loading, or a failed read
-        // with no good record kept). `UserStore` refreshes this when either changes; the record is the one laid over.
+        // `platformConfig/app` has answered, or while the own record is not confirmed by a finished read (still loading,
+        // only the launch cache copy, or a failed read with no good record kept). `UserStore` refreshes this when either
+        // changes; the record is the one laid over.
         guard SecuritySwitchContext.hasRead else { return }
-        if userStore?.ownPayReady == false { return }
+        if userStore?.ownPaySettled == false { return }
         guard let user = userStore?.currentUserWithPay, user.isActive, user.participatesInTimesheets() else {
             await LocalNotificationService.shared.removeTimesheetSubmissionReminders()
             return

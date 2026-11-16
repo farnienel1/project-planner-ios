@@ -281,23 +281,87 @@ final class PayStripReadyTests: XCTestCase {
 
     // MARK: Finding 2 — a failed roster overlay
 
-    func testFinding2AFailedRosterOverlayBlocksOthersPayWithAMessage() {
+    func testFinding2OneFailedReadBlocksOnlyThatPerson() {
+        var stale = stripped(id: "OP-1")
+        stale.formerUserIds = ["OLD-1"]
+        let fine = stripped(id: "OP-2")
+        let roster = [stale, fine]
+        // OP-1's read was refused and nothing answered for any of their ids; OP-2 answered.
+        let failed = FirebaseBackend.rosterFailedUserIds(
+            roster,
+            profiles: ["OP-2": payeProfile("OP-2")],
+            failedProfileIds: ["OP-1"]
+        )
+        XCTAssertEqual(failed, ["op-1"])
+        XCTAssertEqual(
+            FirebaseBackend.rosterFailedUserIds(roster, profiles: ["OLD-1": payeProfile("OP-1")], failedProfileIds: ["OP-1"]),
+            [],
+            "a former id that answered is enough"
+        )
+
+        // The line manager's team: only OP-1's screens wait, with a message naming them.
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready, failedPersonIds: failed)
+        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
+        XCTAssertEqual(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .forPerson(stale)),
+            PrivatePayOverlayReadiness.personFailedMessage("Pat Payee")
+        )
+        XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .forPerson(fine)))
+        XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay), "the team goes on")
+        XCTAssertTrue(PrivatePayOverlayReadiness.personPayFailed(stale), "Export skips and names them")
+        XCTAssertFalse(PrivatePayOverlayReadiness.personPayFailed(fine))
+        // While the first overlay is loading, a person's screens say "Loading", and Export does not count it a failure.
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .loading)
+        XCTAssertEqual(PrivatePayOverlayReadiness.blockMessage(scope: .forPerson(fine)), PrivatePayOverlayReadiness.loadingMessage)
+        XCTAssertFalse(PrivatePayOverlayReadiness.personPayFailed(fine))
+    }
+
+    func testFinding2AFailedRefreshKeepsTheLastGoodCopyOfThatPerson() {
+        let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "LM")
+        let good = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1"), "OP-2": payeProfile("OP-2")])
+        // A refresh: OP-1's read now fails; the copy of OP-1 from the last good overlay stays, nobody is blocked.
+        let refresh = RosterPayOverlayResult(users: roster, profiles: ["OP-2": payeProfile("OP-2")], failedUserIds: ["op-1"])
+        let merged = UserStore.rosterPayAfterResult(roster, result: refresh, cache: good, key: key)
+        XCTAssertTrue(merged.failedIds.isEmpty)
+        XCTAssertEqual(merged.users.first { $0.id == "OP-1" }?.employmentType, .paye)
+        // No good copy: only OP-1 is failed.
+        let first = UserStore.rosterPayAfterResult(roster, result: refresh, cache: nil, key: key)
+        XCTAssertEqual(first.failedIds, ["op-1"])
+        XCTAssertEqual(first.cache?.failedIds, ["op-1"])
+    }
+
+    func testFinding6APartialCacheAnswerIsNeverKeptAsLastGood() {
         let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
         let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
-        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: nil, key: key), .failed, "no good overlay: failed, never finished")
-        let otherPeople = RosterPayProfileCache(key: key + "x", profiles: [:])
-        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: otherPeople, key: key), .failed)
-        let samePeople = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")])
-        XCTAssertEqual(UserStore.rosterPayLoadAfterFailure(cache: samePeople, key: key), .ready, "the last good overlay is still laid over")
-
-        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
-        PrivatePayOverlayReadiness.update(own: .ready, roster: .failed)
-        XCTAssertEqual(
-            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay),
-            PrivatePayOverlayReadiness.rosterFailedMessage,
-            "counter-sign, export, invoice and the weekly report say why"
+        let offline = RosterPayOverlayResult(
+            users: FirebaseBackend.layingRosterPayProfiles(roster, profiles: ["OP-2": payeProfile("OP-2")]),
+            profiles: ["OP-2": payeProfile("OP-2")],
+            failedUserIds: [],
+            fromCache: true
         )
-        XCTAssertNil(PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .ownPay))
+        let first = UserStore.rosterPayAfterResult(roster, result: offline, cache: nil, key: key)
+        XCTAssertNil(first.cache, "not saved as last good")
+        XCTAssertEqual(first.failedIds, ["op-1", "op-2"], "nothing about them is signed or exported until the server answers")
+        let good = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")])
+        let kept = UserStore.rosterPayAfterResult(roster, result: offline, cache: good, key: key)
+        XCTAssertEqual(kept.cache?.profiles.keys.sorted(), ["OP-1"], "the last good overlay stays")
+        XCTAssertEqual(kept.users.first { $0.id == "OP-2" }?.employmentType, .selfEmployed, "shown from the last good copy")
+    }
+
+    func testFinding6PayIsAlwaysLaidOverTheRawRows() {
+        let raw = [stripped(id: "OP-1")]
+        let shown = FirebaseBackend.layingRosterPayProfiles(raw, profiles: ["OP-1": payeProfile("OP-1")])
+        XCTAssertEqual(shown.first?.dayRate, 180)
+        let laid = UserStore.rosterPayLaidMap(raw: raw, shown: shown)
+        // The next overlay starts from the raw row; the profile was deleted meanwhile, so no old pay stays.
+        let back = UserStore.rosterRawRows(shown, laid: laid)
+        XCTAssertEqual(back, raw)
+        XCTAssertEqual(FirebaseBackend.layingRosterPayProfiles(back, profiles: [:]), raw)
+        // A row whose pay changed since (a new snapshot, an edit) is the document's own and is not touched.
+        var edited = shown[0]
+        edited.dayRate = 200
+        XCTAssertEqual(UserStore.rosterRawRows([edited], laid: laid).first?.dayRate, 200)
     }
 
     // MARK: Finding 3 — a failed own read
@@ -364,6 +428,79 @@ final class PayStripReadyTests: XCTestCase {
             PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .ownPay),
             PrivatePayOverlayReadiness.ownFailedMessage
         )
+    }
+
+    // MARK: Second review — reminder, first answer, the own-read wiring
+
+    func testReminderWaitsForTheServerNotTheLaunchCopy() throws {
+        let user = stripped()
+        let key = UserStore.ownPayKey(user: user, organizationId: nil)
+        let cached = try XCTUnwrap(UserStore.ownPayRecord(user: user, reads: [(id: user.id, read: true, data: payeProfile())]).record)
+        let store = UserStore()
+        store.currentUser = user
+        store.ownPayOverlay = OwnPayOverlayState(key: key, finished: false, readable: true, record: cached, recordConfirmed: false)
+        XCTAssertTrue(store.ownPayReady, "My Timesheets decides from the launch copy")
+        XCTAssertFalse(store.ownPaySettled, "no reminder row is written or removed from it")
+        store.ownPayOverlay = OwnPayOverlayState(key: key, finished: true, readable: true, record: cached, recordConfirmed: true)
+        XCTAssertTrue(store.ownPaySettled)
+    }
+
+    func testTheFirstAnswerSaysWhetherTheSwitchesChanged() {
+        SecuritySwitchContext.reset()
+        SecuritySwitchContext.setReadForTests(false)
+        let first = expectation(forNotification: .securitySwitchesFirstRead, object: nil) { note in
+            (note.userInfo?["switchesChanged"] as? Bool) == true
+        }
+        // `privatePay` on at the first answer: `securitySwitchesDidChange` starts the overlays, the first read does not.
+        SecuritySwitchContext.update(config: ["privatePay": true])
+        wait(for: [first], timeout: 2)
+    }
+
+    func testOwnReadWiringCacheThenServerThenRetry() async throws {
+        let previousDelay = UserStore.payOverlayRetryDelayNanoseconds
+        UserStore.payOverlayRetryDelayNanoseconds = 50_000_000
+        defer { UserStore.payOverlayRetryDelayNanoseconds = previousDelay }
+        let user = stripped()
+        let reader = FakePayProfileReader()
+        reader.cached = payeProfile()
+        // First server read: refused. The retry: answered.
+        reader.serverAnswers = [
+            PayProfileRead(read: false, data: nil, offline: false),
+            PayProfileRead(read: true, data: payeProfile(), offline: false),
+        ]
+        let store = UserStore()
+        store.ownPayOrganizationIdOverride = "TEST-ORG"
+        store.payProfileReaderOverride = reader
+        store.currentUser = user
+
+        // The launch copy decides first; signing waits.
+        try await waitUntil { store.ownPayOverlay.record != nil || store.ownPayOverlay.finished }
+        // The refusal drops the launch copy (never "answered from the cache") and holds the decisions.
+        try await waitUntil { store.ownPayOverlay.finished && !store.ownPayOverlay.readable }
+        XCTAssertNil(store.ownPayOverlay.record)
+        XCTAssertFalse(store.ownPayReady)
+        XCTAssertEqual(reader.serverReadOrganizations, ["TEST-ORG"], "the organisation captured when the read began")
+        // The retry (same generation) answers: PAYE, confirmed.
+        try await waitUntil { store.ownPayOverlay.readable && store.ownPayOverlay.finished }
+        XCTAssertEqual(store.ownPayOverlay.record?.employmentType, .paye)
+        XCTAssertTrue(store.ownPaySettled)
+        XCTAssertFalse(store.canAccessMyTimesheets())
+        XCTAssertEqual(reader.serverReads, 2)
+
+        // A newer read (another organisation) drops an older answer.
+        reader.serverAnswers = [PayProfileRead(read: true, data: selfEmployedProfile("PAYE-1"), offline: false)]
+        store.ownPayOrganizationIdOverride = "TEST-ORG-2"
+        store.scheduleOwnPayOverlay()
+        try await waitUntil { store.ownPayOverlay.key.hasPrefix("TEST-ORG-2") && store.ownPayOverlay.finished }
+        XCTAssertEqual(store.ownPayOverlay.record?.employmentType, .selfEmployed)
+    }
+
+    private func waitUntil(_ condition: @MainActor () -> Bool, timeout: TimeInterval = 3) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline { return XCTFail("timed out") }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 
     // MARK: Finding 4 — roster refreshes
@@ -453,5 +590,23 @@ final class PayStripReadyTests: XCTestCase {
         )
         let shown = overlaid(user, profile: payeProfile(id.uuidString))
         XCTAssertTrue(LabourBookingEditOptions.isPaye(booking, operatives: [], users: [shown]), "readable pay: the note shows")
+    }
+}
+
+/// A `payProfiles` reader for the own-pay wiring test: a cached copy and a queue of server answers.
+@MainActor
+private final class FakePayProfileReader: PayProfileReading {
+    var cached: [String: Any]?
+    var serverAnswers: [PayProfileRead] = []
+    private(set) var serverReads = 0
+    private(set) var serverReadOrganizations: [String] = []
+
+    func cachedPayProfile(organizationId: String, subjectId: String) async -> [String: Any]? { cached }
+
+    func readPayProfile(organizationId: String, subjectId: String, cacheWhenOffline: Bool) async -> PayProfileRead {
+        serverReads += 1
+        if serverReadOrganizations.last != organizationId { serverReadOrganizations.append(organizationId) }
+        guard !serverAnswers.isEmpty else { return PayProfileRead(read: false, data: nil, offline: true) }
+        return serverAnswers.removeFirst()
     }
 }

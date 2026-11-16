@@ -108,8 +108,15 @@ nonisolated enum SecuritySwitchContext {
         hasAnswered = true
         lock.unlock()
         if firstAnswer {
+            // `switchesChanged`: `securitySwitchesDidChange` follows and starts the pay overlays, so the first answer
+            // starts them once (review of #240).
+            let changed = current != before
             DispatchQueue.main.async {
-                NotificationCenter.default.post(name: .securitySwitchesFirstRead, object: nil)
+                NotificationCenter.default.post(
+                    name: .securitySwitchesFirstRead,
+                    object: nil,
+                    userInfo: ["switchesChanged": changed]
+                )
             }
         }
         if dataCheckPanel != panelBefore {
@@ -377,38 +384,75 @@ extension FirebaseBackend {
     func overlayRosterPayIfPrivateResult(_ users: [AppUser]) async -> RosterPayOverlayResult {
         guard SecuritySwitchContext.privatePay,
               let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
-            return RosterPayOverlayResult(users: users, profiles: [:], failed: false)
+            return RosterPayOverlayResult(users: users, profiles: [:], failedUserIds: [])
         }
         let roster = users.map(\.payAccessSubject)
         let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster, roster: roster)
         var profiles: [String: [String: Any]] = [:]
-        var failed = false
+        var failedProfileIds = Set<String>()
+        var everyoneFailed = false
+        var fromCache = false
         let collection = db.collection("organizations").document(orgId).collection("payProfiles")
         switch plan {
         case .all:
+            // The server's answer, never a partial cache copy (review of #240); the cache only when offline.
             do {
-                let snapshot = try await collection.getDocuments()
+                let snapshot = try await collection.getDocuments(source: .server)
                 for doc in snapshot.documents { profiles[doc.documentID] = doc.data() }
             } catch {
-                failed = true
+                let ns = error as NSError
                 NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ %@", orgId, error.localizedDescription)
+                if Self.payProfileReadErrorIsOffline(domain: ns.domain, code: ns.code),
+                   let cached = try? await collection.getDocuments(source: .cache) {
+                    for doc in cached.documents { profiles[doc.documentID] = doc.data() }
+                    fromCache = true
+                } else {
+                    everyoneFailed = true
+                }
             }
         case .documents(let ids):
             for id in ids {
                 do {
-                    let snapshot = try await collection.document(id).getDocument()
+                    let snapshot = try await collection.document(id).getDocument(source: .server)
                     if snapshot.exists, let data = snapshot.data() { profiles[id] = data }
                 } catch {
-                    failed = true
+                    let ns = error as NSError
                     NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ id=%@ %@", orgId, id, error.localizedDescription)
+                    if Self.payProfileReadErrorIsOffline(domain: ns.domain, code: ns.code),
+                       let cached = try? await collection.document(id).getDocument(source: .cache) {
+                        if cached.exists, let data = cached.data() { profiles[id] = data }
+                        fromCache = true
+                    } else {
+                        failedProfileIds.insert(id)
+                    }
                 }
             }
         }
         return RosterPayOverlayResult(
             users: Self.layingRosterPayProfiles(users, profiles: profiles),
             profiles: profiles,
-            failed: failed
+            failedUserIds: everyoneFailed
+                ? Set(users.map { $0.id.lowercased() })
+                : Self.rosterFailedUserIds(users, profiles: profiles, failedProfileIds: failedProfileIds),
+            fromCache: fromCache
         )
+    }
+
+    /// The people whose pay could not be read: a read of one of their ids failed and none of their ids answered with a
+    /// profile. User ids, lower case.
+    static func rosterFailedUserIds(
+        _ users: [AppUser],
+        profiles: [String: [String: Any]],
+        failedProfileIds: Set<String>
+    ) -> Set<String> {
+        guard !failedProfileIds.isEmpty else { return [] }
+        var out = Set<String>()
+        for user in users {
+            let ids = [user.id] + user.formerUserIds
+            if ids.contains(where: { profiles[$0] != nil }) { continue }
+            if ids.contains(where: failedProfileIds.contains) { out.insert(user.id.lowercased()) }
+        }
+        return out
     }
 
     /// The roster with each person's pay profile laid over (`payShown`, RULEBOOK 1.26.1 §8: own id, else a

@@ -40,6 +40,27 @@ struct InvoicingView: View {
     }
 
     private var canShowMyTimesheets: Bool { userStore.canAccessMyTimesheets() }
+
+    /// Shown while the person's own pay is not known yet (`UserStore.ownPayReady`): loading, or the read failed.
+    @ViewBuilder
+    private var ownPayWaitingCard: some View {
+        if userStore.ownPayLoadFailed {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.exclamationmark",
+                description: Text(PrivatePayOverlayReadiness.ownFailedMessage)
+            )
+        } else {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(PrivatePayOverlayReadiness.loadingMessage)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 24)
+            .accessibilityIdentifier("timesheets.ownPayLoading")
+        }
+    }
     private var canShowOperativeTimesheets: Bool { userStore.canAccessOperativeTimesheets() }
     private var showTimesheetsDisabledMessage: Bool { userStore.shouldShowTimesheetsDisabledMessage() }
     private var isAdminViewer: Bool {
@@ -54,7 +75,11 @@ struct InvoicingView: View {
                     hubNavyHeader
 
                     VStack(alignment: .leading, spacing: 14) {
-                        if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
+                        if !userStore.ownPayReady && !canShowOperativeTimesheets {
+                            // RULEBOOK §8 (review of #240): whether this person has My Timesheets is decided from their
+                            // own pay, which is not known yet — a loading state, never "Timesheets unavailable".
+                            ownPayWaitingCard
+                        } else if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
                             overtimeHubCard
                         } else if !userStore.canAccessTimesheetsSurface() {
@@ -4496,10 +4521,16 @@ struct OperativeTimesheetsView: View {
         var skippedElsewhere: [String] = []
         /// RULEBOOK 1.47.0 §8: sheets left out because their bookings changed since they were signed.
         var skippedChanged: [String] = []
+        /// Review of #240: people whose pay details could not be loaded (their pay-profile read failed).
+        var skippedPay: [String] = []
         for op in targets {
             guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
+            }
+            if PrivatePayOverlayReadiness.personPayFailed(op) {
+                skippedPay.append(name(op))
+                continue
             }
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
                 userId: op.id,
@@ -4645,6 +4676,10 @@ struct OperativeTimesheetsView: View {
             let line = "\(skippedChanged.joined(separator: ", ")): \(CanonicalBusinessEngine.signedTimesheetExportSkippedMessage)"
             exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         }
+        if !skippedPay.isEmpty {
+            let line = "\(skippedPay.joined(separator: ", ")): \(PrivatePayOverlayReadiness.exportSkippedMessage)"
+            exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        }
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
@@ -4664,7 +4699,7 @@ struct OperativeTimesheetsView: View {
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: row.week.start
             ),
-            scope: .othersPay
+            scope: .forPerson(row.user)
         ) {
             exportMessage = blocked
             return
@@ -4918,7 +4953,7 @@ private struct OperativeTimesheetReviewView: View {
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
             bookings: periodBookingsState,
-            scope: .othersPay
+            scope: .forPerson(operative)
         ) {
             return blocked
         }

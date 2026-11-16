@@ -35,10 +35,17 @@ final class ForcedUpdateGate: ObservableObject {
 
     private var inFlight = false
 
-    /// Reads `platformConfig/app` (server first, then cache). Any failure leaves the app usable.
+    /// Reads `platformConfig/app`. Any failure leaves the app usable. Review of #240: pay screens wait until the switches
+    /// are known, so the wait is as short as possible — this phone's copy is applied first (at once, offline too), then
+    /// the server's; and the live listener is attached whatever the first reads do, so an offline first launch is
+    /// answered as soon as the phone is online.
     func check() async {
         #if DEBUG
-        if UITestingMode.shouldSkipNetworkBootstrap { return }
+        if UITestingMode.shouldSkipNetworkBootstrap {
+            // Seeded UI runs read no Firestore: the switches are answered as "no document" (both off), never left unknown.
+            SecuritySwitchContext.update(config: nil)
+            return
+        }
         #endif
         guard FirebaseApp.app() != nil, !inFlight else { return }
         inFlight = true
@@ -48,23 +55,18 @@ final class ForcedUpdateGate: ObservableObject {
             return
         }
         let ref = Firestore.firestore().document(path)
-        let snapshot: DocumentSnapshot?
-        do {
-            snapshot = try await ref.getDocument(source: .server)
-        } catch {
-            snapshot = try? await ref.getDocument(source: .cache)
-            if snapshot == nil {
-                NSLog("FORCED_UPDATE_CHECK_SKIPPED %@", error.localizedDescription)
-            }
+        if !SecuritySwitchContext.hasRead, let cached = try? await ref.getDocument(source: .cache) {
+            apply(cached)
         }
-        guard let snapshot else {
-            // RULEBOOK 1.26.0: a failed read keeps the switches as last read; a refused listener re-attaches now.
-            Self.requestReplan()
-            return
-        }
-        apply(snapshot)
-        Self.requestReplan()
         startListening(path: path)
+        do {
+            apply(try await ref.getDocument(source: .server))
+        } catch {
+            // A failed read keeps the switches as last read (or the phone's copy above); the listener answers later.
+            NSLog("FORCED_UPDATE_CHECK_SKIPPED %@", error.localizedDescription)
+        }
+        // RULEBOOK 1.26.0: a refused listener re-attaches now.
+        Self.requestReplan()
     }
 
     /// RULEBOOK 1.26.0 §18: the same document carries the security switches (`CanonicalBusinessEngine.securitySwitches`).
