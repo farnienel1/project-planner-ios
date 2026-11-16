@@ -1030,14 +1030,14 @@ enum TimesheetDraftStore {
         } catch {
             return (nil, "Couldn't create the revision: \(error.localizedDescription)")
         }
-        // The `timesheetWriterIsReviewer` input, as `TimesheetApprovalPolicy.writerIsReviewer` builds it.
+        // The `timesheetWriterIsReviewer` input; the subject's line managers are the rulebook's (`lineManagerIds`).
         let reviewerInput: [String: Any] = [
             "writerUserId": Auth.auth().currentUser?.uid ?? writer.id,
             "subjectUserId": subject.id,
             "writerIsAdmin": writer.isRosterAdmin,
             "writerFormerIds": writer.formerUserIds,
             "writerAliasIds": writer.sameEmailUserIds,
-            "subjectLineManagerIds": subject.lineManagerUserIds,
+            "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(subject) ?? [],
             "roster": RulebookRosterSnapshot.roster,
         ]
         guard let check = CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: writerIsSubject) else {
@@ -6214,7 +6214,7 @@ private struct OperativeTimesheetReviewView: View {
             "writerIsAdmin": viewer.isRosterAdmin,
             "writerFormerIds": viewer.formerUserIds,
             "writerAliasIds": viewer.sameEmailUserIds,
-            "subjectLineManagerIds": operative.lineManagerUserIds,
+            "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(operative) ?? [],
             "roster": RulebookRosterSnapshot.roster,
         ]
         return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)?.allowed == true
