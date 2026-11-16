@@ -193,7 +193,8 @@ extension CanonicalBusinessEngine {
     // MARK: Ids and labels
 
     /// `parseTimesheetRevisionDocId(id)` → the original's id and the revision (0 = the original); nil when not a
-    /// timesheet id or above the limit (`_rev100`). An id ending `_rev0` reads as an original of its own.
+    /// timesheet id, or when it ends in a revision suffix that is not 1–99 written without a leading zero (`_rev0`,
+    /// `_rev01`, `_rev100`) — such an id is neither an original nor a revision.
     nonisolated static func parseTimesheetRevisionDocId(_ documentId: String?) -> (documentId: String, baseDocumentId: String, revision: Int)? {
         guard let documentId,
               let row = callJSON("parseTimesheetRevisionDocId", arguments: [documentId]) as? [String: Any],
@@ -242,6 +243,16 @@ extension CanonicalBusinessEngine {
               let amount = (row["amount"] as? NSNumber)?.doubleValue,
               let text = row["text"] as? String else { return nil }
         return (amount, text)
+    }
+
+    /// RULEBOOK 1.54.1 / 1.55.0: a stored version is exported as the security rules read it (`tsExportedIn`) —
+    /// `resolveTimesheetExportedAtMs(data) != null`, so an `exportedAt` a leftover web build copied from
+    /// `invoiceGeneratedAt` is not an export. `data` is the stored document (Firestore values). False when the script
+    /// did not answer.
+    nonisolated static func timesheetStoredExported(_ data: [String: Any]?) -> Bool {
+        guard let data else { return false }
+        let answer = callJSON("resolveTimesheetExportedAtMs", arguments: [FirebaseBackend.firestoreJSON(data)])
+        return answer is NSNumber
     }
 
     /// `timesheetExportedTotal(data)` — a stored version's signed-snapshot invoice total; nil when it has no signed

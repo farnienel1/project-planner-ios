@@ -12,7 +12,17 @@ import FirebaseFirestore
 /// A small yellow warning triangle. Tapping it shows `SIGNED_TIMESHEET_CHANGED_MESSAGE` with an OK button.
 struct SignedTimesheetChangedTriangle: View {
     var message: String = CanonicalBusinessEngine.signedTimesheetChangedMessage
+    /// The popup's title: the 1.47.0 label, or — RULEBOOK 1.55.0 §8, for a revision due — the revision's title
+    /// (`TIMESHEET_REVISION_DUE_NOTICE_TITLE`). Defaults from the message.
+    var title: String? = nil
     @State private var showMessage = false
+
+    private var popupTitle: String {
+        if let title { return title }
+        return message == CanonicalBusinessEngine.timesheetRevisionDueMessage
+            ? CanonicalBusinessEngine.timesheetRevisionDueNoticeTitle
+            : CanonicalBusinessEngine.signedTimesheetChangedLabel
+    }
 
     var body: some View {
         Button {
@@ -26,9 +36,9 @@ struct SignedTimesheetChangedTriangle: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(CanonicalBusinessEngine.signedTimesheetChangedLabel)
+        .accessibilityLabel(popupTitle)
         .accessibilityIdentifier("timesheets.bookingsChangedTriangle")
-        .alert(CanonicalBusinessEngine.signedTimesheetChangedLabel, isPresented: $showMessage) {
+        .alert(popupTitle, isPresented: $showMessage) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(message)
@@ -88,9 +98,11 @@ struct TimesheetEarlierVersionsList: View {
             : CanonicalBusinessEngine.timesheetRevisionLabel(version.revision)
     }
 
+    /// When the version was exported, in the organisation's business time zone (never the device's).
     private func exportedText(_ version: TimesheetVersionInfo) -> String? {
         guard let stamp = version.data["exportedAt"] as? Timestamp else { return nil }
-        return "Exported \(stamp.dateValue().formatted(date: .abbreviated, time: .shortened))"
+        let style = Date.FormatStyle(date: .abbreviated, time: .shortened, timeZone: OrganizationRulebookContext.timeZone)
+        return "Exported \(stamp.dateValue().formatted(style))"
     }
 
     var body: some View {

@@ -11223,14 +11223,15 @@ extension FirebaseBackend {
         let original = try await canonicalRef.getDocument()
         guard let originalData = original.data() else { return [] }
         var documents: [(documentId: String, data: [String: Any])] = [(original.documentID, originalData)]
-        var latestExported = CanonicalBusinessEngine.timesheetExportedFieldSet(originalData["exportedAt"])
+        // Exported as the rules read it (`resolveTimesheetExportedAtMs`: a leftover invoice `exportedAt` is not).
+        var latestExported = CanonicalBusinessEngine.timesheetStoredExported(originalData)
         var revision = 1
         let settings = canonicalRef.parent
         while latestExported, let nextId = CanonicalBusinessEngine.timesheetRevisionDocId(baseDocumentId: original.documentID, revision: revision) {
             let next = try await settings.document(nextId).getDocument()
             guard let data = next.data() else { break }
             documents.append((next.documentID, data))
-            latestExported = CanonicalBusinessEngine.timesheetExportedFieldSet(data["exportedAt"])
+            latestExported = CanonicalBusinessEngine.timesheetStoredExported(data)
             revision += 1
         }
         guard let chain = CanonicalBusinessEngine.timesheetVersionsForPeriod(documents)?.first else {
@@ -11416,7 +11417,9 @@ extension FirebaseBackend {
         // RULEBOOK 1.55.0 §8 / §16 ("lock all"): an exported version never changes — no iPhone save touches it, admins
         // included. Only the period fields an older sheet lacks would be written: skipped quietly; anything else is
         // refused with the reason (a correction is a revision).
-        if exists, CanonicalBusinessEngine.timesheetExportedFieldSet(stored?["exportedAt"]) {
+        // Exported as the rules read it (`tsExportedIn` / `resolveTimesheetExportedAtMs`, 1.54.1): an `exportedAt` a
+        // leftover web build copied from `invoiceGeneratedAt` is not an export, so that sheet still saves.
+        if exists, CanonicalBusinessEngine.timesheetStoredExported(stored) {
             let periodKeys: Set<String> = ["userId", "weekStartKey", "weekEndKey", "weekStart", "weekEnd"]
             if Set(data.keys).isSubset(of: periodKeys) { return }
             throw NSError(domain: "FirebaseBackend", code: 409, userInfo: [NSLocalizedDescriptionKey: Self.exportedTimesheetLockedMessage])
@@ -11452,16 +11455,24 @@ extension FirebaseBackend {
         userId: String,
         weekStart: Date,
         weeklyReportOverride: [String: Any],
-        exportedAt: Date
+        exportedAt: Date,
+        documentId: String? = nil
     ) async throws -> String {
         let canonicalRef = try timesheetStateDocumentRef(organizationId: organizationId, userId: userId, weekStart: weekStart)
-        // RULEBOOK 1.55.0 §8: Export stamps the pay run's LATEST version (an open revision once one exists), never the
-        // frozen original; the transaction still refuses a version that is already exported.
-        let chain = try await loadTimesheetVersionChain(organizationId: organizationId, canonicalRef: canonicalRef)
-        let ref = CanonicalBusinessEngine.timesheetLatestVersion(chain).map { canonicalRef.parent.document($0.documentId) } ?? canonicalRef
+        // RULEBOOK 1.55.0 §8 (web `stampTimesheetExport(documentId)`, review of #243 M1): Export stamps exactly the
+        // version the caller prepared (`documentId`, the draft's `versionDocumentId`) — never a later one read now, so a
+        // snapshot is never frozen onto a revision it was not built from. Without one, the original (canonical id).
+        // The transaction refuses a version that is already exported, and answers `superseded` when a later revision
+        // of it exists (it is no longer the latest).
+        let targetId = Self.versionDocumentId(documentId, ofCanonical: canonicalRef.documentID) ?? canonicalRef.documentID
+        let ref = canonicalRef.parent.document(targetId)
+        let nextRef = CanonicalBusinessEngine.parseTimesheetRevisionDocId(targetId).flatMap { version in
+            CanonicalBusinessEngine.timesheetRevisionDocId(baseDocumentId: version.baseDocumentId, revision: version.revision + 1)
+        }.map { canonicalRef.parent.document($0) }
         return try await Self.runTimesheetExportStamp(
             db: db,
             ref: ref,
+            nextRef: nextRef,
             override: RulebookJSONBox(object: ["weeklyReportOverride": weeklyReportOverride]),
             exportedAt: exportedAt,
             userId: Auth.auth().currentUser?.uid
@@ -11473,6 +11484,7 @@ extension FirebaseBackend {
     nonisolated private static func runTimesheetExportStamp(
         db: Firestore,
         ref: DocumentReference,
+        nextRef: DocumentReference?,
         override: RulebookJSONBox,
         exportedAt: Date,
         userId: String?
@@ -11487,6 +11499,15 @@ extension FirebaseBackend {
             }
             guard let stored = snapshot.data() else { return "missing" }
             if CanonicalBusinessEngine.timesheetExportedFieldSet(stored["exportedAt"]) { return "already-exported" }
+            // RULEBOOK 1.55.0 §8: a later revision of this version exists — it is no longer the latest; nothing is stamped.
+            if let nextRef {
+                do {
+                    if try transaction.getDocument(nextRef).exists { return "superseded" }
+                } catch {
+                    errorPointer?.pointee = error as NSError
+                    return nil
+                }
+            }
             let snapshotFields = override.object["weeklyReportOverride"] ?? NSNull()
             var sheet = FirebaseBackend.firestoreJSON(stored) as? [String: Any] ?? [:]
             sheet["weeklyReportOverride"] = FirebaseBackend.firestoreJSON(snapshotFields)

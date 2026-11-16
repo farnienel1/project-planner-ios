@@ -1002,13 +1002,11 @@ enum TimesheetDraftStore {
 
     /// RULEBOOK 1.55.0 §8: the invoice number and revision note a document of this draft carries (`TimesheetRevisionCopy`).
     /// The invoice number comes from the ORIGINAL's stored id and stored `userId` (review of #344): the version's own
-    /// id read back to its original; a draft read before 1.55.0 uses `timesheetDocumentId` of the sheet's person.
-    static func revisionCopy(for draft: TimesheetDraft, subjectId: String, weekStart: Date, total: Double, currency: String) -> TimesheetRevisionCopy {
-        let original = CanonicalBusinessEngine.parseTimesheetRevisionDocId(draft.versionDocumentId)?.baseDocumentId
-            ?? CanonicalBusinessEngine.dayKeyInOrganizationZone(weekStart).flatMap {
-                CanonicalBusinessEngine.timesheetDocumentId(userId: subjectId, startDayKey: $0)
-            }
-            ?? ""
+    /// id read back to its original.
+    /// Review of #243 (L4): the original's id is never recomputed — a copy read without its document id gets no
+    /// number (callers refresh from the cloud first, `ensureVersionRead`).
+    static func revisionCopy(for draft: TimesheetDraft, subjectId _: String, weekStart _: Date, total: Double, currency: String) -> TimesheetRevisionCopy {
+        let original = CanonicalBusinessEngine.parseTimesheetRevisionDocId(draft.versionDocumentId)?.baseDocumentId ?? ""
         return TimesheetRevisionCopy.make(
             originalDocumentId: original,
             storedUserId: draft.originalStoredUserId,
@@ -1018,6 +1016,20 @@ enum TimesheetDraftStore {
             previousKnown: draft.previousVersionKnown == true,
             currency: currency
         )
+    }
+
+    /// Review of #243 (L4): a local copy read before 1.55.0 has no `versionDocumentId`, so its invoice number cannot be
+    /// built without recomputing an id — read the sheet from the cloud first (which records the version it came from).
+    /// The local copy is returned unchanged when the read fails.
+    static func ensureVersionRead(
+        _ draft: TimesheetDraft,
+        userId: String,
+        weekStart: Date,
+        firebaseBackend: FirebaseBackend
+    ) async -> TimesheetDraft {
+        guard draft.versionDocumentId == nil,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return draft }
+        return await refreshFromCloud(userId: userId, weekStart: weekStart, firebaseBackend: firebaseBackend, organizationId: orgId) ?? draft
     }
 
     /// RULEBOOK 1.55.0 §8: creates the next revision of the pay run whose latest version this device read
@@ -1032,12 +1044,12 @@ enum TimesheetDraftStore {
         liveLines: [TimesheetPayrollLineItem],
         firebaseBackend: FirebaseBackend,
         organizationId: String
-    ) async -> (documentId: String?, message: String?) {
+    ) async -> (documentId: String?, message: String?, revisionOpen: Bool) {
         let chain: [TimesheetVersionInfo]
         do {
             chain = try await firebaseBackend.loadTimesheetVersionChain(organizationId: organizationId, userId: subject.id, weekStart: weekStart)
         } catch {
-            return (nil, "Couldn't create the revision: \(error.localizedDescription)")
+            return (nil, "Couldn't create the revision: \(error.localizedDescription)", false)
         }
         // The `timesheetWriterIsReviewer` input; the subject's line managers are the rulebook's (`lineManagerIds`).
         let reviewerInput: [String: Any] = [
@@ -1050,10 +1062,11 @@ enum TimesheetDraftStore {
             "roster": RulebookRosterSnapshot.roster,
         ]
         guard let check = CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: writerIsSubject) else {
-            return (nil, "Couldn't create the revision: the timesheet rules did not load. Try again.")
+            return (nil, "Couldn't create the revision: the timesheet rules did not load. Try again.", false)
         }
         guard check.allowed, let latest = CanonicalBusinessEngine.timesheetLatestVersion(chain) else {
-            return (nil, check.message.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNotExportedMessage : check.message)
+            // `revision-open`: a revision is already open (created elsewhere) — the screen opens it.
+            return (nil, check.message.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNotExportedMessage : check.message, check.reason == "revision-open")
         }
         do {
             let result = try await firebaseBackend.createTimesheetRevision(
@@ -1062,12 +1075,12 @@ enum TimesheetDraftStore {
                 liveLines: liveLines.map(\.rulebookTotalsJSON)
             )
             switch result.status {
-            case "created": return (result.documentId, nil)
-            case "exists": return (nil, CanonicalBusinessEngine.timesheetRevisionOpenMessage)
-            default: return (nil, CanonicalBusinessEngine.timesheetRevisionNotExportedMessage)
+            case "created": return (result.documentId, nil, false)
+            case "exists": return (nil, CanonicalBusinessEngine.timesheetRevisionOpenMessage, true)
+            default: return (nil, CanonicalBusinessEngine.timesheetRevisionNotExportedMessage, false)
             }
         } catch {
-            return (nil, "Couldn't create the revision: \(error.localizedDescription)")
+            return (nil, "Couldn't create the revision: \(error.localizedDescription)", false)
         }
     }
 
@@ -2636,10 +2649,12 @@ private struct MyTimesheetView: View {
             )
             await MainActor.run {
                 isCreatingRevision = false
-                saveErrorMessage = result.message
-                if result.message != nil { Feedback.play(.actionRefused) }
+                // An already-open revision is simply opened (no error).
+                saveErrorMessage = result.revisionOpen ? nil : result.message
+                if result.message != nil && !result.revisionOpen { Feedback.play(.actionRefused) }
             }
-            if result.documentId != nil {
+            // Created, or already open (review of #243 L1): show the open revision and listen to it.
+            if result.documentId != nil || result.revisionOpen {
                 await refreshDraftFromCloud()
                 await MainActor.run { listenToServerTimesheet() }
             }
@@ -5258,7 +5273,9 @@ struct OperativeTimesheetsView: View {
                     userId: row.operative.id,
                     weekStart: week.start,
                     weeklyReportOverride: snapshot,
-                    exportedAt: exportedAt
+                    exportedAt: exportedAt,
+                    // RULEBOOK 1.55.0 §8 (review of #243 M1): the version this snapshot was prepared from, only.
+                    documentId: row.draft.versionDocumentId
                 )
             } catch {
                 stampError = "Couldn't export \(name(row.operative))'s timesheet: \(error.localizedDescription)"
@@ -5271,7 +5288,8 @@ struct OperativeTimesheetsView: View {
                 stamped.append(row)
             case "late-extras-waiting":
                 skippedLateExtras.append(name(row.operative))
-            case "already-exported":
+            case "already-exported", "superseded":
+                // RULEBOOK 1.55.0: `superseded` — a later revision exists; that one is exported on its own.
                 skippedElsewhere.append(name(row.operative))
             default:
                 continue
@@ -6300,12 +6318,16 @@ private struct OperativeTimesheetReviewView: View {
             )
             if let created = result.documentId {
                 await notificationService.notifyTimesheetRevisionToSign(subject: subject, revisionDocumentId: created, weekStart: week.start)
+            }
+            // Created, or already open (review of #243 L1): show the open revision and listen to it.
+            if result.documentId != nil || result.revisionOpen {
                 await refreshDraftFromCloud()
                 await MainActor.run { listenToServerTimesheet() }
             }
             await MainActor.run {
                 isCreatingRevision = false
-                saveErrorMessage = result.message
+                // An already-open revision is simply opened (no error).
+                saveErrorMessage = result.revisionOpen ? nil : result.message
             }
         }
     }
@@ -7839,6 +7861,11 @@ private enum InvoicePDFGenerationSupport {
         dayRateHistoryCollection: OperativeDayRateHistoryCollection,
         taxIds: CanonicalBusinessEngine.CanonicalSensitiveProfile?
     ) async -> URL? {
+        // Review of #243 (L4): the invoice number needs the version the sheet was read from.
+        if let user = userStore.displayUser {
+            let local = TimesheetDraftStore.load(userId: user.id, weekStart: period.startDate)
+            _ = await TimesheetDraftStore.ensureVersionRead(local, userId: user.id, weekStart: period.startDate, firebaseBackend: firebaseBackend)
+        }
         guard let made = invoicePDF(
             period: period, firebaseBackend: firebaseBackend, userStore: userStore, bookingStore: bookingStore,
             operativeStore: operativeStore, projectStore: projectStore, managerScheduleStore: managerScheduleStore,

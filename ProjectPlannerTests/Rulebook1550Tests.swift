@@ -80,7 +80,8 @@ final class Rulebook1550Tests: XCTestCase {
         // Built only from the ORIGINAL's stored id and stored userId (review of #344).
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumber(originalDocumentId: "timesheet_6a9632ba-xyz_1793404800", storedUserId: "6a9632ba-xyz"), "TS-1793404800-6A9632")
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumber(originalDocumentId: original, storedUserId: "u1"), "TS-1793404800-U1")
-        // An id ending `_rev0` is neither an original nor a revision.
+        // An id ending `_rev0` (or `_rev01`) is neither an original nor a revision.
+        XCTAssertNil(CanonicalBusinessEngine.parseTimesheetRevisionDocId(original + "_rev01"))
         XCTAssertNil(CanonicalBusinessEngine.parseTimesheetRevisionDocId(original + "_rev0"))
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumberForRevision("TS-20261101-6A9632", revision: 1), "TS-20261101-6A9632-REV1")
         XCTAssertEqual(CanonicalBusinessEngine.timesheetInvoiceNumberForRevision("TS-20261101-6A9632", revision: 0), "TS-20261101-6A9632")
@@ -177,6 +178,29 @@ final class Rulebook1550Tests: XCTestCase {
         for key in ["versionDocumentId", "revision", "previousVersionExportedTotal", "__documentId", "revisionOf"] {
             XCTAssertNil(written[key], key)
         }
+    }
+
+    /// Review of #243 (M3, guardrail 3): the save lock reads "exported" as the rules do (`resolveTimesheetExportedAtMs`) —
+    /// an `exportedAt` a leftover web build copied from `invoiceGeneratedAt` is not an export, so that sheet still saves.
+    func testSaveLockIgnoresALeftoverInvoiceExportedAt() {
+        let at = timestamp("2026-11-20T10:00:00Z")
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetStoredExported(["exportedAt": at]))
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetStoredExported(["exportedAt": at, "invoiceGeneratedAt": at]))
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetStoredExported(["exportedAt": at, "invoiceGeneratedAt": timestamp("2026-11-19T10:00:00Z")]))
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetStoredExported(["userId": "u1"]))
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetStoredExported(nil))
+    }
+
+    /// Review of #243 (L4): the invoice number is never built from a recomputed id — a copy without its version id
+    /// gets none until it is read from the cloud.
+    func testInvoiceNumberNeedsTheVersionRead() throws {
+        var row = openRevision
+        row["__documentId"] = revision1
+        row["__originalUserId"] = "u1"
+        let read = try XCTUnwrap(TimesheetDraftStore.decodeFirestoreMap(row))
+        let week = try XCTUnwrap(CanonicalBusinessEngine.date(fromDayKey: "2026-11-01"))
+        XCTAssertEqual(TimesheetDraftStore.revisionCopy(for: read, subjectId: "u1", weekStart: week, total: 1, currency: "GBP").invoiceNumber, "TS-1793404800-U1-REV1")
+        XCTAssertEqual(TimesheetDraftStore.revisionCopy(for: TimesheetDraft(), subjectId: "u1", weekStart: week, total: 1, currency: "GBP").invoiceNumber, "")
     }
 
     func testSaveTargetIsOnlyAVersionOfThisPayRun() {
