@@ -185,7 +185,19 @@ extension FirebaseBackend {
             return false
         }
         batch.setData(WriteMetadata.stamped(fields, userId: auth.currentUser?.uid), forDocument: db.document(path), merge: true)
+        PayProfileSaveRegistry.note(batch, subjectId: subjectId, fields: fields)
         return true
+    }
+
+    /// Commits a batch that may hold pay-profile writes, then announces them (`PayProfileSaveRegistry`).
+    func commitPayBatch(_ batch: WriteBatch) async throws {
+        do {
+            try await batch.commit()
+            PayProfileSaveRegistry.committed(batch)
+        } catch {
+            PayProfileSaveRegistry.discard(batch)
+            throw error
+        }
     }
 
     /// `users/{userId}` partial update plus its pay profile in ONE batch (RULEBOOK 1.13.0 Q1 step B), so pay is never
@@ -200,7 +212,7 @@ extension FirebaseBackend {
             batch.updateData(shared, forDocument: db.collection("users").document(userId))
         }
         addPayProfileWrite(to: batch, subjectId: userId, profileWrite: payload)
-        try await batch.commit()
+        try await commitPayBatch(batch)
     }
 
     /// The pay-profile half of a write on its own (RULEBOOK 1.26.0, `privatePay` on: a new users document or invite
@@ -208,7 +220,7 @@ extension FirebaseBackend {
     func writePayProfileOnly(subjectId: String, profileWrite: [String: Any]) async throws {
         let batch = db.batch()
         guard addPayProfileWrite(to: batch, subjectId: subjectId, profileWrite: profileWrite) else { return }
-        try await batch.commit()
+        try await commitPayBatch(batch)
     }
 
     /// True when a write names a field other than `updatedAt` / `updatedBy` / `updatedFrom`.

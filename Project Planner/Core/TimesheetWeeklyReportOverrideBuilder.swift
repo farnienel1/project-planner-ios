@@ -19,6 +19,27 @@ enum TimesheetWeeklyReportOverrideBuilder {
     /// Shown when the snapshot could not be checked against the rulebook; nothing is signed or saved.
     static let rulebookCheckFailedMessage = "Pay could not be checked against the timesheet rules. Try again; nothing was signed or saved."
 
+    /// Review of #240: a save that completes a sheet (or must rebuild its snapshot) while pay inputs are not ready —
+    /// `blockMessage` non-nil: bookings, rate history or the pay-profile overlays — is refused with that message, so a
+    /// counter-signature is never stored without a frozen snapshot. Nil when the save may go on: inputs ready, the sheet
+    /// is not fully signed by this save, it already has a snapshot that is kept, or it is an owner save that never
+    /// writes the snapshot (a line manager counter-signs it).
+    static func saveRefusalWhilePayInputsBlocked(
+        draft: TimesheetDraft,
+        user: AppUser,
+        writerIsReviewer: Bool?,
+        blockMessage: String?,
+        rebuildSnapshot: Bool
+    ) -> String? {
+        guard let blockMessage else { return nil }
+        if writerIsReviewer == false, TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user) { return nil }
+        guard TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: user) else { return nil }
+        guard draft.weeklyReportOverride == nil || (rebuildSnapshot && !TimesheetApprovalPolicy.isExported(draft)) else {
+            return nil
+        }
+        return blockMessage
+    }
+
     /// Returns `rulebookCheckFailedMessage` when the snapshot could not be built or re-applied safely (the draft's stored
     /// snapshot is then left exactly as it was, and the caller must not save); nil otherwise.
     @discardableResult
@@ -81,6 +102,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
             draft.weeklyReportOverride = made
             return nil
         }
+        // RULEBOOK 1.54.0 §8 (third review of #337): an exported sheet with late extras is frozen — no review re-prices
+        // its snapshot and no late extra joins or leaves it (the security rules refuse those writes).
+        if draft.weeklyReportOverride != nil, TimesheetLateExtrasSupport.exportedStored(draft), !(draft.lateExtras ?? []).isEmpty {
+            return nil
+        }
         if let existing = draft.weeklyReportOverride {
             // RULEBOOK 1.43.0 §8 `timesheetSnapshotNeedsRebuild`: a snapshot frozen with no labour lines (signed before
             // the period's bookings had loaded) is rebuilt from the live bookings when they hold labour lines and nobody
@@ -129,12 +155,16 @@ enum TimesheetWeeklyReportOverrideBuilder {
                         check: check
                     )
                     if check.failed { return rulebookCheckFailedMessage }
+                    // RULEBOOK 1.54.0 (review of #337): Office / WFH / Site survey / custom bookings, newly paid in 1.54.0,
+                    // never enter a repaired signed snapshot (a sheet signed while that option was switched off never had
+                    // them).
+                    let optionPlaceIds = Set(live.lineItems.filter(\.scheduleOptionPlace).map { $0.id.lowercased() })
                     draft.weeklyReportOverride = TimesheetWeeklyReportOverride(
                         approvedAt: existing.approvedAt,
                         approvedByUserId: existing.approvedByUserId,
                         approvedByName: existing.approvedByName,
                         selfSigned: existing.selfSigned,
-                        lines: fresh.lines,
+                        lines: fresh.lines.filter { !optionPlaceIds.contains($0.id.lowercased()) },
                         priceWork: fresh.priceWork,
                         expenses: fresh.expenses
                     )
@@ -334,7 +364,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
             ))
         }
 
-        let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview)
+        let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: applyLiveReview, check: check)
 
         return TimesheetWeeklyReportOverride(
             approvedAt: draft.managerSignedAt ?? draft.operativeSignedAt ?? Date(),
@@ -356,7 +386,7 @@ enum TimesheetWeeklyReportOverrideBuilder {
         check: RulebookCheck? = nil
     ) -> TimesheetWeeklyReportOverride {
         let managerHasSigned = draft.managerSignedAt != nil
-        let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: true)
+        let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: true, check: check)
         let approvedByUserId = draft.managerSignedByUserId
             ?? viewer?.id
             ?? existing.approvedByUserId
@@ -532,7 +562,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
     private static func moneyLines(
         from draft: TimesheetDraft,
         managerHasSigned: Bool,
-        applyLiveReview: Bool
+        applyLiveReview: Bool,
+        check: RulebookCheck? = nil
     ) -> (priceWork: [TimesheetWeeklyReportMoneyLine], expenses: [TimesheetWeeklyReportMoneyLine]) {
         let priceWork: [TimesheetWeeklyReportMoneyLine] = draft.priceWorkEntries.map { entry in
             let decision = entry.managerDecision == .pending ? .approved : entry.managerDecision
@@ -568,7 +599,15 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 decision: decision
             )
         }
-        return (priceWork, expenses)
+        // RULEBOOK 1.54.0 §8 (web `moneyLines` in `weeklyReportOverride.ts`): the late extras a reviewer approved
+        // (`timesheetLateExtrasSnapshotRows`, the reviewer's on-screen decisions laid over the stored reviews as their save
+        // writes them) join the money rows, marked `lateExtra`; unapproved ones never do. Labour rows are never touched.
+        // A script that did not answer fails the snapshot (never one without the approved late extras).
+        guard let late = TimesheetLateExtrasSupport.snapshotMoneyLines(draft) else {
+            check?.failed = true
+            return (priceWork, expenses)
+        }
+        return (priceWork + late.priceWork, expenses + late.expenses)
     }
 
     private static func scaledDays(

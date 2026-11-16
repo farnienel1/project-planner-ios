@@ -36,8 +36,6 @@ enum WeeklyReportPayInputs {
         var currency: String = OrganizationRulebookContext.currencyCode
         /// The report's role label for a person ("Admin User", "Operative").
         var roleLabel: (AppUser?) -> String
-        /// Whether a manager site booking's place is on the report (`MyScheduleOptions.includesManagerScheduleLocation`).
-        var includesManagerBooking: (ManagerSiteBooking) -> Bool = { _ in true }
     }
 
     /// One person on the report, for rendering (name, role, trade) and for `weeklyReportLeaveRows`.
@@ -63,7 +61,8 @@ enum WeeklyReportPayInputs {
             return key >= s.startDayKey && key <= s.endDayKey
         }
         let labour = s.bookings.filter { inRange($0.date) }
-        let manager = s.managerBookings.filter { inRange($0.date) && s.includesManagerBooking($0) }
+        // RULEBOOK 1.54.0 §4.8 / §8: every manager site booking in the range, whatever the schedule options say.
+        let manager = s.managerBookings.filter { inRange($0.date) }
         let people = buildPeople(s, labour: labour, manager: manager)
         let roster = RulebookPeople.roster(s.users)
 
@@ -111,6 +110,28 @@ enum WeeklyReportPayInputs {
         // Never `showAllPay` in the app: with no viewer every figure is hidden (`reportPayForViewer`).
         input["viewer"] = s.viewer.map { $0 as Any } ?? NSNull()
         return Built(input: input, people: people)
+    }
+
+    /// Web #342 `pricedUserIds`: the users documents whose pay this report reads — the people of its bookings, approved
+    /// timesheet weeks and timesheets in the range, matched over every id each person goes by, without case (first
+    /// person wins), as `weeklyReportPayRows` matches them. The report waits only for these people's pay.
+    static func pricedUserIds(_ built: Built) -> Set<String> {
+        var owner: [String: Person] = [:]
+        for person in built.people.values.sorted(by: { $0.id < $1.id }) {
+            for id in [person.id] + person.ids {
+                let key = normalizedId(id)
+                if !key.isEmpty, owner[key] == nil { owner[key] = person }
+            }
+        }
+        var out = Set<String>()
+        func note(_ id: Any?) {
+            guard let id = id as? String, let person = owner[normalizedId(id)], let user = person.user else { return }
+            out.insert(user.id)
+        }
+        for row in built.input["bookings"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        for row in built.input["timesheetWeeks"] as? [[String: Any]] ?? [] { note(row["userId"]) }
+        for row in built.input["sheets"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        return out
     }
 
     /// `weeklyReportLeaveRows` people: every person with all their ids and their email.

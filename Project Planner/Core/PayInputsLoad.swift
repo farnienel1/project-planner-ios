@@ -40,10 +40,16 @@ enum PayInputsLoad {
 
     /// Why pay cannot be worked out yet (history not loaded, or the organisation's policy and payment runs not
     /// loaded), else nil. Sign-off, freezing the agreed snapshot, invoices and exports wait while this is not nil.
-    static func blockMessage(state: PayInputsLoadState, organization: Organization?) -> String? {
+    /// `scope`: whose pay the screen prices — the viewer's own (My Timesheets) or other people's (User Timesheets, the
+    /// review, Export, the weekly report). Only the overlay that screen needs is waited for, so an admin whose own read
+    /// failed can still counter-sign others' sheets.
+    static func blockMessage(state: PayInputsLoadState, organization: Organization?, scope: PayOverlayScope = .ownPay) -> String? {
         guard organization != nil else { return organisationNotLoadedMessage }
         switch state {
-        case .loaded: return nil
+        // RULEBOOK §8 (privatePay on): rates and employment types come from the pay profiles; nothing is priced,
+        // signed, invoiced, exported or reported until those overlays have finished (`PrivatePayOverlayReadiness`),
+        // nor before `platformConfig/app` has said whether `privatePay` is on.
+        case .loaded: return PrivatePayOverlayReadiness.blockMessage(scope: scope)
         case .loading: return historyLoadingMessage
         case .failed(let message): return message
         }
@@ -178,9 +184,10 @@ enum PayInputsLoad {
     static func blockMessage(
         state: PayInputsLoadState,
         organization: Organization?,
-        bookings: (loaded: Bool, failed: Bool)
+        bookings: (loaded: Bool, failed: Bool),
+        scope: PayOverlayScope = .ownPay
     ) -> String? {
-        if let blocked = blockMessage(state: state, organization: organization) { return blocked }
+        if let blocked = blockMessage(state: state, organization: organization, scope: scope) { return blocked }
         guard let ready = CanonicalBusinessEngine.timesheetSnapshotReady(
             bookingsLoaded: bookings.loaded,
             bookingsFailed: bookings.failed

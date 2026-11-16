@@ -228,7 +228,8 @@ struct SettingsProfileDetailView: View {
                 }
             ))
             .task(id: userStore.currentUser?.id) { await loadBillingDetails() }
-            .task(id: userStore.currentUser?.id) {
+            // Reruns once the switches are known (and when they change), not only once per person (review of #240).
+            .task(id: "\(userStore.currentUser?.id ?? "")|\(SecuritySwitchContext.hasRead)|\(SecuritySwitchContext.privatePay)") {
                 guard let me = userStore.currentUser else { return }
                 // RULEBOOK 1.26.0 §8 (`AppUser.payShown`, `CanonicalBusinessEngine` `overlayPayProfile`): the pay profile
                 // only while `privatePay` is on; otherwise the users document as stored.
@@ -236,9 +237,22 @@ struct SettingsProfileDetailView: View {
                     payShownUser = nil
                     return
                 }
-                let profile = await firebaseBackend.loadPayProfile(subjectId: me.id)
-                payShownUser = me.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
+                // Only a profile that came back is shown; a failed read or no document (a profile filed under a former
+                // id) falls back to the overlaid record (`currentUserWithPay`), never the stripped document.
+                if let profile = await firebaseBackend.loadPayProfile(subjectId: me.id) {
+                    payShownUser = me.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
+                } else {
+                    payShownUser = nil
+                }
             }
+    }
+
+    /// RULEBOOK §8 (review of #240): the person's own pay as shown — their pay profile when read here, else the record
+    /// with it laid over (`currentUserWithPay`); nothing while it is not known (never the stripped document).
+    private var profilePayUser: AppUser? {
+        if let payShownUser { return payShownUser }
+        guard userStore.ownPayReady else { return nil }
+        return userStore.currentUserWithPay
     }
 
     private var profileScroll: some View {
@@ -287,7 +301,7 @@ struct SettingsProfileDetailView: View {
                         profileValueRow("Organisation", "Not linked", valueColor: PPColor.danger)
                     }
                     // Read-only rate (§12): `readStoredRates` honours `payBasis`; `formatMoney` in the organisation currency.
-                    if let user = payShownUser ?? userStore.currentUser,
+                    if let user = profilePayUser,
                        let stored = CanonicalBusinessEngine.readStoredRates(
                            payBasis: user.payBasis,
                            dayRate: user.dayRate,
@@ -302,7 +316,7 @@ struct SettingsProfileDetailView: View {
                         }
                     }
                     // Employment type today in the organisation zone (`employmentTypeOnDay` through `AppUser.employmentType(on:)`).
-                    if let user = payShownUser ?? userStore.currentUser {
+                    if let user = profilePayUser {
                         SettingsHubChrome.divider()
                         profileValueRow("Employment type", user.employmentType(on: Date()).title)
                     }

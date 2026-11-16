@@ -40,6 +40,33 @@ struct InvoicingView: View {
     }
 
     private var canShowMyTimesheets: Bool { userStore.canAccessMyTimesheets() }
+
+    /// Shown while the person's own pay is not known yet (`UserStore.ownPayReady`): loading, or the read failed.
+    @ViewBuilder
+    private var ownPayWaitingCard: some View {
+        if userStore.ownPayLoadFailed {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.exclamationmark",
+                description: Text(PrivatePayOverlayReadiness.ownFailedMessage)
+            )
+        } else if userStore.isOffline {
+            ContentUnavailableView(
+                "Pay details unavailable",
+                systemImage: "wifi.slash",
+                description: Text(PrivatePayOverlayReadiness.ownOfflineMessage)
+            )
+        } else {
+            HStack(spacing: 10) {
+                ProgressView()
+                Text(PrivatePayOverlayReadiness.loadingMessage)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.vertical, 24)
+            .accessibilityIdentifier("timesheets.ownPayLoading")
+        }
+    }
     private var canShowOperativeTimesheets: Bool { userStore.canAccessOperativeTimesheets() }
     private var showTimesheetsDisabledMessage: Bool { userStore.shouldShowTimesheetsDisabledMessage() }
     private var isAdminViewer: Bool {
@@ -54,7 +81,15 @@ struct InvoicingView: View {
                     hubNavyHeader
 
                     VStack(alignment: .leading, spacing: 14) {
-                        if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
+                        if !userStore.ownPayReady && canShowOperativeTimesheets {
+                            // A line manager whose own pay is still loading: their My Timesheets card is not decided yet.
+                            ownPayWaitingCard
+                        }
+                        if !userStore.ownPayReady && !canShowOperativeTimesheets {
+                            // RULEBOOK §8 (review of #240): whether this person has My Timesheets is decided from their
+                            // own pay, which is not known yet — a loading state, never "Timesheets unavailable".
+                            ownPayWaitingCard
+                        } else if showTimesheetsDisabledMessage && !canShowMyTimesheets && !canShowOperativeTimesheets {
                             timesheetsDisabledMessageCard
                             overtimeHubCard
                         } else if !userStore.canAccessTimesheetsSurface() {
@@ -1089,6 +1124,8 @@ enum TimesheetDraftStore {
         guard let draft = prepared.draft else { return prepared.refusal ?? rosterNotLoadedMessage }
         var fields = asFirestoreMap(draft)
         var frozenEntriesChanged = false
+        /// RULEBOOK 1.54.0 §8: why a change to the late extras was not saved (`timesheetOwnerCanAddLateExtras`).
+        var lateExtrasRefusal: String?
         if !reviewer {
             for key in managerSignOffKeys { fields.removeValue(forKey: key) }
             // RULEBOOK 1.9.0 §8: "manager signed" is read from the stored copy, never from this device's draft.
@@ -1135,6 +1172,41 @@ enum TimesheetDraftStore {
             ) {
                 return message
             }
+            // RULEBOOK 1.54.0 §8: late extras (`lateExtras`) are written by the owner only once the line manager has
+            // signed and until the stored `exportedAt` is set (`timesheetOwnerCanAddLateExtras`, read from the STORED
+            // sheet — never this device's copy), and follow the ordinary entry rules by kind (`timesheetOwnerEntriesError`:
+            // job number, evidence). The signed entries never change (above). No signature is ever cleared.
+            let loadedLate = loadedCopy(userId: userId, weekStart: weekStart, organizationId: organizationId)
+            let previousLate: [TimesheetLateExtra]? = loadedLate != nil ? loadedLate?.lateExtras : server.flatMap { decodeFirestoreMap($0) }?.lateExtras
+            let baseLate: Any?
+            if let loadedLate { baseLate = asFirestoreMap(loadedLate)["lateExtras"] } else { baseLate = server?["lateExtras"] }
+            if let nextLate = fields["lateExtras"], !firestoreValuesEqual(nextLate, baseLate) {
+                let latePermission = CanonicalBusinessEngine.timesheetOwnerCanAddLateExtras(
+                    managerSignedAt: server.flatMap { statusFields(fromFirestore: $0)?.managerSignedAtMs }.map { Date(timeIntervalSince1970: $0 / 1000) },
+                    approvedAt: firestoreDate(server?["approvedAt"]),
+                    exportedAt: nil,
+                    exportedAtStored: CanonicalBusinessEngine.timesheetExportedFieldSet(server?["exportedAt"]),
+                    selfSigned: subject.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+                )
+                if !latePermission.allowed {
+                    fields.removeValue(forKey: "lateExtras")
+                    lateExtrasRefusal = latePermission.message ?? CanonicalBusinessEngine.timesheetExportedExtrasMessage
+                } else if let message = CanonicalBusinessEngine.timesheetOwnerEntriesError(
+                    previous: TimesheetLateExtrasSupport.entriesByKind(previousLate),
+                    next: TimesheetLateExtrasSupport.entriesByKind(draft.lateExtras),
+                    organizationId: organizationId,
+                    ownerUserIds: CanonicalBusinessEngine.timesheetEvidenceOwnerIds(
+                        sheetDocumentId: "",
+                        userId: userId,
+                        extra: [writerId].filter { !$0.isEmpty }
+                    )
+                ) {
+                    return message
+                }
+            } else {
+                // Unchanged: never resent (a sheet whose late extras this device did not change keeps the stored list).
+                fields.removeValue(forKey: "lateExtras")
+            }
         }
         // RULEBOOK 1.45.0 §8 / §24: the evidence on the entries before this save (as loaded, else as stored), so the
         // files an edit or delete removed can be tidied up after the save.
@@ -1164,6 +1236,8 @@ enum TimesheetDraftStore {
         if reviewer {
             // RULEBOOK 1.47.0 §8: the signed-bookings record is the person's own; a reviewer never writes it.
             for key in signedBookingsKeys { changed.removeValue(forKey: key) }
+            // RULEBOOK 1.54.0 §8 / §16: late extras are the person's own list; a reviewer never writes it.
+            changed.removeValue(forKey: "lateExtras")
         } else if draft.operativeSignedBookingsAtPending == true,
                   changed["operativeSignedBookings"] != nil || changed["operativeSignedAt"] != nil {
             // RULEBOOK 1.47.0 §8: the record's server time, written once with the signature (never the device clock).
@@ -1174,27 +1248,44 @@ enum TimesheetDraftStore {
             func entryId(_ id: UUID, _ stored: String?) -> String {
                 stored ?? storedIds[id.uuidString.lowercased()] ?? WorkDocumentKeys.storedId(for: id)
             }
-            let entries: [(id: String, amount: Double, managerDecision: String, managerRevisedAmount: Double?)] = draft.expenseEntries.map {
-                (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
-            } + draft.priceWorkEntries.map {
-                (id: entryId($0.id, $0.storedId), amount: $0.amount, managerDecision: $0.managerDecision.rawValue, managerRevisedAmount: $0.managerRevisedAmount)
-            }
             // RULEBOOK 1.45.0 §8 (review #322): each entry's stored-row fingerprint, so the review stores it.
-            var reviewFingerprints: [String: String] = [:]
-            for entry in draft.expenseEntries {
-                if let fingerprint = entry.reviewFingerprint { reviewFingerprints[entryId(entry.id, entry.storedId)] = fingerprint }
+            func row(_ id: String, _ amount: Double, _ decision: TimesheetManagerDecision, _ revised: Double?, _ fingerprint: String?) -> [String: Any] {
+                var out: [String: Any] = [
+                    "id": id,
+                    "amount": amount,
+                    "managerDecision": decision.rawValue,
+                    "managerRevisedAmount": revised.map { $0 as Any } ?? NSNull(),
+                ]
+                if let fingerprint, !fingerprint.isEmpty { out["reviewFingerprint"] = fingerprint }
+                return out
             }
-            for entry in draft.priceWorkEntries {
-                if let fingerprint = entry.reviewFingerprint { reviewFingerprints[entryId(entry.id, entry.storedId)] = fingerprint }
+            let signedRows: [[String: Any]] = draft.expenseEntries.map {
+                row(entryId($0.id, $0.storedId), $0.amount, $0.managerDecision, $0.managerRevisedAmount, $0.reviewFingerprint)
+            } + draft.priceWorkEntries.map {
+                row(entryId($0.id, $0.storedId), $0.amount, $0.managerDecision, $0.managerRevisedAmount, $0.reviewFingerprint)
             }
+            // RULEBOOK 1.54.0 §8 (third and fourth reviews of #337): the late extras' decisions go in the SAME write as
+            // the sheet (`lateExtra: true`, with the entry's fingerprint; never an ignored one), never after an export
+            // (`exported`), and never under a signed entry's key (the writer reads the stored sheet's entries itself).
+            let storedExported = CanonicalBusinessEngine.timesheetExportedFieldSet(server?["exportedAt"])
             if let reviewFields = CanonicalBusinessEngine.timesheetEntryReviewWriteFields(
                 storedSheet: server,
-                entries: entries,
+                entryRows: signedRows + TimesheetLateExtrasSupport.reviewEntryRows(draft),
                 reviewedByUserId: writerId,
                 reviewedAtMs: Date().timeIntervalSince1970 * 1000,
-                reviewFingerprints: reviewFingerprints
+                exported: storedExported,
+                sheetDocId: server?["__documentId"] as? String
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
+            }
+            // RULEBOOK 1.54.0 (final check of #337): a stored `exportedAt` is never written back changed or removed.
+            if storedExported { changed.removeValue(forKey: "exportedAt") }
+            // RULEBOOK 1.54.0 §8 / §16 (third review of #337): an exported sheet with late extras is frozen — its review
+            // map and snapshot are never changed (the security rules refuse those writes).
+            if storedExported, let storedLate = server?["lateExtras"] as? [Any], !storedLate.isEmpty {
+                for key in Array(changed.keys) where key == "weeklyReportOverride" || key == "extraEntryReviews" || key.hasPrefix("extraEntryReviews.") {
+                    changed.removeValue(forKey: key)
+                }
             }
         }
         do {
@@ -1232,6 +1323,7 @@ enum TimesheetDraftStore {
         if frozenEntriesChanged {
             return "Price work and expenses can't be changed after your line manager has signed. Ask them to amend it."
         }
+        if let lateExtrasRefusal { return lateExtrasRefusal }
         return nil
     }
 
@@ -1395,8 +1487,10 @@ enum TimesheetDraftStore {
             } + draft.priceWorkEntries.compactMap { entry in
                 entry.reviewFingerprint.map { ["id": entry.storedId ?? WorkDocumentKeys.storedId(for: entry.id), "reviewFingerprint": $0] }
             }
-        guard !rows.isEmpty else { return [:] }
-        return CanonicalBusinessEngine.timesheetEntryFingerprintMap(rows)
+        // RULEBOOK 1.54.0 (third review of #337): late extras under their own `late:` keys, never one map of both kinds.
+        let late = TimesheetLateExtrasSupport.fingerprints(draft)
+        guard !rows.isEmpty else { return late }
+        return CanonicalBusinessEngine.timesheetEntryFingerprintMap(rows).merging(late) { first, _ in first }
     }
 
     static func asFirestoreMap(_ draft: TimesheetDraft) -> [String: Any] {
@@ -1419,6 +1513,11 @@ enum TimesheetDraftStore {
             map["operativeSignedBookingsAt"] = Timestamp(date: writtenAt)
         } else if draft.operativeSignedAt == nil {
             map["operativeSignedBookingsAt"] = NSNull()
+        }
+        // RULEBOOK 1.54.0 §8: late extras, written only when the draft has the list (a sheet without them keeps its
+        // stored shape), each with its own fields and kind — never a decision.
+        if let late = draft.lateExtras {
+            map["lateExtras"] = late.map(TimesheetLateExtrasSupport.storedRow)
         }
         return map
     }
@@ -1577,6 +1676,21 @@ enum TimesheetDraftStore {
             )
         }
 
+        // RULEBOOK 1.54.0 §8: late extras (added after the line manager signed) through `parseTimesheetLateExtras` —
+        // the late decision from the review map, never an inline one. A sheet with a `lateExtras` array the script could
+        // not read is not decoded at all (a save from a half-read sheet would drop them).
+        if map["lateExtras"] is [Any] {
+            guard let late = TimesheetLateExtrasSupport.read(
+                sheetDocumentId: sheetDocumentId,
+                sheet: map,
+                ownerUserIds: RulebookRosterSnapshot.personIds(forUserId: subjectId)
+            ) else { return nil }
+            output.lateExtras = late
+        }
+        output.extraEntryReviewsJSON = TimesheetLateExtrasSupport.reviewsJSONText(fromStoredSheet: map)
+        // RULEBOOK 1.54.0 (review of #337): the stored `exportedAt` as the security rules test it.
+        output.exportedAtStored = CanonicalBusinessEngine.timesheetExportedFieldSet(map["exportedAt"])
+
         if let reviewMap = map["payrollLineReviews"] as? [String: [String: Any]] {
             var reviews: [String: TimesheetPayrollLineReview] = [:]
             for (lineId, payload) in reviewMap {
@@ -1655,7 +1769,7 @@ enum TimesheetDraftStore {
     }
 
     nonisolated private static func moneyLineMap(_ line: TimesheetWeeklyReportMoneyLine) -> [String: Any] {
-        [
+        var row: [String: Any] = [
             "id": line.id,
             "title": line.title,
             "details": line.details,
@@ -1664,6 +1778,11 @@ enum TimesheetDraftStore {
             "amount": line.amount,
             "decision": line.decision.rawValue
         ]
+        // RULEBOOK 1.54.0 §8 (web `weeklyReportOverrideToFirestore`): an approved late extra's row and its fingerprint,
+        // only on such a row (every other row keeps its stored shape).
+        if line.lateExtra == true { row["lateExtra"] = true }
+        if let fingerprint = line.entryFingerprint, !fingerprint.isEmpty { row["entryFingerprint"] = fingerprint }
+        return row
     }
 
     private static func weeklyReportOverride(from map: [String: Any]) -> TimesheetWeeklyReportOverride? {
@@ -1703,7 +1822,10 @@ enum TimesheetDraftStore {
                     jobNumber: row["jobNumber"] as? String ?? "",
                     date: (row["date"] as? Timestamp)?.dateValue() ?? Date(),
                     amount: row["amount"] as? Double ?? 0,
-                    decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved
+                    decision: TimesheetManagerDecision(rawValue: row["decision"] as? String ?? "") ?? .approved,
+                    // RULEBOOK 1.54.0 §8: an approved late extra's row (and its fingerprint when approved).
+                    lateExtra: (row["lateExtra"] as? Bool) == true ? true : nil,
+                    entryFingerprint: (row["entryFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                 )
             }
         }
@@ -2246,6 +2368,13 @@ private struct MyTimesheetView: View {
     @State private var editingPriceWorkEntry: TimesheetPriceWorkEntry?
     @State private var editingExpenseEntry: TimesheetExpenseEntry?
     @State private var deletingEntry: TimesheetEntryTarget?
+    /// RULEBOOK 1.54.0 §8: a late extra (added after the line manager signed) being added, edited or deleted.
+    @State private var showLateExtraConfirm = false
+    @State private var pendingLateExtraMode: TimesheetExtraMode?
+    @State private var showLatePriceWorkSheet = false
+    @State private var showLateExpenseSheet = false
+    @State private var editingLateExtra: TimesheetLateExtra?
+    @State private var deletingLateExtraId: String?
     /// A server copy of this sheet arrived while an edit sheet was open; it loads when that sheet closes.
     @State private var serverTimesheetChangedWhileEditing = false
     /// The "Note to manager" box has the keyboard. Each keystroke saves, and the live listener would
@@ -2260,7 +2389,8 @@ private struct MyTimesheetView: View {
         return PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .ownPay
         )
     }
 
@@ -2443,9 +2573,12 @@ private struct MyTimesheetView: View {
     }
 
     /// RULEBOOK 1.47.0 §8: a reopened sheet shows (and invoices) the live bookings' figures, never its stale signed
-    /// snapshot (web `draftForFigures`).
+    /// snapshot (web `draftForFigures`). 1.54.0: late extras alone never discard the snapshot — its signed figures stand,
+    /// with its late rows only while still approved (`TimesheetLateExtrasSupport.draftWithCurrentLateRows`).
     private var draftForFigures: TimesheetDraft {
-        guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
+        guard bookingChange?.reopened == true, bookingChange?.bookingsChanged != false, draft.weeklyReportOverride != nil else {
+            return TimesheetLateExtrasSupport.draftWithCurrentLateRows(draft)
+        }
         var live = draft
         live.weeklyReportOverride = nil
         return live
@@ -2694,11 +2827,29 @@ private struct MyTimesheetView: View {
                     }
                 }
 
+                // RULEBOOK 1.54.0 §8: price work and expenses added after the line manager signed, each with where it
+                // stands (`timesheetLateExtraLabel`); edited or deleted while `timesheetOwnerCanAddLateExtras` allows.
+                if let late = draft.lateExtras, !late.isEmpty {
+                    sectionCard(title: "Added after sign-off") {
+                        ForEach(late) { item in
+                            lateExtraOwnerRow(item)
+                        }
+                    }
+                }
+
                 sectionHeader("Add to this timesheet")
-                // RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras`: nothing is added once the line manager has signed
-                // (a self-signed sheet stays open; adding asks the person to sign again).
+                // RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras`: nothing is added to the signed entries once the line
+                // manager has signed (a self-signed sheet stays open; adding asks the person to sign again). 1.54.0: from
+                // then until export the buttons add a late extra instead (`timesheetOwnerCanAddLateExtras`).
                 let extras = extrasPermission
-                if !extras.allowed, let message = extras.message {
+                let lateExtras = lateExtrasPermission
+                if !extras.allowed && lateExtras.allowed {
+                    Text(CanonicalBusinessEngine.timesheetLateExtraAddConfirmMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("timesheets.lateExtrasNote")
+                } else if !extras.allowed, let message = lateExtras.message ?? extras.message {
                     Text(message)
                         .font(.footnote)
                         .foregroundStyle(PPColor.warningAmber)
@@ -2713,8 +2864,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.priceWork")
                     .buttonStyle(.plain)
-                    .disabled(!extras.allowed)
-                    .opacity(extras.allowed ? 1 : 0.5)
+                    .disabled(!extras.allowed && !lateExtras.allowed)
+                    .opacity(extras.allowed || lateExtras.allowed ? 1 : 0.5)
                     Button {
                         beginAddingExtra(.expense)
                     } label: {
@@ -2722,8 +2873,8 @@ private struct MyTimesheetView: View {
                     }
                     .accessibilityIdentifier("timesheets.expenses")
                     .buttonStyle(.plain)
-                    .disabled(!extras.allowed)
-                    .opacity(extras.allowed ? 1 : 0.5)
+                    .disabled(!extras.allowed && !lateExtras.allowed)
+                    .opacity(extras.allowed || lateExtras.allowed ? 1 : 0.5)
                 }
 
                 // RULEBOOK §8: no "note to manager" on a self-signed sheet (`timesheetSelfSigned`).
@@ -2831,7 +2982,8 @@ private struct MyTimesheetView: View {
 
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
-                   bookingChange?.reopened != true,
+                   // RULEBOOK 1.54.0: late extras alone never undo the counter-signature.
+                   bookingChange?.reopened != true || bookingChange?.lateExtrasOnly == true,
                    let managerSignedAt = draft.managerSignedAt {
                     VStack(spacing: 8) {
                         if let base64 = draft.managerSignatureImageBase64,
@@ -3109,6 +3261,84 @@ private struct MyTimesheetView: View {
                 ? "\(CanonicalBusinessEngine.timesheetEntryDeleteConfirmMessage)\n\n\(postSignWarningMessage)"
                 : CanonicalBusinessEngine.timesheetEntryDeleteConfirmMessage)
         }
+        // RULEBOOK 1.54.0 §8: late extras — confirm, add, edit and delete (never a signature cleared).
+        .confirmationDialog(
+            "Added after sign-off",
+            isPresented: $showLateExtraConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Continue") { openPendingLateExtraSheet() }
+                .accessibilityIdentifier("timesheets.lateExtra.confirm")
+            Button("Cancel", role: .cancel) { pendingLateExtraMode = nil }
+        } message: {
+            Text(CanonicalBusinessEngine.timesheetLateExtraAddConfirmMessage)
+        }
+        .sheet(isPresented: $showLatePriceWorkSheet) {
+            NavigationStack {
+                TimesheetMoneyEntrySheet(mode: .priceWork, editing: nil as TimesheetPriceWorkEntry?) { (entry: TimesheetPriceWorkEntry) async -> String? in
+                    let late = TimesheetLateExtrasSupport.lateExtra(from: entry, id: UUID().uuidString)
+                    return await applyLateExtraChange { $0.append(late) }
+                }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
+            }
+        }
+        .sheet(isPresented: $showLateExpenseSheet) {
+            NavigationStack {
+                TimesheetMoneyEntrySheet(mode: .expense, editing: nil as TimesheetExpenseEntry?) { (entry: TimesheetExpenseEntry) async -> String? in
+                    let late = TimesheetLateExtrasSupport.lateExtra(from: entry, id: UUID().uuidString)
+                    return await applyLateExtraChange { $0.append(late) }
+                }
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
+                .environmentObject(firebaseBackend)
+            }
+        }
+        .sheet(item: $editingLateExtra) { editing in
+            NavigationStack {
+                if editing.isPriceWork {
+                    TimesheetMoneyEntrySheet(mode: .priceWork, editing: TimesheetLateExtrasSupport.priceWorkEntry(editing)) { (entry: TimesheetPriceWorkEntry) async -> String? in
+                        let late = TimesheetLateExtrasSupport.lateExtra(from: entry, id: editing.id)
+                        return await applyLateExtraChange { list in
+                            if let index = list.firstIndex(where: { $0.id == editing.id }) { list[index] = late }
+                        }
+                    }
+                    .environmentObject(userStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(firebaseBackend)
+                } else {
+                    TimesheetMoneyEntrySheet(mode: .expense, editing: TimesheetLateExtrasSupport.expenseEntry(editing)) { (entry: TimesheetExpenseEntry) async -> String? in
+                        let late = TimesheetLateExtrasSupport.lateExtra(from: entry, id: editing.id)
+                        return await applyLateExtraChange { list in
+                            if let index = list.firstIndex(where: { $0.id == editing.id }) { list[index] = late }
+                        }
+                    }
+                    .environmentObject(userStore)
+                    .environmentObject(projectStore)
+                    .environmentObject(firebaseBackend)
+                }
+            }
+        }
+        .confirmationDialog(
+            CanonicalBusinessEngine.timesheetEntryDeleteLabel,
+            isPresented: Binding(get: { deletingLateExtraId != nil }, set: { if !$0 { deletingLateExtraId = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button(CanonicalBusinessEngine.timesheetEntryDeleteLabel, role: .destructive) {
+                guard let id = deletingLateExtraId else { return }
+                deletingLateExtraId = nil
+                Task {
+                    if let message = await applyLateExtraChange({ $0.removeAll { $0.id == id } }) {
+                        saveErrorMessage = message
+                    }
+                }
+            }
+            .accessibilityIdentifier("timesheets.lateExtra.deleteConfirm")
+            Button("Cancel", role: .cancel) { deletingLateExtraId = nil }
+        } message: {
+            Text(CanonicalBusinessEngine.timesheetEntryDeleteConfirmMessage)
+        }
         .sheet(isPresented: $showInvoiceUTRWarning) {
             InvoiceUTRBlankWarningSheet(
                 onBack: { showInvoiceUTRWarning = false },
@@ -3159,7 +3389,11 @@ private struct MyTimesheetView: View {
             return
         }
         if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
-            await MainActor.run { invoiceErrorMessage = CanonicalBusinessEngine.signedTimesheetChangedMessage }
+            // RULEBOOK 1.54.0 §8: no invoice while late extras wait for the line manager (`timesheetChangesWithLateExtras`).
+            let message = bookingChange?.lateExtrasOnly == true
+                ? CanonicalBusinessEngine.timesheetLateExtraWaitingLabel
+                : CanonicalBusinessEngine.signedTimesheetChangedMessage
+            await MainActor.run { invoiceErrorMessage = message }
             return
         }
 
@@ -3207,11 +3441,97 @@ private struct MyTimesheetView: View {
         )
     }
 
+    /// RULEBOOK 1.54.0 §8 `timesheetOwnerCanAddLateExtras(sheet, { selfSigned })`: late extras only once the line manager
+    /// has signed and until the stored `exportedAt` is set (`TIMESHEET_EXPORTED_EXTRAS_MESSAGE`).
+    private var lateExtrasPermission: RulebookTimesheetExtrasPermission {
+        let selfSigned = userStore.displayUser.map { !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: $0) } ?? false
+        return CanonicalBusinessEngine.timesheetOwnerCanAddLateExtras(
+            managerSignedAt: draft.managerSignedAt,
+            approvedAt: draft.approvedAt,
+            exportedAt: draft.exportedAt,
+            exportedAtStored: draft.exportedAtStored,
+            selfSigned: selfSigned
+        )
+    }
+
+    /// One late extra on the person's own sheet: what it is, its label (`timesheetLateExtraLabel`) and, while allowed,
+    /// Edit / Delete. A late extra pays only once approved, so no amount is shown as paid until then.
+    @ViewBuilder
+    private func lateExtraOwnerRow(_ item: TimesheetLateExtra) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.title)
+                    .fontWeight(.semibold)
+                    .strikethrough(item.lateState == "declined")
+                Text(item.isPriceWork ? "Price work · \(CanonicalBusinessEngine.priceWorkJobNumberText(item.jobNumber))" : "Expense · \(item.jobNumber.isEmpty ? "—" : item.jobNumber)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                let evidenceCount = CanonicalBusinessEngine.claimEvidenceCountText(item.evidence.count)
+                if !evidenceCount.isEmpty {
+                    Text(evidenceCount)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                ClaimEvidenceLinks(evidence: item.evidence, legacyReceiptName: item.receiptName)
+                if let label = CanonicalBusinessEngine.timesheetLateExtraLabel(state: item.lateState ?? "pending", reason: item.lateReason) {
+                    Text(label)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(item.lateState == "approved" ? Color.green : PPColor.warningAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("timesheets.lateExtra.label")
+                }
+                if lateExtrasPermission.allowed {
+                    HStack(spacing: 16) {
+                        Button(CanonicalBusinessEngine.timesheetEntryEditLabel) { editingLateExtra = item }
+                            .font(.caption.weight(.semibold))
+                            .accessibilityIdentifier("timesheets.lateExtra.edit")
+                        Button(CanonicalBusinessEngine.timesheetEntryDeleteLabel, role: .destructive) { deletingLateExtraId = item.id }
+                            .font(.caption.weight(.semibold))
+                            .accessibilityIdentifier("timesheets.lateExtra.delete")
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, 2)
+                }
+            }
+            Spacer()
+            Text(OrgMoney.format(item.amount))
+                .fontWeight(.semibold)
+                .foregroundStyle(item.lateState == "approved" ? Color.primary : Color.secondary)
+        }
+    }
+
+    /// Opens the add sheet for a late extra once the person confirmed.
+    private func openPendingLateExtraSheet() {
+        switch pendingLateExtraMode {
+        case .priceWork: showLatePriceWorkSheet = true
+        case .expense: showLateExpenseSheet = true
+        case .none: break
+        }
+        pendingLateExtraMode = nil
+    }
+
+    /// Adds, replaces or removes one late extra and saves (the signed entries are never touched).
+    private func applyLateExtraChange(_ change: @escaping (inout [TimesheetLateExtra]) -> Void) async -> String? {
+        guard lateExtrasPermission.allowed else { return lateExtrasPermission.message ?? CanonicalBusinessEngine.timesheetExportedExtrasMessage }
+        return await applyEntryChange { sheet in
+            var late = sheet.lateExtras ?? []
+            change(&late)
+            sheet.lateExtras = late
+        }
+    }
+
     private func beginAddingExtra(_ mode: TimesheetExtraMode) {
         // RULEBOOK 1.43.0: no add control and no signature cleared once the line manager has signed.
         let extras = extrasPermission
         guard extras.allowed else {
-            saveErrorMessage = extras.message
+            // RULEBOOK 1.54.0 §8: after the line manager signed (until export) the person adds a late extra, after the
+            // confirm (`TIMESHEET_LATE_EXTRA_ADD_CONFIRM_MESSAGE`). No signature is ever cleared.
+            if lateExtrasPermission.allowed {
+                pendingLateExtraMode = mode
+                showLateExtraConfirm = true
+                return
+            }
+            saveErrorMessage = lateExtrasPermission.message ?? extras.message
             return
         }
         guard let user = userStore.displayUser else {
@@ -3367,6 +3687,7 @@ private struct MyTimesheetView: View {
     /// An add / edit sheet or the re-sign prompt is open: the person may be part-way through a change.
     private var isEditingTimesheet: Bool {
         showAddExpense || showAddPriceWork || showPriceWorkSheet || showExpenseSheet || showPostSignExtraWarning
+            || showLateExtraConfirm || showLatePriceWorkSheet || showLateExpenseSheet || editingLateExtra != nil
             || managerNoteFocused
     }
 
@@ -3546,6 +3867,24 @@ private struct MyTimesheetView: View {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
+            return nil
+        }
+        // A signature that completes the sheet never saves without its snapshot: while pay inputs (bookings, history or
+        // the pay-profile overlays) are not ready, the save is refused rather than saved unfrozen.
+        if let current = userStore.displayUser,
+           let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+               draft: draft,
+               user: current,
+               writerIsReviewer: TimesheetApprovalPolicy.writerIsReviewer(
+                   writerId: current.id,
+                   writer: current,
+                   subjectUserId: current.id,
+                   subject: current
+               ),
+               blockMessage: payInputsBlockMessage,
+               rebuildSnapshot: rebuildSnapshot
+           ) {
+            saveErrorMessage = refusal
             return nil
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
@@ -3765,7 +4104,7 @@ struct OperativeTimesheetsView: View {
     @State private var payInputsState: PayInputsLoadState = .loading
     /// Why pay cannot be worked out yet, else nil (`PayInputsLoad.blockMessage`).
     private var payInputsBlockMessage: String? {
-        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization)
+        PayInputsLoad.blockMessage(state: payInputsState, organization: firebaseBackend.currentOrganization, scope: .othersPay)
     }
     @State private var exportedHistory: [ExportedTimesheetHistoryRow] = []
     /// RULEBOOK 1.43.0 (review r318): the Exported tab's Download PDF.
@@ -3897,7 +4236,7 @@ struct OperativeTimesheetsView: View {
                         } else {
                             ForEach(filteredExportedHistory) { row in
                                 NavigationLink {
-                                    OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                                    OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                         .environmentObject(firebaseBackend)
                                         .environmentObject(userStore)
                                         .environmentObject(bookingStore)
@@ -3907,9 +4246,9 @@ struct OperativeTimesheetsView: View {
                                         .environmentObject(notificationService)
                                 } label: {
                                     HStack(spacing: 12) {
-                                        initialsAvatar(for: row.user)
+                                        initialsAvatar(for: live(row.user))
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                            Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
                                             Text(row.week.title)
@@ -3922,7 +4261,7 @@ struct OperativeTimesheetsView: View {
                                             }
                                         }
                                         Spacer()
-                                        statusPill(for: row.draft, user: row.user)
+                                        statusPill(for: row.draft, user: live(row.user))
                                         Image(systemName: "chevron.right")
                                             .font(.footnote.weight(.semibold))
                                             .foregroundStyle(.tertiary)
@@ -3973,7 +4312,7 @@ struct OperativeTimesheetsView: View {
                     } else {
                     ForEach(awaitingRows) { row in
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: row.user, settings: settings, week: row.week)
+                            OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -3983,26 +4322,26 @@ struct OperativeTimesheetsView: View {
                                 .environmentObject(notificationService)
                         } label: {
                             HStack(spacing: 12) {
-                                initialsAvatar(for: row.user)
+                                initialsAvatar(for: live(row.user))
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(row.user.fullName.isEmpty ? row.user.email : row.user.fullName)
+                                    Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    let draft = TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start)
-                                    let summary = operativeSummary(for: row.user, draft: draft, week: row.week)
+                                    let draft = TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start)
+                                    let summary = operativeSummary(for: live(row.user), draft: draft, week: row.week)
                                     Text(summary.map { "\(row.week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? row.week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
-                                        Text("Line manager: \(lineManagerName(for: row.user))")
+                                        Text("Line manager: \(lineManagerName(for: live(row.user)))")
                                             .font(.caption2)
                                             .foregroundStyle(.secondary)
                                     }
                                 }
                                 Spacer()
                                 statusPill(
-                                    for: TimesheetDraftStore.load(userId: row.user.id, weekStart: row.week.start),
-                                    user: row.user
+                                    for: TimesheetDraftStore.load(userId: live(row.user).id, weekStart: row.week.start),
+                                    user: live(row.user)
                                 )
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
@@ -4167,6 +4506,9 @@ struct OperativeTimesheetsView: View {
         // Rows were built only on appear and after the first fetch. When the roster arrives or is replaced
         // later, rebuild from the people now in scope and fetch their timesheets, instead of keeping the
         // first (empty or cached) list.
+        // The rows keep each person: rebuilt when roster pay is laid over again (review of #240), never priced from a
+        // copy kept from before the pay profiles arrived.
+        .onChange(of: userStore.payOverlayVersion) { _, _ in rebuildAwaitingRows() }
         .task(id: managerScopeUsers.map(\.id)) {
             let ids = managerScopeUsers.map(\.id)
             guard let previous = listScopeIds else {
@@ -4215,7 +4557,8 @@ struct OperativeTimesheetsView: View {
             return
         }
         // RULEBOOK 1.47.0 §8: a sheet waiting for the person to sign the changed bookings again is not signed.
-        let waitingForOwner = userStore.currentUser.flatMap {
+        // RULEBOOK §8: the viewer's own record with their pay profile laid over (PAYE days are not timesheet lines).
+        let waitingForOwner = userStore.currentUserWithPay.flatMap {
             SignedTimesheetChangeContext.shared.change(draft: ownSheet, user: $0, period: week)
         }?.waitingForPerson == true
         ownSheetExportNotice = CanonicalBusinessEngine.timesheetExportOwnSheetNotice(
@@ -4482,7 +4825,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: week.start
-            )
+            ),
+            scope: .othersPay
         ) {
             exportMessage = blocked
             return
@@ -4508,10 +4852,26 @@ struct OperativeTimesheetsView: View {
         var skippedElsewhere: [String] = []
         /// RULEBOOK 1.47.0 §8: sheets left out because their bookings changed since they were signed.
         var skippedChanged: [String] = []
-        for op in targets {
+        /// Review of #240: people whose pay details could not be loaded (their pay-profile read failed).
+        var skippedPay: [String] = []
+        /// RULEBOOK 1.54.0 §8: sheets left out because late extras wait for the line manager.
+        var skippedLateExtras: [String] = []
+        for target in targets {
+            // RULEBOOK §8 (review of #240): the person as the roster holds them now, pay laid over.
+            let op = live(target)
             guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
+            }
+            // The pay gate for this person, checked again for each one (review of #240): still loading stops the export;
+            // their pay could not be loaded skips and names them.
+            if let blocked = PrivatePayOverlayReadiness.blockMessage(scope: .forPerson(op)) {
+                if blocked == PrivatePayOverlayReadiness.loadingMessage {
+                    exportMessage = blocked
+                    return
+                }
+                skippedPay.append(name(op))
+                continue
             }
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
                 userId: op.id,
@@ -4552,7 +4912,12 @@ struct OperativeTimesheetsView: View {
                 return
             }
             if !CanonicalBusinessEngine.signedTimesheetActions(change).mayExport {
-                skippedChanged.append(name(op))
+                // RULEBOOK 1.54.0 §8: a sheet held only by late extras is named with its own reason.
+                if change.lateExtrasOnly {
+                    skippedLateExtras.append(name(op))
+                } else {
+                    skippedChanged.append(name(op))
+                }
                 continue
             }
             // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never exported (fail closed).
@@ -4589,21 +4954,36 @@ struct OperativeTimesheetsView: View {
         var stamped: [(operative: AppUser, draft: TimesheetDraft)] = []
         var stampError: String?
         for row in prepared {
-            if let failure = await TimesheetDraftStore.saveToCloud(
-                row.draft,
-                userId: row.operative.id,
-                weekStart: week.start,
-                weekEnd: week.end,
-                firebaseBackend: firebaseBackend,
-                organizationId: exportOrgId,
-                writer: exporter,
-                subject: row.operative
-            ) {
-                stampError = failure
+            // RULEBOOK 1.54.0 (third review of #337, web `stampTimesheetExport`): only the export fields — the signed
+            // snapshot and `exportedAt` — in a transaction that re-reads the sheet and stamps nothing when it is already
+            // exported or its late extras now wait for the line manager (a late extra added meanwhile is never overwritten).
+            guard let exportedAt = row.draft.exportedAt,
+                  let snapshot = TimesheetDraftStore.asFirestoreMap(row.draft)["weeklyReportOverride"] as? [String: Any] else { continue }
+            let result: String
+            do {
+                result = try await firebaseBackend.stampTimesheetExport(
+                    organizationId: exportOrgId,
+                    userId: row.operative.id,
+                    weekStart: week.start,
+                    weeklyReportOverride: snapshot,
+                    exportedAt: exportedAt
+                )
+            } catch {
+                stampError = "Couldn't export \(name(row.operative))'s timesheet: \(error.localizedDescription)"
                 break
             }
-            TimesheetDraftStore.save(row.draft, userId: row.operative.id, weekStart: week.start, weekEnd: week.end)
-            stamped.append(row)
+            switch result {
+            case "stamped":
+                TimesheetDraftStore.save(row.draft, userId: row.operative.id, weekStart: week.start, weekEnd: week.end)
+                TimesheetDraftStore.rememberLoadedCopy(row.draft, userId: row.operative.id, weekStart: week.start)
+                stamped.append(row)
+            case "late-extras-waiting":
+                skippedLateExtras.append(name(row.operative))
+            case "already-exported":
+                skippedElsewhere.append(name(row.operative))
+            default:
+                continue
+            }
         }
 
         // 3. Deliver every stamped sheet — PDF from the copy that was saved, backup, then one email — each person on
@@ -4657,6 +5037,14 @@ struct OperativeTimesheetsView: View {
             let line = "\(skippedChanged.joined(separator: ", ")): \(CanonicalBusinessEngine.signedTimesheetExportSkippedMessage)"
             exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
         }
+        if !skippedLateExtras.isEmpty {
+            let line = "\(skippedLateExtras.joined(separator: ", ")): \(CanonicalBusinessEngine.timesheetLateExtrasExportSkippedMessage)"
+            exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+        if !skippedPay.isEmpty {
+            let line = "\(skippedPay.joined(separator: ", ")): \(PrivatePayOverlayReadiness.exportSkippedMessage)"
+            exportMessage = [exportMessage, line].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n")
+        }
     }
 
     /// RULEBOOK 1.43.0 (review r318, web `downloadExportedPdf`): Exported → Download PDF rebuilds the PDF from the
@@ -4675,7 +5063,8 @@ struct OperativeTimesheetsView: View {
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
                 from: row.week.start
-            )
+            ),
+            scope: .forPerson(live(row.user))
         ) {
             exportMessage = blocked
             return
@@ -4683,7 +5072,7 @@ struct OperativeTimesheetsView: View {
         var sheet = row.draft
         if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
-                userId: row.user.id,
+                userId: live(row.user).id,
                 weekStart: row.week.start,
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
@@ -4696,15 +5085,15 @@ struct OperativeTimesheetsView: View {
             return
         }
         let taxIds = await InvoicePDFGenerationSupport.taxIdsForExport(
-            subject: row.user,
+            subject: live(row.user),
             requested: includeTaxIdsInExport,
             userStore: userStore
         )
-        let name = row.user.fullName.isEmpty ? row.user.email : row.user.fullName
+        let name = live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName
         let attachment: TimesheetExportHelper.PDFAttachment
         do {
             attachment = try TimesheetExportHelper.makeSheetPDF(
-            operative: row.user,
+            operative: live(row.user),
             week: row.week,
             draft: sheet,
             bookingStore: bookingStore,
@@ -4829,6 +5218,9 @@ struct OperativeTimesheetsView: View {
 
     /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
     /// (a declined expense never counts). Nil when the script did not answer.
+    /// RULEBOOK §8 (review of #240): a person kept on a row, as the roster holds them now (pay laid over).
+    private func live(_ user: AppUser) -> AppUser { UserStore.livePerson(user, in: userStore.organizationUsers) }
+
     private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
@@ -4912,9 +5304,20 @@ private struct OperativeTimesheetReviewView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var holidayStore: HolidayStore
-    let operative: AppUser
+    /// The person as passed in. Pricing and decisions use `operative`, the person as the roster holds them now.
+    private let operativeSeed: AppUser
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
+
+    init(operative: AppUser, settings: OrganizationInvoicingSettings, week: WeekRange) {
+        self.operativeSeed = operative
+        self.settings = settings
+        self.week = week
+    }
+
+    /// RULEBOOK §8 (review of #240): the reviewed person with their pay laid over now — looked up again by id, never the
+    /// copy a list kept from before the roster's pay profiles arrived.
+    private var operative: AppUser { UserStore.livePerson(operativeSeed, in: userStore.organizationUsers) }
     @State private var draft = TimesheetDraft()
     @State private var showingManagerSignSheet = false
     /// RULEBOOK 1.47.0 §8: the counter-signature of a reopened sheet rebuilds its snapshot on the save that follows.
@@ -4928,7 +5331,8 @@ private struct OperativeTimesheetReviewView: View {
         if let blocked = PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
-            bookings: periodBookingsState
+            bookings: periodBookingsState,
+            scope: .forPerson(operative)
         ) {
             return blocked
         }
@@ -4959,6 +5363,8 @@ private struct OperativeTimesheetReviewView: View {
     @State private var editingPayrollLineId: String?
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
+    /// RULEBOOK 1.54.0 §8: the late extra whose amount the reviewer is editing (⚙).
+    @State private var editingLateExtraId: String?
     /// A server copy of this sheet arrived while the reviewer was editing; it loads when they finish.
     @State private var serverTimesheetChangedWhileEditing = false
     @State private var showExtrasReviewRequiredAlert = false
@@ -5004,9 +5410,10 @@ private struct OperativeTimesheetReviewView: View {
         // RULEBOOK 1.47.0 §8: while the person must sign the changed bookings again nothing is reviewed or
         // counter-signed; once they have, the line manager reviews and counter-signs again.
         if bookingChange?.waitingForPerson == true { return false }
+        // RULEBOOK 1.54.0 §8: late extras alone open only the late extras for review (below), never the signed lines.
         return TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative)
             && (TimesheetApprovalPolicy.recordedSignatureDate(draft.managerSignedAt) == nil
-                || bookingChange?.waitingForLineManager == true)
+                || (bookingChange?.waitingForLineManager == true && bookingChange?.lateExtrasOnly != true))
             && TimesheetApprovalPolicy.operativeHasSigned(draft)
             && !TimesheetApprovalPolicy.isExported(draft)
     }
@@ -5069,9 +5476,12 @@ private struct OperativeTimesheetReviewView: View {
         Task { await loadDayRateHistory() }
     }
 
-    /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot.
+    /// RULEBOOK 1.47.0 §8: a reopened sheet's figures are the live bookings, never its stale snapshot. 1.54.0: late
+    /// extras alone never discard the snapshot; its late rows count only while still approved.
     private var draftForFigures: TimesheetDraft {
-        guard bookingChange?.reopened == true, draft.weeklyReportOverride != nil else { return draft }
+        guard bookingChange?.reopened == true, bookingChange?.bookingsChanged != false, draft.weeklyReportOverride != nil else {
+            return TimesheetLateExtrasSupport.draftWithCurrentLateRows(draft)
+        }
         var live = draft
         live.weeklyReportOverride = nil
         return live
@@ -5140,6 +5550,17 @@ private struct OperativeTimesheetReviewView: View {
                     Task { await refreshDraftFromCloud() }
                 }
             }
+            .sheet(isPresented: Binding(get: { editingLateExtraId != nil }, set: { if !$0 { editingLateExtraId = nil } })) {
+                if let id = editingLateExtraId, let item = draft.lateExtras?.first(where: { $0.id == id }) {
+                    TimesheetManagerAmountEditSheet(
+                        title: item.isPriceWork ? "Edit price work" : "Edit expense",
+                        subtitle: item.title,
+                        originalAmount: item.managerRevisedAmount ?? item.amount,
+                        onSave: { value in applyLateExtraAmount(id, entered: value) },
+                        onDelete: nil
+                    )
+                }
+            }
             .alert("Review required", isPresented: $showExtrasReviewRequiredAlert) {
                 Button("OK", role: .cancel) {}
                     .accessibilityIdentifier("operativeTimesheetReview.ok")
@@ -5174,6 +5595,7 @@ private struct OperativeTimesheetReviewView: View {
                 reviewBreakdownCard
                 reviewExpensesCard
                 reviewPriceWorkCard
+                reviewLateExtrasCard
                 reviewSignaturesCard
                 reviewSignOffSection
             }
@@ -5241,6 +5663,12 @@ private struct OperativeTimesheetReviewView: View {
             rowLine(title: "Overtime", amount: totals?.overtimeLabour ?? 0)
             rowLine(title: "Price work · \(draft.priceWorkEntries.count)", amount: totals?.priceWork ?? 0)
             rowLine(title: "Expenses · \(draft.expenseEntries.count)", amount: totals?.expenses ?? 0)
+            // RULEBOOK 1.54.0 §8 `timesheetLateExtrasSummary(...).pending`: late extras still waiting (not in any figure).
+            if let pending = lateExtrasSummary?.pending, pending > 0 {
+                Text("\(pending) added after sign-off waiting for a decision (not in the total)")
+                    .font(.caption)
+                    .foregroundStyle(PPColor.warningAmber)
+            }
             Divider()
             rowLine(title: managerHasSigned ? "Approved total" : "Total", amount: totals?.total ?? 0)
             if !draft.managerNote.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -5326,6 +5754,123 @@ private struct OperativeTimesheetReviewView: View {
         }
     }
 
+    /// RULEBOOK 1.54.0 §8 `timesheetLateExtrasSummary` for this sheet (nil without late extras).
+    private var lateExtrasSummary: RulebookLateExtrasSummary? {
+        TimesheetLateExtrasSupport.summary(draft)
+    }
+
+    /// RULEBOOK 1.54.0 §8 `timesheetLateExtraReviewable(decision, { exported })` for one late extra, for this viewer:
+    /// the line manager or an admin (never the person), after the line manager signed, never once exported, never an
+    /// ignored one (its id is a signed entry's) and never while the person must sign changed bookings again.
+    private func canReviewLateExtra(_ item: TimesheetLateExtra) -> Bool {
+        guard viewerIsReviewer, managerHasSigned, bookingChange?.waitingForPerson != true else { return false }
+        return CanonicalBusinessEngine.timesheetLateExtraReviewable(
+            state: item.lateState ?? "pending",
+            exported: TimesheetLateExtrasSupport.exportedStored(draft)
+        )
+    }
+
+    @ViewBuilder
+    private var reviewLateExtrasCard: some View {
+        if let late = draft.lateExtras, !late.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Added after sign-off")
+                    .font(.headline)
+                if late.contains(where: canReviewLateExtra) {
+                    Text(CanonicalBusinessEngine.timesheetLateExtrasReviewerMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(late) { item in
+                    lateExtraReviewRow(item)
+                    ClaimEvidenceLinks(evidence: item.evidence, legacyReceiptName: item.receiptName)
+                }
+            }
+            .padding(14)
+            .background(Color(.systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .accessibilityIdentifier("operativeTimesheetReview.lateExtras")
+        }
+    }
+
+    /// One late extra with ✓ ✕ ⚙ (nothing pre-selected while it is pending) or, when it cannot be reviewed, its label.
+    @ViewBuilder
+    private func lateExtraReviewRow(_ item: TimesheetLateExtra) -> some View {
+        let reviewable = canReviewLateExtra(item)
+        let subtitle = item.isPriceWork
+            ? "Price work · Agreed with: \(item.agreedManagerName) · \(item.date.formatted(date: .abbreviated, time: .omitted)) · \(CanonicalBusinessEngine.priceWorkJobNumberText(item.jobNumber))"
+            : "Expense · \(item.date.formatted(date: .abbreviated, time: .omitted)) · \(item.jobNumber.isEmpty ? "—" : item.jobNumber)"
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.title)
+                    .font(.subheadline.weight(.semibold))
+                    .strikethrough(item.managerDecision == .declined)
+                Text(Self.extraSubtitle(subtitle, evidenceCount: item.evidence.count))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if !reviewable, let label = CanonicalBusinessEngine.timesheetLateExtraLabel(state: item.lateState ?? "pending", reason: item.lateReason) {
+                    Text(label)
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(PPColor.warningAmber)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if reviewable {
+                    HStack(spacing: 14) {
+                        Button { updateLateExtraDecision(item.id, decision: .approved) } label: {
+                            Image(systemName: item.managerDecision == .approved || item.managerDecision == .edited ? "checkmark.circle.fill" : "checkmark.circle")
+                        }
+                        .accessibilityLabel("Approve")
+                        .accessibilityIdentifier("operativeTimesheetReview.lateExtra.approve")
+                        .foregroundStyle(Color.green)
+                        Button { updateLateExtraDecision(item.id, decision: .declined) } label: {
+                            Image(systemName: item.managerDecision == .declined ? "xmark.circle.fill" : "xmark.circle")
+                        }
+                        .accessibilityLabel("Decline")
+                        .accessibilityIdentifier("operativeTimesheetReview.lateExtra.decline")
+                        .foregroundStyle(Color.red)
+                        Button { editingLateExtraId = item.id } label: {
+                            Image(systemName: "gearshape")
+                        }
+                        .accessibilityLabel("Edit amount")
+                        .accessibilityIdentifier("operativeTimesheetReview.lateExtra.edit")
+                        .foregroundStyle(Color.secondary)
+                    }
+                    .font(.title3)
+                    .buttonStyle(.borderless)
+                    .onlineOnly(isOnline: smartCache.isOnline)
+                }
+            }
+            Spacer()
+            let shown = item.managerDecision == .edited ? (item.managerRevisedAmount ?? item.amount) : item.amount
+            Text(OrgMoney.format(shown))
+                .fontWeight(.semibold)
+                .strikethrough(item.managerDecision == .declined)
+        }
+    }
+
+    /// The reviewer's ✓ / ✕ on one late extra; the save writes its review (`lateExtra: true`) with the snapshot.
+    private func updateLateExtraDecision(_ id: String, decision: TimesheetManagerDecision, revisedAmount: Double? = nil) {
+        guard var late = draft.lateExtras, let index = late.firstIndex(where: { $0.id == id }),
+              canReviewLateExtra(late[index]) else { return }
+        late[index].managerDecision = decision
+        late[index].managerRevisedAmount = revisedAmount
+        draft.lateExtras = late
+        saveDraft()
+    }
+
+    /// ⚙: the reviewer's revised amount for one late extra (in pennies, `roundPennies`), as for a signed entry.
+    private func applyLateExtraAmount(_ id: String, entered: Double) {
+        guard let item = draft.lateExtras?.first(where: { $0.id == id }) else { return }
+        let revised = CanonicalBusinessEngine.roundPennies(entered)
+        if abs(revised - item.amount) < 0.01 {
+            updateLateExtraDecision(id, decision: .approved)
+        } else {
+            updateLateExtraDecision(id, decision: .edited, revisedAmount: revised)
+        }
+        editingLateExtraId = nil
+    }
+
     private var reviewSignaturesCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Signatures")
@@ -5346,7 +5891,10 @@ private struct OperativeTimesheetReviewView: View {
         if let note = bookingChange?.reviewerMessage {
             SignedTimesheetChangedBanner(message: note)
         }
-        if bookingChange?.waitingForLineManager == true, viewerIsReviewer {
+        if bookingChange?.lateExtrasOnly == true {
+            // RULEBOOK 1.54.0 §8: only late extras wait — each ✓ / ✕ saves with the snapshot; no counter-signature.
+            EmptyView()
+        } else if bookingChange?.waitingForLineManager == true, viewerIsReviewer {
             if needsExtrasReviewMessage {
                 Text("Approve, decline or edit every expense and price-work line before signing off.")
                     .font(.caption)
@@ -5415,7 +5963,7 @@ private struct OperativeTimesheetReviewView: View {
 
     private var needsExtrasReviewMessage: Bool {
         TimesheetDraftAdjustments.extrasPendingReview(in: draft)
-            && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty)
+            && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty || !(draft.lateExtras ?? []).isEmpty)
     }
 
     /// RULEBOOK 1.47.0 §8 (review of #234 item 5): the counter-signature waits for the booking-change check and follows
@@ -5450,7 +5998,7 @@ private struct OperativeTimesheetReviewView: View {
             return
         }
         if TimesheetDraftAdjustments.extrasPendingReview(in: draft)
-            && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty) {
+            && (!draft.expenseEntries.isEmpty || !draft.priceWorkEntries.isEmpty || !(draft.lateExtras ?? []).isEmpty) {
             showExtrasReviewRequiredAlert = true
         } else {
             showingManagerSignSheet = true
@@ -5706,6 +6254,25 @@ private struct OperativeTimesheetReviewView: View {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
             return nil
         }
+        // A counter-signature never saves without its snapshot (review of #240): while pay inputs (bookings, history or
+        // the roster's pay-profile overlay) are not ready, the save is refused rather than saved unfrozen.
+        if let refusal = TimesheetWeeklyReportOverrideBuilder.saveRefusalWhilePayInputsBlocked(
+            draft: draft,
+            user: operative,
+            writerIsReviewer: userStore.displayUser.map {
+                TimesheetApprovalPolicy.writerIsReviewer(
+                    writerId: $0.id,
+                    writer: $0,
+                    subjectUserId: operative.id,
+                    subject: operative
+                )
+            },
+            blockMessage: payInputsBlockMessage,
+            rebuildSnapshot: rebuildSnapshotOnSave
+        ) {
+            saveErrorMessage = refusal
+            return
+        }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
         // RULEBOOK 1.46.0: a snapshot the rulebook could not check is never saved (fail closed).
@@ -5769,6 +6336,7 @@ private struct OperativeTimesheetReviewView: View {
 
     private var isEditingReview: Bool {
         showingManagerSignSheet || editingPayrollLineId != nil || editingExpenseId != nil || editingPriceWorkId != nil
+            || editingLateExtraId != nil
     }
 
     private func listenToServerTimesheet() {
@@ -7097,7 +7665,8 @@ enum TimesheetInvoiceRows {
         extrasMode: ExtrasMode,
         period: ClosedRange<Date>
     ) -> [[String: Any]]? {
-        let sheet = FirebaseBackend.firestoreJSON(TimesheetDraftStore.asFirestoreMap(draft))
+        // RULEBOOK 1.54.0 §8: approved late extras are invoice rows (`timesheetInvoiceRows` reads them from the sheet).
+        let sheet = TimesheetLateExtrasSupport.rulebookSheet(draft)
         let lines: [[String: Any]] = summary.lineItems.map(\.rulebookTotalsJSON)
         var input: [String: Any] = [
             "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
@@ -7169,6 +7738,8 @@ enum TimesheetInvoiceRows {
         func entryKey(_ storedId: String?, _ id: UUID) -> String { key(storedId ?? WorkDocumentKeys.storedId(for: id)) }
         let priceWork = Dictionary(draft.priceWorkEntries.map { (entryKey($0.storedId, $0.id), $0) }, uniquingKeysWith: { first, _ in first })
         let expenses = Dictionary(draft.expenseEntries.map { (entryKey($0.storedId, $0.id), $0) }, uniquingKeysWith: { first, _ in first })
+        // RULEBOOK 1.54.0 §8: an approved late extra's row (`timesheetInvoiceRows` adds only approved ones).
+        let late = Dictionary((draft.lateExtras ?? []).map { (key($0.id), $0) }, uniquingKeysWith: { first, _ in first })
 
         var rows: [InvoiceLineItem] = []
         for row in result {
@@ -7218,12 +7789,16 @@ enum TimesheetInvoiceRows {
                     rows.append(moneyRow(prefix: "pw", id: line.id, date: line.date, jobNumber: line.jobNumber, projectName: "Price work", details: line.title, amount: amount))
                 } else if let entry = priceWork[key(id)] {
                     rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, amount: amount))
+                } else if let entry = late[key(id)], entry.isPriceWork {
+                    rows.append(moneyRow(prefix: "pw", id: entry.id, date: entry.date, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, amount: amount))
                 }
             case "expense":
                 if fromOverride, let line = overrideExpenses[key(id)] {
                     rows.append(moneyRow(prefix: "exp", id: line.id, date: line.date, jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber, projectName: "Expense", details: line.title, amount: amount))
                 } else if let entry = expenses[key(id)] {
                     rows.append(moneyRow(prefix: "exp", id: entry.id.uuidString, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, amount: amount))
+                } else if let entry = late[key(id)], !entry.isPriceWork {
+                    rows.append(moneyRow(prefix: "exp", id: entry.id, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, amount: amount))
                 }
             default:
                 continue

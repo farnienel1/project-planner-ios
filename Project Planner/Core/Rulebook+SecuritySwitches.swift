@@ -16,6 +16,9 @@ import FirebaseAuth
 extension Notification.Name {
     /// A security switch changed for the open organisation (`securitySwitches`): pay reads and the read plans re-plan.
     static let securitySwitchesDidChange = Notification.Name("securitySwitchesDidChange")
+    /// `platformConfig/app` answered for the first time since launch (`SecuritySwitchContext.hasRead` turned true). Own
+    /// pay decisions held while the switches were unknown run then (`OwnPayOverlay.swift`).
+    static let securitySwitchesFirstRead = Notification.Name("securitySwitchesFirstRead")
     /// The `ghostAccounts` switch changed for the open organisation (RULEBOOK 1.34.0 §18, owner decision 7 Nov "1b"):
     /// Add user shows or hides the Ghost account toggle.
     static let ghostAccountsSwitchDidChange = Notification.Name("ghostAccountsSwitchDidChange")
@@ -99,10 +102,23 @@ nonisolated enum SecuritySwitchContext {
         let panelBefore = dataCheckPanel
         let nextKey = next.flatMap { CanonicalBusinessEngine.rulebookMemoKey($0) } ?? "none"
         lock.lock()
+        let firstAnswer = !hasAnswered
         config = next
         configKey = nextKey
         hasAnswered = true
         lock.unlock()
+        if firstAnswer {
+            // `switchesChanged`: `securitySwitchesDidChange` follows and starts the pay overlays, so the first answer
+            // starts them once (review of #240).
+            let changed = current != before
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .securitySwitchesFirstRead,
+                    object: nil,
+                    userInfo: ["switchesChanged": changed]
+                )
+            }
+        }
         if dataCheckPanel != panelBefore {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .dataCheckPanelSwitchDidChange, object: nil)
@@ -118,6 +134,13 @@ nonisolated enum SecuritySwitchContext {
             NotificationCenter.default.post(name: .securitySwitchesDidChange, object: nil)
             NotificationCenter.default.post(name: .jobReadPlanDidChange, object: nil)
         }
+    }
+
+    /// Tests: whether `platformConfig/app` reads as answered (`hasRead`), without touching the switches.
+    static func setReadForTests(_ read: Bool) {
+        lock.lock()
+        hasAnswered = read
+        lock.unlock()
     }
 
     /// Tests: forget the document.
@@ -352,27 +375,91 @@ extension FirebaseBackend {
     /// read (`payProfileReadPlan` + `overlayPayProfile`, own id, else a `formerUserIds` id). While it is off the users
     /// documents are shown unchanged — a stale pay profile left by an older build must never replace them.
     func overlayRosterPayIfPrivate(_ users: [AppUser]) async -> [AppUser] {
+        await overlayRosterPayIfPrivateResult(users).users
+    }
+
+    /// `overlayRosterPayIfPrivate` with what it read: the pay profiles by document id (so the next roster snapshot can be
+    /// laid over at once, `layingRosterPayProfiles`) and whether a read failed or was refused. A failed read is never
+    /// "no profile" (review of #240): the caller marks the roster's pay not ready and retries.
+    func overlayRosterPayIfPrivateResult(_ users: [AppUser]) async -> RosterPayOverlayResult {
         guard SecuritySwitchContext.privatePay,
-              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return users }
+              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
+            return RosterPayOverlayResult(users: users, profiles: [:], failedUserIds: [])
+        }
         let roster = users.map(\.payAccessSubject)
         let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster, roster: roster)
         var profiles: [String: [String: Any]] = [:]
+        var failedProfileIds = Set<String>()
+        var everyoneFailed = false
+        var fromCache = false
         let collection = db.collection("organizations").document(orgId).collection("payProfiles")
         switch plan {
         case .all:
-            if let snapshot = try? await collection.getDocuments() {
+            // The server's answer, never a partial cache copy (review of #240); the cache only when offline.
+            do {
+                let snapshot = try await collection.getDocuments(source: .server)
                 for doc in snapshot.documents { profiles[doc.documentID] = doc.data() }
+            } catch {
+                let ns = error as NSError
+                NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ %@", orgId, error.localizedDescription)
+                if Self.payProfileReadErrorIsOffline(domain: ns.domain, code: ns.code),
+                   let cached = try? await collection.getDocuments(source: .cache) {
+                    for doc in cached.documents { profiles[doc.documentID] = doc.data() }
+                    fromCache = true
+                } else {
+                    everyoneFailed = true
+                }
             }
         case .documents(let ids):
             for id in ids {
-                if let snapshot = try? await collection.document(id).getDocument(), snapshot.exists, let data = snapshot.data() {
-                    profiles[id] = data
+                do {
+                    let snapshot = try await collection.document(id).getDocument(source: .server)
+                    if snapshot.exists, let data = snapshot.data() { profiles[id] = data }
+                } catch {
+                    let ns = error as NSError
+                    NSLog("PAY_PROFILE_ROSTER_READ_FAILED org=%@ id=%@ %@", orgId, id, error.localizedDescription)
+                    if Self.payProfileReadErrorIsOffline(domain: ns.domain, code: ns.code),
+                       let cached = try? await collection.document(id).getDocument(source: .cache) {
+                        if cached.exists, let data = cached.data() { profiles[id] = data }
+                        fromCache = true
+                    } else {
+                        failedProfileIds.insert(id)
+                    }
                 }
             }
         }
+        return RosterPayOverlayResult(
+            users: Self.layingRosterPayProfiles(users, profiles: profiles),
+            profiles: profiles,
+            failedUserIds: everyoneFailed
+                ? Set(users.map { $0.id.lowercased() })
+                : Self.rosterFailedUserIds(users, profiles: profiles, failedProfileIds: failedProfileIds),
+            fromCache: fromCache
+        )
+    }
+
+    /// The people whose pay could not be read: a read of one of their ids failed and none of their ids answered with a
+    /// profile. User ids, lower case.
+    static func rosterFailedUserIds(
+        _ users: [AppUser],
+        profiles: [String: [String: Any]],
+        failedProfileIds: Set<String>
+    ) -> Set<String> {
+        guard !failedProfileIds.isEmpty else { return [] }
+        var out = Set<String>()
+        for user in users {
+            let ids = [user.id] + user.formerUserIds
+            if ids.contains(where: { profiles[$0] != nil }) { continue }
+            if ids.contains(where: failedProfileIds.contains) { out.insert(user.id.lowercased()) }
+        }
+        return out
+    }
+
+    /// The roster with each person's pay profile laid over (`payShown`, RULEBOOK 1.26.1 §8: own id, else a
+    /// `formerUserIds` id). Rows with no profile in `profiles` are returned as given.
+    static func layingRosterPayProfiles(_ users: [AppUser], profiles: [String: [String: Any]]) -> [AppUser] {
         guard !profiles.isEmpty else { return users }
         return users.map { user in
-            // RULEBOOK 1.26.1 §8: the same `payEditorStartingValues` record the pay editors start from.
             let profileId = ([user.id] + user.formerUserIds).first { profiles[$0] != nil }
             return profileId.map { user.payShown(with: profiles[$0], profileId: $0, privatePay: true) } ?? user
         }

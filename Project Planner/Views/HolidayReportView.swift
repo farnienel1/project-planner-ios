@@ -5,6 +5,9 @@ struct HolidayReportView: View {
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var userStore: UserStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    /// RULEBOOK 1.40.0 / 1.54.0: the employment type of the person's balance, from the pay record (`privatePay`).
+    @StateObject private var leaveEmploymentModel = AnnualLeaveEmploymentModel()
 
     let user: AppUser
 
@@ -68,13 +71,34 @@ struct HolidayReportView: View {
         return user.createdAt
     }
 
-    /// RULEBOOK 1.22.0 §9 `CanonicalBusinessEngine.leaveReportYears`: the person's leave years (their leave-year start
-    /// month), from their start date to today, newest first.
+    /// RULEBOOK 1.54.0 §9 `CanonicalBusinessEngine.annualLeaveReportYearMonths`: the leave year the report counts is
+    /// the one `annualLeaveBalance` counts for this person on this screen — their own leave year while they have an
+    /// allowance today, else the organisation's — from the same inputs as the balance (Edit User). Nil until the
+    /// employment type (pay record) is known or when the script did not answer: the report then shows nothing rather
+    /// than a different year.
+    private var reportYearStartMonth: Int? {
+        let employment = leaveEmploymentModel.employment(for: user, backend: firebaseBackend)
+        guard employment.ready else { return nil }
+        let org = firebaseBackend.currentOrganization?.settings.annualLeaveDefaults ?? .default
+        return CanonicalBusinessEngine.annualLeaveReportYearMonths(
+            annualLeaveEnabled: user.annualLeaveEnabled,
+            startMonth: user.annualLeaveYearStartMonth,
+            endMonth: user.annualLeaveYearEndMonth,
+            orgStartMonth: org.startMonth,
+            orgEndMonth: org.endMonth,
+            onDayKey: OrganizationRulebookContext.dayKey(Date()),
+            employment: employment.employment
+        )?.startMonth
+    }
+
+    /// RULEBOOK 1.22.0 §9 `CanonicalBusinessEngine.leaveReportYears`: the person's leave years (1.54.0: the balance's
+    /// leave-year start month, `reportYearStartMonth`), from their start date to today, newest first.
     private var availableYears: [RulebookLeaveYear] {
-        CanonicalBusinessEngine.leaveReportYears(
+        guard let startMonth = reportYearStartMonth else { return [] }
+        return CanonicalBusinessEngine.leaveReportYears(
             firstDayKey: OrganizationRulebookContext.dayKey(joinDate),
             todayDayKey: OrganizationRulebookContext.dayKey(Date()),
-            startMonth: user.annualLeaveYearStartMonth
+            startMonth: startMonth
         ) ?? []
     }
 
@@ -94,7 +118,7 @@ struct HolidayReportView: View {
     /// every id the person goes by (`personIdSet` plus operative ids on their email), weekends and bank holidays out of
     /// multi-day records and half days 0.5 — the count `annualLeaveBalance` takes.
     private var report: RulebookLeaveReport? {
-        guard let year = selectedYear else { return nil }
+        guard let year = selectedYear, let startMonth = reportYearStartMonth else { return nil }
         let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let operativeIds = operativeStore.allOperatives
             .filter { !email.isEmpty && $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email }
@@ -115,7 +139,7 @@ struct HolidayReportView: View {
             records: records,
             personIds: personIds,
             onDayKey: year.startDayKey,
-            startMonth: user.annualLeaveYearStartMonth,
+            startMonth: startMonth,
             nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
         )
     }
