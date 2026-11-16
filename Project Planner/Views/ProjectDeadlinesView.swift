@@ -21,6 +21,15 @@ struct ProjectDeadlinesView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @State private var siteAudits: [SiteAudit] = []
+    /// The deadlines as last loaded from (or written to) the server: what this person's changes are compared with, so
+    /// only their own changes are saved (`saveDeadlineChanges`).
+    @State private var serverBaseItems: [DLDeadline] = []
+    /// The same list as stored, read by the rulebook reader (`loadDeadlinesState` / the last save); nil when the list
+    /// came from this device's cache.
+    @State private var serverBaseRows: RulebookJSONBox?
+    /// Saves run one after another, so each compares with the list the previous save wrote (two quick edits are never
+    /// read as a conflict with each other).
+    @State private var persistTask: Task<Void, Never>?
 
     private var canManage: Bool { !userStore.isOperativeMode() }
     private var contextKind: String { project.isSmallWorksDocument ? "Small Work" : "Project" }
@@ -66,7 +75,8 @@ struct ProjectDeadlinesView: View {
                     contextName: project.siteName,
                     contextRef: project.jobNumber,
                     contextKind: contextKind,
-                    canManage: canManage,
+                    // RULEBOOK §2: deadline changes are online only — the add and edit controls are off offline.
+                    canManage: canManage && OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline),
                     authorName: authorName,
                     people: people,
                     siteAudits: siteAudits.map { WorkAccess.siteAuditRef($0) },
@@ -90,8 +100,8 @@ struct ProjectDeadlinesView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "") {
-            let orgReady = !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId ?? "").isEmpty
+        .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
+            let orgReady = organizationId() != nil
             guard orgReady else { return }
             store.bindPersistence { items in
                 await persistDeadlines(items)
@@ -130,8 +140,12 @@ struct ProjectDeadlinesView: View {
         )
     }
 
+    /// AGENTS rule 2: the open organisation only, never the person's home company (`users/{uid}.organizationId`).
     private func organizationId() -> String? {
-        firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId
+        FirebaseBackend.openOrganizationIdForWrites(
+            requested: nil,
+            openOrganizationId: firebaseBackend.currentOrganization?.firestoreDocumentId
+        )
     }
 
     private func load(preferRemote: Bool = false) async {
@@ -150,14 +164,20 @@ struct ProjectDeadlinesView: View {
             if !preferRemote, smartCache.isOnline == false, let local {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
+                serverBaseItems = local.items
+                serverBaseRows = nil
             } else {
                 let state = try await firebaseBackend.loadDeadlinesState(project: project, organizationId: orgId)
                 if smartCache.isOnline == false, let local {
                     store.replaceAll(local.items)
                     store.lastKnownUpdatedAt = local.updatedAt ?? state.updatedAt
+                    serverBaseItems = local.items
+                    serverBaseRows = nil
                 } else {
                     store.replaceAll(state.items)
                     store.lastKnownUpdatedAt = state.updatedAt
+                    serverBaseItems = state.items
+                    serverBaseRows = state.storedRows
                     OfflineDeadlineLocalStore.shared.save(
                         items: state.items,
                         projectId: project.id,
@@ -176,6 +196,8 @@ struct ProjectDeadlinesView: View {
             if let local = OfflineDeadlineLocalStore.shared.load(projectId: project.id, organizationId: orgId) {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
+                serverBaseItems = local.items
+                serverBaseRows = nil
                 store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             } else {
                 errorMessage = error.localizedDescription
@@ -183,59 +205,74 @@ struct ProjectDeadlinesView: View {
         }
     }
 
+    /// RULEBOOK §2: deadlines are not in `OFFLINE_ACTIONS`, so a change is online only — offline it is put back and
+    /// the person is told; nothing is queued. Online, only this person's changes are laid over the stored list
+    /// (`saveDeadlineChanges`); a deadline someone else changed meanwhile is not overwritten, and the person is told
+    /// which of their changes did not apply.
     private func persistDeadlines(_ items: [DLDeadline]) async {
+        let previous = persistTask
+        let task = Task { @MainActor in
+            await previous?.value
+            await saveDeadlineChanges(items)
+        }
+        persistTask = task
+        await task.value
+    }
+
+    private func saveDeadlineChanges(_ items: [DLDeadline]) async {
         guard let orgId = organizationId() else { return }
-        OfflineDeadlineLocalStore.shared.save(
-            items: items,
-            projectId: project.id,
-            organizationId: orgId,
-            updatedAt: store.lastKnownUpdatedAt
-        )
-        if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
-            OfflineOutboxStore.shared.enqueueSaveDeadlines(
-                projectId: project.id,
-                isSmallWorks: project.isSmallWorksDocument,
-                items: items,
-                baseUpdatedAt: store.lastKnownUpdatedAt,
-                organizationId: orgId
-            )
+        guard OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline) else {
+            store.replaceAll(DeadlineScreenMerge.screenAfterSave(sent: items, saved: serverBaseItems, onScreen: store.items))
+            errorMessage = OnlineOnlyActionError(actionId: UnlistedOfflineAction.saveDeadlines.rawValue).localizedDescription
             return
         }
         do {
-            let written = try await firebaseBackend.saveDeadlines(
-                items,
-                project: project,
+            let result = try await firebaseBackend.saveDeadlineChanges(
+                base: serverBaseItems,
+                baseStoredRows: serverBaseRows,
+                next: items,
+                projectId: project.id,
+                projectKey: project.documentId,
+                isSmallWorks: project.isSmallWorksDocument,
                 organizationId: orgId,
                 baseUpdatedAt: store.lastKnownUpdatedAt
             )
+            // The new base is the list as stored, read back through the rulebook reader (never this device's own
+            // copies, whose dates are more precise than the stored ones — review of #242).
+            serverBaseItems = result.items
+            serverBaseRows = result.storedRows
             store.lastKnownUpdatedAt = Date()
-            if written.map(\.id) != items.map(\.id) || written.count != items.count {
-                store.replaceAll(written)
+            // Review of #242: only the deadlines the person has not changed since this save was sent take the saved
+            // copy; a newer edit still waiting to be saved stays on screen.
+            let screen = DeadlineScreenMerge.screenAfterSave(sent: items, saved: result.items, onScreen: store.items)
+            if screen != store.items {
+                store.replaceAll(screen)
             }
             OfflineDeadlineLocalStore.shared.save(
-                items: written,
+                items: result.items,
                 projectId: project.id,
                 organizationId: orgId,
                 updatedAt: store.lastKnownUpdatedAt
             )
-        } catch {
-            if OfflineWriteSupport.shouldQueue(error: error, isOnline: smartCache.isOnline) {
-                OfflineOutboxStore.shared.enqueueSaveDeadlines(
-                    projectId: project.id,
-                    isSmallWorks: project.isSmallWorksDocument,
-                    items: items,
-                    baseUpdatedAt: store.lastKnownUpdatedAt,
-                    organizationId: orgId
-                )
-            } else {
-                await MainActor.run { errorMessage = error.localizedDescription }
+            if !result.notApplied.isEmpty {
+                let titles = result.notApplied.map(\.title).joined(separator: ", ")
+                errorMessage = "Not saved — changed or deleted on another device: \(titles). Check it and try again."
             }
+        } catch {
+            // Puts back only what this save sent; a newer edit made since stays (its own save follows).
+            store.replaceAll(DeadlineScreenMerge.screenAfterSave(sent: items, saved: serverBaseItems, onScreen: store.items))
+            errorMessage = error.localizedDescription
         }
     }
 
     private func commit(_ draft: DLDeadline, localFileURL: URL?) async {
         guard let orgId = organizationId() else {
             errorMessage = "Cannot save without organization."
+            return
+        }
+        // RULEBOOK §2: deadlines are online only (not in `OFFLINE_ACTIONS`); nothing is saved on the device.
+        guard OfflinePolicy.isEnabled(.saveDeadlines, isOnline: smartCache.isOnline) else {
+            errorMessage = OnlineOnlyActionError(actionId: UnlistedOfflineAction.saveDeadlines.rawValue).localizedDescription
             return
         }
         var item = draft
@@ -245,25 +282,21 @@ struct ProjectDeadlinesView: View {
             item.createdByUserId = userStore.currentUser?.id ?? firebaseBackend.currentUser?.uid ?? ""
         }
         if let localFileURL {
-            if OfflineWriteSupport.shouldQueue(isOnline: smartCache.isOnline) {
-                errorMessage = "Deadline saved on this device. Attach the file again when you’re back online."
-            } else {
-                do {
-                    let name = item.fileName ?? localFileURL.lastPathComponent
-                    let url = try await firebaseBackend.uploadHealthSafetyFile(
-                        localFileURL,
-                        organizationId: orgId,
-                        projectId: project.id,
-                        category: "deadlines",
-                        fileName: name
-                    )
-                    item.fileURL = url
-                    item.fileName = name
-                    item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
-                } catch {
-                    errorMessage = error.localizedDescription
-                    return
-                }
+            do {
+                let name = item.fileName ?? localFileURL.lastPathComponent
+                let url = try await firebaseBackend.uploadHealthSafetyFile(
+                    localFileURL,
+                    organizationId: orgId,
+                    projectId: project.id,
+                    category: "deadlines",
+                    fileName: name
+                )
+                item.fileURL = url
+                item.fileName = name
+                item.history.insert(DLChange(at: Date(), author: authorName, kind: .fileAttached(name: name)), at: 0)
+            } catch {
+                errorMessage = error.localizedDescription
+                return
             }
         }
         if let auditId = item.siteAuditId,
@@ -377,5 +410,30 @@ extension DLStore {
                 await syncNotifications(items)
             }
         }
+    }
+}
+
+/// What the Deadlines screen shows when a save finishes (review of #242). Saves run one after another, and the person
+/// may edit again while one is in flight. A deadline still exactly as this save sent it takes `saved` (the stored copy,
+/// or the base when the save failed); one changed, added or deleted on screen since stays as it is; a deadline the
+/// stored list has that this save neither sent nor shows (added on another device) is added. Screen plumbing only.
+enum DeadlineScreenMerge {
+    static func screenAfterSave(sent: [DLDeadline], saved: [DLDeadline], onScreen: [DLDeadline]) -> [DLDeadline] {
+        let sentById = Dictionary(sent.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let savedById = Dictionary(saved.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var out: [DLDeadline] = []
+        for item in onScreen {
+            if let was = sentById[item.id], was == item {
+                if let fresh = savedById[item.id] { out.append(fresh) }
+            } else {
+                out.append(item)
+            }
+        }
+        let shown = Set(onScreen.map(\.id))
+        let sentIds = Set(sent.map(\.id))
+        for fresh in saved where !shown.contains(fresh.id) && !sentIds.contains(fresh.id) {
+            out.append(fresh)
+        }
+        return out
     }
 }

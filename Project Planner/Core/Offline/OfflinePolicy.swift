@@ -71,6 +71,25 @@ nonisolated enum OfflineAction: String, Sendable, CaseIterable {
     case mySchedule = "view.my_schedule"
 }
 
+/// Actions the rulebook's `OFFLINE_ACTIONS` does not list. `offlineAvailability` answers online only for an unlisted id
+/// (RULEBOOK §2), so these controls are disabled offline and never queued. They are kept apart from `OfflineAction`,
+/// whose ids are all rows of the table. If web lists one later, `availability(actionId:)` follows it.
+nonisolated enum UnlistedOfflineAction: String, Sendable, CaseIterable {
+    case saveMaterialLine = "materials.save_line"
+    case deleteMaterialLine = "materials.delete_line"
+    case sendMaterialRequest = "materials.send_request"
+    case saveDeadlines = "deadlines.save"
+}
+
+/// A control used while offline whose action is online only (RULEBOOK §2). Final: nothing was queued or written.
+nonisolated struct OnlineOnlyActionError: LocalizedError, Sendable {
+    let actionId: String
+    var errorDescription: String? {
+        let message = OfflinePolicy.onlineOnlyMessage
+        return message.isEmpty ? "Connect to the internet to change this" : message
+    }
+}
+
 nonisolated enum OfflinePolicy {
     /// `OFFLINE_PENDING_SYNC_LABEL`.
     static let pendingSyncMessage: String =
@@ -91,6 +110,23 @@ nonisolated enum OfflinePolicy {
         let value = table[action.rawValue]
             ?? (CanonicalBusinessEngine.callJSON("offlineAvailability", arguments: [action.rawValue]) as? String)
         return OfflineAvailability(canonical: value) ?? .onlineOnly
+    }
+
+    /// `offlineAvailability(actionId)` for an id `OfflineAction` does not name (an unlisted id is online only).
+    static func availability(_ action: UnlistedOfflineAction) -> OfflineAvailability {
+        let value = table[action.rawValue]
+            ?? (CanonicalBusinessEngine.callJSON("offlineAvailability", arguments: [action.rawValue]) as? String)
+        return OfflineAvailability(canonical: value) ?? .onlineOnly
+    }
+
+    /// True when the control for an unlisted action is usable now (online, unless the rulebook ever allows it).
+    static func isEnabled(_ action: UnlistedOfflineAction, isOnline: Bool) -> Bool {
+        isOnline || availability(action) != .onlineOnly
+    }
+
+    /// Throws `OnlineOnlyActionError` when the action may not run now. Never queues.
+    static func requireAvailable(_ action: UnlistedOfflineAction, isOnline: Bool) throws {
+        guard isEnabled(action, isOnline: isOnline) else { throw OnlineOnlyActionError(actionId: action.rawValue) }
     }
 
     /// The delete action for a booking in `collection` (`bookingDeleteOfflineAction`): `booking.delete` for labour

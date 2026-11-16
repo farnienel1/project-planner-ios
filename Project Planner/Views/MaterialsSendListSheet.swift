@@ -493,7 +493,9 @@ struct MaterialsSendListSheet: View {
                 .buttonBorderShape(.capsule)
                 .tint(MaterialsOrderingTheme.success)
             }
-            .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending || !canSendOrders)
+            // RULEBOOK §2: quote and order emails are online only (not in `OFFLINE_ACTIONS`), never queued.
+            .disabled(selectedMaterialIds.isEmpty || recipientCount == 0 || isSending || !canSendOrders
+                || !OfflinePolicy.isEnabled(.sendMaterialRequest, isOnline: smartCache.isOnline))
             if MaterialWhatsAppRulebook.isAvailable {
                 Button {
                     beginWhatsApp()

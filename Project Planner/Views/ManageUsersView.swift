@@ -1179,13 +1179,16 @@ struct ManageUserRowView: View {
                 // Always a brand new invitation (never reuse an old link), created FIRST; only then are the earlier
                 // links closed, skipping the new one (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`,
                 // + `invitedBy` for an operatives manager), so a refused create leaves the old link working.
+                // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
+                // home company), so `sendEmail` finds it in the organisation it is sent from.
+                let openOrgId = try userStore.requireOpenOrganizationId()
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
                     let invitationId = UUID().uuidString
                     var invitationData: [String: Any] = [
                         "email": user.email,
-                        "organizationId": user.organizationId,
+                        "organizationId": openOrgId,
                         "invitedBy": sender,
                         "firstName": user.firstName,
                         "surname": user.surname,
@@ -1219,7 +1222,7 @@ struct ManageUserRowView: View {
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(
-                        organizationId: user.organizationId,
+                        organizationId: openOrgId,
                         email: user.email,
                         excluding: newInvitationId,
                         userStore: userStore
@@ -1228,19 +1231,21 @@ struct ManageUserRowView: View {
                 let invitationId = resend.invitationId
                 let closedNote = InvitationDocument.closeSummary(resend.closed)
 
-                let success = await userStore.sendSignUpEmailWithVerification(
+                let emailProblem = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
                     firstName: user.firstName,
                     surname: user.surname,
-                    invitationId: invitationId
+                    invitationId: invitationId,
+                    organizationId: openOrgId
                 )
+                let success = emailProblem == nil
 
                 await MainActor.run {
                     isSendingSignUpEmail = false
                     if success {
                         rowEmailFeedback = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
                     } else {
-                        rowEmailFeedback = "❌ Failed to send sign-up email. Please try again."
+                        rowEmailFeedback = "❌ The sign-up email was not sent: \(emailProblem ?? "unknown error"). Please try again."
                     }
                 }
             } catch {
@@ -1256,12 +1261,13 @@ struct ManageUserRowView: View {
         isSendingResetPassword = true
         rowEmailFeedback = nil
         Task {
-            let success = await userStore.sendPasswordResetEmail(to: user.email)
+            let resetProblem = await userStore.sendPasswordResetEmail(to: user.email)
+            let success = resetProblem == nil
             await MainActor.run {
                 isSendingResetPassword = false
                 rowEmailFeedback = success
                     ? "✅ Password reset email sent to \(user.email)."
-                    : "❌ Failed to send password reset email."
+                    : "❌ The password reset email was not sent: \(resetProblem ?? "unknown error")."
             }
         }
     }
@@ -1805,6 +1811,9 @@ struct EditUserView: View {
                 isGivingAppAccess = false
                 if let error = result.error {
                     ghostAccessMessage = error
+                    // App access was given but the email failed: the sheet closes (the invitation exists) and the
+                    // message says to resend.
+                    if result.invitationId != nil { showingGiveAppAccess = false }
                 } else {
                     showingGiveAppAccess = false
                     ghostAccessMessage = "Invitation sent to \(email.lowercased()). They stay bookable as they are until they accept."
@@ -4741,12 +4750,13 @@ struct EditUserView: View {
         isSendingResetPassword = true
         resetPasswordMessage = nil
         Task {
-            let success = await userStore.sendPasswordResetEmail(to: user.email)
+            let resetProblem = await userStore.sendPasswordResetEmail(to: user.email)
+            let success = resetProblem == nil
             await MainActor.run {
                 isSendingResetPassword = false
                 resetPasswordMessage = success
                     ? "✅ Password reset email sent to \(user.email). They should use the link in that email to choose a new password."
-                    : "❌ Failed to send password reset email."
+                    : "❌ The password reset email was not sent: \(resetProblem ?? "unknown error")."
             }
         }
     }
@@ -4784,13 +4794,16 @@ struct EditUserView: View {
             // A brand new invitation, created FIRST; only then are the earlier links closed, skipping the new one
             // (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`, + `invitedBy` for an operatives
             // manager), so a refused create leaves the old link working.
+            // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
+            // home company), so `sendEmail` finds it in the organisation it is sent from.
+            let openOrgId = try userStore.requireOpenOrganizationId()
             let resend = try await InvitationDocument.resend(create: {
                 // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                 let sender = try InvitationDocument.signedInSenderField()
                 let invitationId = UUID().uuidString
                 var invitationData: [String: Any] = [
                     "email": user.email,
-                    "organizationId": user.organizationId,
+                    "organizationId": openOrgId,
                     "invitedBy": sender,
                     "firstName": user.firstName,
                     "surname": user.surname,
@@ -4824,7 +4837,7 @@ struct EditUserView: View {
                 return invitationId
             }, closeEarlier: { newInvitationId in
                 await InvitationDocument.closeEarlierInvitations(
-                    organizationId: user.organizationId,
+                    organizationId: openOrgId,
                     email: user.email,
                     excluding: newInvitationId,
                     userStore: userStore
@@ -4832,15 +4845,20 @@ struct EditUserView: View {
             })
             let closedNote = InvitationDocument.closeSummary(resend.closed)
 
-            await userStore.resendInvitationEmail(
+            let emailProblem = await userStore.resendInvitationEmail(
                 email: user.email,
                 firstName: user.firstName,
                 surname: user.surname,
-                invitationId: resend.invitationId
+                invitationId: resend.invitationId,
+                organizationId: openOrgId
             )
 
             await MainActor.run {
-                resendEmailMessage = "✅ Verification email sent successfully to \(user.email)\n\(closedNote)"
+                if let emailProblem {
+                    resendEmailMessage = "❌ The invitation was created but the email was not sent: \(emailProblem). Please try again.\n\(closedNote)"
+                } else {
+                    resendEmailMessage = "✅ Verification email sent successfully to \(user.email)\n\(closedNote)"
+                }
                 isResendingEmail = false
             }
         } catch {
@@ -4871,13 +4889,16 @@ struct EditUserView: View {
                 // Always a brand new invitation (never reuse an old link), created FIRST; only then are the earlier
                 // links closed, skipping the new one (RULEBOOK 1.31.1 §16: the queries name `organizationId` + `email`,
                 // + `invitedBy` for an operatives manager), so a refused create leaves the old link working.
+                // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
+                // home company), so `sendEmail` finds it in the organisation it is sent from.
+                let openOrgId = try userStore.requireOpenOrganizationId()
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
                     let invitationId = UUID().uuidString
                     var invitationData: [String: Any] = [
                         "email": user.email,
-                        "organizationId": user.organizationId,
+                        "organizationId": openOrgId,
                         "invitedBy": sender,
                         "firstName": user.firstName,
                         "surname": user.surname,
@@ -4911,7 +4932,7 @@ struct EditUserView: View {
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(
-                        organizationId: user.organizationId,
+                        organizationId: openOrgId,
                         email: user.email,
                         excluding: newInvitationId,
                         userStore: userStore
@@ -4920,12 +4941,14 @@ struct EditUserView: View {
                 let invitationId = resend.invitationId
                 let closedNote = InvitationDocument.closeSummary(resend.closed)
 
-                let success = await userStore.sendSignUpEmailWithVerification(
+                let emailProblem = await userStore.sendSignUpEmailWithVerification(
                     email: user.email,
                     firstName: user.firstName,
                     surname: user.surname,
-                    invitationId: invitationId
+                    invitationId: invitationId,
+                    organizationId: openOrgId
                 )
+                let success = emailProblem == nil
 
                 await MainActor.run {
                     isSendingSignUpEmail = false
@@ -4934,8 +4957,8 @@ struct EditUserView: View {
                         signUpEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
                         resendEmailMessage = "✅ Sign-up email with verification code sent successfully to \(user.email)\n\(closedNote)"
                     } else {
-                        signUpEmailMessage = "❌ Failed to send sign-up email. Please try again."
-                        resendEmailMessage = "❌ Failed to send sign-up email. Please try again."
+                        signUpEmailMessage = "❌ The sign-up email was not sent: \(emailProblem ?? "unknown error"). Please try again."
+                        resendEmailMessage = "❌ The sign-up email was not sent: \(emailProblem ?? "unknown error"). Please try again."
                     }
                 }
             } catch {

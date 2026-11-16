@@ -1703,9 +1703,8 @@ struct HolidayView: View {
     private func submitHoliday() {
         let selectedDays = selectedDatesSorted
         guard !selectedDays.isEmpty else { return }
-        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
-            ?? userStore.currentUser?.organizationId
-            ?? ""
+        // AGENTS rule 2: the open organisation only, never `users/{uid}.organizationId` (the home company).
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
         guard !orgId.isEmpty else {
             errorMessage = "Organization not loaded yet. Please try again in a moment."
             showError = true

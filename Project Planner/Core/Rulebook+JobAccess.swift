@@ -181,7 +181,16 @@ extension CanonicalBusinessEngine {
             "roster": roster,
         ]
         if let enforced { input["enforced"] = enforced }
-        return callJSON("warningScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
+        // Fail closed: the script silent is the empty scope (no warnings), never everything.
+        return callJSON("warningScopeFor", arguments: [input]) as? [String: Any] ?? noWarningScope
+    }
+
+    /// The rulebook's scope for a viewer it cannot place (`warningScopeFor` with no viewer: no job, no person, no
+    /// unbooked labour). Used while the signed-in profile is not loaded and when the script does not answer, so a
+    /// manager never sees the whole company for a moment (owner decisions 4 Nov / 6 Nov, RULEBOOK §5, §6).
+    nonisolated static var noWarningScope: [String: Any] {
+        if let none = callJSON("warningScopeFor", arguments: [[String: Any]()]) as? [String: Any] { return none }
+        return ["kind": "jobs", "jobIds": [String](), "personIds": [String](), "personEmails": [String](), "unbookedLabour": false]
     }
 
     /// RULEBOOK 1.33.0 §6 `dailyOverviewScopeFor({ viewer, roster, people, operatives })`: admins everything
@@ -201,7 +210,8 @@ extension CanonicalBusinessEngine {
             "operatives": operatives,
         ]
         if let enforced { input["enforced"] = enforced }
-        return callJSON("dailyOverviewScopeFor", arguments: [input]) as? [String: Any] ?? ["kind": "all"]
+        // Fail closed (as `warningScopeFor`): the script silent shows nobody, never everyone.
+        return callJSON("dailyOverviewScopeFor", arguments: [input]) as? [String: Any] ?? noWarningScope
     }
 
     /// RULEBOOK 1.33.0 §6 `isDailyOverviewRowInScope(scope, { personIds, email, subcontractor })`: a booked person, a
@@ -235,6 +245,8 @@ extension Notification.Name {
     /// The inputs of `jobQueryPlan` / `bookingQueryPlan` changed (viewer, visible jobs, own booking ids or an
     /// operative's job ids): job and booking listeners re-plan their queries (§17).
     static let jobReadPlanDidChange = Notification.Name("jobReadPlanDidChange")
+    /// The signed-in viewer (`JobAccessContext.readViewer`) changed: warnings re-scan under the new scope.
+    static let jobAccessViewerDidChange = Notification.Name("jobAccessViewerDidChange")
 }
 
 /// The signed-in account as the read plans see it (the real profile, never role testing: the security rules read the
@@ -263,10 +275,31 @@ nonisolated enum JobAccessContext {
         Array(Set(ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
     }
 
+    /// True while someone is signed in on this device (`FirebaseBackend.currentUser`).
+    nonisolated(unsafe) private(set) static var signedIn = false
+
+    static func updateSignedIn(_ value: Bool) {
+        signedIn = value
+    }
+
+    /// Signed in but the profile has not loaded yet: the warning and Daily Overview scopes are then the empty scope
+    /// (`noWarningScope`), never everything. With nobody signed in (unit tests, the signed-out screens) there is no
+    /// viewer to wait for and the unscoped rules apply as before.
+    static var viewerPending: Bool { signedIn && readViewer == nil }
+
+    /// What a screen shows while `viewerPending`: loading online; offline the profile may never load, so it says so
+    /// instead of spinning for ever (review of #242).
+    static func viewerPendingMessage(isOnline: Bool) -> String {
+        isOnline ? "Loading your team…" : "Your profile hasn't loaded — connect to the internet."
+    }
+
     static func updateViewer(_ viewer: JobAccessViewer?) {
         guard viewer != readViewer else { return }
         readViewer = viewer
         post()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .jobAccessViewerDidChange, object: nil)
+        }
     }
 
     @MainActor static func updateManagers(_ rows: [Manager]) {
@@ -470,7 +503,10 @@ extension UserStore {
     func refreshJobAccessContext() {
         JobAccessContext.updateAccounts(organizationUsers)
         JobAccessContext.updateOwnAccount(currentUser)
-        JobAccessContext.updateViewer(currentUser.map { jobAccessViewer(for: $0) })
+        // Review of #242: the launch placeholder (`isProvisional`, an admin-shaped stand-in while `users/{uid}` loads)
+        // is never a viewer: its admin flags would show a manager the whole company. Until the real profile loads the
+        // viewer is pending (warnings and Daily Overview show nobody; the read plans read as before the profile).
+        JobAccessContext.updateViewer(currentUser.flatMap { $0.isProvisional ? nil : jobAccessViewer(for: $0) })
     }
 
     // MARK: Gates the screens call
@@ -548,8 +584,9 @@ extension UserStore {
 // MARK: - Daily Overview and warning scope (§17)
 
 /// `warningScopeFor({ viewer, visibleJobIds, bookings, managerBookings, people, operatives })` for the signed-in
-/// account (the real profile, as the reads are). Nil when the scope is everything (`{ kind: 'all' }`) or the profile
-/// is not loaded, so callers keep their unscoped call.
+/// account (the real profile, as the reads are). Nil when the scope is everything (`{ kind: 'all' }`) or nobody is
+/// signed in, so callers keep their unscoped call; the empty scope (`noWarningScope`) while a signed-in person's profile
+/// is not loaded (`JobAccessContext.viewerPending`).
 @MainActor
 enum WarningScopeSupport {
     static func scope(
@@ -558,6 +595,8 @@ enum WarningScopeSupport {
         users: [AppUser],
         operatives: [Operative]
     ) -> [String: Any]? {
+        // Signed in, profile not loaded yet: nothing, never everything (a manager would otherwise see the whole company).
+        if JobAccessContext.viewerPending { return CanonicalBusinessEngine.noWarningScope }
         guard let viewer = JobAccessContext.readViewer else { return nil }
         // RULEBOOK 1.31.0 §5 (owner decision): admins see everything; a manager — whatever their Projects / Small works
         // toggles — themselves, their reports and the jobs they manage. Admins skip building the inputs.
@@ -604,8 +643,16 @@ enum DailyOverviewScopeSupport {
     private static var cached: (key: Int, scope: [String: Any]?)?
     private static var rowAnswers: [String: Bool] = [:]
 
-    /// The signed-in viewer's scope; nil when it is everything (`{ kind: 'all' }`) or the profile is not loaded.
+    /// The signed-in viewer's scope; nil when it is everything (`{ kind: 'all' }`); the empty scope while the profile is
+    /// not loaded.
     static func scope(users: [AppUser], operatives: [Operative]) -> [String: Any]? {
+        // Signed in, profile not loaded yet: nobody, never everyone. Not cached, and the row answers of an earlier scope
+        // are dropped so none of them is reused for this one.
+        if JobAccessContext.viewerPending {
+            cached = nil
+            rowAnswers.removeAll(keepingCapacity: true)
+            return CanonicalBusinessEngine.noWarningScope
+        }
         guard let viewer = JobAccessContext.readViewer else { return nil }
         var hasher = Hasher()
         hasher.combine(viewer.uid)

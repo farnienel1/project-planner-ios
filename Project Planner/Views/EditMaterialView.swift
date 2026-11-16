@@ -115,7 +115,9 @@ struct EditMaterialView: View {
                     }
                     .fontWeight(.semibold)
                     .accessibilityIdentifier("editMaterial.save")
-                    .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || !canManageMaterial)
+                    .disabled(materialDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving || !canManageMaterial
+                        // RULEBOOK §2: material lines are online only (not in `OFFLINE_ACTIONS`).
+                        || !OfflinePolicy.isEnabled(.saveMaterialLine, isOnline: smartCache.isOnline))
                 }
             }
         }
@@ -181,7 +183,8 @@ struct EditMaterialView: View {
                     updatedMaterial,
                     organizationId: organizationId,
                     firebaseBackend: firebaseBackend,
-                    isOnline: smartCache.isOnline
+                    isOnline: smartCache.isOnline,
+                    opened: material
                 )
                 print("✅ Material updated: \(updatedMaterial.material) for date: \(normalizedDate)")
                 

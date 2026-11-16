@@ -572,7 +572,8 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
     }
 
     private func organizationId(firebaseBackend: FirebaseBackend, userStore: UserStore) -> String? {
-        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? userStore.currentUser?.organizationId
+        // AGENTS rule 2: the open organisation only, never the home company in `users/{uid}.organizationId`.
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         guard let orgId else { return nil }
         let trimmed = orgId.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
