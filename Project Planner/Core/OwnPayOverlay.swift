@@ -17,6 +17,7 @@
 //
 
 import Foundation
+import Combine
 @preconcurrency import FirebaseFirestore
 
 /// Whether one pay-profile overlay can be priced from.
