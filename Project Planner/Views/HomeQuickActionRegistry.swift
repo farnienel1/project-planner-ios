@@ -223,7 +223,7 @@ enum HomeQuickActionRegistry {
         case HomeQuickActionID.staffHelp.rawValue:
             return HomeQuickActionMeta(id: id, symbol: "questionmark.circle.fill", title: "Help", tint: muted)
         case HomeQuickActionID.staffHoliday.rawValue:
-            return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Holiday", tint: rust)
+            return HomeQuickActionMeta(id: id, symbol: "sun.max.fill", title: "Annual leave", tint: rust)
         case HomeQuickActionID.staffGeneralAppSettings.rawValue:
             // Kept so an old saved home layout drops the tile. Do not show a title.
             return nil

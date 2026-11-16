@@ -98,14 +98,14 @@ class LocalNotificationService {
             content.title = "Warning dismissed"
             content.body = details.isEmpty ? "An admin dismissed a warning. Dismissed warnings do not reappear." : details
         case .holidayRequestSubmitted:
-            content.title = "Holiday Request"
-            content.body = details.isEmpty ? "An operative has submitted a holiday request." : details
+            content.title = "Annual Leave Request"
+            content.body = details.isEmpty ? "An operative has submitted an annual leave request." : details
         case .holidayRequestApproved:
-            content.title = "Holiday Approved"
-            content.body = details.isEmpty ? "A holiday request has been approved." : details
+            content.title = "Annual Leave Approved"
+            content.body = details.isEmpty ? "An annual leave request has been approved." : details
         case .holidayRequestDeclined:
-            content.title = "Holiday Declined"
-            content.body = details.isEmpty ? "A holiday request has been declined." : details
+            content.title = "Annual Leave Declined"
+            content.body = details.isEmpty ? "An annual leave request has been declined." : details
         case .holidayCancelledByManager:
             content.title = "Annual Leave Cancelled"
             content.body = details.isEmpty ? "Your annual leave was cancelled." : details

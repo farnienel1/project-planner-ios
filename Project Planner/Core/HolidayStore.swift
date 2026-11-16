@@ -65,7 +65,7 @@ class HolidayStore: ObservableObject {
 
     private func resolveOrganizationId() async throws -> String {
         guard let fb = firebaseBackend, fb.isAuthenticated else {
-            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage holidays."])
+            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage annual leave."])
         }
 
         if let orgId = fb.currentOrganization?.firestoreDocumentId, !orgId.isEmpty {
@@ -129,7 +129,7 @@ class HolidayStore: ObservableObject {
     private func queueCreate(_ draft: HolidayBooking) throws -> HolidayBooking {
         let orgId = try offlineOrganizationId()
         guard let uid = firebaseBackend?.currentUser?.uid else {
-            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage holidays."])
+            throw NSError(domain: "HolidayStore", code: 401, userInfo: [NSLocalizedDescriptionKey: "You must be signed in to manage annual leave."])
         }
         let create = try FirebaseBackend.holidayRequestCreate(draft, organizationId: orgId)
         OfflineOutboxStore.shared.enqueueAnnualLeaveRequest(
@@ -208,12 +208,12 @@ class HolidayStore: ObservableObject {
 
     func loadData() async {
         guard let fb = firebaseBackend else {
-            errorMessage = "Holiday service unavailable. Please reopen the app."
+            errorMessage = "Annual leave service unavailable. Please reopen the app."
             isLoading = false
             return
         }
         guard fb.isAuthenticated else {
-            errorMessage = "Please sign in again to load holidays."
+            errorMessage = "Please sign in again to load annual leave."
             isLoading = false
             return
         }
@@ -240,7 +240,7 @@ class HolidayStore: ObservableObject {
             let nsError = error as NSError
             print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
-                errorMessage = "Holiday sync is currently blocked by Firebase permissions. Existing cached data may still be shown."
+                errorMessage = "Annual leave sync is currently blocked by Firebase permissions. Existing cached data may still be shown."
             } else {
                 errorMessage = error.localizedDescription
             }

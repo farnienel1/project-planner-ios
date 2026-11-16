@@ -1509,7 +1509,7 @@ struct OnHolidayRowView: View {
            let operative = operativeStore.operatives.first(where: { $0.id == oid }) {
             return operative.name
         }
-        return "On holiday"
+        return "On annual leave"
     }
 
     private var initialsGradient: [Color] {

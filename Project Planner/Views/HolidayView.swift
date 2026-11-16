@@ -254,7 +254,7 @@ struct HolidayView: View {
                             VStack(alignment: .leading, spacing: 20) {
                                 if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        Text("Some holiday data could not be synced.")
+                                        Text("Some annual leave data could not be synced.")
                                             .font(.subheadline)
                                             .fontWeight(.semibold)
                                         Text(msg)
@@ -1730,7 +1730,7 @@ struct HolidayView: View {
                     }()
                     for day in selectedDays {
                         if hasExistingHoliday(on: day) {
-                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
+                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have an annual leave booking or request."])
                         }
                     }
                     // One document per request range (`holidayRequestRanges`), pending for `leaveApproverIds`.
@@ -1765,7 +1765,7 @@ struct HolidayView: View {
                     }
                     for day in selectedDays {
                         if hasExistingHoliday(on: day) {
-                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have a holiday booking/request."])
+                            throw NSError(domain: "Holiday", code: 409, userInfo: [NSLocalizedDescriptionKey: "One or more selected days already have an annual leave booking or request."])
                         }
                     }
                     // D5: approved only with the `annualLeaveSelfBook` permission; otherwise a pending request
