@@ -186,13 +186,13 @@ struct HolidayReportView: View {
 
     private var bookingsList: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PPGroupLabel(text: "Approved holiday")
+            PPGroupLabel(text: "Approved annual leave")
             let rows = report?.rows ?? []
             if rows.isEmpty {
                 PPGroupedCard {
                     HStack(spacing: 13) {
                         PPIconTile(symbol: "calendar", family: .system, size: PPMetrics.menuIcon)
-                        Text("No approved holiday for \(selectedYear.map(yearTitle) ?? "this year").")
+                        Text("No approved annual leave for \(selectedYear.map(yearTitle) ?? "this year").")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         Spacer(minLength: 0)

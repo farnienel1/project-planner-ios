@@ -254,7 +254,7 @@ struct HolidayView: View {
                             VStack(alignment: .leading, spacing: 20) {
                                 if let msg = holidayStore.errorMessage, !msg.isEmpty {
                                     VStack(alignment: .leading, spacing: 8) {
-                                        Text("Some holiday data could not be synced.")
+                                        Text("Some annual leave data could not be synced.")
                                             .font(.subheadline)
                                             .fontWeight(.semibold)
                                         Text(msg)
