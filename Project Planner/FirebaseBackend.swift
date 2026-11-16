@@ -3175,7 +3175,8 @@ class FirebaseBackend: ObservableObject {
                 }
             }
         }
-        // RULEBOOK §1 / §24: never a `gs://` address (web shows https links only): retry, else fail the upload visibly.
+        // RULEBOOK §1 / §24: only a download URL is stored, never a Storage bucket address (web shows https links
+        // only): retry, else fail the upload visibly.
         return try await downloadURLOrRemoveUpload(storageRef, path: imagePath, organizationId: organizationId, userId: userId, logTag: "SiteAudit")
     }
 
