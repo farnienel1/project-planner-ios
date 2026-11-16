@@ -13,6 +13,7 @@
 //
 
 import SwiftUI
+import Combine
 
 struct PayrunSnapshotView: View {
     // `let` stores, as `WeeklyReportView`: this screen must not re-render on every booking publish.
