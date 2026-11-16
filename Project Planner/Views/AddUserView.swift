@@ -1475,10 +1475,12 @@ struct AddUserView: View {
             endMonth: annualLeaveEndMonth
         ) {
             errorMessage = leaveYearError
+            Feedback.play(.actionRefused)
             return
         }
         if let message = ghostDraftError {
             errorMessage = message
+            Feedback.play(.actionRefused)
             return
         }
         if stopForDuplicateName() { return }
@@ -1549,6 +1551,7 @@ struct AddUserView: View {
         }
         if permissions.operativeMode && (permissions.adminAccess || permissions.manager || permissions.operatives) {
             errorMessage = "Operative mode cannot be combined with admin, manager, or operative management flags."
+            Feedback.play(.actionRefused)
             return
         }
         
@@ -1556,6 +1559,7 @@ struct AddUserView: View {
             let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
             guard let d = Double(t), d >= 0 else {
                 errorMessage = "Enter the remaining allowance in steps of 0.5."
+                Feedback.play(.actionRefused)
                 return
             }
         }
@@ -1565,6 +1569,7 @@ struct AddUserView: View {
         if let payMessage = inviteRateError {
             rateFieldError = payMessage
             errorMessage = payMessage
+            Feedback.play(.actionRefused)
             return
         }
 
@@ -1574,6 +1579,7 @@ struct AddUserView: View {
             endMonth: annualLeaveEndMonth
         ) {
             errorMessage = leaveYearError
+            Feedback.play(.actionRefused)
             return
         }
 

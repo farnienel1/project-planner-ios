@@ -3417,7 +3417,10 @@ private struct MyTimesheetView: View {
             signedByName: signedByName,
             signedByUserId: userStore.displayUser?.id,
             signatureImageBase64: signatureImageData.base64EncodedString()
-        ) else { return }
+        ) else {
+            Feedback.play(.actionRefused)
+            return
+        }
         // RULEBOOK 1.47.0 §8 `signedTimesheetBookingRecord`: the bookings this signature covers, from the lines shown.
         guard SignedTimesheetChanges.stampSignedBookings(
             on: &draft,
@@ -6077,7 +6080,10 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     signedByName: signedByName,
                     signedByUserId: userStore.displayUser?.id,
                     signatureImageBase64: signatureImageData.base64EncodedString()
-                ) else { return }
+                ) else {
+                    Feedback.play(.actionRefused)
+                    return
+                }
                 let counterSignSave = onCounterSignSave()
                 let signer = draft.managerSignedByName ?? "Line manager"
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName

@@ -1724,6 +1724,7 @@ struct HolidayView: View {
                             errorMessage = "Not signed in."
                             showError = true
                             isSaving = false
+                            Feedback.play(.actionRefused)
                         }
                         return
                     }
@@ -1773,6 +1774,7 @@ struct HolidayView: View {
                             errorMessage = "Not signed in."
                             showError = true
                             isSaving = false
+                            Feedback.play(.actionRefused)
                         }
                         return
                     }

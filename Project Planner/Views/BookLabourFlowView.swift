@@ -141,7 +141,12 @@ struct BookLabourFlowView: View {
             workEndTime: end,
             isBreakRemoved: breakRemoved
         ) {
-            breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: save)
+            // Feedback: the break prompt plays `warningShown`; the conflict list of the same save does not play it again.
+            breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: { [leaveGate] in
+                leaveGate.skipsWarningHaptic = true
+                save()
+                leaveGate.skipsWarningHaptic = false
+            })
             Feedback.play(.warningShown)
         } else {
             save()

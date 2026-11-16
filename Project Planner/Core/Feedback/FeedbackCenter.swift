@@ -183,10 +183,11 @@ enum FeedbackDecision {
         refusal == nil ? success : .actionRefused
     }
 
-    /// A price work or expense review Approve: `claimsApproved` when any decided item was approved, `claimsDeclined`
-    /// when every decided item was rejected (guide v1.1 §4).
-    static func claimsReviewed(decisions: [String]) -> FeedbackEvent {
-        decisions.contains("approved") ? .claimsApproved : .claimsDeclined
+    /// A price work or expense review Approve: `claimsApproved` when the review plan (`payeClaimReviewWrites`) counts
+    /// at least one approved item — an approval left unchanged is not written but still counts — else
+    /// `claimsDeclined` (guide v1.1 §4).
+    static func claimsReviewed(approvedCount: Int) -> FeedbackEvent {
+        approvedCount > 0 ? .claimsApproved : .claimsDeclined
     }
 
     /// An annual leave save: Pending sync on this phone (`HolidayStore.isPendingSync`) → `savedOffline`.
@@ -280,15 +281,19 @@ final class FeedbackCenter: FeedbackPlaying {
     }
 
     func play(_ event: FeedbackEvent) {
+        // The toggles first (review of #239): with nothing to play, the throttle window is not started.
+        let sound = Self.soundsEnabled(defaults) ? event.sound : nil
+        let playsHaptic = Self.hapticsEnabled(defaults)
+        guard sound != nil || playsHaptic else { return }
         let time = now()
         if let last = lastPlayedAt, time >= last, time.timeIntervalSince(last) < Self.throttleInterval {
             return
         }
         lastPlayedAt = time
-        if Self.soundsEnabled(defaults), let sound = event.sound {
+        if let sound {
             sounds.play(sound)
         }
-        if Self.hapticsEnabled(defaults) {
+        if playsHaptic {
             haptics.play(event.haptic)
         }
     }

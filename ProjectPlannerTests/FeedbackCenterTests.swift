@@ -194,6 +194,47 @@ final class FeedbackCenterTests: XCTestCase {
         XCTAssertEqual(haptics.prepared, 0, "haptics off: nothing is prepared")
     }
 
+    /// Review of #239: the toggles are read before the throttle, so a play with nothing to play starts no window.
+    func testTheThrottleStartsOnlyWhenSomethingPlays() {
+        let sounds = SoundSpy()
+        let haptics = HapticSpy()
+        var clock = Date(timeIntervalSince1970: 0)
+        let center = FeedbackCenter(defaults: defaults, sounds: sounds, haptics: haptics, now: { clock })
+        defaults.set(false, forKey: FeedbackCenter.soundsKey)
+        defaults.set(false, forKey: FeedbackCenter.hapticsKey)
+        center.play(.bookingSaved)
+        defaults.set(true, forKey: FeedbackCenter.soundsKey)
+        defaults.set(true, forKey: FeedbackCenter.hapticsKey)
+        clock = clock.addingTimeInterval(0.1)
+        center.play(.bookingDeleted)
+        XCTAssertEqual(sounds.played, [.removed], "the silent play did not throttle this one")
+        XCTAssertEqual(haptics.played, [.removed])
+        // Sounds off but haptics on still plays, so it still throttles.
+        defaults.set(false, forKey: FeedbackCenter.soundsKey)
+        clock = clock.addingTimeInterval(0.5)
+        center.play(.bookingSaved)
+        clock = clock.addingTimeInterval(0.1)
+        center.play(.actionRefused)
+        XCTAssertEqual(haptics.played, [.removed, .success])
+    }
+
+    /// Review of #239: Book labour's unpaid-break prompt plays `warningShown`; the conflict list of that same save does
+    /// not play it again. Any other conflict list does.
+    func testOneWarningHapticPerSave() {
+        let spy = Spy()
+        Feedback.player = spy
+        let gate = BookingConflictGate()
+        let row = BookingConflictItem.doubleBooking(personKey: "TEST-p", dayKey: "2026-11-02", personName: "TEST", detail: "Already booked")
+        gate.skipsWarningHaptic = true
+        gate.runChoices(rows: [row]) { _ in }
+        gate.skipsWarningHaptic = false
+        XCTAssertEqual(spy.events, [])
+        XCTAssertNotNil(gate.pending, "the list itself is still shown")
+        gate.pending = nil
+        gate.runChoices(rows: [row]) { _ in }
+        XCTAssertEqual(spy.events, [.warningShown])
+    }
+
     func testPlayASampleUsesTheTogglesAndIgnoresTheThrottle() {
         let sounds = SoundSpy()
         let haptics = HapticSpy()
@@ -262,8 +303,9 @@ final class FeedbackCenterTests: XCTestCase {
         XCTAssertEqual(FeedbackDecision.event(refusal: "Couldn't save", success: .timesheetSigned), .actionRefused)
         XCTAssertEqual(FeedbackDecision.leaveEvent(pendingSync: true, success: .leaveRequested), .savedOffline)
         XCTAssertEqual(FeedbackDecision.leaveEvent(pendingSync: false, success: .leaveBooked), .leaveBooked)
-        XCTAssertEqual(FeedbackDecision.claimsReviewed(decisions: ["rejected", "approved"]), .claimsApproved)
-        XCTAssertEqual(FeedbackDecision.claimsReviewed(decisions: ["rejected", "rejected"]), .claimsDeclined)
+        // Review of #239: from the plan's approved count, so an approval left unchanged (not written) still counts.
+        XCTAssertEqual(FeedbackDecision.claimsReviewed(approvedCount: 1), .claimsApproved)
+        XCTAssertEqual(FeedbackDecision.claimsReviewed(approvedCount: 0), .claimsDeclined)
     }
 
     func testADeleteIsReadFromWhatTheStoreShowsAfterwards() {
@@ -499,12 +541,12 @@ final class FeedbackCenterTests: XCTestCase {
         // owner decision 2
         ("Views/Overtime/OvertimeViews.swift", "message = \"Sent for approval.\"", "Feedback.play(.overtimeSent)", 300),
         ("Views/Overtime/OvertimeViews.swift", "message = result.message", "Feedback.play(returned ? .overtimeReturned : .actionRefused)", 300),
-        ("Views/Overtime/PayeClaimsViews.swift", "notice = message", "FeedbackDecision.claimsReviewed(decisions: writes.compactMap", 300),
+        ("Views/Overtime/PayeClaimsViews.swift", "notice = message", "Feedback.play(FeedbackDecision.claimsReviewed(approvedCount: approvedCount))", 300),
         // userInvited
         ("Views/AddUserView.swift", "errorMessage = userStore.errorMessage ?? \"Failed to add this person. Please try again.\"", "Feedback.play(success ? .userInvited : .actionRefused)", 300),
         ("Views/AddUserView.swift", "errorMessage = userStore.errorMessage ?? \"Failed to create user. Please try again.\"", "Feedback.play(success ? .userInvited : .actionRefused)", 300),
         // warningShown
-        ("Views/BookLabourFlowView.swift", "breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: save)", "Feedback.play(.warningShown)", 80),
+        ("Views/BookLabourFlowView.swift", "breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: {", "Feedback.play(.warningShown)", 300),
         ("Views/MyScheduleView.swift", "breakWarningMessage = warning", "Feedback.play(.warningShown)", 80),
         ("Views/BookingHoursEditSheet.swift", "breakWarningMessage = warning", "Feedback.play(.warningShown)", 200),
         ("Views/BookingConflictRowsView.swift", "self.pending = next", "Feedback.play(.warningShown)", 300),

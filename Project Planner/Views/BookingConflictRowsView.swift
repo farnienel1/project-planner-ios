@@ -301,6 +301,9 @@ final class BookingConflictGate: ObservableObject {
     }
 
     @Published var pending: Pending?
+    /// Feedback only (review of #239): true while a save that already played `warningShown` (Book labour's unpaid
+    /// break prompt) runs, so its conflict list does not play a second warning haptic. Changes nothing else.
+    var skipsWarningHaptic = false
 
     /// Saves at once when there is nothing to decide; otherwise asks first. `afterDismiss`: the flow's own sheet is
     /// closing, so the list opens a moment later (one sheet at a time). Flows that do not save a Replace use this one:
@@ -329,17 +332,18 @@ final class BookingConflictGate: ObservableObject {
             return
         }
         let next = Pending(rows: rows, onConfirm: onConfirm)
+        let playsWarning = !skipsWarningHaptic
         if afterDismiss {
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 450_000_000)
                 guard let self else { return }
                 self.pending = next
                 // Feedback guide §4 `warningShown`: the double-booking and leave list stops this save (haptic only).
-                Feedback.play(.warningShown)
+                if playsWarning { Feedback.play(.warningShown) }
             }
         } else {
             pending = next
-            Feedback.play(.warningShown)
+            if playsWarning { Feedback.play(.warningShown) }
         }
     }
 

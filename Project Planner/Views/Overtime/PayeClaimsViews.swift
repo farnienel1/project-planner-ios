@@ -489,7 +489,7 @@ struct PayeClaimsRangeView: View {
         if canReview && !inRange.isEmpty {
             let writes = preview?.writes ?? []
             Button {
-                Task { await approve(writes: writes, message: preview?.message ?? "") }
+                Task { await approve(writes: writes, message: preview?.message ?? "", approvedCount: preview?.approved ?? 0) }
             } label: {
                 Text(CanonicalBusinessEngine.overtimeText("OVERTIME_APPROVE_LABEL", fallback: "Approve"))
                     .font(.headline)
@@ -641,7 +641,7 @@ struct PayeClaimsRangeView: View {
     }
 
     /// RULEBOOK 1.32.0 §26 Approve: every review write in one batch, then the rulebook's "Approved X of Y" message.
-    private func approve(writes: [PayeClaimReviewWrite], message: String) async {
+    private func approve(writes: [PayeClaimReviewWrite], message: String, approvedCount: Int) async {
         busy = true
         notice = nil
         defer { busy = false }
@@ -649,9 +649,9 @@ struct PayeClaimsRangeView: View {
             try await firebaseBackend.savePayeClaimReviews(writes)
             decisions = [:]
             notice = message
-            // Guide v1.1 §4 (owner decision 2): `claimsApproved` when any decided item was approved, else
-            // `claimsDeclined`.
-            Feedback.play(FeedbackDecision.claimsReviewed(decisions: writes.compactMap { $0.fields["decision"] as? String }))
+            // Guide v1.1 §4 (owner decision 2): `claimsApproved` when the review plan counts any approved item (an
+            // unchanged review is not written but still counts), else `claimsDeclined`.
+            Feedback.play(FeedbackDecision.claimsReviewed(approvedCount: approvedCount))
         } catch {
             notice = error.localizedDescription.isEmpty ? "The review could not be saved." : error.localizedDescription
             Feedback.play(.actionRefused)
