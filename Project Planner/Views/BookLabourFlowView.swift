@@ -141,7 +141,13 @@ struct BookLabourFlowView: View {
             workEndTime: end,
             isBreakRemoved: breakRemoved
         ) {
-            breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: save)
+            // Feedback: the break prompt plays `warningShown`; the conflict list of the same save does not play it again.
+            breakWarningPrompt = BreakWarningPrompt(message: message, onConfirm: { [leaveGate] in
+                leaveGate.skipsWarningHaptic = true
+                save()
+                leaveGate.skipsWarningHaptic = false
+            })
+            Feedback.play(.warningShown)
         } else {
             save()
         }
@@ -1823,8 +1829,11 @@ struct BookLabourFlowView: View {
             ? CanonicalBusinessEngine.createOtMultiplierOverride(chosen: otMultiplierOverride, on: day)
             : nil
         isSaving = true
+        Feedback.prepare()
         Task {
             var firstError: String?
+            /// Feedback guide §4: each booking's own outcome, so the whole party plays one sound.
+            var saveResults: [BookingSaveResult] = []
             let bookedBy = firebaseBackend.currentUser?.uid
             let bookedByName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
             for person in people {
@@ -1833,6 +1842,7 @@ struct BookLabourFlowView: View {
                         if firstError == nil {
                             firstError = "No operative profile is linked to \(person.displayName)."
                         }
+                        saveResults.append(.refused("No operative profile is linked to \(person.displayName)."))
                         continue
                     }
                     if duplicateOperativeBooking(
@@ -1861,10 +1871,12 @@ struct BookLabourFlowView: View {
                         booking.updatedAt = Date()
                         if let problem = await bookingStore.addBookingReplacing(booking, replaces: refs, managerBookings: managerScheduleStore.managerSiteBookings) {
                             if firstError == nil { firstError = problem }
+                            saveResults.append(.refused(problem))
                             continue
                         }
+                        saveResults.append(.saved)
                     } else {
-                        await bookingStore.bookOperative(
+                        let result = await bookingStore.bookOperative(
                             op,
                             on: day,
                             timeSlot: operativeSlot,
@@ -1875,6 +1887,7 @@ struct BookLabourFlowView: View {
                             isBreakRemoved: breakRemoved,
                             otMultiplierOverride: storedRate
                         )
+                        saveResults.append(result)
                     }
                     await notificationService.notifyBookedUsers(
                         projectName: project.siteName,
@@ -1909,15 +1922,23 @@ struct BookLabourFlowView: View {
                         otMultiplierOverride: storedRate
                     )
                     if let refs = replacedByUserId[person.user.id], !refs.isEmpty {
-                        if let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: refs, labourBookings: bookingStore.bookings), firstError == nil {
+                        let problem = await managerScheduleStore.saveBookingReplacing(booking, replaces: refs, labourBookings: bookingStore.bookings)
+                        if let problem, firstError == nil {
                             firstError = problem
                         }
+                        if let problem {
+                            saveResults.append(.refused(problem))
+                        } else {
+                            saveResults.append(.saved)
+                        }
                     } else {
-                        await managerScheduleStore.saveBooking(booking)
+                        let result = await managerScheduleStore.saveBooking(booking)
+                        saveResults.append(result)
                     }
                 }
             }
             ScheduleChangeNotifier.postBookingStoreDidChange()
+            let partyResults = saveResults
             await MainActor.run {
                 isSaving = false
                 if let firstError {
@@ -1925,6 +1946,8 @@ struct BookLabourFlowView: View {
                 } else {
                     dismiss()
                 }
+                // One sound for the party: saved, Pending sync, or (any refused) the error (owner decision 3).
+                Feedback.play(results: partyResults, success: .bookingSaved)
             }
         }
     }
@@ -2003,7 +2026,9 @@ struct BookLabourFlowView: View {
         }
         leaveGate.runSingleReplacing(rows: clashRows + leaveRows) { replaces in
         isSaving = true
+        Feedback.prepare()
         Task {
+            var saveResult: BookingSaveResult = .saved
             if !replaces.isEmpty {
                 var booking = Booking(
                     operativeId: operative.id,
@@ -2021,11 +2046,12 @@ struct BookLabourFlowView: View {
                     await MainActor.run {
                         isSaving = false
                         errorBanner = problem
+                        Feedback.play(.actionRefused)
                     }
                     return
                 }
             } else {
-                await bookingStore.bookOperative(
+                saveResult = await bookingStore.bookOperative(
                     operative,
                     on: day,
                     timeSlot: slot,
@@ -2043,9 +2069,11 @@ struct BookLabourFlowView: View {
                 recipients: [.init(operativeId: operative.id, dates: [day])]
             )
             ScheduleChangeNotifier.postBookingStoreDidChange()
+            let finalResult = saveResult
             await MainActor.run {
                 isSaving = false
                 dismiss()
+                Feedback.play(finalResult, success: .bookingSaved)
             }
         }
         }

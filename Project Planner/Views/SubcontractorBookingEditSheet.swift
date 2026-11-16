@@ -136,11 +136,13 @@ struct SubcontractorBookingEditSheet: View {
         updated.isBreakRemoved = breakRemoved
         updated.bookedContactIds = Array(selectedContactIds)
         updated.updatedAt = Date()
+        Feedback.prepare()
         Task {
-            await subcontractorStore.saveBooking(updated)
+            let result = await subcontractorStore.saveBooking(updated)
             await MainActor.run {
                 isSaving = false
                 onDismiss()
+                Feedback.play(result, success: .bookingEdited)
             }
         }
     }
@@ -154,6 +156,10 @@ struct SubcontractorBookingEditSheet: View {
                 isSaving = false
                 if !subcontractorStore.bookings.contains(where: { $0.id == booking.id }) {
                     onDismiss()
+                    Feedback.play(.bookingDeleted)
+                } else {
+                    // Still here: refused (subcontractor deletes are online only and never queued).
+                    Feedback.play(.actionRefused)
                 }
             }
         }

@@ -495,11 +495,17 @@ struct HolidayView: View {
                                 halfDayBookingEditor = nil
                                 successMessage = "Leave updated."
                                 showSuccess = true
+                                // Owner decision 5: a leave edit plays "saved" (Pending sync: the queued tick).
+                                Feedback.play(FeedbackDecision.leaveEvent(
+                                    pendingSync: holidayStore.isPendingSync(updated),
+                                    success: .leaveEdited
+                                ))
                             }
                         } catch {
                             await MainActor.run {
                                 errorMessage = error.localizedDescription
                                 showError = true
+                                Feedback.play(.actionRefused)
                             }
                         }
                     }
@@ -529,7 +535,11 @@ struct HolidayView: View {
                                 }
                                 Spacer(minLength: 8)
                                 Button {
-                                    Task { await holidayStore.deleteBooking(booking) }
+                                    Task {
+                                        let result = await holidayStore.deleteBooking(booking)
+                                        // Owner decision 5: removing leave plays "removed".
+                                        Feedback.play(result, success: .leaveRemoved)
+                                    }
                                 } label: {
                                     Image(systemName: "xmark.circle.fill")
                                         .font(.title3)
@@ -1704,6 +1714,7 @@ struct HolidayView: View {
 
         isSaving = true
         errorMessage = nil
+        Feedback.prepare()
 
         Task {
             do {
@@ -1713,6 +1724,7 @@ struct HolidayView: View {
                             errorMessage = "Not signed in."
                             showError = true
                             isSaving = false
+                            Feedback.play(.actionRefused)
                         }
                         return
                     }
@@ -1750,9 +1762,11 @@ struct HolidayView: View {
                             pendingSync: holidayStore.isPendingSync(request)
                         )
                     }
+                    let requestPending = created.contains { holidayStore.isPendingSync($0) }
                     await MainActor.run {
                         successMessage = "Annual leave request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
                         showSuccess = true
+                        Feedback.play(FeedbackDecision.leaveEvent(pendingSync: requestPending, success: .leaveRequested))
                     }
                 } else {
                     guard let uid = firebaseBackend.currentUser?.uid else {
@@ -1760,6 +1774,7 @@ struct HolidayView: View {
                             errorMessage = "Not signed in."
                             showError = true
                             isSaving = false
+                            Feedback.play(.actionRefused)
                         }
                         return
                     }
@@ -1789,6 +1804,7 @@ struct HolidayView: View {
                             )
                         }
                     }
+                    let savedPending = created.contains { holidayStore.isPendingSync($0) }
                     await MainActor.run {
                         if isManagerRequestMode {
                             successMessage = "Annual leave request submitted for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
@@ -1796,6 +1812,11 @@ struct HolidayView: View {
                             successMessage = "Annual leave booked for \(selectedDays.count) day\(selectedDays.count == 1 ? "" : "s")."
                         }
                         showSuccess = true
+                        // Owner decision 5: approved leave saved directly plays leaveBooked; a request leaveRequested.
+                        Feedback.play(FeedbackDecision.leaveEvent(
+                            pendingSync: savedPending,
+                            success: selfBooks ? .leaveBooked : .leaveRequested
+                        ))
                     }
                 }
                 await MainActor.run {
@@ -1807,6 +1828,7 @@ struct HolidayView: View {
                     errorMessage = error.localizedDescription
                     showError = true
                     isSaving = false
+                    Feedback.play(.actionRefused)
                 }
             }
         }
@@ -1933,7 +1955,9 @@ struct HolidayView: View {
         guard let uid = firebaseBackend.currentUser?.uid, canDecide(request) else { return }
         Task {
             if request.cancellationRequestedAt != nil {
-                await holidayStore.deleteBooking(request)
+                let removed = await holidayStore.deleteBooking(request)
+                // Owner decision 5: accepting a cancellation removes the leave ("removed").
+                Feedback.play(removed, success: .leaveRemoved)
                 let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
                 if let ownerId = request.userId {
                     await notificationService.notifyAnnualLeaveCancelledByManager(
@@ -1950,7 +1974,8 @@ struct HolidayView: View {
                 )
                 return
             } else {
-                await holidayStore.approveBooking(request, approvedByUserId: uid)
+                let result = await holidayStore.approveBooking(request, approvedByUserId: uid)
+                Feedback.play(result, success: .leaveApproved)
             }
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: true, decidedByName: approverName)
@@ -2002,7 +2027,8 @@ struct HolidayView: View {
             return
         }
         Task {
-            await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)
+            let result = await holidayStore.rejectBooking(request, rejectedByUserId: uid, reason: reason)
+            Feedback.play(result, success: .leaveDeclined)
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Admin"
             await notifyDecision(to: request, approved: false, decidedByName: approverName, reason: reason)
             await notifyPeerLineManagers(
@@ -2018,7 +2044,11 @@ struct HolidayView: View {
     /// the other line managers (`lineManagerPeerRecipients`) are told.
     private func refuseCancellation(_ request: HolidayBooking, actorUserId: String) {
         Task {
-            guard await holidayStore.refuseCancellation(request) else { return }
+            guard await holidayStore.refuseCancellation(request) else {
+                Feedback.play(.actionRefused)
+                return
+            }
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(request), success: .leaveDeclined))
             let approverName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Manager"
             if let ownerId = request.userId {
                 await notificationService.notifyAnnualLeaveCancellationRefused(
@@ -2086,9 +2116,11 @@ struct HolidayView: View {
         if canShowSelfServeBookedAnnualLeave {
             return {
                 Task {
-                    await holidayStore.deleteBooking(booking)
+                    let result = await holidayStore.deleteBooking(booking)
                     successMessage = "Annual leave removed."
                     showSuccess = true
+                    // Owner decision 5: removing leave plays "removed".
+                    Feedback.play(result, success: .leaveRemoved)
                 }
             }
         }
@@ -2104,7 +2136,12 @@ struct HolidayView: View {
         Task {
             holidayStore.errorMessage = nil
             await holidayStore.requestCancellation(booking, by: uid)
-            guard holidayStore.errorMessage == nil else { return }
+            guard holidayStore.errorMessage == nil else {
+                Feedback.play(.actionRefused)
+                return
+            }
+            // Owner decision 5: a cancellation request plays "saved" (Pending sync: the queued tick).
+            Feedback.play(FeedbackDecision.leaveEvent(pendingSync: holidayStore.isPendingSync(booking), success: .leaveEdited))
             // Approvers are told now, or once the outbox confirms a request made offline (§2).
             await notificationService.notifyHolidayRequestSubmittedWhenSynced(
                 leaveNotice(for: booking, requesterUserId: uid, requesterName: requesterName(for: booking), cancellation: true),

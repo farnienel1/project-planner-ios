@@ -632,7 +632,10 @@ struct ScheduleSubcontractorView: View {
     private func save() {
         guard let selectedSubcontractorId else { return }
         isSaving = true
+        Feedback.prepare()
         Task {
+            /// Feedback guide §4: one sound for every day saved.
+            var results: [BookingSaveResult] = []
             for date in selectedDates {
                 let key = slotKey(for: date)
                 let slot = dateTimeSlots[key] ?? .defaultPickerSlot(on: date)
@@ -645,11 +648,14 @@ struct ScheduleSubcontractorView: View {
                     bookedBy: "Project Planner",
                     bookedContactIds: contactIds
                 )
-                await subcontractorStore.saveBooking(booking)
+                let result = await subcontractorStore.saveBooking(booking)
+                results.append(result)
             }
+            let savedResults = results
             await MainActor.run {
                 isSaving = false
                 dismiss()
+                Feedback.play(results: savedResults, success: .bookingSaved)
             }
         }
     }

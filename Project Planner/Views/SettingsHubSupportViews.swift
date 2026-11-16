@@ -568,6 +568,8 @@ struct SettingsNotificationsHubView: View {
                     SettingsHubChrome.footer("Turn off any reminder you do not want. Organisation cut-off time is set in organisation settings. My Schedule extra locations are managed in Organisation Settings Hub → Schedule options.")
                 }
                 NotificationsCheckCard()
+                // Feedback guide §5 (owner decision 1): this phone's sounds and haptics, outside the Save draft.
+                FeedbackSettingsCard()
             }
             .padding(16)
         }

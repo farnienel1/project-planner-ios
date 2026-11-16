@@ -118,16 +118,19 @@ class SubcontractorStore: ObservableObject {
         }
     }
     
-    func saveBooking(_ booking: SubcontractorBooking) async {
+    /// Returns the outcome (saved or refused; subcontractor bookings are online only) for the feedback sound (guide
+    /// §4); what is written is unchanged.
+    @discardableResult
+    func saveBooking(_ booking: SubcontractorBooking) async -> BookingSaveResult {
         guard let firebaseBackend,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
             errorMessage = "Organization is not loaded yet. Please try again."
-            return
+            return .refused("Organization is not loaded yet. Please try again.")
         }
         // RULEBOOK 1.10.0 §2, §16: `canWriteBooking` — admins, or a manager of the booking's job.
         if let refusal = JobAccessContext.bookingWriteRefusal(collection: "subcontractorBookings", projectId: booking.storedProjectId) {
             errorMessage = refusal
-            return
+            return .refused(refusal)
         }
         // The firm's people on site by name, written with their ids (RULEBOOK 1.7.0 `subcontractorBookingWriteFields`).
         let firm = subcontractors.first { $0.id == booking.subcontractorId }
@@ -144,8 +147,10 @@ class SubcontractorStore: ObservableObject {
             } else {
                 bookings.append(saved)
             }
+            return .saved
         } catch {
             errorMessage = error.localizedDescription
+            return .refused(error.localizedDescription)
         }
     }
 

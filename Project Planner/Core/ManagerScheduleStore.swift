@@ -345,8 +345,20 @@ class ManagerScheduleStore: ObservableObject {
         return nil
     }
 
-    func saveBooking(_ booking: ManagerSiteBooking) async {
+    /// Returns this save's own outcome (`saveBookingReportingProblem`) for the feedback sound; unchanged writes.
+    @discardableResult
+    func saveBooking(_ booking: ManagerSiteBooking) async -> BookingSaveResult {
         await saveBookingReportingProblem(booking)
+    }
+
+    /// Feedback (guide §4), read right after `deleteBooking` from what the store shows — writes nothing: still on this
+    /// phone → refused; gone but Pending sync → queued; gone → saved (`BookingDeleteOutcome`).
+    func deleteOutcome(of booking: ManagerSiteBooking) -> BookingSaveResult {
+        BookingDeleteOutcome.decide(
+            stillOnPhone: managerSiteBookings.contains(where: { $0.id == booking.id }),
+            pendingSync: isPendingSync(booking),
+            refusal: errorMessage ?? "This booking could not be deleted."
+        )
     }
 
     /// `saveBooking`, then this save's own outcome: saved, queued as Pending sync, or refused with why (1.33.1 review

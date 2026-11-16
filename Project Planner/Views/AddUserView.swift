@@ -1475,10 +1475,12 @@ struct AddUserView: View {
             endMonth: annualLeaveEndMonth
         ) {
             errorMessage = leaveYearError
+            Feedback.play(.actionRefused)
             return
         }
         if let message = ghostDraftError {
             errorMessage = message
+            Feedback.play(.actionRefused)
             return
         }
         if stopForDuplicateName() { return }
@@ -1496,6 +1498,8 @@ struct AddUserView: View {
                 } else {
                     errorMessage = userStore.errorMessage ?? "Failed to add this person. Please try again."
                 }
+                // Feedback guide §4 (owner decision 10): a ghost created plays `userInvited`.
+                Feedback.play(success ? .userInvited : .actionRefused)
             }
         }
     }
@@ -1547,6 +1551,7 @@ struct AddUserView: View {
         }
         if permissions.operativeMode && (permissions.adminAccess || permissions.manager || permissions.operatives) {
             errorMessage = "Operative mode cannot be combined with admin, manager, or operative management flags."
+            Feedback.play(.actionRefused)
             return
         }
         
@@ -1554,6 +1559,7 @@ struct AddUserView: View {
             let t = remainingLeaveText.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespacesAndNewlines)
             guard let d = Double(t), d >= 0 else {
                 errorMessage = "Enter the remaining allowance in steps of 0.5."
+                Feedback.play(.actionRefused)
                 return
             }
         }
@@ -1563,6 +1569,7 @@ struct AddUserView: View {
         if let payMessage = inviteRateError {
             rateFieldError = payMessage
             errorMessage = payMessage
+            Feedback.play(.actionRefused)
             return
         }
 
@@ -1572,6 +1579,7 @@ struct AddUserView: View {
             endMonth: annualLeaveEndMonth
         ) {
             errorMessage = leaveYearError
+            Feedback.play(.actionRefused)
             return
         }
 
@@ -1588,6 +1596,7 @@ struct AddUserView: View {
                 await MainActor.run {
                     isCreating = false
                     errorMessage = "Organization not loaded. Please wait a moment and try again."
+                    Feedback.play(.actionRefused)
                 }
                 return
             }
@@ -1600,6 +1609,7 @@ struct AddUserView: View {
                     await MainActor.run {
                         isCreating = false
                         errorMessage = "Could not check whether this email is already in the organisation. Try again."
+                        Feedback.play(.actionRefused)
                     }
                     return
                 }
@@ -1607,6 +1617,7 @@ struct AddUserView: View {
                     await MainActor.run {
                         isCreating = false
                         errorMessage = "A user with the email address '\(email)' already exists in this organization. Each email address can only be used once per organization."
+                        Feedback.play(.actionRefused)
                     }
                     return
                 }
@@ -1614,6 +1625,7 @@ struct AddUserView: View {
                 await MainActor.run {
                     isCreating = false
                     errorMessage = "Could not check whether this email is already in the organisation. Try again."
+                    Feedback.play(.actionRefused)
                 }
                 return
             }
@@ -1672,6 +1684,8 @@ struct AddUserView: View {
                 } else {
                     errorMessage = userStore.errorMessage ?? "Failed to create user. Please try again."
                 }
+                // Feedback guide §4 (owner decision 10): an invite whose email failed still plays `userInvited`.
+                Feedback.play(success ? .userInvited : .actionRefused)
             }
         }
     }

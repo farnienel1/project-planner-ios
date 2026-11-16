@@ -1694,6 +1694,8 @@ struct OperativeCustomHoursSheet: View {
                isBreakRemoved: !breakIncluded
            ) {
             breakWarningMessage = warning
+            // Feedback guide §4 `warningShown`: the unpaid-break warning stops this save (haptic only).
+            Feedback.play(.warningShown)
             return
         }
         var otOut: Double? = nil

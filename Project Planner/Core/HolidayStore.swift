@@ -370,33 +370,47 @@ class HolidayStore: ObservableObject {
         return fields
     }
 
-    func deleteBooking(_ booking: HolidayBooking) async {
-        guard let fb = firebaseBackend else { return }
+    /// Returns what happened (saved, Pending sync, or refused) for the feedback sound (guide §4); what is written is
+    /// unchanged. Without a backend nothing is written: refused.
+    @discardableResult
+    func deleteBooking(_ booking: HolidayBooking) async -> BookingSaveResult {
+        guard let fb = firebaseBackend else { return .refused(Self.notSavedMessage) }
         do {
             let orgId = try await resolveOrganizationId()
             lastSaveWasPendingSync = try await fb.deleteHolidayBooking(booking, organizationId: orgId, session: writeSession(orgId))
             bookings.removeAll { $0.id == booking.id }
+            return lastSaveWasPendingSync ? .queued(BookingStore.pendingSyncMessage) : .saved
         } catch {
             errorMessage = error.localizedDescription
+            return .refused(error.localizedDescription)
         }
     }
+
+    /// Feedback only: the refusal when no backend is set (nothing is written or shown, as before).
+    static let notSavedMessage = "This annual leave change could not be saved."
 
     // Owner decision 4 Nov ("Never delete leave"): changing Annual Leave Management, the line manager or the account
     // type never deletes a person's approved or pending leave. The toggle only decides whether *future* leave saves
     // approved or is requested (`canSelfBookAnnualLeave`). The two helpers that deleted it are gone.
 
-    /// Approve in one partial update (`holidayDecisionWriteFields`).
-    func approveBooking(_ booking: HolidayBooking, approvedByUserId: String) async {
+    /// Approve in one partial update (`holidayDecisionWriteFields`). Returns the outcome for the feedback sound.
+    @discardableResult
+    func approveBooking(_ booking: HolidayBooking, approvedByUserId: String) async -> BookingSaveResult {
         await decide(booking, status: .approved, approverUid: approvedByUserId, note: nil)
     }
 
-    /// Decline in one partial update (`holidayDecisionWriteFields`). A blank reason clears the note.
-    func rejectBooking(_ booking: HolidayBooking, rejectedByUserId: String, reason: String = "") async {
+    /// Decline in one partial update (`holidayDecisionWriteFields`). A blank reason clears the note. Returns the
+    /// outcome for the feedback sound.
+    @discardableResult
+    func rejectBooking(_ booking: HolidayBooking, rejectedByUserId: String, reason: String = "") async -> BookingSaveResult {
         await decide(booking, status: .rejected, approverUid: rejectedByUserId, note: reason)
     }
 
-    private func decide(_ booking: HolidayBooking, status: HolidayStatus, approverUid: String, note: String?) async {
-        guard let fb = firebaseBackend else { return }
+    /// Writes exactly as before; the result (saved, Pending sync after the short wait, or refused) is for the feedback
+    /// sound only (guide §4).
+    @discardableResult
+    private func decide(_ booking: HolidayBooking, status: HolidayStatus, approverUid: String, note: String?) async -> BookingSaveResult {
+        guard let fb = firebaseBackend else { return .refused(Self.notSavedMessage) }
         do {
             let orgId = try await resolveOrganizationId()
             let result = try await fb.decideHolidayBooking(
@@ -420,8 +434,10 @@ class HolidayStore: ObservableObject {
             } else {
                 bookings.append(updated)
             }
+            return result.pendingSync ? .queued(BookingStore.pendingSyncMessage) : .saved
         } catch {
             errorMessage = error.localizedDescription
+            return .refused(error.localizedDescription)
         }
     }
 
