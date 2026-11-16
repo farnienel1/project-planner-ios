@@ -36,8 +36,6 @@ enum WeeklyReportPayInputs {
         var currency: String = OrganizationRulebookContext.currencyCode
         /// The report's role label for a person ("Admin User", "Operative").
         var roleLabel: (AppUser?) -> String
-        /// Whether a manager site booking's place is on the report (`MyScheduleOptions.includesManagerScheduleLocation`).
-        var includesManagerBooking: (ManagerSiteBooking) -> Bool = { _ in true }
     }
 
     /// One person on the report, for rendering (name, role, trade) and for `weeklyReportLeaveRows`.
@@ -63,7 +61,8 @@ enum WeeklyReportPayInputs {
             return key >= s.startDayKey && key <= s.endDayKey
         }
         let labour = s.bookings.filter { inRange($0.date) }
-        let manager = s.managerBookings.filter { inRange($0.date) && s.includesManagerBooking($0) }
+        // RULEBOOK 1.54.0 §4.8 / §8: every manager site booking in the range, whatever the schedule options say.
+        let manager = s.managerBookings.filter { inRange($0.date) }
         let people = buildPeople(s, labour: labour, manager: manager)
         let roster = RulebookPeople.roster(s.users)
 

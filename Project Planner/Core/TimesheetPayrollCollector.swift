@@ -312,7 +312,8 @@ enum TimesheetPayrollCollector {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         )
         for booking in managerBookings where managerIds.contains(booking.userId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) {
-            guard scheduleOptions.includesManagerScheduleLocation(booking) else { continue }
+            // RULEBOOK 1.54.0 §4.8 / §8 (owner decision 16 Nov): a switched-off schedule option (Office, Working from
+            // home, Site survey, a custom item) only leaves the pickers; bookings already made there are still paid.
             let day = cal.startOfDay(for: booking.date)
             guard day >= rangeStart && day <= rangeEnd else { continue }
             let policy = dayPolicy(for: day)
