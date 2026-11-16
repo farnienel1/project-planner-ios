@@ -503,6 +503,101 @@ final class PayStripReadyTests: XCTestCase {
         }
     }
 
+    // MARK: Third review
+
+    func testWeeklyReportRefusesWhileAnyonesPayIsUnknownAndNamesThem() {
+        let organization = Organization(firestoreDocumentId: "TEST-ORG-STRIP", name: "TEST-Company")
+        func report() -> String? { PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .wholeTeam) }
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready, failedPersonIds: ["op-1"], failedPersonNames: ["Pat Payee"])
+        XCTAssertEqual(report(), PrivatePayOverlayReadiness.teamFailedMessage(["Pat Payee"]), "never priced as Rate not set / £0")
+        XCTAssertNil(
+            PayInputsLoad.blockMessage(state: .loaded, organization: organization, scope: .othersPay),
+            "the team list and the others' reviews go on"
+        )
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .ready, rosterFromCache: true)
+        XCTAssertEqual(report(), PrivatePayOverlayReadiness.rosterFromCacheMessage, "not from this phone's copy")
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .failed)
+        XCTAssertEqual(report(), PrivatePayOverlayReadiness.rosterFailedMessage)
+        PrivatePayOverlayReadiness.update(own: .failed, roster: .ready)
+        XCTAssertNil(report(), "the admin's own read does not block it")
+    }
+
+    func testEveryoneFailedIsNeverReady() {
+        let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        XCTAssertEqual(UserStore.rosterPayLoadAfterResult(roster, failedIds: ["op-1", "op-2"]), .failed)
+        XCTAssertEqual(UserStore.rosterPayLoadAfterResult(roster, failedIds: ["op-1"]), .ready)
+        XCTAssertEqual(UserStore.rosterPayLoadAfterResult(roster, failedIds: []), .ready)
+        // An all-or-nothing `.all` read that failed with no good copy: everyone failed, so not ready.
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "ADMIN")
+        let failedAll = RosterPayOverlayResult(users: roster, profiles: [:], failedUserIds: ["op-1", "op-2"])
+        let merged = UserStore.rosterPayAfterResult(roster, result: failedAll, cache: nil, key: key)
+        XCTAssertEqual(UserStore.rosterPayLoadAfterResult(roster, failedIds: merged.failedIds), .failed)
+        PrivatePayOverlayReadiness.update(own: .ready, roster: .failed, failedPersonIds: merged.failedIds)
+        XCTAssertEqual(PrivatePayOverlayReadiness.blockMessage(scope: .othersPay), PrivatePayOverlayReadiness.rosterFailedMessage)
+    }
+
+    func testOfflineFirstLaunchCacheMissNeverDecidesPrivatePayOff() {
+        XCTAssertTrue(ForcedUpdateGate.ignoresUnknownCacheMiss(exists: false, fromCache: true, switchesKnown: false))
+        XCTAssertFalse(ForcedUpdateGate.ignoresUnknownCacheMiss(exists: false, fromCache: false, switchesKnown: false), "the server says no document")
+        XCTAssertFalse(ForcedUpdateGate.ignoresUnknownCacheMiss(exists: true, fromCache: true, switchesKnown: false), "a cached document is an answer")
+        XCTAssertFalse(ForcedUpdateGate.ignoresUnknownCacheMiss(exists: false, fromCache: true, switchesKnown: true))
+    }
+
+    func testOwnProfileFromThePhonesCacheIsShownButNeverPricedOrSigned() throws {
+        let user = stripped()
+        let key = UserStore.ownPayKey(user: user, organizationId: nil)
+        let record = try XCTUnwrap(UserStore.ownPayRecord(user: user, reads: [(id: user.id, read: true, data: payeProfile())]).record)
+        let offline = UserStore.ownPayStateAfterRead(
+            key: key, previous: OwnPayOverlayState(key: key), record: record, readable: true, offline: true, fromCache: true
+        )
+        XCTAssertTrue(offline.answeredFromCache)
+        XCTAssertFalse(offline.recordConfirmed)
+        XCTAssertTrue(UserStore.ownPayDecidable(offline, key: key), "shown")
+        XCTAssertEqual(UserStore.ownPayLoad(offline, key: key), .loading, "never priced or signed from")
+        let store = UserStore()
+        store.currentUser = user
+        store.ownPayOverlay = offline
+        XCTAssertFalse(store.ownPaySettled, "no reminder row from it")
+        // A record the server confirmed earlier stays confirmed.
+        let confirmed = OwnPayOverlayState(key: key, finished: true, readable: true, record: record, recordConfirmed: true)
+        let later = UserStore.ownPayStateAfterRead(key: key, previous: confirmed, record: record, readable: true, offline: true, fromCache: true)
+        XCTAssertEqual(UserStore.ownPayLoad(later, key: key), .ready)
+    }
+
+    func testOwnReadFromCacheIsReadAgain() async throws {
+        let previousDelay = UserStore.payOverlayRetryDelayNanoseconds
+        UserStore.payOverlayRetryDelayNanoseconds = 50_000_000
+        defer { UserStore.payOverlayRetryDelayNanoseconds = previousDelay }
+        let reader = FakePayProfileReader()
+        reader.serverAnswers = [
+            PayProfileRead(read: true, data: payeProfile(), offline: true),
+            PayProfileRead(read: true, data: payeProfile(), offline: false),
+        ]
+        let store = UserStore()
+        store.ownPayOrganizationIdOverride = "TEST-ORG"
+        store.payProfileReaderOverride = reader
+        store.currentUser = stripped()
+        try await waitUntil { store.ownPayOverlay.finished && store.ownPayOverlay.answeredFromCache }
+        XCTAssertFalse(store.ownPaySettled)
+        try await waitUntil { store.ownPayOverlay.finished && !store.ownPayOverlay.answeredFromCache }
+        XCTAssertTrue(store.ownPaySettled)
+        XCTAssertEqual(reader.serverReads, 2)
+    }
+
+    func testChangedPeopleKeepTheLastGoodPayForThoseStillPresent() {
+        let roster = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        let scope = UserStore.rosterPayScopeKey(organizationId: "ORG", viewerId: "LM")
+        let key = UserStore.rosterPaySubjectsKey(roster, organizationId: "ORG", viewerId: "LM")
+        let cache = RosterPayProfileCache(key: key, profiles: ["OP-1": payeProfile("OP-1")], scope: scope)
+        let grown = roster + [stripped(id: "OP-3")]
+        let grownKey = UserStore.rosterPaySubjectsKey(grown, organizationId: "ORG", viewerId: "LM")
+        let next = UserStore.rosterPayAfterSnapshot(grown, cache: cache, key: grownKey, scope: scope)
+        XCTAssertEqual(next.load, .loading, "the new person's pay is still being read")
+        XCTAssertEqual(next.users.first { $0.id == "OP-1" }?.employmentType, .paye, "never a stripped row for OP-1")
+        let otherViewer = UserStore.rosterPayScopeKey(organizationId: "ORG", viewerId: "OTHER")
+        XCTAssertEqual(UserStore.rosterPayAfterSnapshot(grown, cache: cache, key: grownKey, scope: otherViewer).users, grown)
+    }
+
     // MARK: Finding 4 — roster refreshes
 
     func testFinding4ARefreshOfTheSamePeopleStaysReadyAndKeepsThePay() {

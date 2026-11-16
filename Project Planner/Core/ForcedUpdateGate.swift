@@ -72,6 +72,13 @@ final class ForcedUpdateGate: ObservableObject {
     /// RULEBOOK 1.26.0 §18: the same document carries the security switches (`CanonicalBusinessEngine.securitySwitches`).
     /// A missing document is "both off".
     private func apply(_ snapshot: DocumentSnapshot) {
+        // Review of #240: before the switches are known, a "no document" answer from this phone's cache (an offline
+        // first launch: nothing cached yet) is not an answer — it never decides that `privatePay` is off.
+        if Self.ignoresUnknownCacheMiss(
+            exists: snapshot.exists,
+            fromCache: snapshot.metadata.isFromCache,
+            switchesKnown: SecuritySwitchContext.hasRead
+        ) { return }
         guard snapshot.exists, let data = snapshot.data() else {
             updateRequired = false
             SecuritySwitchContext.update(config: nil)
@@ -79,6 +86,12 @@ final class ForcedUpdateGate: ObservableObject {
         }
         updateRequired = Self.blocks(running: Self.runningBuild, config: data)
         SecuritySwitchContext.update(config: FirebaseBackend.firestoreJSON(data) as? [String: Any])
+    }
+
+    /// Whether a `platformConfig/app` snapshot is ignored: it says the document does not exist, it came from the cache,
+    /// and the switches have not been answered yet.
+    nonisolated static func ignoresUnknownCacheMiss(exists: Bool, fromCache: Bool, switchesKnown: Bool) -> Bool {
+        !exists && fromCache && !switchesKnown
     }
 
     private var listener: ListenerRegistration?

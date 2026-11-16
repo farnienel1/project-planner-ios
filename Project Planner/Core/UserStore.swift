@@ -45,6 +45,10 @@ class UserStore: ObservableObject {
     /// Roster people (user ids, lower case) whose pay-profile read failed or was refused, with no good copy held. Only
     /// their own screens and actions (review, invoice, Export row) are blocked (review of #240).
     private(set) var rosterPayFailedIds: Set<String> = []
+    /// True while the roster's last answer came from this phone's cache (offline): the weekly report waits.
+    private(set) var rosterPayFromCache = false
+    /// Re-reads failed or cache-answered pay profiles when the phone comes back online.
+    private var onlineCancellable: AnyCancellable?
     /// The pay this store laid over each roster row (raw → shown), so the next overlay starts from the raw rows.
     private var rosterPayLaid: [String: (raw: RosterPayFields, shown: RosterPayFields)] = [:]
     /// Tests: the organisation and reader the own-pay overlay uses instead of `firebaseBackend`.
@@ -157,6 +161,7 @@ class UserStore: ObservableObject {
             // Nothing to read: no roster pay is priced from pay profiles.
             rosterPayOverlayLoad = .ready
             rosterPayFailedIds = []
+            rosterPayFromCache = false
             if !SecuritySwitchContext.privatePay || organizationUsers.isEmpty {
                 rosterPayProfileCache = nil
                 rosterPayLaid = [:]
@@ -168,8 +173,10 @@ class UserStore: ObservableObject {
         // Always from the raw rows: pay this store laid over earlier is taken off again first (review of #240).
         let raw = Self.rosterRawRows(organizationUsers, laid: rosterPayLaid)
         let key = Self.rosterPaySubjectsKey(raw, organizationId: orgId, viewerId: currentUser?.id)
-        // Same people as the last good overlay: lay it over now and stay ready while the refresh runs.
-        let applied = Self.rosterPayAfterSnapshot(raw, cache: rosterPayProfileCache, key: key)
+        let scope = Self.rosterPayScopeKey(organizationId: orgId, viewerId: currentUser?.id)
+        // Same people as the last good overlay: lay it over now and stay ready while the refresh runs. Other people:
+        // the last good profiles stay over those still present while the new read runs (loading).
+        let applied = Self.rosterPayAfterSnapshot(raw, cache: rosterPayProfileCache, key: key, scope: scope)
         rosterPayOverlayLoad = applied.load
         rosterPayFailedIds = applied.failedIds
         publishRosterPayRows(applied.users, raw: raw)
@@ -177,10 +184,13 @@ class UserStore: ObservableObject {
         Task { @MainActor [weak self] in
             let result = await firebaseBackend.overlayRosterPayIfPrivateResult(raw)
             guard let self, generation == self.privatePayOverlayGeneration else { return }
-            let merged = Self.rosterPayAfterResult(raw, result: result, cache: self.rosterPayProfileCache, key: key)
+            let merged = Self.rosterPayAfterResult(
+                raw, result: result, cache: self.rosterPayProfileCache, key: key, scope: scope
+            )
             if let next = merged.cache { self.rosterPayProfileCache = next }
             self.rosterPayFailedIds = merged.failedIds
-            self.rosterPayOverlayLoad = .ready
+            self.rosterPayFromCache = result.fromCache
+            self.rosterPayOverlayLoad = Self.rosterPayLoadAfterResult(raw, failedIds: merged.failedIds)
             self.publishRosterPayRows(merged.users, raw: raw)
             self.publishPayOverlayReadiness()
             guard result.failed || result.fromCache else { return }
@@ -207,7 +217,7 @@ class UserStore: ObservableObject {
 
     /// The app came back to the foreground: a failed roster overlay is tried again.
     func retryRosterPayOverlayIfFailed() {
-        guard SecuritySwitchContext.privatePay, !rosterPayFailedIds.isEmpty else { return }
+        guard SecuritySwitchContext.privatePay, !rosterPayFailedIds.isEmpty || rosterPayFromCache else { return }
         schedulePrivatePayOverlay()
     }
 
@@ -250,6 +260,18 @@ class UserStore: ObservableObject {
     func setSmartCache(_ smartCache: SmartCacheService) {
         self.smartCache = smartCache
         self.isOffline = !smartCache.isOnline
+        // Back online: pay profiles that failed or came only from this phone's copy are read again (review of #240).
+        onlineCancellable = smartCache.$isOnline
+            .removeDuplicates()
+            .dropFirst()
+            .filter { $0 }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.retryOwnPayOverlayIfFailed()
+                    self?.retryRosterPayOverlayIfFailed()
+                }
+            }
     }
 
     /// Writes `users/{uid}.lastSeenAt` (merge). Call from app foreground; throttled to ~2 minutes.
@@ -802,8 +824,9 @@ class UserStore: ObservableObject {
         // Empty is stored only when this load ended with nobody. People the server could not
         // confirm as gone stay in `published`, so a short fetch cannot wipe the saved roster.
         // Save the list with its same-email ids put back, so a cold start still matches bookings.
+        // The raw rows (review of #240): pay this store laid over from pay profiles is never saved on the phone.
         RosterRetention.save(
-            organizationUsers,
+            Self.rosterRawRows(organizationUsers, laid: rosterPayLaid),
             organizationId: organizationId,
             allowEmpty: published.isEmpty
         )
@@ -1219,6 +1242,7 @@ class UserStore: ObservableObject {
         rosterPayProfileCache = nil
         rosterPayLaid = [:]
         rosterPayFailedIds = []
+        rosterPayFromCache = false
         currentUser = nil
         roleTestingPreset = nil
         errorMessage = nil

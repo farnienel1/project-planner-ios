@@ -75,6 +75,10 @@ struct InvoicingView: View {
                     hubNavyHeader
 
                     VStack(alignment: .leading, spacing: 14) {
+                        if !userStore.ownPayReady && canShowOperativeTimesheets {
+                            // A line manager whose own pay is still loading: their My Timesheets card is not decided yet.
+                            ownPayWaitingCard
+                        }
                         if !userStore.ownPayReady && !canShowOperativeTimesheets {
                             // RULEBOOK §8 (review of #240): whether this person has My Timesheets is decided from their
                             // own pay, which is not known yet — a loading state, never "Timesheets unavailable".
@@ -4528,7 +4532,13 @@ struct OperativeTimesheetsView: View {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
             }
-            if PrivatePayOverlayReadiness.personPayFailed(op) {
+            // The pay gate for this person, checked again for each one (review of #240): still loading stops the export;
+            // their pay could not be loaded skips and names them.
+            if let blocked = PrivatePayOverlayReadiness.blockMessage(scope: .forPerson(op)) {
+                if blocked == PrivatePayOverlayReadiness.loadingMessage {
+                    exportMessage = blocked
+                    return
+                }
                 skippedPay.append(name(op))
                 continue
             }

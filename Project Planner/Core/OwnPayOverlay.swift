@@ -33,6 +33,9 @@ enum PayOverlayLoad: Equatable {
 enum PayOverlayScope: Equatable {
     case ownPay
     case othersPay
+    /// Everyone at once (the weekly report): refused while anyone's pay could not be loaded, or while the last answer
+    /// came from this phone's cache — never "Rate not set" or £0 for a person whose pay is unknown.
+    case wholeTeam
     /// One person: every id they go by (lower case) and the name the message shows.
     case person(ids: [String], name: String)
 
@@ -62,6 +65,8 @@ struct RosterPayProfileCache {
     var key: String
     var profiles: [String: [String: Any]]
     var failedIds: Set<String> = []
+    /// Organisation and viewer the profiles were read for (`UserStore.rosterPayScopeKey`).
+    var scope: String = ""
 }
 
 /// The six pay fields of a roster row (`withPayFields`), comparable, so pay this store laid over can be told apart from
@@ -115,6 +120,9 @@ struct OwnPayOverlayState: Equatable {
     /// True when `record` came from a finished read (the server, or this phone's copy while offline). False for the
     /// copy shown from the cache at launch while the server read runs (dropped if the server refuses it).
     var recordConfirmed = false
+    /// True when the last finished read was answered from this phone's cache (offline): shown, never priced or signed
+    /// from, and read again on foreground or when the phone is back online.
+    var answeredFromCache = false
 }
 
 /// Whether the private-pay overlays are ready. Pay screens wait for it through `PayInputsLoad.blockMessage`. Set only by
@@ -128,21 +136,38 @@ enum PrivatePayOverlayReadiness {
     }
     /// Export: the people left out because their pay details could not be loaded.
     static let exportSkippedMessage = "pay details could not be loaded, so not exported. Try again."
+    static let rosterFailedMessage = "Pay details for the team could not be loaded, so pay cannot be worked out. Check your connection and try again."
+    static let rosterFromCacheMessage = "Pay details could only be read from this phone's copy. Connect to the internet and try again."
+    static func teamFailedMessage(_ names: [String]) -> String {
+        "Pay details for \(names.joined(separator: ", ")) could not be loaded, so the report cannot be worked out. Check your connection and try again."
+    }
 
     private(set) static var own: PayOverlayLoad = .ready
     private(set) static var roster: PayOverlayLoad = .ready
     /// Roster people (user ids, lower case) whose pay-profile read failed with no good copy held.
     private(set) static var failedPersonIds: Set<String> = []
+    /// Their names, sorted (the weekly report names them).
+    private(set) static var failedPersonNames: [String] = []
+    /// True while the roster's last answer came from this phone's cache (offline).
+    private(set) static var rosterFromCache = false
 
-    static func update(own: PayOverlayLoad, roster: PayOverlayLoad, failedPersonIds: Set<String> = []) {
+    static func update(
+        own: PayOverlayLoad,
+        roster: PayOverlayLoad,
+        failedPersonIds: Set<String> = [],
+        failedPersonNames: [String] = [],
+        rosterFromCache: Bool = false
+    ) {
         self.own = own
         self.roster = roster
         self.failedPersonIds = failedPersonIds
+        self.failedPersonNames = failedPersonNames
+        self.rosterFromCache = rosterFromCache
     }
 
     /// Back to "nothing pending" (tests, sign-out).
     static func reset() {
-        update(own: .ready, roster: .ready, failedPersonIds: [])
+        update(own: .ready, roster: .ready)
     }
 
     /// Whether `user`'s pay could not be loaded (while `privatePay` is on): Export skips them and names them.
@@ -159,7 +184,9 @@ enum PrivatePayOverlayReadiness {
         privatePay: Bool,
         own: PayOverlayLoad,
         roster: PayOverlayLoad,
-        failedPersonIds: Set<String> = []
+        failedPersonIds: Set<String> = [],
+        failedPersonNames: [String] = [],
+        rosterFromCache: Bool = false
     ) -> String? {
         guard switchesKnown else { return loadingMessage }
         guard privatePay else { return nil }
@@ -171,11 +198,26 @@ enum PrivatePayOverlayReadiness {
             case .failed: return ownFailedMessage
             }
         case .othersPay:
-            // The team as a whole waits only for the first overlay; one person's failure never blocks the rest.
-            return roster == .loading ? loadingMessage : nil
+            // The team list waits only for the first overlay; one person's failure never blocks the rest.
+            switch roster {
+            case .ready: return nil
+            case .loading: return loadingMessage
+            case .failed: return rosterFailedMessage
+            }
+        case .wholeTeam:
+            switch roster {
+            case .loading: return loadingMessage
+            case .failed: return rosterFailedMessage
+            case .ready: break
+            }
+            if !failedPersonIds.isEmpty {
+                return failedPersonNames.isEmpty ? rosterFailedMessage : teamFailedMessage(failedPersonNames)
+            }
+            return rosterFromCache ? rosterFromCacheMessage : nil
         case .person(let ids, let name):
             if roster == .loading { return loadingMessage }
-            return ids.contains(where: failedPersonIds.contains) ? personFailedMessage(name) : nil
+            if roster == .failed || ids.contains(where: failedPersonIds.contains) { return personFailedMessage(name) }
+            return nil
         }
     }
 
@@ -186,7 +228,9 @@ enum PrivatePayOverlayReadiness {
             privatePay: SecuritySwitchContext.privatePay,
             own: own,
             roster: roster,
-            failedPersonIds: failedPersonIds
+            failedPersonIds: failedPersonIds,
+            failedPersonNames: failedPersonNames,
+            rosterFromCache: rosterFromCache
         )
     }
 }
@@ -222,8 +266,20 @@ extension UserStore {
         previous: OwnPayOverlayState,
         record: AppUser?,
         readable: Bool,
-        offline: Bool
+        offline: Bool,
+        fromCache: Bool = false
     ) -> OwnPayOverlayState {
+        if readable && fromCache {
+            // This phone's copy (offline): shown, never confirmed. A record the server confirmed earlier stays.
+            if previous.key == key, previous.recordConfirmed, let confirmed = previous.record {
+                return OwnPayOverlayState(
+                    key: key, finished: true, readable: true, record: confirmed, recordConfirmed: true, answeredFromCache: true
+                )
+            }
+            return OwnPayOverlayState(
+                key: key, finished: true, readable: true, record: record, recordConfirmed: false, answeredFromCache: true
+            )
+        }
         if readable {
             return OwnPayOverlayState(key: key, finished: true, readable: true, record: record, recordConfirmed: record != nil)
         }
@@ -252,7 +308,9 @@ extension UserStore {
         guard state.key == key else { return .loading }
         let confirmed = state.record != nil && state.recordConfirmed
         guard state.finished else { return confirmed ? .ready : .loading }
-        if state.readable || confirmed { return .ready }
+        if confirmed { return .ready }
+        // An answer from this phone's cache is not priced or signed from: wait for the server.
+        if state.readable { return state.answeredFromCache ? .loading : .ready }
         return .failed
     }
 
@@ -268,6 +326,12 @@ extension UserStore {
 
     /// The key of the people a roster overlay priced: the organisation, the viewer (the read plan follows them) and every
     /// id of every person, lower case and sorted. A snapshot with the same key is the same set of people.
+    /// The organisation and viewer part of `rosterPaySubjectsKey`: profiles read for this scope may be laid over the
+    /// people still present while a changed set of people is read.
+    static func rosterPayScopeKey(organizationId: String, viewerId: String?) -> String {
+        [organizationId, viewerId?.lowercased() ?? ""].joined(separator: "|")
+    }
+
     static func rosterPaySubjectsKey(_ users: [AppUser], organizationId: String, viewerId: String?) -> String {
         let people = users
             .map { ([$0.id] + $0.formerUserIds).map { $0.lowercased() }.sorted().joined(separator: ",") }
@@ -278,13 +342,22 @@ extension UserStore {
 
     /// A new roster snapshot: with a good overlay of the same people, laid over from it at once and ready (its failed
     /// people stay failed); otherwise as given and loading until its overlay answers.
+    /// When the people changed but the organisation and viewer did not, the last good profiles are laid over the people
+    /// still present (never stripped rows for them) while the state stays loading.
     static func rosterPayAfterSnapshot(
         _ users: [AppUser],
         cache: RosterPayProfileCache?,
-        key: String
+        key: String,
+        scope: String? = nil
     ) -> (users: [AppUser], load: PayOverlayLoad, failedIds: Set<String>) {
-        guard let cache, cache.key == key else { return (users, .loading, []) }
-        return (FirebaseBackend.layingRosterPayProfiles(users, profiles: cache.profiles), .ready, cache.failedIds)
+        guard let cache else { return (users, .loading, []) }
+        if cache.key == key {
+            return (FirebaseBackend.layingRosterPayProfiles(users, profiles: cache.profiles), .ready, cache.failedIds)
+        }
+        if let scope, cache.scope == scope {
+            return (FirebaseBackend.layingRosterPayProfiles(users, profiles: cache.profiles), .loading, [])
+        }
+        return (users, .loading, [])
     }
 
     /// An overlay answer for `raw`. Server answers become the new last good overlay; a person whose read failed now but
@@ -295,7 +368,8 @@ extension UserStore {
         _ raw: [AppUser],
         result: RosterPayOverlayResult,
         cache: RosterPayProfileCache?,
-        key: String
+        key: String,
+        scope: String = ""
     ) -> (users: [AppUser], cache: RosterPayProfileCache?, failedIds: Set<String>) {
         let good = cache?.key == key ? cache : nil
         if result.fromCache {
@@ -316,8 +390,15 @@ extension UserStore {
                 failed.remove(id)
             }
         }
-        let next = RosterPayProfileCache(key: key, profiles: profiles, failedIds: failed)
+        let next = RosterPayProfileCache(key: key, profiles: profiles, failedIds: failed, scope: scope)
         return (FirebaseBackend.layingRosterPayProfiles(raw, profiles: profiles), next, failed)
+    }
+
+    /// The roster's state after an answer: failed when nobody's pay could be read (an all-or-nothing `.all` read that
+    /// failed), never ready; otherwise ready, with the failed people blocked one by one.
+    static func rosterPayLoadAfterResult(_ raw: [AppUser], failedIds: Set<String>) -> PayOverlayLoad {
+        guard !raw.isEmpty else { return .ready }
+        return raw.allSatisfy({ failedIds.contains($0.id.lowercased()) }) ? .failed : .ready
     }
 
     /// The roster rows as the users documents hold them: a row still showing pay this store laid over (`laid`: per id,
@@ -428,6 +509,7 @@ extension UserStore {
             }
             var reads: [(id: String, read: Bool, data: [String: Any]?)] = []
             var ownOffline = false
+            var ownFromCache = false
             for id in [user.id] + user.formerUserIds {
                 // Own id: the server, else this phone's copy only when offline. Former ids: the server only.
                 let answer = await reader.readPayProfile(
@@ -435,7 +517,10 @@ extension UserStore {
                     subjectId: id,
                     cacheWhenOffline: id == user.id
                 )
-                if id == user.id { ownOffline = answer.offline }
+                if id == user.id {
+                    ownOffline = answer.offline
+                    ownFromCache = answer.read && answer.offline
+                }
                 reads.append((id: id, read: answer.read, data: answer.data))
                 if answer.data != nil { break }
             }
@@ -449,14 +534,17 @@ extension UserStore {
                 previous: self.ownPayOverlay,
                 record: result.record,
                 readable: result.readable,
-                offline: ownOffline
+                offline: ownOffline,
+                fromCache: ownFromCache
             )
             self.publishPayOverlayReadiness()
-            // Not read: try again a few times; the next foreground tries again too.
-            if !result.readable, attempt < 3 {
+            // Not read, or only from this phone's copy: try again a few times; the next foreground or the phone coming
+            // back online tries again too.
+            if !result.readable || ownFromCache, attempt < 3 {
                 Task { @MainActor [weak self] in
                     try? await Task.sleep(nanoseconds: UserStore.payOverlayRetryDelayNanoseconds)
-                    guard let self, generation == self.ownPayOverlayGeneration, !self.ownPayOverlay.readable else { return }
+                    guard let self, generation == self.ownPayOverlayGeneration,
+                          !self.ownPayOverlay.readable || self.ownPayOverlay.answeredFromCache else { return }
                     self.scheduleOwnPayOverlay(force: true, attempt: attempt + 1)
                 }
             }
@@ -466,9 +554,11 @@ extension UserStore {
         }
     }
 
-    /// The app came back to the foreground: a failed own read is tried again.
+    /// The app came back to the foreground (or online): a failed own read, or one answered only from this phone's
+    /// cache, is tried again.
     func retryOwnPayOverlayIfFailed() {
-        guard SecuritySwitchContext.privatePay, ownPayOverlay.finished, !ownPayOverlay.readable else { return }
+        guard SecuritySwitchContext.privatePay, ownPayOverlay.finished,
+              !ownPayOverlay.readable || ownPayOverlay.answeredFromCache else { return }
         scheduleOwnPayOverlay(force: true)
     }
 
@@ -493,10 +583,19 @@ extension UserStore {
             : Self.ownPayLoad(ownPayOverlay, key: ownPayCurrentKey)
         let roster: PayOverlayLoad = SecuritySwitchContext.privatePay ? rosterPayOverlayLoad : .ready
         let failed: Set<String> = SecuritySwitchContext.privatePay ? rosterPayFailedIds : []
+        let names = organizationUsers
+            .filter { failed.contains($0.id.lowercased()) }
+            .map { $0.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? $0.email : $0.fullName }
+            .sorted()
+        let fromCache = SecuritySwitchContext.privatePay && rosterPayFromCache
         guard own != PrivatePayOverlayReadiness.own
             || roster != PrivatePayOverlayReadiness.roster
-            || failed != PrivatePayOverlayReadiness.failedPersonIds else { return }
-        PrivatePayOverlayReadiness.update(own: own, roster: roster, failedPersonIds: failed)
+            || failed != PrivatePayOverlayReadiness.failedPersonIds
+            || names != PrivatePayOverlayReadiness.failedPersonNames
+            || fromCache != PrivatePayOverlayReadiness.rosterFromCache else { return }
+        PrivatePayOverlayReadiness.update(
+            own: own, roster: roster, failedPersonIds: failed, failedPersonNames: names, rosterFromCache: fromCache
+        )
         // Pay screens compute their block message in `body`: redraw them when it changes.
         objectWillChange.send()
     }
