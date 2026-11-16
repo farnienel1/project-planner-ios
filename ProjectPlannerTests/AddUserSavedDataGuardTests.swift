@@ -68,7 +68,7 @@ final class AddUserSavedDataGuardTests: XCTestCase {
         ("Project Planner/Views/AddUserView.swift", ".onChange(of: selectedLineManagerUserIds) { _, newIds in", "9bab5b123f134e7b7fb07750e10f3f244a02db4417dcf7dc414333cbe82bdac3"),
         ("Project Planner/Views/AddUserView.swift", ".onChange(of: vatNumber) { _, newValue in", "4daef6ac20d090c5836de80d90c7ec99c4fd318d7cc3b5b9b6fa7eeccf1b3379"),
         ("Project Planner/Views/AddUserView.swift", ".onChange(of: utrNumber) { _, newValue in", "8afb250c477bd0f7c77cc43adfdb2ea6ef1fa5742986d583dda31625a679fdb2"),
-        ("Project Planner/FirebaseBackend.swift", "func createUserInvitation(email: String,", "032dd80a8e5ca27aae0723b01a598e8c5e29e76aab9b2221e2c6cbf7cf2acb9b"),
+        ("Project Planner/FirebaseBackend.swift", "func createUserInvitation(email: String,", "8d22c48b44422fa754da2cc8f959fb6bb5fc47e5b2920bcb0da390c1c67ad6b0"), // iOS scan fixes: the set-up email names the invitation's organisation (sendEmail `invite_setup`)
         ("Project Planner/FirebaseBackend.swift", "static func inviteUserRateFields(dayRate: Double?) -> InviteUserRateFields? {", "d048aab66526037ceaf3e3e6e90702c98ffc043e60b942f63a1bd7d19d1feffa"),
         ("Project Planner/Core/UserStore.swift", "func inviteUser(firstName: String,", "890f7b91c366ffaef2a4ddfb45ec24d69d3d478cd3e5f2ab72728ee5cbd41793"),
         ("Project Planner/Core/AddUserPermissionSeeding.swift", "static func select(", "18c09df467b70a01b69c82b87b9025dff0b3e6ab8864ed2e6af52d0a1322dc23"),

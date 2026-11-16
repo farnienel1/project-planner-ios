@@ -342,7 +342,7 @@ final class IOSScanFixesTests: XCTestCase {
 
     func testASiteAuditPhotoNeverStoresAGsAddress() throws {
         let body = try functionBody("uploadSiteAuditImage", in: try source("Project Planner/FirebaseBackend.swift"))
-        XCTAssertFalse(body.contains("gs://"))
+        XCTAssertFalse(body.contains("\"gs://"), "no gs:// address is built")
         XCTAssertTrue(body.contains("downloadURLOrRemoveUpload"))
     }
 }

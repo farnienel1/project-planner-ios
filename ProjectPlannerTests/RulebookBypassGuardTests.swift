@@ -92,7 +92,7 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/OperativeQualificationsEditorView.swift": 4,
             "Views/OrganisationSettingsHubView.swift": 1,
             "Views/OrganisationWorkingHoursView.swift": 2,
-            "Views/ProjectDetailView.swift": 6,
+            "Views/ProjectDetailView.swift": 3,
             "Views/ProjectsView.swift": 1,
             "Views/WholesalersRevampViews.swift": 1,
             "Views/WorksDashboardCard.swift": 2,
