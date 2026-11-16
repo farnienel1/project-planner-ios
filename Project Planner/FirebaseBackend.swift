@@ -11270,10 +11270,12 @@ extension FirebaseBackend {
     /// `timesheetRevisionCreateFields` + `revisionCreatedAt` (server time) + write metadata. Nothing else is written.
     /// Returns `created`, `exists`, `not-exported` or `missing`, with the target id when known.
     /// `liveLines`: the period's live payroll lines (owner decision finding 6 = a: labour decisions are kept only for
-    /// bookings unchanged since the version it corrects).
+    /// bookings unchanged since the version it corrects). `writerIsSubject`: the person's own revision copies
+    /// `payrollLineReviews` exactly (review of web #344, M1; the rules require it).
     func createTimesheetRevision(
         organizationId: String,
         previousDocumentId: String,
+        writerIsSubject: Bool,
         liveLines: [[String: Any]]
     ) async throws -> (status: String, documentId: String?, revision: Int?) {
         let writerId = Auth.auth().currentUser?.uid ?? ""
@@ -11284,6 +11286,7 @@ extension FirebaseBackend {
             settings: settings,
             previousRef: previousRef,
             writerId: writerId,
+            writerIsSubject: writerIsSubject,
             liveLines: RulebookJSONBox(object: ["lines": liveLines])
         )
         let parts = answer.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
@@ -11300,6 +11303,7 @@ extension FirebaseBackend {
         settings: CollectionReference,
         previousRef: DocumentReference,
         writerId: String,
+        writerIsSubject: Bool,
         liveLines: RulebookJSONBox
     ) async throws -> String {
         let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
@@ -11315,6 +11319,7 @@ extension FirebaseBackend {
                 previousDocumentId: previous.documentID,
                 previousData: data,
                 writerUserId: writerId,
+                writerIsSubject: writerIsSubject,
                 liveLines: liveLines.object["lines"] as? [[String: Any]] ?? []
             ) else { return "not-exported||" }
             let targetRef = settings.document(made.documentId)

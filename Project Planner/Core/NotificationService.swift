@@ -1264,9 +1264,12 @@ class NotificationService: ObservableObject {
     /// Sent when a user signs their timesheet (RULEBOOK §13): one row per `timesheetSubmittedRecipients(subject,
     /// roster)` — the subject's active line managers, else the active admins; never the subject; nobody when the
     /// sheet is self-signed. Document ids come from `timesheetNotificationDedupeKey` (organisation-zone period start).
+    /// RULEBOOK 1.55.0: `revision` is the signed version's REV number (nil / 0 the original), so signing REV N
+    /// writes its own row instead of hitting the original's de-dupe key.
     func notifyTimesheetSubmitted(
         signedByUser: AppUser,
-        weekStart: Date
+        weekStart: Date,
+        revision: Int? = nil
     ) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         if let userStore, userStore.organizationUsers.isEmpty {
@@ -1289,7 +1292,8 @@ class NotificationService: ObservableObject {
                 subjectId: signedByUser.id,
                 periodStartDayKey: periodStartDayKey,
                 timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-                recipientId: managerId
+                recipientId: managerId,
+                revision: revision
             ) else { continue }
             let notification = AppNotification(
                 id: syntheticNotificationId(from: key),
@@ -1343,11 +1347,13 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// Sent when line manager signs off a timesheet.
+    /// Sent when line manager signs off a timesheet. RULEBOOK 1.55.0: `revision` is the counter-signed version's REV
+    /// number (nil / 0 the original), so the person is told when REV N is signed too.
     func notifyTimesheetSignedByManager(
         targetUserId: String,
         signedByName: String,
-        weekStart: Date
+        weekStart: Date,
+        revision: Int? = nil
     ) async {
         // `timesheetSignedRecipients`: the subject's account, unless they are the signer (the signed-in user).
         guard let targetId = CanonicalBusinessEngine.timesheetSignedRecipients(
@@ -1360,7 +1366,8 @@ class NotificationService: ObservableObject {
             type: AppNotification.NotificationType.timesheetSignedByManager.rawValue,
             subjectId: targetId,
             periodStartDayKey: OrganizationRulebookContext.dayKey(weekStart),
-            timeZone: OrganizationRulebookContext.timeZoneIdentifier
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            revision: revision
         ) else { return }
         let dedupeId = syntheticNotificationId(from: key)
         let notification = AppNotification(
@@ -1407,7 +1414,10 @@ class NotificationService: ObservableObject {
                 createdAt: Date(),
                 requiresPermission: nil,
                 deepLinkUserId: subject.id,
-                deepLinkWeekStart: weekDay
+                deepLinkWeekStart: weekDay,
+                // Web `timesheetRevisionToSignLinkFields`: deepLinkUserId, deepLinkWeekStart and the period start
+                // as an organisation-zone day key.
+                dayKey: OrganizationRulebookContext.dayKey(weekStart)
             )
             await saveNotification(notification)
         }

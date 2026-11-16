@@ -311,6 +311,40 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertEqual((reviews["op-b1"] as? [String: Any])?["decision"] as? String, "edited")
     }
 
+    /// Review of web #344 (M1): the person's own revision ("Review and sign again") copies `payrollLineReviews` exactly,
+    /// changed bookings included, so a line manager's decision can never be dropped by the person.
+    func testPersonsOwnRevisionCopiesLabourDecisionsExactly() throws {
+        var previous = signedSheet(exported: true)
+        previous["weeklyReportOverride"] = [
+            "approvedAt": timestamp("2026-11-16T10:00:00Z"),
+            "lines": [["id": "op-b1", "bookingFingerprint": "FP1", "amount": 100, "paidHours": 8, "decision": "edited"],
+                      ["id": "op-b2", "bookingFingerprint": "FP2", "amount": 50, "paidHours": 4, "decision": "approved"]],
+        ] as [String: Any]
+        previous["payrollLineReviews"] = ["op-b1": ["decision": "edited", "revisedAmount": 90], "op-b2": ["decision": "declined"]]
+        let live: [[String: Any]] = [["id": "op-b1", "bookingFingerprint": "FP1", "amount": 100, "paidHours": 8],
+                                     ["id": "op-b2", "bookingFingerprint": "FPX", "amount": 50, "paidHours": 4]]
+        let made = try XCTUnwrap(CanonicalBusinessEngine.timesheetRevisionCreateFields(
+            previousDocumentId: original, previousData: previous, writerUserId: "u1", writerIsSubject: true, liveLines: live))
+        let reviews = try XCTUnwrap(made.fields["payrollLineReviews"] as? [String: Any])
+        XCTAssertEqual(Set(reviews.keys), ["op-b1", "op-b2"])
+        XCTAssertEqual((reviews["op-b2"] as? [String: Any])?["decision"] as? String, "declined")
+    }
+
+    /// M2: a revision's notices get their own de-dupe key (`…|rev{N}`), so the line manager is told REV N needs
+    /// signing and the person is told REV N is signed; the original's key is unchanged.
+    func testRevisionNoticesHaveTheirOwnDedupeKeys() {
+        func key(_ type: String, _ revision: Int?) -> String? {
+            CanonicalBusinessEngine.timesheetNotificationDedupeKey(
+                type: type, subjectId: "op-1", periodStartDayKey: "2026-07-02", timeZone: "Europe/London",
+                recipientId: type == "timesheet_pending_manager_signoff" ? "lm-1" : nil, revision: revision)
+        }
+        XCTAssertEqual(key("timesheet_signed_by_manager", nil), "timesheetSigned|op-1|1782946800")
+        XCTAssertEqual(key("timesheet_signed_by_manager", 0), "timesheetSigned|op-1|1782946800")
+        XCTAssertEqual(key("timesheet_signed_by_manager", 2), "timesheetSigned|op-1|1782946800|rev2")
+        XCTAssertEqual(key("timesheet_pending_manager_signoff", 1), "timesheetPending|op-1|lm-1|1782946800|rev1")
+        XCTAssertNotEqual(key("timesheet_pending_manager_signoff", 1), key("timesheet_pending_manager_signoff", nil))
+    }
+
     func testRevisionEntriesAreFrozenForThePerson() {
         let extras = CanonicalBusinessEngine.timesheetOwnerCanAddExtras(managerSignedAt: nil, approvedAt: nil, selfSigned: false, revision: 1)
         XCTAssertFalse(extras.allowed)

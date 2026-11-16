@@ -1072,6 +1072,7 @@ enum TimesheetDraftStore {
             let result = try await firebaseBackend.createTimesheetRevision(
                 organizationId: organizationId,
                 previousDocumentId: latest.documentId,
+                writerIsSubject: writerIsSubject,
                 liveLines: liveLines.map(\.rulebookTotalsJSON)
             )
             switch result.status {
@@ -4040,10 +4041,12 @@ private struct MyTimesheetView: View {
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
         let weekStart = week.start
+        let revision = draft.revision
         Task {
             await notificationService.notifyTimesheetSubmitted(
                 signedByUser: current,
-                weekStart: weekStart
+                weekStart: weekStart,
+                revision: revision
             )
         }
     }
@@ -7132,11 +7135,13 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 let counterSignSave = onCounterSignSave()
                 let signer = draft.managerSignedByName ?? "Line manager"
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
+                let revision = draft.revision
                 Task {
                     await notificationService.notifyTimesheetSignedByManager(
                         targetUserId: operative.id,
                         signedByName: signer,
-                        weekStart: week.start
+                        weekStart: week.start,
+                        revision: revision
                     )
                     // `lineManagerPeerRecipients(operative, signer, roster)` picks the other line managers.
                     await notificationService.notifyLineManagerPeerAction(

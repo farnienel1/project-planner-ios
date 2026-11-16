@@ -361,13 +361,17 @@ extension CanonicalBusinessEngine {
         previousDocumentId: String,
         previousData: [String: Any],
         writerUserId: String,
+        writerIsSubject: Bool = false,
         liveLines: [[String: Any]]? = nil
     ) -> (documentId: String, revision: Int, fields: [String: Any])? {
+        // Review of web #344 (M1): the sheet's own person ("Review and sign again") copies `payrollLineReviews`
+        // exactly, so they can never drop a line manager's decision (the security rules require the copy).
         // Owner decision 16 Nov (finding 6 = a): `liveLines` (id, `bookingFingerprint`, amount, paid hours) — the labour
         // decisions are kept only for bookings unchanged since (`timesheetRevisionLabourReviews`); none → all dropped.
         var input: [String: Any] = [
             "previous": ["documentId": previousDocumentId, "data": FirebaseBackend.firestoreJSON(previousData)],
             "writerUserId": writerUserId,
+            "writerIsSubject": writerIsSubject,
         ]
         if let liveLines { input["liveLines"] = liveLines }
         guard let row = callJSON("timesheetRevisionCreateFields", arguments: [input]) as? [String: Any],
@@ -377,7 +381,11 @@ extension CanonicalBusinessEngine {
         let copied = Set(timesheetRevisionCopiedFields)
         var fields: [String: Any] = [:]
         for (key, value) in scriptFields {
-            if key == "payrollLineReviews", let kept = value as? [String: Any], let stored = previousData[key] as? [String: Any] {
+            if key == "payrollLineReviews", writerIsSubject {
+                // The person's own revision: the stored map exactly as stored.
+                guard let stored = previousData[key] else { continue }
+                fields[key] = stored
+            } else if key == "payrollLineReviews", let kept = value as? [String: Any], let stored = previousData[key] as? [String: Any] {
                 // The labour decisions the script kept: each written exactly as stored (a part of the stored map).
                 fields[key] = stored.filter { kept[$0.key] != nil }
             } else if copied.contains(key) {
