@@ -64,6 +64,8 @@ struct RosterPayProfileCache {
     var failedIds: Set<String> = []
     /// Organisation and viewer the profiles were read for (`UserStore.rosterPayScopeKey`).
     var scope: String = ""
+    /// The people (user ids, lower case) this overlay read — covered unless in `failedIds`.
+    var coveredIds: Set<String> = []
 }
 
 /// The six pay fields of a roster row (`withPayFields`), comparable, so pay this store laid over can be told apart from
@@ -481,6 +483,13 @@ extension UserStore {
             if let good {
                 return (FirebaseBackend.layingRosterPayProfiles(raw, profiles: good.profiles), good, good.failedIds)
             }
+            // Web #342: the same organisation and viewer, other people (someone joined): the last good profiles stay
+            // laid over; only the people that overlay did not cover are failed (the reports refuse only for them).
+            if let cache, !scope.isEmpty, cache.scope == scope {
+                let uncovered = Set(raw.map { $0.id.lowercased() }.filter { !cache.coveredIds.contains($0) })
+                    .union(cache.failedIds.intersection(raw.map { $0.id.lowercased() }))
+                return (FirebaseBackend.layingRosterPayProfiles(raw, profiles: cache.profiles), nil, uncovered)
+            }
             return (result.users, nil, Set(raw.map { $0.id.lowercased() }))
         }
         var profiles = result.profiles
@@ -495,7 +504,9 @@ extension UserStore {
                 failed.remove(id)
             }
         }
-        let next = RosterPayProfileCache(key: key, profiles: profiles, failedIds: failed, scope: scope)
+        let next = RosterPayProfileCache(
+            key: key, profiles: profiles, failedIds: failed, scope: scope, coveredIds: Set(raw.map { $0.id.lowercased() })
+        )
         return (FirebaseBackend.layingRosterPayProfiles(raw, profiles: profiles), next, failed)
     }
 
@@ -670,6 +681,8 @@ extension UserStore {
     /// `platformConfig/app` answered for the first time: the decisions held until then run now. When the first answer
     /// also changed the switches, `securitySwitchesDidChange` starts the overlays, so they start once (review of #240).
     func securitySwitchesFirstRead(switchesChanged: Bool) {
+        // The switches settled: screens waiting on them (the Payrun Snapshot) recompute even when no readiness changed.
+        bumpPayOverlayVersion()
         if !switchesChanged {
             scheduleOwnPayOverlay(force: true)
             schedulePrivatePayOverlay()

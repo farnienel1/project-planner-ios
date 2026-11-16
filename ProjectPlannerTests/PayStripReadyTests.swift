@@ -545,6 +545,35 @@ final class PayStripReadyTests: XCTestCase {
         )
     }
 
+    func testOfflineAfterSomeoneJoinedOnlyTheNewPersonIsUncovered() {
+        let before = [stripped(id: "OP-1"), stripped(id: "OP-2")]
+        let scope = UserStore.rosterPayScopeKey(organizationId: "ORG", viewerId: "ADMIN")
+        let firstKey = UserStore.rosterPaySubjectsKey(before, organizationId: "ORG", viewerId: "ADMIN")
+        let server = RosterPayOverlayResult(users: before, profiles: ["OP-1": payeProfile("OP-1")], failedUserIds: [])
+        let good = UserStore.rosterPayAfterResult(before, result: server, cache: nil, key: firstKey, scope: scope).cache
+        XCTAssertEqual(good?.coveredIds, ["op-1", "op-2"])
+
+        // OP-3 joined; the phone is offline, so the read answers from the cache.
+        let after = before + [stripped(id: "OP-3")]
+        let key = UserStore.rosterPaySubjectsKey(after, organizationId: "ORG", viewerId: "ADMIN")
+        let offline = RosterPayOverlayResult(users: after, profiles: [:], failedUserIds: [], fromCache: true)
+        let merged = UserStore.rosterPayAfterResult(after, result: offline, cache: good, key: key, scope: scope)
+        XCTAssertEqual(merged.failedIds, ["op-3"], "only the person the last good overlay did not cover")
+        XCTAssertNil(merged.cache, "the partial cache answer is never kept as last good")
+        XCTAssertEqual(merged.users.first { $0.id == "OP-1" }?.employmentType, .paye, "the last good pay stays laid over")
+        func gate(_ people: [AppUser]) -> PayOverlayLoad {
+            PrivatePayOverlayReadiness.reportGate(
+                people: people, switchesKnown: true, privatePay: true, roster: .ready, failedPersonIds: merged.failedIds
+            ).status
+        }
+        XCTAssertEqual(gate([before[0]]), .ready, "the report runs when the priced people are covered")
+        XCTAssertEqual(gate([before[0], after[2]]), .failed, "and refuses only for an uncovered priced person")
+        // Another viewer: nothing of the last overlay is reused.
+        let otherScope = UserStore.rosterPayScopeKey(organizationId: "ORG", viewerId: "OTHER")
+        let other = UserStore.rosterPayAfterResult(after, result: offline, cache: good, key: key, scope: otherScope)
+        XCTAssertEqual(other.failedIds.count, 3)
+    }
+
     func testPricedPeopleAreThoseOfTheBookingsWeeksAndSheets() {
         let a = stripped(id: "OP-A")
         let b = stripped(id: "OP-B")

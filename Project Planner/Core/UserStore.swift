@@ -56,6 +56,10 @@ class UserStore: ObservableObject {
     func bumpPayOverlayVersion() { payOverlayVersion &+= 1 }
     /// Re-reads failed or cache-answered pay profiles when the phone comes back online.
     private var onlineCancellable: AnyCancellable?
+    /// Starts the pay overlays when the open organisation becomes known (review of #240: `.loading` with no organisation).
+    private var organizationCancellable: AnyCancellable?
+    /// True while a roster pay-profile read is running (the foreground retry never starts a second one).
+    private var rosterPayReadInFlight = false
     /// The pay this store laid over each roster row (raw → shown), so the next overlay starts from the raw rows.
     private var rosterPayLaid: [String: (raw: RosterPayFields, shown: RosterPayFields)] = [:]
     /// Tests: the organisation and reader the own-pay overlay uses instead of `firebaseBackend`.
@@ -170,6 +174,7 @@ class UserStore: ObservableObject {
         privatePayOverlayGeneration &+= 1
         guard SecuritySwitchContext.privatePay, let firebaseBackend, !organizationUsers.isEmpty,
               let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
+            rosterPayReadInFlight = false
             // Nothing to read: no roster pay is priced from pay profiles — unless `privatePay` is on with people listed
             // and the organisation not known yet: then their pay is still loading, never ready (review of #240).
             rosterPayOverlayLoad = SecuritySwitchContext.privatePay && !organizationUsers.isEmpty ? .loading : .ready
@@ -194,9 +199,11 @@ class UserStore: ObservableObject {
         rosterPayFailedIds = applied.failedIds
         publishRosterPayRows(applied.users, raw: raw)
         publishPayOverlayReadiness()
+        rosterPayReadInFlight = true
         Task { @MainActor [weak self] in
             let result = await firebaseBackend.overlayRosterPayIfPrivateResult(raw)
             guard let self, generation == self.privatePayOverlayGeneration else { return }
+            self.rosterPayReadInFlight = false
             let merged = Self.rosterPayAfterResult(
                 raw, result: result, cache: self.rosterPayProfileCache, key: key, scope: scope
             )
@@ -245,12 +252,14 @@ class UserStore: ObservableObject {
 
     /// The app came back to the foreground: a failed roster overlay is tried again.
     func retryRosterPayOverlayIfFailed() {
-        guard SecuritySwitchContext.privatePay, !rosterPayFailedIds.isEmpty || rosterPayFromCache else { return }
+        let stuckLoading = rosterPayOverlayLoad == .loading && !rosterPayReadInFlight
+        guard SecuritySwitchContext.privatePay, !rosterPayFailedIds.isEmpty || rosterPayFromCache || stuckLoading else { return }
         schedulePrivatePayOverlay()
     }
 
     /// A switch changed: on → lay the pay profiles over; off → read the roster again, so no overlaid value stays.
     private func securitySwitchesChanged() {
+        bumpPayOverlayVersion()
         scheduleOwnPayOverlay(force: true)
         if SecuritySwitchContext.privatePay {
             schedulePrivatePayOverlay()
@@ -283,6 +292,22 @@ class UserStore: ObservableObject {
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         self.firebaseBackend = firebaseBackend
+        organizationCancellable = firebaseBackend.$currentOrganization
+            .map { $0?.firestoreDocumentId ?? "" }
+            .removeDuplicates()
+            .filter { !$0.isEmpty }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in self?.organizationDidLoadForPay() }
+            }
+    }
+
+    /// The open organisation is known: the own read and a roster overlay left loading with no organisation start now.
+    private func organizationDidLoadForPay() {
+        scheduleOwnPayOverlay()
+        if SecuritySwitchContext.privatePay, rosterPayOverlayLoad == .loading, !rosterPayReadInFlight {
+            schedulePrivatePayOverlay()
+        }
     }
     
     func setSmartCache(_ smartCache: SmartCacheService) {

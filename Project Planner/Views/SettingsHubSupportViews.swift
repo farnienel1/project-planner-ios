@@ -237,8 +237,13 @@ struct SettingsProfileDetailView: View {
                     payShownUser = nil
                     return
                 }
-                let profile = await firebaseBackend.loadPayProfile(subjectId: me.id)
-                payShownUser = me.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
+                // Only a profile that came back is shown; a failed read or no document (a profile filed under a former
+                // id) falls back to the overlaid record (`currentUserWithPay`), never the stripped document.
+                if let profile = await firebaseBackend.loadPayProfile(subjectId: me.id) {
+                    payShownUser = me.payShown(with: profile, privatePay: SecuritySwitchContext.privatePay)
+                } else {
+                    payShownUser = nil
+                }
             }
     }
 
