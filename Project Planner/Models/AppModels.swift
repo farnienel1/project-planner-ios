@@ -381,7 +381,7 @@ enum RoleTestingPreset: String, CaseIterable, Identifiable {
         case .manager:
             return "Typical manager: scheduling, clients, qualifications, no user administration."
         case .operative:
-            return "Limited operative home, projects/small works, schedule, holiday — no admin areas."
+            return "Limited operative home, projects/small works, schedule, annual leave — no admin areas."
         }
     }
 }

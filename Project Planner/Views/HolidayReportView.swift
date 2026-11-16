@@ -39,7 +39,7 @@ struct HolidayReportView: View {
                 }
             }
             .background(PPColor.page.ignoresSafeArea())
-            .navigationTitle("Holiday Report")
+            .navigationTitle("Annual leave report")
             .navigationBarTitleDisplayMode(.inline)
             .ppNavyNavigationBar()
             .toolbar {
@@ -57,7 +57,7 @@ struct HolidayReportView: View {
     }
 
     private var header: some View {
-        PPNavyPageTitle(eyebrow: "Holiday Report", title: user.fullName, subtitle: user.email)
+        PPNavyPageTitle(eyebrow: "Annual leave report", title: user.fullName, subtitle: user.email)
     }
 
     private var joinDate: Date {

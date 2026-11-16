@@ -381,7 +381,7 @@ struct TasksDetailView: View {
 
     private var holidayBannersSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Holiday approvals")
+            Text("Annual leave approvals")
                 .font(.system(.title3, design: .rounded))
                 .fontWeight(.bold)
                 .foregroundStyle(.primary)
@@ -900,7 +900,7 @@ private struct HolidayApprovalTaskCard: View {
             HStack {
                 Image(systemName: isCancellationRequest ? "xmark.circle.fill" : "sun.max.fill")
                     .foregroundColor(isCancellationRequest ? .red : .orange)
-                Text(isCancellationRequest ? "Holiday cancellation request" : "Holiday request")
+                Text(isCancellationRequest ? "Annual leave cancellation request" : "Annual leave request")
                     .font(.headline)
                 Spacer()
                 Text("Pending")
