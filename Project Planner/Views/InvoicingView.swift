@@ -3513,7 +3513,8 @@ private struct MyTimesheetView: View {
     /// Adds, replaces or removes one late extra and saves (the signed entries are never touched).
     private func applyLateExtraChange(_ change: @escaping (inout [TimesheetLateExtra]) -> Void) async -> String? {
         guard lateExtrasPermission.allowed else { return lateExtrasPermission.message ?? CanonicalBusinessEngine.timesheetExportedExtrasMessage }
-        return await applyEntryChange { sheet in
+        // Merge with main (1.54): saved without a feedback sound, as on main (late extras are a sound follow-up).
+        return await applyEntryChangeSaving(clearingSignatures: false) { sheet in
             var late = sheet.lateExtras ?? []
             change(&late)
             sheet.lateExtras = late
@@ -6271,7 +6272,7 @@ private struct OperativeTimesheetReviewView: View {
             rebuildSnapshot: rebuildSnapshotOnSave
         ) {
             saveErrorMessage = refusal
-            return
+            return nil
         }
         // The agreed snapshot is never frozen from inputs that did not load (`PayInputsLoad`).
         if payInputsBlockMessage == nil || draft.weeklyReportOverride != nil {
