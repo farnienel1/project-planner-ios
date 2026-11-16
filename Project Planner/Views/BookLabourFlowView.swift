@@ -405,7 +405,13 @@ struct BookLabourFlowView: View {
 
     private var pickPersonView: some View {
         Group {
-            if candidates.isEmpty && !viewerScopeListsUnbookedLabour {
+            if JobAccessContext.viewerPending {
+                // Review of #242: the signed-in person's profile has not loaded, so their team is not known yet — a
+                // loading state, never "Everyone is booked" or "no access".
+                ProgressView("Loading your team…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+            } else if candidates.isEmpty && !viewerScopeListsUnbookedLabour {
                 // RULEBOOK 1.31.0 §5 (web #262 `bookLabourListPhase` `noAccess`): a viewer whose warning scope cannot
                 // list unbooked labour is told so — never "Everyone is booked".
                 ContentUnavailableView(

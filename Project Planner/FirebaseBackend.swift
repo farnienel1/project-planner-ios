@@ -1222,13 +1222,20 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
         try RulebookRosterLists.requireInviteLevel(invitationData)
         try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
-        await sendPasswordResetVerificationEmail(email: invitationEmail, invitationId: invitationId, organizationId: organizationId)
+        if let problem = await sendPasswordResetVerificationEmail(email: invitationEmail, invitationId: invitationId, organizationId: organizationId) {
+            throw NSError(
+                domain: "FirebaseBackend",
+                code: 502,
+                userInfo: [NSLocalizedDescriptionKey: "The password reset email was not sent: \(problem)"]
+            )
+        }
     }
     
     /// Sends the password reset email with a single link (no code): the person clicks it and sets a new password on the
     /// website. Through the authenticated `sendEmail` function, template `password_reset_link` (web
     /// docs/EMAIL_FUNCTION.md): the function renders the body and sends it only to the invitation's own email.
-    private func sendPasswordResetVerificationEmail(email: String, invitationId: String, organizationId: String) async {
+    /// Returns nil when sent, else why not (shown by Manage Users, never a silent "sent").
+    private func sendPasswordResetVerificationEmail(email: String, invitationId: String, organizationId: String) async -> String? {
         do {
             let result = try await AppEmailClient.send(
                 template: .passwordResetLink,
@@ -1237,8 +1244,11 @@ class FirebaseBackend: ObservableObject {
                 data: AppEmailPayload.invitationData(invitationId: invitationId)
             )
             print("🔥🔥🔥 DEBUG: password reset link email sent (\(result.sentCount))")
+            return nil
         } catch {
-            print("🔥🔥🔥 DEBUG: ❌ password reset link email not sent: \(AppEmailClient.message(for: error))")
+            let problem = AppEmailClient.message(for: error)
+            print("🔥🔥🔥 DEBUG: ❌ password reset link email not sent: \(problem)")
+            return problem
         }
     }
     
@@ -7696,15 +7706,17 @@ class FirebaseBackend: ObservableObject {
     /// The set-up email for an invitation, through the authenticated `sendEmail` function, template `invite_setup`
     /// (web docs/EMAIL_FUNCTION.md): the function renders the welcome pack and sends it only to the email stored on
     /// `invitations/{invitationId}` of `organizationId` (the open organisation when not given). There is no fallback
-    /// sender: a failed send is reported, and the admin can resend from Manage Users.
-    func sendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String, organizationId: String? = nil) async {
+    /// sender: a failed send is reported, and the admin can resend from Manage Users. Returns nil when sent, else why
+    /// not (Manage Users shows it instead of "sent").
+    @discardableResult
+    func sendInvitationEmail(email: String, firstName: String, surname: String, invitationId: String, organizationId: String? = nil) async -> String? {
         print("🔥🔥🔥 DEBUG: Sending invitation email to: \(email)")
         guard let orgId = Self.openOrganizationIdForWrites(
             requested: organizationId,
             openOrganizationId: currentOrganization?.firestoreDocumentId
         ) else {
             print("🔥🔥🔥 DEBUG: ❌ Invitation email not sent: no organisation is open")
-            return
+            return "no organisation is open"
         }
         do {
             let result = try await AppEmailClient.send(
@@ -7714,9 +7726,12 @@ class FirebaseBackend: ObservableObject {
                 data: AppEmailPayload.invitationData(invitationId: invitationId)
             )
             print("🔥🔥🔥 DEBUG: ✅ Invitation email sent (\(result.sentCount)) to: \(email)")
+            return nil
         } catch {
             // Don't throw: the invitation is still created and the admin can resend it.
-            print("🔥🔥🔥 DEBUG: ❌ Failed to send invitation email to \(email): \(AppEmailClient.message(for: error))")
+            let problem = AppEmailClient.message(for: error)
+            print("🔥🔥🔥 DEBUG: ❌ Failed to send invitation email to \(email): \(problem)")
+            return problem
         }
     }
     
@@ -11942,10 +11957,12 @@ extension FirebaseBackend {
         try await loadDeadlinesState(project: project, organizationId: organizationId).items
     }
 
-    func loadDeadlinesState(project: Project, organizationId: String) async throws -> (items: [DLDeadline], updatedAt: Date?) {
+    /// `storedRows`: the deadlines exactly as stored, read through `parseDeadlineDocument` (by lower-case id) — the base
+    /// a later `saveDeadlineChanges` compares the stored list with, so precision never differs (review of #242).
+    func loadDeadlinesState(project: Project, organizationId: String) async throws -> (items: [DLDeadline], updatedAt: Date?, storedRows: RulebookJSONBox?) {
         let resolved = await resolveOrganizationIdForFirebaseWrites(preferredFallback: organizationId)
             ?? normalizedOrganizationId(organizationId)
-        guard !resolved.isEmpty else { return ([], nil) }
+        guard !resolved.isEmpty else { return ([], nil, nil) }
         let orgId = try await ensureReadableOrganization(resolved)
         let ref = deadlinesStateDocumentRef(organizationId: orgId, project: project)
         let doc: DocumentSnapshot
@@ -11958,78 +11975,154 @@ extension FirebaseBackend {
                 throw error
             }
         }
-        guard let data = doc.data() else { return ([], nil) }
+        guard let data = doc.data() else {
+            return ([], nil, RulebookJSONBox(object: [:]))
+        }
         guard let items = Self.deadlines(fromDocument: ref.documentID, data: data, projectKey: project.documentId) else {
             throw CanonicalWriteUnavailableError(function: "parseDeadlineDocument")
         }
         let updatedAt = (data["updatedAt"] as? Timestamp)?.dateValue()
-        return (items, updatedAt)
+        let rows = Self.canonicalDeadlineRows(
+            data["items"] as? [[String: Any]] ?? [],
+            documentId: ref.documentID,
+            projectKey: project.documentId,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier
+        )
+        return (items, updatedAt, rows.map { RulebookJSONBox(object: $0) })
     }
 
-    /// What one save of a job's deadlines did: the list now stored, and the person's edits that were not applied
-    /// because someone else changed or deleted that deadline after it was loaded (shown to the person, never dropped
-    /// silently).
+    /// What one save of a job's deadlines did: the list now stored (`items`, read back through the rulebook reader, so
+    /// it is exactly what a later load gives), the person's edits that were not applied because someone else changed
+    /// or deleted that deadline after it was loaded (shown to the person, never dropped silently), and the stored rows
+    /// to compare the next save with.
     struct DeadlineSaveResult {
         var items: [DLDeadline]
         var notApplied: [DLDeadline]
+        var storedRows: RulebookJSONBox?
     }
 
-    /// Lays one person's deadline changes over the list as stored now (RULEBOOK §1: never rewrite a whole document from
-    /// a possibly stale copy). `base` is the list the person loaded, `next` the list after their change. Only the
-    /// deadlines they added, edited or deleted are applied, each by id; a deadline someone else changed or deleted
-    /// since `base` keeps the stored copy and the person's version is returned in `notApplied`. App write plumbing —
-    /// the deadline fields themselves come from `parseDeadlineDocument` (there is no rulebook writer for the `items`
-    /// array yet; reported to web).
-    static func mergeDeadlineChanges(
-        stored: [DLDeadline],
-        base: [DLDeadline],
-        next: [DLDeadline]
-    ) -> (items: [DLDeadline], notApplied: [DLDeadline], changed: Bool) {
-        let baseById = Dictionary(base.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let nextIds = Set(next.map(\.id))
-        let storedIds = Set(stored.map(\.id))
-        var result = stored
-        var notApplied: [DLDeadline] = []
+    /// The `items` of a deadlines document read through `parseDeadlineDocument`, by lower-case id. Nil when the script
+    /// did not answer. Rows read from the same stored values are equal, whatever the precision of the dates.
+    nonisolated static func canonicalDeadlineRows(
+        _ items: [[String: Any]],
+        documentId: String,
+        projectKey: String,
+        timeZone: String
+    ) -> [String: Any]? {
+        guard let document = CanonicalBusinessEngine.parseDeadlineDocument(
+            documentId: documentId, data: ["items": items], projectId: projectKey, timeZone: timeZone
+        ) else { return nil }
+        var rows: [String: Any] = [:]
+        for row in document.rows("items") {
+            let id = row.id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !id.isEmpty, rows[id] == nil { rows[id] = row.raw }
+        }
+        return rows
+    }
+
+    nonisolated private static func deadlineItemId(_ item: [String: Any]) -> String {
+        ((item["id"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    nonisolated private static func sameRow(_ lhs: Any?, _ rhs: Any?) -> Bool {
+        guard let lhs = lhs as? [String: Any], let rhs = rhs as? [String: Any] else { return lhs == nil && rhs == nil }
+        return NSDictionary(dictionary: lhs).isEqual(NSDictionary(dictionary: rhs))
+    }
+
+    /// Lays one person's deadline changes over the list as stored now (RULEBOOK §1: never rewrite a whole document
+    /// from a possibly stale copy). Every comparison is between rows read by `parseDeadlineDocument`:
+    /// - the person's changes are the items whose row in `nextRaw` differs from `baseRaw` (the list they loaded, both
+    ///   written the same way), plus the ids they added and deleted;
+    /// - a change applies only while the stored row is still the one they loaded (`baseStoredRows`, read from the
+    ///   stored document; else `baseRaw`'s rows). Otherwise the stored item stays and its id is in `notAppliedIds`.
+    /// Untouched stored items are written back exactly as stored (fields this app does not know are kept).
+    /// `baseRaw` nil is an entry an older build queued without the list it loaded: with `legacyAddOnly` only its new
+    /// deadlines are added (the stored list changed since it was queued), otherwise the stored list is its base.
+    /// App write plumbing: there is no rulebook writer for the `items` array yet (reported to web).
+    nonisolated static func mergeDeadlineItemMaps(
+        storedRaw: [[String: Any]],
+        nextRaw: [[String: Any]],
+        baseRaw: [[String: Any]]?,
+        baseStoredRows: [String: Any]?,
+        legacyAddOnly: Bool,
+        documentId: String,
+        projectKey: String,
+        timeZone: String
+    ) -> (items: [[String: Any]], notAppliedIds: [String], changed: Bool)? {
+        guard let storedRows = canonicalDeadlineRows(storedRaw, documentId: documentId, projectKey: projectKey, timeZone: timeZone),
+              let nextRows = canonicalDeadlineRows(nextRaw, documentId: documentId, projectKey: projectKey, timeZone: timeZone)
+        else { return nil }
+        let baseRows: [String: Any]
+        if let baseRaw {
+            guard let rows = canonicalDeadlineRows(baseRaw, documentId: documentId, projectKey: projectKey, timeZone: timeZone) else { return nil }
+            baseRows = rows
+        } else {
+            baseRows = storedRows
+        }
+        let conflictRows = baseStoredRows ?? baseRows
+        var nextById: [String: [String: Any]] = [:]
+        var nextOrder: [String] = []
+        for item in nextRaw {
+            let id = deadlineItemId(item)
+            guard !id.isEmpty, nextById[id] == nil else { continue }
+            nextById[id] = item
+            nextOrder.append(id)
+        }
+        var result = storedRaw
+        var notApplied: [String] = []
         var changed = false
-        for item in next {
-            if let was = baseById[item.id] {
-                guard item != was else { continue }
-                // Edited by this person: applied only when the stored copy is still the one they loaded.
-                guard let index = result.firstIndex(where: { $0.id == item.id }), result[index] == was else {
-                    notApplied.append(item)
+        func storedIndex(_ id: String) -> Int? { result.firstIndex { deadlineItemId($0) == id } }
+
+        for id in nextOrder {
+            guard let item = nextById[id] else { continue }
+            let inBase = baseRows[id] != nil
+            if inBase && !legacyAddOnly {
+                guard !sameRow(nextRows[id], baseRows[id]) else { continue }
+                // Edited: only while the stored row is the one they loaded.
+                guard let index = storedIndex(id), sameRow(storedRows[id], conflictRows[id]) else {
+                    notApplied.append(id)
                     continue
                 }
                 result[index] = item
                 changed = true
-            } else if !storedIds.contains(item.id) {
+            } else if storedRows[id] == nil {
                 result.append(item)
                 changed = true
-            } else if let index = result.firstIndex(where: { $0.id == item.id }), result[index] != item {
-                // An id this person did not load but is stored (added on another device): the stored copy stays.
-                notApplied.append(item)
+            } else if !sameRow(storedRows[id], nextRows[id]) {
+                // An id this person did not load is stored already (added on another device), or an older queued
+                // list whose base has changed: the stored copy stays.
+                notApplied.append(id)
             }
         }
-        for was in base where !nextIds.contains(was.id) {
-            guard let index = result.firstIndex(where: { $0.id == was.id }) else { continue }
-            guard result[index] == was else {
-                notApplied.append(was)
-                continue
+        if !legacyAddOnly {
+            for id in baseRows.keys.sorted() where nextById[id] == nil {
+                guard let index = storedIndex(id) else { continue }
+                guard sameRow(storedRows[id], conflictRows[id]) else {
+                    notApplied.append(id)
+                    continue
+                }
+                result.remove(at: index)
+                changed = true
             }
-            result.remove(at: index)
-            changed = true
         }
         return (result, notApplied, changed)
     }
 
+    /// The deadline items as this app writes them (`deadlineMap`).
+    func deadlineItemMaps(_ items: [DLDeadline]) -> [[String: Any]] {
+        items.map(deadlineMap)
+    }
+
     /// Saves one person's deadline changes for a job. Online only (RULEBOOK §2: deadlines are not in
-    /// `OFFLINE_ACTIONS`). The stored list is read from the server first — a failed read stops the save rather than
-    /// overwrite — then only the changed deadlines are laid over it (`mergeDeadlineChanges`) and `updatedAt` is the
-    /// server time. `base` nil is an entry an older build queued without the list it loaded: when the stored list has
-    /// not changed since `baseUpdatedAt` it is the base, otherwise only that entry's new deadlines are added and the
-    /// rest is reported as not applied.
+    /// `OFFLINE_ACTIONS`). The read, the merge (`mergeDeadlineItemMaps`) and the write run in one Firestore
+    /// transaction, so a change made on another device in between is never overwritten; `updatedAt` is the server
+    /// time. `base` is the list the person loaded and `baseStoredRows` its stored rows (`loadDeadlinesState`). `base`
+    /// nil is an entry an older build queued without it: when the stored list changed after `baseUpdatedAt` only its
+    /// new deadlines are added.
     @discardableResult
     func saveDeadlineChanges(
         base: [DLDeadline]?,
+        baseStoredRows: RulebookJSONBox? = nil,
         next items: [DLDeadline],
         projectId: UUID,
         projectKey: String? = nil,
@@ -12064,44 +12157,95 @@ extension FirebaseBackend {
         try await validateDataIntegrity(organizationId: orgId)
 
         let ref = deadlinesStateDocumentRef(organizationId: orgId, projectKey: jobKey, isSmallWorks: isSmallWorks)
-        let remoteDoc = try await ref.getDocument(source: .server)
-        let remoteData = remoteDoc.data() ?? [:]
-        var stored: [DLDeadline] = []
-        if remoteDoc.exists {
-            guard let parsed = Self.deadlines(fromDocument: ref.documentID, data: remoteData, projectKey: jobKey) else {
-                throw CanonicalWriteUnavailableError(function: "parseDeadlineDocument")
-            }
-            stored = parsed
-        }
-        var effectiveBase = base ?? stored
-        var effectiveNext = items
-        var legacyNotApplied: [DLDeadline] = []
-        if base == nil, let baseUpdatedAt,
-           let remoteUpdatedAt = (remoteData["updatedAt"] as? Timestamp)?.dateValue(),
-           remoteUpdatedAt > baseUpdatedAt.addingTimeInterval(0.4) {
-            // An older queued list made before someone else's change: only its new deadlines are added.
-            let storedIds = Set(stored.map(\.id))
-            effectiveBase = stored
-            effectiveNext = stored + items.filter { !storedIds.contains($0.id) }
-            legacyNotApplied = items.filter { item in storedIds.contains(item.id) && !stored.contains(item) }
-        }
-        let merge = Self.mergeDeadlineChanges(stored: stored, base: effectiveBase, next: effectiveNext)
-        let notApplied = legacyNotApplied + merge.notApplied
-        guard merge.changed else { return DeadlineSaveResult(items: stored, notApplied: notApplied) }
-
-        let payload: [String: Any] = [
-            "items": merge.items.map(deadlineMap),
-            "updatedAt": FieldValue.serverTimestamp(),
-            "projectId": jobKey
-        ]
-        try await ref.setData(payload, merge: true)
-
-        try await writeDeadlineAssignments(
-            projectKey: jobKey,
-            assigneeUserIds: merge.items.flatMap(\.assigneeUserIds),
-            organizationId: orgId
+        let input = RulebookJSONBox(object: [
+            "next": items.map(deadlineMap),
+            "base": base.map { $0.map(deadlineMap) as Any } ?? NSNull(),
+            "baseStoredRows": baseStoredRows?.object ?? NSNull(),
+            "baseUpdatedAtMs": baseUpdatedAt.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
+        ])
+        let outcome = try await Self.runDeadlineSaveTransaction(
+            db: db,
+            ref: ref,
+            jobKey: jobKey,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            input: input
         )
-        return DeadlineSaveResult(items: merge.items, notApplied: notApplied)
+        let written = outcome.object["items"] as? [[String: Any]] ?? []
+        guard let parsed = Self.deadlines(fromDocument: ref.documentID, data: ["items": written], projectKey: jobKey) else {
+            throw CanonicalWriteUnavailableError(function: "parseDeadlineDocument")
+        }
+        let notAppliedIds = Set(outcome.object["notApplied"] as? [String] ?? [])
+        let candidates = items + (base ?? [])
+        var notApplied: [DLDeadline] = []
+        for item in candidates where notAppliedIds.contains(WorkDocumentKeys.storedId(for: item.id).lowercased())
+            && !notApplied.contains(where: { $0.id == item.id }) {
+            notApplied.append(item)
+        }
+        if (outcome.object["changed"] as? Bool) == true {
+            try await writeDeadlineAssignments(
+                projectKey: jobKey,
+                assigneeUserIds: parsed.flatMap(\.assigneeUserIds),
+                organizationId: orgId
+            )
+        }
+        let rows = Self.canonicalDeadlineRows(written, documentId: ref.documentID, projectKey: jobKey, timeZone: OrganizationRulebookContext.timeZoneIdentifier)
+        return DeadlineSaveResult(items: parsed, notApplied: notApplied, storedRows: rows.map { RulebookJSONBox(object: $0) })
+    }
+
+    /// The read, merge and write of `saveDeadlineChanges` in one transaction. `nonisolated` so the transaction block
+    /// never runs on the main actor; it calls only the nonisolated merge and the packed reader.
+    nonisolated private static func runDeadlineSaveTransaction(
+        db: Firestore,
+        ref: DocumentReference,
+        jobKey: String,
+        timeZone: String,
+        input: RulebookJSONBox
+    ) async throws -> RulebookJSONBox {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            let data = snapshot.data() ?? [:]
+            let storedRaw = data["items"] as? [[String: Any]] ?? []
+            let nextRaw = input.object["next"] as? [[String: Any]] ?? []
+            let baseRaw = input.object["base"] as? [[String: Any]]
+            var legacyAddOnly = false
+            if baseRaw == nil, let baseMs = input.object["baseUpdatedAtMs"] as? Double,
+               let remote = (data["updatedAt"] as? Timestamp)?.dateValue(),
+               remote.timeIntervalSince1970 * 1000 > baseMs + 400 {
+                legacyAddOnly = true
+            }
+            guard let merge = FirebaseBackend.mergeDeadlineItemMaps(
+                storedRaw: storedRaw,
+                nextRaw: nextRaw,
+                baseRaw: baseRaw,
+                baseStoredRows: input.object["baseStoredRows"] as? [String: Any],
+                legacyAddOnly: legacyAddOnly,
+                documentId: ref.documentID,
+                projectKey: jobKey,
+                timeZone: timeZone
+            ) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "parseDeadlineDocument") as NSError
+                return nil
+            }
+            if merge.changed {
+                transaction.setData([
+                    "items": merge.items,
+                    "updatedAt": FieldValue.serverTimestamp(),
+                    "projectId": jobKey,
+                ], forDocument: ref, merge: true)
+            }
+            return [
+                "items": merge.items,
+                "notApplied": merge.notAppliedIds,
+                "changed": merge.changed,
+            ] as NSDictionary
+        }
+        return RulebookJSONBox(object: (answer as? [String: Any]) ?? [:])
     }
 
     /// RULEBOOK 1.7.0 §1 "Partial writes only": one job's assignees in `settings/deadlineAssignments` are written

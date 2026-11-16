@@ -446,7 +446,17 @@ struct DailyOverviewView: View {
                         LastUpdatedOfflineLabel()
                             .padding(.top, 14)
                     }
-                    if !unbookedAllNames.isEmpty {
+                    if JobAccessContext.viewerPending {
+                        // Review of #242: the profile has not loaded, so the team is not known yet — never an empty
+                        // "nobody unbooked" day.
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Loading your team…")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 20)
+                    } else if !unbookedAllNames.isEmpty {
                         unbookedLabourRevampCard
                             .padding(.top, 20)
                     }

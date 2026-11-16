@@ -78,13 +78,19 @@ enum MaterialOfflineService {
         // Only a request with an id is retried: without one the function cannot tell a retry from a new send.
         let canRetry = MaterialRequestEmailPayload.requestIdValue(request.requestId) != nil
         var lastError: Error?
-        let outcome = try await MaterialRequestSendRetry.perform(isOnline: isOnline, canRetry: canRetry) {
-            do {
-                try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
-            } catch {
-                lastError = error
-                throw error
+        let outcome: MaterialRequestSendRetry.Outcome
+        do {
+            outcome = try await MaterialRequestSendRetry.perform(isOnline: isOnline, canRetry: canRetry) {
+                do {
+                    try await firebaseBackend.sendMaterialRequest(request, organizationId: organizationId)
+                } catch {
+                    lastError = error
+                    throw error
+                }
             }
+        } catch where MaterialRequestSendRetry.isTimeout(error) && canRetry {
+            // Review of #242: a timeout may have sent it — never "connect to the internet".
+            throw MaterialSendUnconfirmedError()
         }
         switch outcome {
         case .sent:
@@ -100,6 +106,7 @@ enum MaterialOfflineService {
             // Not queued any more (online only). "Still sending" keeps its own message; anything else is a
             // connection problem the person retries when back online.
             if let lastError, (lastError as? MaterialRequestEmailError) == .stillSending { throw lastError }
+            if let lastError, MaterialRequestSendRetry.isTimeout(lastError), canRetry { throw MaterialSendUnconfirmedError() }
             throw OnlineOnlyActionError(actionId: UnlistedOfflineAction.sendMaterialRequest.rawValue)
         }
     }
@@ -113,6 +120,14 @@ enum MaterialOfflineService {
         }
         return message
     }
+}
+
+/// A material email whose send timed out or was not confirmed: it may have gone. The request id is kept for this
+/// email (`MaterialRequestRetryIds`), so pressing Send again is answered from the first send and never emails the
+/// wholesaler twice.
+struct MaterialSendUnconfirmedError: LocalizedError {
+    static let message = "The email service did not confirm this send, so it may already have been sent — check your sent items. Pressing Send again is safe: the same email is never sent twice."
+    var errorDescription: String? { Self.message }
 }
 
 /// What to do when sending a material quote / order email fails while the phone thinks it is online.

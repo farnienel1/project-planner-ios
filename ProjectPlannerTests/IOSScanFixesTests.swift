@@ -178,54 +178,132 @@ final class IOSScanFixesTests: XCTestCase {
 
     // MARK: 5. Deadline saves write only the person's changes and never drop them silently
 
-    private func deadline(_ id: UUID, _ title: String, progress: Double = 0) -> DLDeadline {
-        DLDeadline(id: id, title: title, due: Date(timeIntervalSince1970: 1_800_000_000), progress: progress)
+    private func deadline(_ id: UUID, _ title: String, progress: Double = 0, due: Date = Date(timeIntervalSince1970: 1_800_000_000)) -> DLDeadline {
+        DLDeadline(id: id, title: title, due: due, progress: progress)
     }
 
+    private let docId = "deadlines_projects_JOB-1"
+    private let jobKey = "JOB-1"
+
+    /// `mergeDeadlineItemMaps` for app-written lists, as `saveDeadlineChanges` calls it.
+    private func merge(
+        _ backend: FirebaseBackend,
+        stored: [[String: Any]],
+        base: [DLDeadline],
+        next: [DLDeadline],
+        baseStoredRows: [String: Any]? = nil
+    ) throws -> (items: [[String: Any]], notAppliedIds: [String], changed: Bool) {
+        try XCTUnwrap(FirebaseBackend.mergeDeadlineItemMaps(
+            storedRaw: stored,
+            nextRaw: backend.deadlineItemMaps(next),
+            baseRaw: backend.deadlineItemMaps(base),
+            baseStoredRows: baseStoredRows,
+            legacyAddOnly: false,
+            documentId: docId,
+            projectKey: jobKey,
+            timeZone: "Europe/London"
+        ), "the script answered")
+    }
+
+    private func read(_ raw: [[String: Any]]) throws -> [DLDeadline] {
+        try XCTUnwrap(FirebaseBackend.deadlines(fromDocument: docId, data: ["items": raw], projectKey: jobKey))
+    }
+
+    private func key(_ id: UUID) -> String { WorkDocumentKeys.storedId(for: id).lowercased() }
+
     /// Failure before: a save wrote the whole list; when the server was newer every local edit was dropped silently.
-    func testOnlyThePersonsChangesAreLaidOverTheStoredList() {
+    func testOnlyThePersonsChangesAreLaidOverTheStoredList() throws {
+        let backend = FirebaseBackend()
         let a = UUID(), b = UUID(), c = UUID()
         let base = [deadline(a, "A"), deadline(b, "B")]
         // Someone else edited B and added C after this person loaded.
-        let stored = [deadline(a, "A"), deadline(b, "B", progress: 0.5), deadline(c, "C")]
+        let stored = backend.deadlineItemMaps([deadline(a, "A"), deadline(b, "B", progress: 0.5), deadline(c, "C")])
         // This person edited A.
         let next = [deadline(a, "A", progress: 1), deadline(b, "B")]
-        let merge = FirebaseBackend.mergeDeadlineChanges(stored: stored, base: base, next: next)
-        XCTAssertTrue(merge.changed)
-        XCTAssertTrue(merge.notApplied.isEmpty)
-        XCTAssertEqual(merge.items.first { $0.id == a }?.progress, 1)
-        XCTAssertEqual(merge.items.first { $0.id == b }?.progress, 0.5, "the other person's edit is kept")
-        XCTAssertNotNil(merge.items.first { $0.id == c }, "the other person's new deadline is kept")
+        let result = try merge(backend, stored: stored, base: base, next: next)
+        XCTAssertTrue(result.changed)
+        XCTAssertTrue(result.notAppliedIds.isEmpty)
+        let items = try read(result.items)
+        XCTAssertEqual(items.first { $0.id == a }?.progress, 1)
+        XCTAssertEqual(items.first { $0.id == b }?.progress, 0.5, "the other person's edit is kept")
+        XCTAssertNotNil(items.first { $0.id == c }, "the other person's new deadline is kept")
     }
 
-    func testAConflictingEditIsReportedNotDropped() {
+    func testAConflictingEditIsReportedNotDropped() throws {
+        let backend = FirebaseBackend()
         let a = UUID()
-        let base = [deadline(a, "A")]
-        let stored = [deadline(a, "A", progress: 0.5)]
-        let next = [deadline(a, "A", progress: 1)]
-        let merge = FirebaseBackend.mergeDeadlineChanges(stored: stored, base: base, next: next)
-        XCTAssertFalse(merge.changed)
-        XCTAssertEqual(merge.notApplied.map(\.id), [a])
-        XCTAssertEqual(merge.items.first?.progress, 0.5)
+        let result = try merge(
+            backend,
+            stored: backend.deadlineItemMaps([deadline(a, "A", progress: 0.5)]),
+            base: [deadline(a, "A")],
+            next: [deadline(a, "A", progress: 1)]
+        )
+        XCTAssertFalse(result.changed)
+        XCTAssertEqual(result.notAppliedIds, [key(a)])
+        XCTAssertEqual(try read(result.items).first?.progress, 0.5)
     }
 
-    func testDeletesAndAddsApplyAndAnEditOfADeletedDeadlineIsReported() {
+    func testDeletesAndAddsApplyAndAnEditOfADeletedDeadlineIsReported() throws {
+        let backend = FirebaseBackend()
         let a = UUID(), b = UUID(), d = UUID()
         let base = [deadline(a, "A"), deadline(b, "B")]
-        let stored = [deadline(a, "A")] // B was deleted elsewhere.
+        let stored = backend.deadlineItemMaps([deadline(a, "A")]) // B was deleted elsewhere.
         let next = [deadline(b, "B", progress: 1), deadline(d, "D")] // This person deleted A, edited B, added D.
-        let merge = FirebaseBackend.mergeDeadlineChanges(stored: stored, base: base, next: next)
-        XCTAssertTrue(merge.changed)
-        XCTAssertNil(merge.items.first { $0.id == a }, "A deleted")
-        XCTAssertNotNil(merge.items.first { $0.id == d }, "D added")
-        XCTAssertNil(merge.items.first { $0.id == b }, "B is never re-created")
-        XCTAssertEqual(merge.notApplied.map(\.id), [b])
+        let result = try merge(backend, stored: stored, base: base, next: next)
+        XCTAssertTrue(result.changed)
+        let items = try read(result.items)
+        XCTAssertNil(items.first { $0.id == a }, "A deleted")
+        XCTAssertNotNil(items.first { $0.id == d }, "D added")
+        XCTAssertNil(items.first { $0.id == b }, "B is never re-created")
+        XCTAssertEqual(result.notAppliedIds, [key(b)])
+    }
+
+    /// Review of #242 (HIGH): after a save the base was this device's own copy (dates to the nanosecond) while the
+    /// stored list is read to the millisecond, so a second edit of the same deadline was refused as "changed on another
+    /// device". The base is now the stored list read back through the rulebook reader.
+    func testEditingTheSameDeadlineTwiceWithFractionalSecondDatesIsNeverAConflict() throws {
+        let backend = FirebaseBackend()
+        let a = UUID()
+        let original = deadline(a, "A", due: Date(timeIntervalSince1970: 1_800_000_000.123_456_789))
+        let stored0 = backend.deadlineItemMaps([original])
+        let rows0 = FirebaseBackend.canonicalDeadlineRows(stored0, documentId: docId, projectKey: jobKey, timeZone: "Europe/London")
+        let base0 = try read(stored0)
+
+        var first = try XCTUnwrap(base0.first)
+        first.progress = 0.5
+        first.completedAt = Date(timeIntervalSince1970: 1_800_000_100.987_654_321)
+        let save1 = try merge(backend, stored: stored0, base: base0, next: [first], baseStoredRows: rows0)
+        XCTAssertTrue(save1.changed)
+        XCTAssertTrue(save1.notAppliedIds.isEmpty)
+
+        // What the view keeps after the save: the written list read back, and its stored rows.
+        let base1 = try read(save1.items)
+        let rows1 = FirebaseBackend.canonicalDeadlineRows(save1.items, documentId: docId, projectKey: jobKey, timeZone: "Europe/London")
+        var second = try XCTUnwrap(base1.first)
+        second.progress = 1
+        second.completedAt = Date(timeIntervalSince1970: 1_800_000_200.555_555_555)
+        let save2 = try merge(backend, stored: save1.items, base: base1, next: [second], baseStoredRows: rows1)
+        XCTAssertTrue(save2.changed, "the second edit is applied")
+        XCTAssertTrue(save2.notAppliedIds.isEmpty, "never \"changed on another device\"")
+        XCTAssertEqual(try read(save2.items).first?.progress, 1)
+    }
+
+    func testUntouchedStoredItemsAreWrittenBackAsStored() throws {
+        let backend = FirebaseBackend()
+        let a = UUID(), b = UUID()
+        var storedB = backend.deadlineItemMaps([deadline(b, "B")])[0]
+        storedB["webOnlyField"] = "kept"
+        let stored = backend.deadlineItemMaps([deadline(a, "A")]) + [storedB]
+        let result = try merge(backend, stored: stored, base: try read(stored), next: [deadline(a, "A", progress: 1)] + (try read(stored)).filter { $0.id == b })
+        XCTAssertTrue(result.changed)
+        XCTAssertEqual(result.items.first { ($0["id"] as? String)?.lowercased() == key(b) }?["webOnlyField"] as? String, "kept")
     }
 
     func testDeadlinesUseServerTimeAndNoWholeListOverwrite() throws {
         let backend = try source("Project Planner/FirebaseBackend.swift")
         XCTAssertFalse(backend.contains("mergeDeadlinesFirstWriterWins"))
-        let body = try functionBody("saveDeadlineChanges", in: backend)
+        let body = try functionBody("runDeadlineSaveTransaction", in: backend)
+        XCTAssertTrue(body.contains("db.runTransaction"), "read, merge and write in one transaction")
         XCTAssertTrue(body.contains("FieldValue.serverTimestamp()"))
         XCTAssertFalse(body.contains("Timestamp(date: Date())"))
     }
@@ -344,5 +422,43 @@ final class IOSScanFixesTests: XCTestCase {
         let body = try functionBody("uploadSiteAuditImage", in: try source("Project Planner/FirebaseBackend.swift"))
         XCTAssertFalse(body.contains("gs://"))
         XCTAssertTrue(body.contains("downloadURLOrRemoveUpload"))
+    }
+
+    // MARK: Review of #242
+
+    /// A scan before the signed-in person's profile loads would publish the empty scope as a real "all clear".
+    func testWarningsWaitForTheViewer() throws {
+        var readiness = WarningInputsReadiness.allLoaded
+        XCTAssertTrue(readiness.storeInputsReady)
+        readiness.viewerLoaded = false
+        XCTAssertEqual(readiness.missing, [.viewer])
+        XCTAssertFalse(readiness.storeInputsReady, "no scan publishes before the viewer is known")
+        let helper = try source("Project Planner/Core/WarningsRefreshHelper.swift")
+        XCTAssertTrue(helper.contains("viewerLoaded: !JobAccessContext.viewerPending"))
+        XCTAssertTrue(helper.contains(".jobAccessViewerDidChange"), "a viewer change re-scans")
+        XCTAssertTrue(try source("Project Planner/Views/BookLabourFlowView.swift").contains("JobAccessContext.viewerPending"))
+        XCTAssertTrue(try source("Project Planner/Views/DailyOverviewView.swift").contains("JobAccessContext.viewerPending"))
+    }
+
+    /// The invitation and reset emails no longer report "sent" when `sendEmail` refused them.
+    func testEmailFailuresReachManageUsers() throws {
+        let backend = try source("Project Planner/FirebaseBackend.swift")
+        XCTAssertTrue(backend.contains("invitationId: String, organizationId: String? = nil) async -> String? {"))
+        XCTAssertTrue(backend.contains("organizationId: String) async -> String? {"), "the reset link email returns its problem")
+        let manage = try source("Project Planner/Views/ManageUsersView.swift")
+        XCTAssertTrue(manage.contains("if let emailProblem {"))
+        XCTAssertFalse(manage.contains("\"❌ Failed to send password reset email.\""))
+        // Resend invitations are written for the open organisation, never the person's home company.
+        XCTAssertFalse(manage.contains("\"organizationId\": user.organizationId"))
+        XCTAssertFalse(manage.contains("organizationId: user.organizationId,"))
+        XCTAssertFalse(try source("Project Planner/Views/HolidayView.swift").contains("?? userStore.currentUser?.organizationId"))
+    }
+
+    func testATimedOutMaterialSendSaysItMayHaveGone() {
+        let message = MaterialSendUnconfirmedError.message
+        XCTAssertTrue(message.contains("may already have been sent"))
+        XCTAssertTrue(message.contains("Pressing Send again is safe"))
+        XCTAssertFalse(message.contains("Connect to the internet"))
+        XCTAssertTrue(MaterialRequestSendRetry.isTimeout(MaterialRequestEmailError.timedOut))
     }
 }

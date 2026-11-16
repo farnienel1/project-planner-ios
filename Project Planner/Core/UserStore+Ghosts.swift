@@ -139,13 +139,17 @@ extension UserStore {
             return (nil, "Couldn't give app access: \(error.localizedDescription)")
         }
         // The usual set-up email, as for any invitation (the person accepts on the web link).
-        await backend.sendInvitationEmail(
+        let emailProblem = await backend.sendInvitationEmail(
             email: plan.claimPath.components(separatedBy: "/").last ?? email,
             firstName: ghost.firstName,
             surname: ghost.surname,
-            invitationId: invitationId
+            invitationId: invitationId,
+            organizationId: organizationId
         )
         await loadOrganizationUsers(forceRefresh: true)
+        if let emailProblem {
+            return (invitationId, "App access was given, but the set-up email was not sent: \(emailProblem). Use Resend on their profile.")
+        }
         return (invitationId, nil)
     }
 }

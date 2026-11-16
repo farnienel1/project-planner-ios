@@ -245,6 +245,8 @@ extension Notification.Name {
     /// The inputs of `jobQueryPlan` / `bookingQueryPlan` changed (viewer, visible jobs, own booking ids or an
     /// operative's job ids): job and booking listeners re-plan their queries (§17).
     static let jobReadPlanDidChange = Notification.Name("jobReadPlanDidChange")
+    /// The signed-in viewer (`JobAccessContext.readViewer`) changed: warnings re-scan under the new scope.
+    static let jobAccessViewerDidChange = Notification.Name("jobAccessViewerDidChange")
 }
 
 /// The signed-in account as the read plans see it (the real profile, never role testing: the security rules read the
@@ -289,6 +291,9 @@ nonisolated enum JobAccessContext {
         guard viewer != readViewer else { return }
         readViewer = viewer
         post()
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .jobAccessViewerDidChange, object: nil)
+        }
     }
 
     @MainActor static func updateManagers(_ rows: [Manager]) {

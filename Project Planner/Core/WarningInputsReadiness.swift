@@ -21,6 +21,9 @@ nonisolated struct WarningInputsReadiness: Equatable, Sendable {
         case people
         case annualLeave
         case jobs
+        /// The signed-in person's profile (their warning scope). Review of #242: a scan before it loads would show the
+        /// empty scope as a real "all clear".
+        case viewer
 
         var label: String {
             switch self {
@@ -31,6 +34,7 @@ nonisolated struct WarningInputsReadiness: Equatable, Sendable {
             case .people: return "people"
             case .annualLeave: return "annual leave"
             case .jobs: return "jobs"
+            case .viewer: return "your profile"
             }
         }
     }
@@ -46,6 +50,9 @@ nonisolated struct WarningInputsReadiness: Equatable, Sendable {
     var rosterLoaded: Bool
     var annualLeaveLoaded: Bool
     var jobsLoaded: Bool
+    /// The signed-in person's profile has loaded (`JobAccessContext.viewerPending` false). True when nobody is signed
+    /// in (nothing to wait for).
+    var viewerLoaded: Bool = true
 
     /// Inputs still loading, in a fixed order.
     var missing: [Input] {
@@ -57,6 +64,7 @@ nonisolated struct WarningInputsReadiness: Equatable, Sendable {
         if !operativesLoaded || !rosterLoaded { out.append(.people) }
         if !annualLeaveLoaded { out.append(.annualLeave) }
         if !jobsLoaded { out.append(.jobs) }
+        if !viewerLoaded { out.append(.viewer) }
         return out
     }
 

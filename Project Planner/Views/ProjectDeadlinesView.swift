@@ -24,6 +24,9 @@ struct ProjectDeadlinesView: View {
     /// The deadlines as last loaded from (or written to) the server: what this person's changes are compared with, so
     /// only their own changes are saved (`saveDeadlineChanges`).
     @State private var serverBaseItems: [DLDeadline] = []
+    /// The same list as stored, read by the rulebook reader (`loadDeadlinesState` / the last save); nil when the list
+    /// came from this device's cache.
+    @State private var serverBaseRows: RulebookJSONBox?
     /// Saves run one after another, so each compares with the list the previous save wrote (two quick edits are never
     /// read as a conflict with each other).
     @State private var persistTask: Task<Void, Never>?
@@ -162,16 +165,19 @@ struct ProjectDeadlinesView: View {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
                 serverBaseItems = local.items
+                serverBaseRows = nil
             } else {
                 let state = try await firebaseBackend.loadDeadlinesState(project: project, organizationId: orgId)
                 if smartCache.isOnline == false, let local {
                     store.replaceAll(local.items)
                     store.lastKnownUpdatedAt = local.updatedAt ?? state.updatedAt
                     serverBaseItems = local.items
+                    serverBaseRows = nil
                 } else {
                     store.replaceAll(state.items)
                     store.lastKnownUpdatedAt = state.updatedAt
                     serverBaseItems = state.items
+                    serverBaseRows = state.storedRows
                     OfflineDeadlineLocalStore.shared.save(
                         items: state.items,
                         projectId: project.id,
@@ -191,6 +197,7 @@ struct ProjectDeadlinesView: View {
                 store.replaceAll(local.items)
                 store.lastKnownUpdatedAt = local.updatedAt
                 serverBaseItems = local.items
+                serverBaseRows = nil
                 store.restrictToAssigneeUserId = canManage ? nil : userStore.currentUser?.id
             } else {
                 errorMessage = error.localizedDescription
@@ -222,6 +229,7 @@ struct ProjectDeadlinesView: View {
         do {
             let result = try await firebaseBackend.saveDeadlineChanges(
                 base: serverBaseItems,
+                baseStoredRows: serverBaseRows,
                 next: items,
                 projectId: project.id,
                 projectKey: project.documentId,
@@ -229,7 +237,10 @@ struct ProjectDeadlinesView: View {
                 organizationId: orgId,
                 baseUpdatedAt: store.lastKnownUpdatedAt
             )
+            // The new base is the list as stored, read back through the rulebook reader (never this device's own
+            // copies, whose dates are more precise than the stored ones — review of #242).
             serverBaseItems = result.items
+            serverBaseRows = result.storedRows
             store.lastKnownUpdatedAt = Date()
             if result.items != items {
                 store.replaceAll(result.items)
