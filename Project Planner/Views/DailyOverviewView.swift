@@ -1258,10 +1258,7 @@ struct DailyOverviewView: View {
 
 private extension DailyOverviewView {
     func managerName(for userId: String) -> String {
-        if let user = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers) {
-            return user.fullName.isEmpty ? user.email : user.fullName
-        }
-        return userId
+        dailyOverviewManagerName(userId: userId, users: userStore.organizationUsers)
     }
 
     // A computed formatter so it follows an organisation switch (organisation zone, never the phone's, guardrail 2).
@@ -1992,10 +1989,7 @@ struct ProjectBookingCard: View {
     }
 
     private func managerName(userId: String) -> String {
-        if let user = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers) {
-            return user.fullName.isEmpty ? user.email : user.fullName
-        }
-        return userId
+        dailyOverviewManagerName(userId: userId, users: userStore.organizationUsers)
     }
 
     private func initialsGradient(for name: String) -> [Color] {
@@ -2022,6 +2016,20 @@ struct ProjectBookingCard: View {
         case .overtime: return 5
         }
     }
+}
+
+/// The name on a Daily Overview manager row (By project and Other / Site survey): the account the stored id names
+/// (`StaffEmailIdentity.account`, the lookup these rows always used) — its full name, else its email — and
+/// `unknownLabourPersonName` ("Unknown person") when there is none, as web and the labour rows do (owner rule
+/// 17 Nov: both apps match). It used to show the stored id.
+func dailyOverviewManagerName(userId: String, users: [AppUser]) -> String {
+    if let user = StaffEmailIdentity.account(forUserId: userId, in: users) {
+        let name = user.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { return name }
+        let email = user.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !email.isEmpty { return email }
+    }
+    return unknownLabourPersonName
 }
 
 /// The Daily Overview Type chip (owner answer 17 Nov: iOS matches web). Its kind is the rulebook's

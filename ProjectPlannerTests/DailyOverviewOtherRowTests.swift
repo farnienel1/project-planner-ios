@@ -79,4 +79,21 @@ final class DailyOverviewOtherRowTests: XCTestCase {
         XCTAssertEqual(booking.payrollHoursResult().totalPaidHours, before)
         XCTAssertEqual(booking.scheduleCoveragePillHours(), ScheduleCoverageFormat.hours(before) + "h")
     }
+
+    /// Owner rule 17 Nov (both apps match): a manager row whose person has no account reads "Unknown person" on both
+    /// Daily Overview lists (By project and Other / Site survey), as web does — never the stored id.
+    func testAPersonWithNoAccountReadsUnknownPerson() {
+        XCTAssertEqual(dailyOverviewManagerName(userId: "NoSuchUid123", users: []), unknownLabourPersonName)
+        XCTAssertEqual(unknownLabourPersonName, "Unknown person")
+
+        var named = LogicFixtures.selfEmployedUser(id: "TEST-admin", email: "test.admin@example.com")
+        named.firstName = "Test"
+        named.surname = "Admin"
+        XCTAssertEqual(dailyOverviewManagerName(userId: "TEST-admin", users: [named]), "Test Admin")
+
+        var nameless = LogicFixtures.selfEmployedUser(id: "TEST-blank", email: "blank@example.com")
+        nameless.firstName = ""
+        nameless.surname = ""
+        XCTAssertEqual(dailyOverviewManagerName(userId: "TEST-blank", users: [nameless]), "blank@example.com")
+    }
 }
