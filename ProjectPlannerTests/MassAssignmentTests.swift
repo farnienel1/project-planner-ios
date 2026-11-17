@@ -91,12 +91,12 @@ final class MassAssignmentTests: XCTestCase {
     }
 
     func testOnlyTheOrganisationCreatorMayRecreateTheirOwnProfile() {
-        XCTAssertTrue(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationCreatorUserId: "abcUID"))
-        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationCreatorUserId: "ABCUID"), "uids are case-sensitive")
-        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationCreatorUserId: nil))
-        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationCreatorUserId: ""))
-        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "", organizationCreatorUserId: ""))
-        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "someone", organizationCreatorUserId: "abcUID"))
+        XCTAssertTrue(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationId: "org1", organizationCreatorUserId: "abcUID"))
+        XCTAssertTrue(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationId: "org1", organizationCreatorUserId: "ABCUID"), "the rulebook (`isOrganizationSuperAdmin`) compares the creator id without case")
+        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationId: "org1", organizationCreatorUserId: nil))
+        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "abcUID", organizationId: "org1", organizationCreatorUserId: ""))
+        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "", organizationId: "org1", organizationCreatorUserId: ""))
+        XCTAssertFalse(UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: "someone", organizationId: "org1", organizationCreatorUserId: "abcUID"))
     }
 
     func testEveryInvitationWriteIsCheckedAgainstAKnownInviter() throws {

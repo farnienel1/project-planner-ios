@@ -472,11 +472,20 @@ class UserStore: ObservableObject {
     }
     
     /// Mass-assignment audit 17 Nov: a confirmed-missing `users/{uid}` is re-created (as the Super Admin) only for the
-    /// organisation's creator. Compared exactly (Firebase Auth uids are case-sensitive); a missing creator never matches.
-    nonisolated static func mayRecreateOwnProfileAsSuperAdmin(uid: String, organizationCreatorUserId: String?) -> Bool {
+    /// organisation's creator.
+    /// The rulebook decides (`isOrganizationSuperAdmin`, review of #263): with no profile there is no stored flag, so
+    /// only the creator matches. A blank uid, a blank creator, or no answer from the script never matches.
+    nonisolated static func mayRecreateOwnProfileAsSuperAdmin(uid: String, organizationId: String, organizationCreatorUserId: String?) -> Bool {
         let creator = (organizationCreatorUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let me = uid.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !creator.isEmpty && !me.isEmpty && creator == me
+        guard !creator.isEmpty, !me.isEmpty else { return false }
+        return CanonicalBusinessEngine.isOrganizationSuperAdmin(
+            viewerId: me,
+            viewerIsSuperAdmin: false,
+            viewerOrganizationId: nil,
+            organizationId: organizationId,
+            creatorUserId: creator
+        ) == true
     }
 
     /// Shown when the signed-in person's profile is missing from the open organisation and they are not its creator.
@@ -523,6 +532,7 @@ class UserStore: ObservableObject {
                         print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
                     case .confirmedMissing where Self.mayRecreateOwnProfileAsSuperAdmin(
                         uid: firebaseUser.uid,
+                        organizationId: organization.firestoreDocumentId,
                         organizationCreatorUserId: organization.creatorUserId
                     ):
                         // Mass-assignment audit 17 Nov: only the organisation's creator re-creates their own missing
@@ -2159,8 +2169,6 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // Whether the inviter is an admin, from their stored document; nil when it could not be read (the rules decide).
-        var inviterIsAdmin: Bool?
         // Load the actual user document from Firebase to check permissions
         if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
             print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
@@ -2170,7 +2178,6 @@ class UserStore: ObservableObject {
             
             // Check if user has admin permissions in Firebase
             let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
-            inviterIsAdmin = hasAdmin
             let canInviteOperativesAsManager =
                 !hasAdmin &&
                 !firebaseUserData.permissions.operativeMode &&
@@ -2227,9 +2234,10 @@ class UserStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: Current user ID for rules check: \(currentUserId)")
         
         do {
-            // Mass-assignment audit 17 Nov: the invitation is always checked against a known inviter
-            // (`InvitationDocument.requireAllowed`); an inviter whose own profile could not be read invites nothing.
-            guard let inviterIsAdmin else {
+            // Mass-assignment audit 17 Nov (review of #263): the invitation is always checked against the inviter's
+            // level in THIS organisation (`organizationLevelFor`, never a home company's flags); when that level
+            // could not be read, nothing is invited.
+            guard let inviterIsAdmin = await firebaseBackend.inviterIsAdmin(uid: currentUserId, organizationId: organizationId) else {
                 errorMessage = "Couldn't check your permissions. Try again."
                 return false
             }
@@ -3915,6 +3923,15 @@ class UserStore: ObservableObject {
              
              /// The organisation open on this device — every invitation Manage Users writes is for it (AGENTS rule 2;
              /// never `user.organizationId`, the person's home company). Throws when none is open.
+             /// Mass-assignment review of #263: whether the signed-in user is an admin of `organizationId`, read for that
+             /// organisation (`FirebaseBackend.inviterIsAdmin`). Throws when it cannot be read: no invitation is written then.
+             func requireInviterIsAdmin(organizationId: String) async throws -> Bool {
+                 guard let firebaseBackend, let uid = firebaseBackend.currentUser?.uid,
+                       let isAdmin = await firebaseBackend.inviterIsAdmin(uid: uid, organizationId: organizationId)
+                 else { throw InvitationCheckUnavailableError() }
+                 return isAdmin
+             }
+
              func requireOpenOrganizationId() throws -> String {
                  let id = firebaseBackend?.currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                  guard !id.isEmpty else {

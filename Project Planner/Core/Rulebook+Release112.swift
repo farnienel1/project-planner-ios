@@ -81,53 +81,36 @@ nonisolated struct InvitationNotOperativeOnlyError: LocalizedError {
     }
 }
 
+/// Mass-assignment review of #263: the invitation check could not run (the inviter's level or the script's answer
+/// is unknown), so nothing is written. Fail closed: the security rules are never the only guard.
+nonisolated struct InvitationCheckUnavailableError: LocalizedError {
+    var errorDescription: String? {
+        "Couldn't check your permissions. Try again."
+    }
+}
+
 extension InvitationDocument {
-    /// Throws `InvitationNotOperativeOnlyError` when the inviter is known not to be an admin and `fields` (the
-    /// invitation about to be written) are not operative-only. `inviterIsAdmin` nil (unknown) leaves the decision
-    /// to the security rules. An unanswered script check is not a refusal.
-    nonisolated static func requireAllowed(_ fields: [String: Any], inviterIsAdmin: Bool?) throws {
-        guard inviterIsAdmin == false else { return }
-        if CanonicalBusinessEngine.invitationIsOperativeOnly(fields) == false {
-            throw InvitationNotOperativeOnlyError()
+    /// Throws `InvitationNotOperativeOnlyError` when the inviter is not an admin and `fields` (the invitation about to
+    /// be written) are not operative-only, and `InvitationCheckUnavailableError` when the script did not answer — a
+    /// non-admin's invitation is never written unchecked (review of #263: fail closed).
+    nonisolated static func requireAllowed(_ fields: [String: Any], inviterIsAdmin: Bool) throws {
+        if inviterIsAdmin { return }
+        guard let operativeOnly = CanonicalBusinessEngine.invitationIsOperativeOnly(fields) else {
+            throw InvitationCheckUnavailableError()
         }
+        if !operativeOnly { throw InvitationNotOperativeOnlyError() }
     }
 }
 
 extension InvitationDocument {
     /// Mass-assignment audit 17 Nov: the create fields of an invitation (`createFields`, `invitationCreateFields`)
     /// checked against the inviter (`requireAllowed`) — the fields actually written, never only a draft of the
-    /// person's stored flags. `inviterIsAdmin` is always known here (false when the inviter's profile is unknown).
+    /// person's stored flags. `inviterIsAdmin` is the inviter's level in the open organisation
+    /// (`UserStore.requireInviterIsAdmin`).
     nonisolated static func checkedCreateFields(from data: [String: Any], inviterIsAdmin: Bool) throws -> [String: Any] {
         let fields = try createFields(from: data)
         try requireAllowed(fields, inviterIsAdmin: inviterIsAdmin)
         return fields
-    }
-}
-
-extension InvitationDocument {
-    /// The message to show instead of re-inviting `subject` (resend sign-up from Manage Users), or nil to go ahead:
-    /// the invitation would carry the subject's admin / manager / operatives / operative-mode flags, and a signed-in
-    /// inviter who is not an admin may write only an operative-only one (`invitationIsOperativeOnly`). Checked before
-    /// the old links are marked used, so a refused resend leaves the current link working.
-    @MainActor
-    static func resendRefusal(subject: AppUser, inviter: AppUser?) -> String? {
-        let draft: [String: Any] = [
-            "email": subject.email,
-            "organizationId": subject.organizationId,
-            "permissions": [
-                "adminAccess": subject.permissions.adminAccess,
-                "manager": subject.permissions.manager,
-                "operatives": subject.permissions.operatives,
-                "operativeMode": subject.permissions.operativeMode,
-            ],
-        ]
-        guard let fields = try? createFields(from: draft) else { return nil }
-        do {
-            try requireAllowed(fields, inviterIsAdmin: inviter.map { $0.isRosterAdmin })
-            return nil
-        } catch {
-            return error.localizedDescription
-        }
     }
 }
 

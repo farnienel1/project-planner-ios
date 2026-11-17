@@ -4473,10 +4473,40 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// The signed-in account is the creator of the open organisation, and the profile being written is for it.
+    /// Mass-assignment review of #263: whether `uid` is an admin of `organizationId`, read for THAT organisation
+    /// (`organizationLevelFor`: their users document when it names this organisation, else their membership here, else
+    /// the `members` role; the creator is the Super Admin) — never a home company's flags. Nil when a document could
+    /// not be read or the script did not answer; callers then refuse (fail closed).
+    func inviterIsAdmin(uid: String, organizationId: String) async -> Bool? {
+        let userRef = db.collection("users").document(uid)
+        let membershipRef = userRef.collection("orgMemberships").document(organizationId)
+        let orgRef = db.collection("organizations").document(organizationId)
+        do {
+            let org = try await orgRef.getDocument()
+            let user = try await userRef.getDocument()
+            let membership = try await membershipRef.getDocument()
+            guard org.exists else { return nil }
+            let orgData = org.data() ?? [:]
+            let membersRole = (orgData["members"] as? [String: Any])?[uid] as? String
+            guard let level = CanonicalBusinessEngine.organizationLevelFor(
+                organizationId: organizationId,
+                userId: uid,
+                user: user.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membership: membership.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membersRole: membersRole,
+                creatorUserId: orgData["creatorUserId"] as? String
+            ) else { return nil }
+            return level.level == .admin
+        } catch {
+            NSLog("INVITER_LEVEL_UNREAD org=%@ — %@", organizationId, String(describing: error))
+            return nil
+        }
+    }
+
     func isOpenOrganizationCreator(uid: String?, organizationId: String) -> Bool {
         guard let uid, let org = currentOrganization else { return false }
         guard organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return false }
-        return UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: uid, organizationCreatorUserId: org.creatorUserId)
+        return UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: uid, organizationId: org.firestoreDocumentId, organizationCreatorUserId: org.creatorUserId)
     }
 
     static func parseAppUserDocument(

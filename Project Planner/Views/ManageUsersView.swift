@@ -1166,15 +1166,6 @@ struct ManageUserRowView: View {
     private func sendSignUpEmail() {
         isSendingSignUpEmail = true
         rowEmailFeedback = nil
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old link is marked used.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            isSendingSignUpEmail = false
-            rowEmailFeedback = "❌ \(refusal)"
-            return
-        }
-        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
-        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
-        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
 
         Task {
             let db = Firestore.firestore()
@@ -1185,6 +1176,10 @@ struct ManageUserRowView: View {
                 // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
                 // home company), so `sendEmail` finds it in the organisation it is sent from.
                 let openOrgId = try userStore.requireOpenOrganizationId()
+                // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+                // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+                // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+                let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
@@ -4786,15 +4781,6 @@ struct EditUserView: View {
     }
     
     private func createNewInvitation() async {
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before anything is written.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            resendEmailMessage = "❌ \(refusal)"
-            isResendingEmail = false
-            return
-        }
-        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
-        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
-        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
         let db = Firestore.firestore()
         do {
             // A brand new invitation, created FIRST; only then are the earlier links closed, skipping the new one
@@ -4803,6 +4789,10 @@ struct EditUserView: View {
             // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
             // home company), so `sendEmail` finds it in the organisation it is sent from.
             let openOrgId = try userStore.requireOpenOrganizationId()
+            // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+            // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+            // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+            let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
             let resend = try await InvitationDocument.resend(create: {
                 // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                 let sender = try InvitationDocument.signedInSenderField()
@@ -4880,17 +4870,6 @@ struct EditUserView: View {
             isSendingSignUpEmail = true
         }
         signUpEmailMessage = nil
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old links are marked used.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            isSendingSignUpEmail = false
-            isResendingEmail = false
-            signUpEmailMessage = "❌ \(refusal)"
-            resendEmailMessage = "❌ \(refusal)"
-            return
-        }
-        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
-        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
-        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
 
         Task {
             let db = Firestore.firestore()
@@ -4901,6 +4880,10 @@ struct EditUserView: View {
                 // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
                 // home company), so `sendEmail` finds it in the organisation it is sent from.
                 let openOrgId = try userStore.requireOpenOrganizationId()
+                // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+                // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+                // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+                let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
