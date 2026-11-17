@@ -68,10 +68,20 @@ final class SuperAdminEmploymentTypeTests: XCTestCase {
             let decl = try body(text, marker: marker)
             XCTAssertFalse(decl.contains("if isViewingSuperAdminProfile { return false }"), "\(marker) must not hide the Super Admin")
             XCTAssertFalse(decl.contains("isSuperAdmin {"), "\(marker) must not hide the Super Admin")
-            for level in ["permissions.operativeMode", "permissions.manager", "permissions.adminAccess", "isViewingSuperAdminProfile"] {
-                XCTAssertTrue(decl.contains(level), "\(marker) must show for \(level)")
-            }
+            XCTAssertTrue(decl.contains("return draftHasUserLevel"), "\(marker) must show for every level")
         }
+        let level = try body(text, marker: "private var draftHasUserLevel: Bool {")
+        XCTAssertTrue(level.contains("isViewingSuperAdminProfile"), "the Super Admin's profile shows the allowance")
+        XCTAssertTrue(level.contains("RulebookRosterLists.inviteHasNoLevel(permissions)"), "the level comes from the rulebook")
+    }
+
+    /// The level test the leave sections use (`userMissingLevel` through `CanonicalBusinessEngine`): every level has one,
+    /// so each shows the allowance; a draft with no level flag has none.
+    func testEveryLevelFlagCountsAsAUserLevel() {
+        XCTAssertFalse(RulebookRosterLists.inviteHasNoLevel(UserPermissions(operativeMode: true)), "operative")
+        XCTAssertFalse(RulebookRosterLists.inviteHasNoLevel(UserPermissions(manager: true)), "manager")
+        XCTAssertFalse(RulebookRosterLists.inviteHasNoLevel(UserPermissions(adminAccess: true)), "admin")
+        XCTAssertTrue(RulebookRosterLists.inviteHasNoLevel(UserPermissions()), "no level flag")
     }
 
     // MARK: Behaviour — who may save the Super Admin's employment type and leave allowance (review of #258)

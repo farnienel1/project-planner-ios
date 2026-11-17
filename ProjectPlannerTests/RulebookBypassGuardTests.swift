@@ -122,7 +122,7 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/AddUserView.swift": 6,
             "Views/BookLabourFlowView.swift": 2,
             "Views/InvoicingView.swift": 4,
-            "Views/ManageUsersView.swift": 64,
+            "Views/ManageUsersView.swift": 60,
             "Views/ManagersView.swift": 1,
             "Views/OperativeAnnualLeaveViews.swift": 4,
             "Views/OrganisationSettingsHubView.swift": 2,

@@ -1883,8 +1883,14 @@ struct EditUserView: View {
     /// Known duplication: web decides the same in `lib/staff/editUserSections.ts`; change both together.
     private var shouldShowAnnualLeaveAccessToggle: Bool {
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
-        return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
-            || isViewingSuperAdminProfile
+        return draftHasUserLevel
+    }
+
+    /// The draft has a user level (`userMissingLevel` false over its level flags, through `CanonicalBusinessEngine`),
+    /// or the operative role, or it is the Super Admin's profile. Every level shows the allowance (web
+    /// `editUserAnnualLeaveSection`).
+    private var draftHasUserLevel: Bool {
+        isViewingSuperAdminProfile || user.role == .operative || !RulebookRosterLists.inviteHasNoLevel(permissions)
     }
 
     private var annualLeaveAccessDirty: Bool {
@@ -1928,8 +1934,7 @@ struct EditUserView: View {
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         guard annualLeaveEnabledDraft else { return false }
         // Every level, as web (17 Nov owner bug: admins and the Super Admin had no allowance fields on iPhone).
-        return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
-            || isViewingSuperAdminProfile
+        return draftHasUserLevel
     }
 
     /// The remaining figure as the rulebook gives it, or nil until the pay record and the adjustments have loaded
