@@ -11,7 +11,7 @@ import FirebaseFirestore
 final class SiteAuditReportLayoutTests: XCTestCase {
     func testSharedFixtureGivesTheSameLinesAndPagesAsWeb() throws {
         let fixture = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportFixture(), "the packed script has no site audit fixture")
-        XCTAssertEqual(fixture.inputs.count, 3)
+        XCTAssertEqual(fixture.inputs.count, 6)
         XCTAssertEqual(fixture.expected.count, fixture.inputs.count)
         for (index, entry) in fixture.inputs.enumerated() {
             let name = entry["name"] as? String ?? "#\(index)"
@@ -70,6 +70,42 @@ final class SiteAuditReportLayoutTests: XCTestCase {
             XCTAssertEqual(document.numberOfPages, pages.count, "\(name): PDF pages")
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// 1.61.1 (owner request 17 Nov): the company logo at the top right, fitted whole; the initials badge when
+    /// there is no logo or it could not be loaded (the app passes no logo).
+    func testCompanyLogoTopRightOrInitialsBadge() throws {
+        let fixture = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportFixture())
+        func firstPageOps(_ name: String) throws -> [[String: Any]] {
+            let input = try XCTUnwrap(fixture.inputs.first { $0["name"] as? String == name }?["input"] as? [String: Any], name)
+            let layout = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportLayout(input), name)
+            return try XCTUnwrap((layout["pages"] as? [[String: Any]])?.first?["ops"] as? [[String: Any]], name)
+        }
+        let rightMargin = 595.28 - 32
+        for (name, aspect) in [("logo-very-wide", 12.0), ("logo-very-tall", 1.0 / 12.0), ("owner-c646", 4.0 / 3.0)] {
+            let ops = try firstPageOps(name)
+            let logo = try XCTUnwrap(ops.first { $0["kind"] as? String == "image" && $0["ref"] as? String == "logo" }, name)
+            let w = try XCTUnwrap(logo["w"] as? Double), h = try XCTUnwrap(logo["h"] as? Double)
+            let x = try XCTUnwrap(logo["x"] as? Double), y = try XCTUnwrap(logo["y"] as? Double)
+            XCTAssertEqual(w / h, aspect, accuracy: aspect * 0.03, "\(name): aspect kept")
+            XCTAssertLessThanOrEqual(w, 98.01, "\(name): fits the box")
+            XCTAssertLessThanOrEqual(h, 52.01, "\(name): fits the box")
+            XCTAssertEqual(x + w + 6, rightMargin, accuracy: 0.05, "\(name): right edge on the margin")
+            XCTAssertEqual(y, 30, accuracy: 0.05, "\(name): at the top")
+            XCTAssertFalse(ops.contains { $0["kind"] as? String == "text" && $0["text"] as? String == "RM" }, "\(name): no badge")
+        }
+        let missing = try firstPageOps("logo-missing-or-failed")
+        XCTAssertFalse(missing.contains { $0["kind"] as? String == "image" && $0["ref"] as? String == "logo" })
+        XCTAssertTrue(missing.contains { $0["kind"] as? String == "text" && $0["text"] as? String == "RM" })
+    }
+
+    /// A logo that cannot be read (a PDF logo, a bad URL) gives nil and never blocks the report.
+    func testCompanyLogoLoaderFallsBackToNil() async {
+        let refused = await CompanyLogoLoader.logo(urlString: "http://example.com/logo.png")
+        XCTAssertNil(refused)
+        let missing = await CompanyLogoLoader.logo(urlString: nil)
+        XCTAssertNil(missing)
+        XCTAssertNil(UIImage(data: Data("%PDF-1.7 logo".utf8)), "a PDF logo is not a picture: the badge shows")
     }
 
     func testFieldLimitsComeFromTheRulebook() throws {

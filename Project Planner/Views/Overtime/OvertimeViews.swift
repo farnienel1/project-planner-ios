@@ -1585,9 +1585,7 @@ struct OvertimeCogSheet: View {
 /// `OvertimeReportPDFBuilder` in the invoice / timesheet PDF style.
 enum OvertimeReportPDF {
     static func loadLogo(_ urlString: String?) async -> UIImage? {
-        guard let urlString, let url = CanonicalBusinessEngine.safeExternalURL(urlString), !urlString.isEmpty else { return nil }
-        guard let result = try? await URLSession.shared.data(from: url) else { return nil }
-        return UIImage(data: result.0)
+        await CompanyLogoLoader.logo(urlString: urlString)
     }
 
     @MainActor

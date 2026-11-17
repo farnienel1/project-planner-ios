@@ -148,16 +148,23 @@ enum SiteAuditDraftNotifications {
 
 /// The organisation logo for a site audit PDF: kept in memory after the first load and read from the URL cache when
 /// offline, and never waited on for more than a couple of seconds, so "Submit & generate PDF" stays quick.
-enum SiteAuditLogoLoader {
+/// The company logo for a PDF (`organizations/{orgId}.companyLogoURL`, RULEBOOK §4.1 / §24; 1.61.1 §29 the site audit
+/// report's top right). One loader for the site audit report and the overtime / price work / expenses reports. It never
+/// blocks or fails a PDF: no URL, a URL `safeExternalURL` refuses, a timeout (`timeoutSeconds`), an error or a file the
+/// system cannot read as a picture (a PDF logo) gives nil, and the report shows its fallback (the initials badge).
+/// PNG, JPEG, HEIC and WebP are read by `UIImage(data:)`.
+enum CompanyLogoLoader {
+    static let timeoutSeconds: TimeInterval = 15
     private static var cache: [String: UIImage] = [:]
 
     static func logo(urlString: String?) async -> UIImage? {
         guard let urlString, let url = CanonicalBusinessEngine.safeExternalURL(urlString) else { return nil }
         if let cached = cache[urlString] { return cached }
-        var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 2.5)
+        var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: timeoutSeconds)
         request.httpMethod = "GET"
-        guard let (data, _) = try? await URLSession.shared.data(for: request),
-              let image = UIImage(data: data) else { return nil }
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+        guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { return nil }
         cache[urlString] = image
         return image
     }

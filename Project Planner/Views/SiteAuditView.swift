@@ -1515,7 +1515,7 @@ struct SiteAuditCreateFlowView: View {
             }
 
             let pdfTask = Task {
-                let logo = await SiteAuditLogoLoader.logo(urlString: logoURL)
+                let logo = await CompanyLogoLoader.logo(urlString: logoURL)
                 return await SiteAuditPDFBuilder.makePDFAsync(
                     audit: audit,
                     localItems: drafts,
@@ -2414,10 +2414,7 @@ struct SiteAuditDetailView: View {
     }
 
     private func loadLogo() async -> UIImage? {
-        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = CanonicalBusinessEngine.safeExternalURL(logoURL),
-              let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-        return UIImage(data: data)
+        await CompanyLogoLoader.logo(urlString: firebaseBackend.currentOrganization?.companyLogoURL)
     }
 }
 
