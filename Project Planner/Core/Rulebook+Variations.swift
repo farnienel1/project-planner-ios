@@ -253,6 +253,12 @@ extension CanonicalBusinessEngine {
 
     // MARK: - Tracker
 
+    /// RULEBOOK 1.63.0 §22 `variationTrackerOrder(rows)`: the live ids in the one tracker order — stored `sequence`, then
+    /// the VO number, then the id — the order `variationRenumberPlan` reads, so the list and the tracker agree.
+    nonisolated static func variationTrackerOrder(rows: [[String: Any]]) -> [String]? {
+        (callJSON("variationTrackerOrder", arguments: [rows]) as? [Any])?.compactMap { $0 as? String }
+    }
+
     /// `variationRenumberPlan({ rows, order, prefix, padding, orderLocked })`: the tracker's order and numbers, pinned
     /// rows in their places. `refused` is `VARIATION_ORDER_LOCKED_MESSAGE` when the order is locked.
     nonisolated static func variationRenumberPlan(
@@ -278,13 +284,15 @@ extension CanonicalBusinessEngine {
         return (planRows, result["refused"] as? String)
     }
 
-    /// RULEBOOK 1.63.0 §22 `variationStatusWriteFields(stored, status)`: the number lock written with a status change —
-    /// Submitted and Closed lock it, Open unlocks it in the same write (a reopened variation is unpinned). Falls back to
-    /// the same rule when the script does not answer.
-    nonisolated static func variationStatusLocksNumber(status: String, storedLocked: Bool) -> Bool {
-        let result = callJSON("variationStatusWriteFields", arguments: [["voNumberLocked": storedLocked], status]) as? [String: Any]
+    /// RULEBOOK 1.63.0 §22 `variationStatusWriteFields(status)`: the number lock written with a status change —
+    /// Submitted and Closed lock it, Open unlocks it in the same write (a reopened variation is unpinned). The status is
+    /// read with `normalizeVariationStatus`, the reader `variationIsPinned` uses, so a legacy `sent` / `complete` /
+    /// `done` locks and pins alike. Falls back to the same reading when the script does not answer.
+    nonisolated static func variationStatusLocksNumber(status: String) -> Bool {
+        let result = callJSON("variationStatusWriteFields", arguments: [status]) as? [String: Any]
         if let locked = result?["voNumberLocked"] as? Bool { return locked }
-        return status == "submitted" || status == "closed"
+        let word = status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["submitted", "sent", "closed", "complete", "completed", "done"].contains(word)
     }
 
     /// `variationIsPinned(row)`: Submitted and Closed keep their place and number (1.63.0: the status decides; a lock

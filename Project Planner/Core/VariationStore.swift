@@ -29,6 +29,13 @@ final class VariationStore: ObservableObject {
     var visibleVariations: [Variation] {
         let live = variations.filter { !$0.isDeleted }
         if tracker.enabled {
+            // RULEBOOK 1.63.0 `variationTrackerOrder` (sequence, VO number, id): the tracker's own order.
+            let rows: [[String: Any]] = live.map { ["id": $0.id, "voNumber": $0.voNumber, "sequence": $0.sequence] }
+            if let order = CanonicalBusinessEngine.variationTrackerOrder(rows: rows) {
+                var rank: [String: Int] = [:]
+                for (index, id) in order.enumerated() { rank[id.lowercased()] = index }
+                return live.sorted { (rank[$0.id.lowercased()] ?? Int.max) < (rank[$1.id.lowercased()] ?? Int.max) }
+            }
             return live.sorted {
                 if $0.sequence != $1.sequence { return $0.sequence < $1.sequence }
                 return $0.createdAt > $1.createdAt

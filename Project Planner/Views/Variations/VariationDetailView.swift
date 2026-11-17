@@ -298,10 +298,7 @@ struct VariationDetailView: View {
         variation.statusHistory.append(VariationStatusHistoryEntry(status: status.rawValue, byUid: uid, byName: name, at: Date()))
         // RULEBOOK 1.63.0 `variationStatusWriteFields`: Submitted / Closed lock the number, Open (a reopen) clears the
         // lock in the same write, so the variation is unpinned and the rules accept its next renumber.
-        variation.voNumberLocked = CanonicalBusinessEngine.variationStatusLocksNumber(
-            status: status.rawValue,
-            storedLocked: opened.voNumberLocked
-        )
+        variation.voNumberLocked = CanonicalBusinessEngine.variationStatusLocksNumber(status: status.rawValue)
         if status == .submitted {
             variation.submittedAt = Date()
         }
