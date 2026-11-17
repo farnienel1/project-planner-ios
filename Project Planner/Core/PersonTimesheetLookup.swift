@@ -147,7 +147,7 @@ enum PersonTimesheetLookup {
     static func gather(
         ids: [String],
         byUserIds: @escaping ([String]) async throws -> [Document],
-        byDocumentPrefix: (@escaping (String) async throws -> [Document])?,
+        byDocumentPrefix: ((String) async throws -> [Document])?,
         warn: @escaping (String) -> Void = { _ in }
     ) async -> [Document] {
         let unique = uniqueIds(ids)
