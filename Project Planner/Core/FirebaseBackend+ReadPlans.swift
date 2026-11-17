@@ -221,6 +221,49 @@ extension FirebaseBackend {
         return (sources, parts.joined(separator: ",") + "|\(startPart)")
     }
 
+    // MARK: Annual leave (RULEBOOK 1.56.0 §9, §17)
+
+    /// `leaveQueryPlan` for the signed-in viewer in `orgId` (`LeaveReadDecision.decide`): the viewer at their real level
+    /// (`permissionLevelOf`), their own ids (`bookingIdsForAccount`, the same ids the booking plan takes, worked out now),
+    /// their stored email, and `operativeOwnLeaveEnabled(platformConfig/app, orgId)`. Off or unread → the whole collection.
+    func leaveReadDecision(organizationId orgId: String) -> LeaveReadDecision {
+        LeaveReadDecision.decide(
+            viewer: JobAccessContext.readViewer,
+            operativeLevel: JobAccessContext.leaveOperativeLevel,
+            ownIds: JobAccessContext.ownBookingIds,
+            email: JobAccessContext.leaveEmail,
+            operativeOwnLeave: SecuritySwitchContext.operativeOwnLeaveEnabled(organizationId: orgId)
+        )
+    }
+
+    /// The Firestore reads of a leave decision under `organizations/{orgId}/holidayBookings`: the collection for `.all`,
+    /// one `or` query per own query for `.own`, nothing for `.nothing`.
+    func leaveReadSources(organizationId orgId: String, decision: LeaveReadDecision) -> [PlannedReadSource] {
+        let base = db.collection("organizations").document(orgId).collection("holidayBookings")
+        switch decision {
+        case .all:
+            return [PlannedReadSource(kind: .query(base, withoutDateBound: nil))]
+        case .nothing:
+            return []
+        case .own(let queries):
+            return queries.compactMap { Self.ownLeaveQuery(base, $0).map { PlannedReadSource(kind: .query($0, withoutDateBound: nil)) } }
+        }
+    }
+
+    /// One own-leave query: `userId in <its values> OR operativeId in <its values>`, each part's own list, the values
+    /// exactly as the plan gives them (no case variants). A part with no values is left out (Firestore refuses an
+    /// empty `in`); nil when both are empty.
+    nonisolated static func ownLeaveQuery(_ base: Query, _ query: RulebookOwnLeaveQuery) -> Query? {
+        var filters: [Filter] = []
+        if !query.userIdValues.isEmpty { filters.append(Filter.whereField("userId", in: query.userIdValues)) }
+        if !query.operativeIdValues.isEmpty { filters.append(Filter.whereField("operativeId", in: query.operativeIdValues)) }
+        switch filters.count {
+        case 0: return nil
+        case 1: return base.whereFilter(filters[0])
+        default: return base.whereFilter(Filter.orFilter(filters))
+        }
+    }
+
     // MARK: One-off reads
 
     /// Every document the plan's queries return, merged by id. A query whose composite index is still building
@@ -312,6 +355,10 @@ extension FirebaseBackend {
         /// RULEBOOK 1.43.0 §8 (review r318): called after every snapshot of any part (metadata-only ones included) with
         /// whether the whole plan is now a server answer with no pending local writes.
         onAuthority: (@MainActor (_ authoritative: Bool) -> Void)? = nil,
+        /// RULEBOOK 1.56.0: true for a listener whose re-attaches after a failure are capped
+        /// (`LiveListenerAttachPolicy.retryDelay`: a refusal once after 30 s, other errors a few times, then none until
+        /// the next re-plan, foreground or organisation switch). False keeps the open-ended back-off.
+        cappedRetries: Bool = false,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
@@ -377,7 +424,16 @@ extension FirebaseBackend {
                     // with backoff (2 s, 4 s, … up to 60 s) until it answers or the plan is replaced. The other sources
                     // of the plan keep delivering; this one counts as answered from cache meanwhile.
                     Self.postPlannedListenerFailed(label: label, error: error)
-                    let delay = Self.plannedListenerRetryDelay(attempt: attempt)
+                    let delay: Double
+                    if cappedRetries {
+                        guard let capped = LiveListenerAttachPolicy.retryDelay(
+                            afterFailures: attempt + 1,
+                            permissionDenied: Self.isPermissionDenied(error)
+                        ) else { return }
+                        delay = capped
+                    } else {
+                        delay = Self.plannedListenerRetryDelay(attempt: attempt)
+                    }
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
                         guard !registration.isRemoved else { return }
                         attach(index, query, fallback: nil, attempt: attempt + 1)
@@ -466,6 +522,8 @@ extension FirebaseBackend {
         key: String,
         organizationId: String,
         plan: (sources: [PlannedReadSource], signature: String),
+        cappedRetries: Bool = false,
+        onRefused: (@MainActor () -> Void)? = nil,
         onChange: @escaping @MainActor (_ rows: LiveDocumentRows, _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -484,8 +542,10 @@ extension FirebaseBackend {
                 // Keep this listener (it retries on backoff) but let the next re-plan replace it — only this one,
                 // never a newer replacement.
                 if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
+                onRefused?()
             },
-            parity: (key: key, organizationId: orgId)
+            parity: (key: key, organizationId: orgId),
+            cappedRetries: cappedRetries
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
             onChange(rows, fromCache)

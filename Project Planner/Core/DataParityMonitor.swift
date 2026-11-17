@@ -286,6 +286,20 @@ final class DataParityMonitor: ObservableObject {
             if let skip = listener.skip { return RulebookDataParityListInput(key: key, skipped: skip) }
             let serverCount = await Self.countPlan(plan.sources)
             return RulebookDataParityListInput(key: key, serverCount: serverCount, localIds: listener.snapshot?.ids ?? [])
+        case "holidayBookings":
+            // RULEBOOK 1.56.0: count exactly the leave plan the listener runs (`leaveQueryPlan`) — the collection, or an
+            // operative's own `or` queries (`dataParitySumCounts`); never `count()` of the whole collection for them.
+            guard firebaseBackend.liveListeners.isAttached(key: key) else {
+                return RulebookDataParityListInput(key: key, skipped: "notListening")
+            }
+            let decision = firebaseBackend.leaveReadDecision(organizationId: orgId)
+            guard decision != .nothing, holidayStore?.plannedSignature == decision.signature else {
+                return RulebookDataParityListInput(key: key, skipped: "notListening")
+            }
+            let listener = listenerDocuments(key: key, organizationId: orgId, writesSettled: writesSettled)
+            if let skip = listener.skip { return RulebookDataParityListInput(key: key, skipped: skip) }
+            let serverCount = await Self.countPlan(firebaseBackend.leaveReadSources(organizationId: orgId, decision: decision))
+            return RulebookDataParityListInput(key: key, serverCount: serverCount, localIds: listener.snapshot?.ids ?? [])
         default:
             guard firebaseBackend.liveListeners.isAttached(key: key) else {
                 return RulebookDataParityListInput(key: key, skipped: "notListening")

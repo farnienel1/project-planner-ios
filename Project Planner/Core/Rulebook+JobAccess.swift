@@ -39,6 +39,87 @@ nonisolated struct JobAccessViewer: Equatable, Sendable {
     }
 }
 
+extension JobAccessViewer {
+    /// The viewer `leaveQueryPlan` takes (RULEBOOK 1.56.0 §9, owner answer 17 Nov Q2): the same viewer with
+    /// `role.isOperativeMode` = `permissionLevelOf(user) == operative`, so a no-flag user and an admin with a stray
+    /// operative-mode flag are never narrowed.
+    nonisolated func leaveViewer(operativeLevel: Bool) -> JobAccessViewer {
+        var copy = self
+        copy.role.isOperativeMode = operativeLevel
+        return copy
+    }
+}
+
+/// `leaveQueryValues` result.
+nonisolated struct RulebookLeaveQueryValues: Equatable, Sendable {
+    let ids: [String]
+    let emails: [String]
+}
+
+/// One `kind: 'own'` leave query: `userId in userIdValues OR operativeId in operativeIdValues` (each part's own list —
+/// the emails are on `userId` only).
+nonisolated struct RulebookOwnLeaveQuery: Equatable, Hashable, Sendable {
+    let userIdValues: [String]
+    let operativeIdValues: [String]
+
+    /// Names the query in a listener target (values exactly as sent).
+    var signature: String {
+        "u:\(userIdValues.joined(separator: "+"))/o:\(operativeIdValues.joined(separator: "+"))"
+    }
+}
+
+/// `leaveQueryPlan` result: the whole collection, or the viewer's own queries.
+nonisolated struct RulebookLeaveQueryPlan: Equatable, Sendable {
+    let readsEveryLeave: Bool
+    let ownQueries: [RulebookOwnLeaveQuery]
+}
+
+/// What the leave reads run for the signed-in viewer in one organisation (RULEBOOK 1.56.0, `leaveQueryPlan`). App
+/// plumbing over the script's answer; the decision is the script's.
+nonisolated enum LeaveReadDecision: Equatable, Sendable {
+    /// The whole `holidayBookings` collection (switch off or unread, or a viewer not at the operative level).
+    case all
+    /// Only these own queries, merged by document id — never the whole collection.
+    case own([RulebookOwnLeaveQuery])
+    /// No leave read at all (switch on and the viewer not known yet, an operative whose plan the script did not
+    /// answer, or no uid).
+    case nothing
+
+    var signature: String {
+        switch self {
+        case .all: return "all"
+        case .nothing: return "nothing"
+        case .own(let queries): return "own:" + queries.map(\.signature).joined(separator: ",")
+        }
+    }
+
+    /// RULEBOOK 1.56.0 (owner decisions 17 Nov): the switch gates the narrowing — while `operativeOwnLeave` is off or
+    /// not read yet everyone reads the whole collection exactly as before 1.56.0, without asking for a viewer. With it
+    /// on: `leaveQueryPlan` for the viewer at their real level; no viewer yet → nothing; no answer → the whole
+    /// collection for staff, nothing for an operative (never the whole collection).
+    nonisolated static func decide(
+        viewer: JobAccessViewer?,
+        operativeLevel: Bool,
+        ownIds: [String],
+        email: String?,
+        operativeOwnLeave: Bool
+    ) -> LeaveReadDecision {
+        guard operativeOwnLeave else { return .all }
+        guard let viewer else { return .nothing }
+        let leaveViewer = viewer.leaveViewer(operativeLevel: operativeLevel)
+        guard let plan = CanonicalBusinessEngine.leaveQueryPlan(
+            leaveViewer,
+            ownIds: ownIds,
+            email: email,
+            operativeOwnLeave: true
+        ) else {
+            return operativeLevel ? .nothing : .all
+        }
+        if plan.readsEveryLeave { return .all }
+        return plan.ownQueries.isEmpty ? .nothing : .own(plan.ownQueries)
+    }
+}
+
 /// The job kind a job belongs to (`WorkCatalogue`): the collection it is stored in.
 nonisolated enum JobKind: String, Sendable, Codable {
     case projects
@@ -153,6 +234,78 @@ extension CanonicalBusinessEngine {
         return callJSON("readsEveryBooking", arguments: [viewer.json, options]) as? Bool ?? false
     }
 
+    // MARK: Annual leave reads (RULEBOOK 1.56.0 §9, §17, owner answers 17 Nov)
+
+    /// `OWN_LEAVE_IDS_PER_QUERY`: own ids per leave `or` query (14). Nil when the script did not answer.
+    nonisolated static var ownLeaveIdsPerQuery: Int? {
+        constant("OWN_LEAVE_IDS_PER_QUERY", as: Int.self)
+    }
+
+    /// `leaveQueryValues(uid, ownIds, email)` → the ids (uid first, then `ownIds`, exact de-dupe) and the account email
+    /// as stored and lower-cased (on `userId` only). Nil when the script did not answer.
+    nonisolated static func leaveQueryValues(uid: String, ownIds: [String], email: String?) -> RulebookLeaveQueryValues? {
+        guard let row = callJSON("leaveQueryValues", arguments: [uid, ownIds, email.map { $0 as Any } ?? NSNull()]) as? [String: Any],
+              let ids = row["ids"] as? [String], let emails = row["emails"] as? [String] else { return nil }
+        return RulebookLeaveQueryValues(ids: ids, emails: emails)
+    }
+
+    /// `readsOnlyOwnLeave(viewer, { operativeOwnLeave })`: true only with the switch on and the viewer at the operative
+    /// level (`role.isOperativeMode` set from `permissionLevelOf`). Nil when the script did not answer.
+    nonisolated static func readsOnlyOwnLeave(_ viewer: JobAccessViewer, operativeOwnLeave: Bool) -> Bool? {
+        callJSON("readsOnlyOwnLeave", arguments: [viewer.json, ["operativeOwnLeave": operativeOwnLeave]]) as? Bool
+    }
+
+    /// `leaveQueryPlan(viewer, { ownIds, email, operativeOwnLeave })` → `{ readsEveryLeave, queries }`. The viewer's
+    /// `role.isOperativeMode` must be `permissionLevelOf(user) == operative` (`JobAccessViewer.leaveViewer`). Nil when
+    /// the script did not answer.
+    nonisolated static func leaveQueryPlan(
+        _ viewer: JobAccessViewer?,
+        ownIds: [String],
+        email: String?,
+        operativeOwnLeave: Bool
+    ) -> RulebookLeaveQueryPlan? {
+        let options: [String: Any] = [
+            "ownIds": ownIds,
+            "email": email.map { $0 as Any } ?? NSNull(),
+            "operativeOwnLeave": operativeOwnLeave,
+        ]
+        guard let row = callJSON("leaveQueryPlan", arguments: [viewer.map { $0.json as Any } ?? NSNull(), options]) as? [String: Any],
+              let queries = row["queries"] as? [[String: Any]] else { return nil }
+        var own: [RulebookOwnLeaveQuery] = []
+        var readsAll = false
+        for query in queries where query["collection"] as? String == "holidayBookings" {
+            switch query["kind"] as? String {
+            case "all":
+                readsAll = true
+            case "own":
+                let parts = query["anyOf"] as? [[String: Any]] ?? []
+                func values(_ field: String) -> [String] {
+                    parts.first { $0["field"] as? String == field }?["values"] as? [String] ?? []
+                }
+                own.append(RulebookOwnLeaveQuery(userIdValues: values("userId"), operativeIdValues: values("operativeId")))
+            default:
+                continue
+            }
+        }
+        return RulebookLeaveQueryPlan(readsEveryLeave: (row["readsEveryLeave"] as? Bool ?? false) || readsAll, ownQueries: own)
+    }
+
+    /// `operativeOwnLeaveEnabled(config, organizationId)` (`OPERATIVE_OWN_LEAVE_SWITCH_FIELD` exactly `true`, or the id
+    /// in `OPERATIVE_OWN_LEAVE_ORGANIZATION_IDS_FIELD`). Nil when the script did not answer.
+    nonisolated static func operativeOwnLeaveEnabled(config: [String: Any]?, organizationId: String) -> Bool? {
+        callJSON("operativeOwnLeaveEnabled", arguments: [config.map { $0 as Any } ?? NSNull(), organizationId]) as? Bool
+    }
+
+    /// `OPERATIVE_OWN_LEAVE_SWITCH_FIELD` (`operativeOwnLeave`).
+    nonisolated static var operativeOwnLeaveSwitchField: String? {
+        constant("OPERATIVE_OWN_LEAVE_SWITCH_FIELD", as: String.self)
+    }
+
+    /// `OPERATIVE_OWN_LEAVE_ORGANIZATION_IDS_FIELD` (`operativeOwnLeaveOrganizationIds`).
+    nonisolated static var operativeOwnLeaveOrganizationIdsField: String? {
+        constant("OPERATIVE_OWN_LEAVE_ORGANIZATION_IDS_FIELD", as: String.self)
+    }
+
     /// `warningScopeFor({ viewer, visibleJobIds, bookings, managerBookings, people, operatives })`. `{ kind: 'all' }`
     /// when the script did not answer (the scan then behaves as before 1.10.0).
     nonisolated static func warningScopeFor(
@@ -247,6 +400,10 @@ extension Notification.Name {
     static let jobReadPlanDidChange = Notification.Name("jobReadPlanDidChange")
     /// The signed-in viewer (`JobAccessContext.readViewer`) changed: warnings re-scan under the new scope.
     static let jobAccessViewerDidChange = Notification.Name("jobAccessViewerDidChange")
+    /// RULEBOOK 1.56.0: an input of `leaveQueryPlan` that `jobReadPlanDidChange` does not cover changed — the
+    /// `operativeOwnLeave` switch for the open organisation, or the signed-in person's level or stored email. The
+    /// annual-leave listener re-plans (`HolidayStore`).
+    static let leaveReadPlanDidChange = Notification.Name("leaveReadPlanDidChange")
 }
 
 /// The signed-in account as the read plans see it (the real profile, never role testing: the security rules read the
@@ -291,6 +448,22 @@ nonisolated enum JobAccessContext {
     /// instead of spinning for ever (review of #242).
     static func viewerPendingMessage(isOnline: Bool) -> String {
         isOnline ? "Loading your team…" : "Your profile hasn't loaded — connect to the internet."
+    }
+
+    /// RULEBOOK 1.56.0 §9: whether the signed-in person is at the operative level (`permissionLevelOf`), and their
+    /// account email as stored — the inputs `leaveQueryPlan` takes beside `readViewer` and `ownBookingIds`.
+    nonisolated(unsafe) private(set) static var leaveOperativeLevel = false
+    nonisolated(unsafe) private(set) static var leaveEmail: String?
+
+    static func updateLeaveViewer(operativeLevel: Bool, email: String?) {
+        let trimmed = email?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextEmail = (trimmed?.isEmpty ?? true) ? nil : trimmed
+        guard operativeLevel != leaveOperativeLevel || nextEmail != leaveEmail else { return }
+        leaveOperativeLevel = operativeLevel
+        leaveEmail = nextEmail
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .leaveReadPlanDidChange, object: nil)
+        }
     }
 
     static func updateViewer(_ viewer: JobAccessViewer?) {
@@ -506,7 +679,10 @@ extension UserStore {
         // Review of #242: the launch placeholder (`isProvisional`, an admin-shaped stand-in while `users/{uid}` loads)
         // is never a viewer: its admin flags would show a manager the whole company. Until the real profile loads the
         // viewer is pending (warnings and Daily Overview show nobody; the read plans read as before the profile).
-        JobAccessContext.updateViewer(currentUser.flatMap { $0.isProvisional ? nil : jobAccessViewer(for: $0) })
+        let readUser = currentUser.flatMap { $0.isProvisional ? nil : $0 }
+        // RULEBOOK 1.56.0 §9 (owner answer 17 Nov Q2): only the operative level (`permissionLevelOf`) is narrowed.
+        JobAccessContext.updateLeaveViewer(operativeLevel: readUser?.permissionLevel == .operative, email: readUser?.email)
+        JobAccessContext.updateViewer(readUser.map { jobAccessViewer(for: $0) })
     }
 
     // MARK: Gates the screens call

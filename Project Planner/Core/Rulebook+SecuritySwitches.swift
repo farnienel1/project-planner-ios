@@ -78,6 +78,25 @@ nonisolated enum SecuritySwitchContext {
         } ?? false
     }
 
+    private static let ownLeaveMemo = RulebookAnswerMemo<String, Bool>(limit: 32)
+
+    /// RULEBOOK 1.56.0 §9, §18 (owner decisions 17 Nov): `operativeOwnLeaveEnabled(platformConfig/app, organizationId)`
+    /// — whether operatives read only their own leave (`leaveQueryPlan`). Not read yet, a missing document or an
+    /// unanswered script is off: everyone then reads the whole `holidayBookings` collection, as before 1.56.0.
+    static func operativeOwnLeaveEnabled(organizationId: String?) -> Bool {
+        lock.lock()
+        let current = config
+        let key = configKey
+        lock.unlock()
+        let orgId = organizationId ?? ""
+        return ownLeaveMemo.value(for: "\(key)|\(orgId)") {
+            CanonicalBusinessEngine.operativeOwnLeaveEnabled(config: current, organizationId: orgId)
+        } ?? false
+    }
+
+    /// The open organisation's `operativeOwnLeave` switch.
+    static var operativeOwnLeave: Bool { operativeOwnLeaveEnabled(organizationId: OrganizationRulebookContext.organizationId) }
+
     /// The open organisation's `ghostAccounts` switch.
     static var ghostAccounts: Bool { ghostAccountsEnabled(organizationId: OrganizationRulebookContext.organizationId) }
 
@@ -100,6 +119,7 @@ nonisolated enum SecuritySwitchContext {
         let before = current
         let ghostBefore = ghostAccounts
         let panelBefore = dataCheckPanel
+        let ownLeaveBefore = operativeOwnLeave
         let nextKey = next.flatMap { CanonicalBusinessEngine.rulebookMemoKey($0) } ?? "none"
         lock.lock()
         let firstAnswer = !hasAnswered
@@ -122,6 +142,12 @@ nonisolated enum SecuritySwitchContext {
         if dataCheckPanel != panelBefore {
             DispatchQueue.main.async {
                 NotificationCenter.default.post(name: .dataCheckPanelSwitchDidChange, object: nil)
+            }
+        }
+        if operativeOwnLeave != ownLeaveBefore {
+            // RULEBOOK 1.56.0: the annual-leave listener re-plans (`HolidayStore`).
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: .leaveReadPlanDidChange, object: nil)
             }
         }
         if ghostAccounts != ghostBefore {

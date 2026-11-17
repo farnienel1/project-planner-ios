@@ -8888,9 +8888,21 @@ class FirebaseBackend: ObservableObject {
             ], merge: true)
     }
 
-    func loadHolidayBookings(organizationId: String) async throws -> [HolidayBooking] {
+    /// RULEBOOK 1.56.0 §9, §17: `decision` is `leaveReadDecision(organizationId:)` — the whole collection (as before,
+    /// `.all`) or an operative's own `or` queries (`.own`, each read from the server with the cache fallback, merged by
+    /// document id; never the whole collection). `.nothing` reads nothing and returns an empty list.
+    func loadHolidayBookings(organizationId: String, decision: LeaveReadDecision = .all) async throws -> [HolidayBooking] {
         // Read path only — do not run writable-org repair (that can hang launch).
         let orgId = try await ensureReadableOrganization(organizationId)
+        if case .nothing = decision { return [] }
+        if case .own = decision {
+            let docs = try await readPlannedQueryDocuments(leaveReadSources(organizationId: orgId, decision: decision))
+            let parsed = holidayBookingsFromFirestore(docs, organizationId: orgId)
+            if LiveSnapshotMerge.loadYieldedNothing(collection: "holidayBookings", documentIds: docs.map(\.documentID), parsedCount: parsed.count) {
+                throw RulebookReaderYieldedNothingError(collection: "annual leave", rowCount: docs.count)
+            }
+            return parsed
+        }
         let holidaysRef = db.collection("organizations").document(orgId).collection("holidayBookings")
         let snapshot: QuerySnapshot
         do {
