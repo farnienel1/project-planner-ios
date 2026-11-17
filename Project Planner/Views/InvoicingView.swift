@@ -2231,11 +2231,13 @@ private struct MyTimesheetsHubView: View {
         }
 
         if let orgId = organizationId {
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: userId,
-                limit: 200
-            ) {
+            // `w-timesheet-lookups`: also the person's sheets stored without `userId` whose document id names them
+            // (`timesheet_{uid}_…`, `timesheetDocumentSubjectId`) — the period screen opens those by that same id.
+            // Sheets filed under another id the person goes by (a former invite id, a second users document) are NOT
+            // listed here yet: the period screen reads and saves `timesheet_{uid}_…` only, so such a period would open
+            // as a blank new sheet and a signature would make a second copy (follow-up; web reads and saves the alias).
+            let rows = await firebaseBackend.listPersonTimesheetStates(organizationId: orgId, ids: [userId], limit: 200)
+            do {
                 for row in rows {
                     guard let weekStart = firestoreDate(row["weekStart"]),
                           let storedStart = TimesheetDraftStore.organizationDay(weekStart) else { continue }
@@ -4562,6 +4564,8 @@ struct OperativeTimesheetsView: View {
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
                                 .buttonStyle(PPMenuRowButtonStyle())
+                                // An unknown (deleted) person has no profile or review screen; Download PDF stays.
+                                .disabled(row.unresolvedPerson)
                                 // RULEBOOK 1.43.0 (review r318): rebuild this exported sheet's PDF from its saved
                                 // snapshot (never re-stamped), so an undelivered sheet is always recoverable.
                                 .contextMenu {
@@ -5465,7 +5469,10 @@ struct OperativeTimesheetsView: View {
         await MainActor.run { isLoadingExportedHistory = true }
 
         let users = usersForExportedHistory()
-        guard !users.isEmpty else {
+        // Web `includeUnresolved` (17 Nov follow-up): an admin also sees exported sheets whose stored person is nobody in
+        // the organisation (a deleted person) as "Unknown person · <hint>", never dropped.
+        let viewerIsAdmin = userStore.displayUser?.isRosterAdmin == true
+        guard !users.isEmpty || viewerIsAdmin else {
             await MainActor.run {
                 exportedHistory = []
                 isLoadingExportedHistory = false
@@ -5474,85 +5481,122 @@ struct OperativeTimesheetsView: View {
         }
 
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        let roster = userStore.organizationUsers
+        // Guardrail 1 (`w-timesheet-lookups`): a sheet belongs to a person under every id they go by (`personIdSet`
+        // via `RulebookPeople.ownerIds`: former invite ids, a second users document on their email), exact id first.
+        let idsOf: (AppUser) -> [String] = { RulebookPeople.ownerIds(for: $0, users: roster) }
+        let ownerOf = PersonTimesheetLookup.ownerResolver(candidates: users, idsOf: idsOf)
+        let rosterOwnerOf = PersonTimesheetLookup.ownerResolver(candidates: roster, idsOf: idsOf)
+
+        // Cloud rows per listed person (keyed by their id), plus admins' unresolved people.
+        var cloudByUser: [String: (user: AppUser, rows: [[String: Any]], unresolved: Bool)] = [:]
+        /// Whether the rows hold every version of each pay run (the per-person read) — only then is the local copy of
+        /// the pay run refreshed from them (the organisation-wide read holds exported versions only).
+        var rowsAreComplete = false
+        if let orgId {
+            if let all = try? await firebaseBackend.listExportedTimesheets(organizationId: orgId), !all.isEmpty {
+                // Web fast path: one organisation-wide read of every exported sheet, each matched to its person.
+                for row in all {
+                    let subject = (row["__subjectId"] as? String) ?? ""
+                    if let member = ownerOf(subject) {
+                        cloudByUser[member.id, default: (member, [], false)].rows.append(row)
+                    } else if viewerIsAdmin, !subject.isEmpty, rosterOwnerOf(subject) == nil {
+                        let stand = PersonTimesheetLookup.unresolvedPerson(storedUserId: subject, organizationId: orgId)
+                        cloudByUser[subject.lowercased(), default: (stand, [], true)].rows.append(row)
+                    }
+                }
+            } else {
+                // The organisation-wide read was refused or empty: each listed person under every id they go by.
+                rowsAreComplete = true
+                for user in users {
+                    let rows = await firebaseBackend.listPersonTimesheetStates(
+                        organizationId: orgId,
+                        ids: idsOf(user),
+                        limit: 400,
+                        // RULEBOOK 1.55.0 §8: every version, grouped below into one row per pay run.
+                        versions: .all
+                    )
+                    // A sheet filed under an id two listed documents share goes to the one it names exactly.
+                    let mine = rows.filter { ownerOf(($0["__subjectId"] as? String) ?? "")?.id == user.id }
+                    cloudByUser[user.id] = (user, mine, false)
+                }
+            }
+        }
+
         var byId: [String: ExportedTimesheetHistoryRow] = [:]
         /// RULEBOOK 1.55.0 §8: rows built from a pay run's version chain (one per pay run).
         var chainRows: [String: ExportedTimesheetHistoryRow] = [:]
-        // RULEBOOK 1.31.0 §8: a sheet stored without `userId` is matched by its document id
-        // (`timesheetDocumentSubjectId`) against every id of the person (`personIdSet`: own, former and same-email
-        // ids), never dropped. Each such sheet is listed under one person only.
-        let unownedRows: [[String: Any]] = orgId == nil ? [] :
-            ((try? await firebaseBackend.listExportedTimesheetsWithoutUserId(organizationId: orgId!)) ?? [])
-        var claimedUnowned = Set<String>()
 
+        let complete = rowsAreComplete
+        for (_, entry) in cloudByUser {
+            let user = entry.user
+            // The local copy is only ever written for sheets filed under the person's own id (the period screens read
+            // that id), and only from a complete read.
+            let saveLocally: ([String: Any]) -> Bool = { row in
+                complete && !entry.unresolved
+                    && ((row["__subjectId"] as? String) ?? user.id).caseInsensitiveCompare(user.id) == .orderedSame
+            }
+            let cloudRows = entry.rows
+            // RULEBOOK 1.55.0 §8: an original and its revisions are one pay run — the row shows the latest EXPORTED
+            // version, with the earlier versions under it (read only). Rows that are not timesheet versions stay.
+            let chains = CanonicalBusinessEngine.timesheetVersionsForPeriod(cloudRows.compactMap { row in
+                (row["__documentId"] as? String).map { id in (documentId: id, data: row.filter { entry in !entry.key.hasPrefix("__") }) }
+            }) ?? []
+            var chained = Set<String>()
+            for chain in chains {
+                for version in chain { chained.insert(version.documentId) }
+                TimesheetVersionChainCache.remember(chain)
+                guard let shownIndex = chain.lastIndex(where: { $0.exported }) else { continue }
+                let shown = chain[shownIndex]
+                var row = FirebaseBackend.versionRow(shown, chain: chain)
+                row["__subjectId"] = PersonTimesheetLookup.documentOwnerId(documentId: shown.documentId, data: shown.data)
+                guard let weekStart = firestoreDate(row["weekStart"]),
+                      let day = TimesheetDraftStore.organizationDay(weekStart),
+                      let decoded = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
+                let local = saveLocally(row)
+                if local { TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day) }
+                // The local copy of the pay run is its LATEST version: only saved when that is the one shown.
+                if local && shownIndex == chain.count - 1 {
+                    let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
+                    TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
+                }
+                let period = exportedRowPeriod(row: row, day: day, user: user, local: local)
+                let rowId = "\(user.id)|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? "")|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? "")"
+                chainRows[rowId] = ExportedTimesheetHistoryRow(
+                    id: rowId,
+                    user: user,
+                    week: period,
+                    draft: decoded,
+                    earlier: CanonicalBusinessEngine.timesheetEarlierVersions(Array(chain[...shownIndex])),
+                    unresolvedPerson: entry.unresolved
+                )
+            }
+            for row in cloudRows where !chained.contains((row["__documentId"] as? String) ?? "") {
+                guard let weekStart = firestoreDate(row["weekStart"]),
+                      let day = TimesheetDraftStore.organizationDay(weekStart),
+                      let decoded = TimesheetDraftStore.decodeFirestoreMap(row),
+                      TimesheetDraftStore.listBucket(for: decoded, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" else { continue }
+                let local = saveLocally(row)
+                if local {
+                    TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
+                    let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
+                    TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
+                }
+                let period = exportedRowPeriod(row: row, day: day, user: user, local: local)
+                let rowId = "\(user.id)|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? "")|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? "")"
+                if chainRows[rowId] == nil {
+                    byId[rowId] = ExportedTimesheetHistoryRow(id: rowId, user: user, week: period, draft: decoded, unresolvedPerson: entry.unresolved)
+                }
+            }
+        }
+
+        // This device's own copies (a sheet exported here before the server answered), as before.
         for user in users {
             var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id))
             for period in TimesheetPayrollPolicy.previousPayPeriods(count: 260, settings: settings) {
                 weekStarts.insert(period.start)
             }
             weekStarts.insert(week.start)
-
-            if let orgId,
-               let listed = try? await firebaseBackend.listTimesheetStates(
-                   organizationId: orgId,
-                   userId: user.id,
-                   limit: 400,
-                   // RULEBOOK 1.55.0 §8: every version, grouped below into one row per pay run.
-                   versions: .all
-               ) {
-                let personIds = Set(RulebookPeople.ownerIds(for: user, users: userStore.organizationUsers).map { $0.lowercased() })
-                let unownedForUser = unownedRows.filter { row in
-                    guard let subject = (row["__subjectId"] as? String)?.lowercased(),
-                          let docId = row["__documentId"] as? String,
-                          personIds.contains(subject), !claimedUnowned.contains(docId) else { return false }
-                    claimedUnowned.insert(docId)
-                    return true
-                }
-                let cloudRows = listed + unownedForUser
-                // RULEBOOK 1.55.0 §8: an original and its revisions are one pay run — the row shows the latest EXPORTED
-                // version, with the earlier versions under it (read only). Rows that are not timesheet versions stay.
-                let chains = CanonicalBusinessEngine.timesheetVersionsForPeriod(cloudRows.compactMap { row in
-                    (row["__documentId"] as? String).map { id in (documentId: id, data: row.filter { entry in !entry.key.hasPrefix("__") }) }
-                }) ?? []
-                var chained = Set<String>()
-                for chain in chains {
-                    for version in chain { chained.insert(version.documentId) }
-                    TimesheetVersionChainCache.remember(chain)
-                    guard let shownIndex = chain.lastIndex(where: { $0.exported }) else { continue }
-                    let shown = chain[shownIndex]
-                    let row = FirebaseBackend.versionRow(shown, chain: chain)
-                    guard let weekStart = firestoreDate(row["weekStart"]),
-                          let day = TimesheetDraftStore.organizationDay(weekStart),
-                          let decoded = TimesheetDraftStore.decodeFirestoreMap(row) else { continue }
-                    TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
-                    weekStarts.insert(day)
-                    let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
-                    // The local copy of the pay run is its LATEST version: only saved when that is the one shown.
-                    if shownIndex == chain.count - 1 {
-                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
-                    }
-                    let period = TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: end, settings: settings)
-                    let rowId = "\(user.id)|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? "")|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? "")"
-                    chainRows[rowId] = ExportedTimesheetHistoryRow(
-                        id: rowId,
-                        user: user,
-                        week: period,
-                        draft: decoded,
-                        earlier: CanonicalBusinessEngine.timesheetEarlierVersions(Array(chain[...shownIndex]))
-                    )
-                }
-                for row in cloudRows where !chained.contains((row["__documentId"] as? String) ?? "") {
-                    guard let weekStart = firestoreDate(row["weekStart"]),
-                          let day = TimesheetDraftStore.organizationDay(weekStart) else { continue }
-                    TimesheetDraftStore.rememberBounds(from: row, userId: user.id, weekStart: day)
-                    weekStarts.insert(day)
-                    if let decoded = TimesheetDraftStore.decodeFirestoreMap(row),
-                       TimesheetDraftStore.listBucket(for: decoded, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" {
-                        let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
-                        TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
-                    }
-                }
-            }
-
             for start in weekStarts {
                 let draft = TimesheetDraftStore.load(userId: user.id, weekStart: start)
                 guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user)) == "exported" else { continue }
@@ -5562,7 +5606,7 @@ struct OperativeTimesheetsView: View {
                 let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? ""
                 let rowId = "\(user.id)|\(startKey)|\(endKey)"
                 // RULEBOOK 1.55.0 §8: a pay run read with its versions keeps that row (latest exported version).
-                if chainRows[rowId] != nil { continue }
+                if chainRows[rowId] != nil || byId[rowId] != nil { continue }
                 byId[rowId] = ExportedTimesheetHistoryRow(
                     id: rowId,
                     user: user,
@@ -5583,6 +5627,19 @@ struct OperativeTimesheetsView: View {
             exportedHistory = sorted
             isLoadingExportedHistory = false
         }
+    }
+
+    /// The pay run an exported row shows: its stored start and end (`weekStartKey` / `weekEndKey`, else `weekEnd`)
+    /// matched to a payment run (`periodMatchingStoredStart`). A row saved locally reads the bounds remembered for it.
+    private func exportedRowPeriod(row: [String: Any], day: Date, user: AppUser, local: Bool) -> WeekRange {
+        if local {
+            let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
+            return TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: end, settings: settings)
+        }
+        let endKey = (row["weekEndKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedEnd = (endKey.isEmpty ? nil : CanonicalBusinessEngine.date(fromDayKey: endKey))
+            ?? firestoreDate(row["weekEnd"]).flatMap { TimesheetDraftStore.organizationDay($0) }
+        return TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: storedEnd, settings: settings)
     }
 
     /// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects`: User Timesheets people, the viewer's own exported sheets
@@ -5652,6 +5709,9 @@ private struct ExportedTimesheetHistoryRow: Identifiable {
     let draft: TimesheetDraft
     /// RULEBOOK 1.55.0 §8: the pay run's earlier versions (before the one this row shows), newest first, read only.
     var earlier: [TimesheetVersionInfo] = []
+    /// Web `isUnresolvedTimesheetPerson`: the stored person is nobody in the organisation (admins only) — the row shows
+    /// "Unknown person · <hint>" and has no profile or review screen to open; Download PDF still works.
+    var unresolvedPerson: Bool = false
 }
 
 private enum ManagerTimesheetListTab {
