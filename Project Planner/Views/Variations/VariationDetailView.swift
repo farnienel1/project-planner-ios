@@ -251,33 +251,26 @@ struct VariationDetailView: View {
                 .font(.footnote.weight(.semibold))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 8) {
-                ForEach(VariationStatus.allCases, id: \.self) { status in
-                    Button {
-                        guard canEdit, status != variation.status else { return }
-                        if status == .submitted {
-                            confirmSubmitted = true
-                        } else {
-                            Task { await applyStatus(status) }
-                        }
-                    } label: {
-                        Text(status.title)
-                            .font(.subheadline.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .foregroundStyle(variation.status == status ? Color.white : Color.primary)
-                            .background(variation.status == status ? headerColor(status) : PPColor.well)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .stroke(headerColor(status).opacity(variation.status == status ? 0 : 0.45), lineWidth: 1)
-                            )
+            // Owner request 17 Nov (UI only): Open / Submitted / Closed as a segmented control. Same handler as the
+            // buttons before: Submitted asks first, the others apply straight away; choosing the current one does nothing.
+            Picker("Status", selection: Binding(
+                get: { variation.status },
+                set: { status in
+                    guard canEdit, status != variation.status else { return }
+                    if status == .submitted {
+                        confirmSubmitted = true
+                    } else {
+                        Task { await applyStatus(status) }
                     }
-                    .accessibilityIdentifier("variationDetail.status.\(status.rawValue)")
-                    .buttonStyle(.plain)
-                    .disabled(!canEdit || status == variation.status)
+                }
+            )) {
+                ForEach(VariationStatus.allCases, id: \.self) { status in
+                    Text(status.title).tag(status)
                 }
             }
+            .pickerStyle(.segmented)
+            .disabled(!canEdit)
+            .accessibilityLabel("Status of \(variation.voNumber)")
             .accessibilityIdentifier("variationDetail.status")
             Text(canEdit
                  ? "An admin, or a manager assigned to this job, can mark it submitted or closed."
@@ -303,9 +296,14 @@ struct VariationDetailView: View {
         variation.updatedAt = Date()
         variation.updatedByUid = uid
         variation.statusHistory.append(VariationStatusHistoryEntry(status: status.rawValue, byUid: uid, byName: name, at: Date()))
+        // RULEBOOK 1.63.0 `variationStatusWriteFields`: Submitted / Closed lock the number, Open (a reopen) clears the
+        // lock in the same write, so the variation is unpinned and the rules accept its next renumber.
+        variation.voNumberLocked = CanonicalBusinessEngine.variationStatusLocksNumber(
+            status: status.rawValue,
+            storedLocked: opened.voNumberLocked
+        )
         if status == .submitted {
             variation.submittedAt = Date()
-            variation.voNumberLocked = true
         }
         if status == .closed {
             variation.closedAt = Date()

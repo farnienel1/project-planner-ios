@@ -22,7 +22,8 @@ final class VariationStore: ObservableObject {
     init(parentId: String, parentType: VariationParentType) {
         self.parentId = parentId
         self.parentType = parentType
-        self.tracker = .disabled(parentId: parentId, parentType: parentType)
+        // RULEBOOK 1.63.0: until the tracker document loads, a job reads as having none — on by default.
+        self.tracker = VariationCodec.tracker(from: [:], parentId: parentId, parentType: parentType)
     }
 
     var visibleVariations: [Variation] {

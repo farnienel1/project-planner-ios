@@ -486,7 +486,7 @@ extension CanonicalBusinessEngine {
         callJSON("removedEvidenceHeading", arguments: [count]) as? String ?? "Removed evidence (\(max(0, count)))"
     }
 
-    /// `parseVariationTrackerDocument(parentId, data)`: a missing document is a disabled tracker.
+    /// `parseVariationTrackerDocument(parentId, data)`: a missing document is an enabled tracker (1.63.0).
     nonisolated static func parseVariationTrackerDocument(parentId: String, data: [String: Any]?) -> CanonicalDocumentRow? {
         let arg: Any = data.map { peopleDocumentJSON($0) as Any } ?? NSNull()
         return opsRow("parseVariationTrackerDocument", [parentId, arg])

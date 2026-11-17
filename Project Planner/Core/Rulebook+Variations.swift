@@ -278,7 +278,17 @@ extension CanonicalBusinessEngine {
         return (planRows, result["refused"] as? String)
     }
 
-    /// `variationIsPinned(row)`: Submitted, Closed or a locked number keep their place and number.
+    /// RULEBOOK 1.63.0 §22 `variationStatusWriteFields(stored, status)`: the number lock written with a status change —
+    /// Submitted and Closed lock it, Open unlocks it in the same write (a reopened variation is unpinned). Falls back to
+    /// the same rule when the script does not answer.
+    nonisolated static func variationStatusLocksNumber(status: String, storedLocked: Bool) -> Bool {
+        let result = callJSON("variationStatusWriteFields", arguments: [["voNumberLocked": storedLocked], status]) as? [String: Any]
+        if let locked = result?["voNumberLocked"] as? Bool { return locked }
+        return status == "submitted" || status == "closed"
+    }
+
+    /// `variationIsPinned(row)`: Submitted and Closed keep their place and number (1.63.0: the status decides; a lock
+    /// left on a reopened Open variation no longer pins it).
     nonisolated static func variationIsPinned(status: String, voNumberLocked: Bool) -> Bool {
         (callJSON("variationIsPinned", arguments: [["status": status, "voNumberLocked": voNumberLocked]]) as? Bool) ?? false
     }
