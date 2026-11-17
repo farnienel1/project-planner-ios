@@ -231,10 +231,45 @@ struct BookLabourFlowView: View {
     }
 
     var body: some View {
-        if embedsNavigationStack {
+        // RULEBOOK §2 `canScheduleOperatives`: an operative never gets into Book labour, whatever way in. Until the
+        // signed-in user is known, show loading rather than deciding.
+        if userStore.displayUser == nil {
+            gateScreen { ProgressView() }
+        } else if !userStore.canOpenJobScheduling() {
+            gateScreen {
+                ContentUnavailableView(
+                    JobSchedulingAccessCopy.noAccessTitle,
+                    systemImage: "lock.fill",
+                    description: Text(JobSchedulingAccessCopy.noAccessMessage)
+                )
+            }
+        } else if embedsNavigationStack {
             NavigationStack { bookFlowRoot }
         } else {
             bookFlowRoot
+        }
+    }
+
+    /// The loading / no-access screen: inside its own navigation stack with a Close button when this view was opened
+    /// full screen (`embedsNavigationStack`); otherwise the parent stack's Back button is there already.
+    @ViewBuilder
+    private func gateScreen<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        if embedsNavigationStack {
+            NavigationStack {
+                content()
+                    .navigationTitle("Book labour")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { dismiss() }
+                                .accessibilityIdentifier("bookLabour.noAccess.close")
+                        }
+                    }
+            }
+        } else {
+            content()
+                .navigationTitle("Book labour")
+                .navigationBarTitleDisplayMode(.inline)
         }
     }
 

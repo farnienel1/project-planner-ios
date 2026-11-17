@@ -78,9 +78,10 @@ struct DailyOverviewView: View {
     }
     
     /// Staff open Book Labour; which jobs they may book onto is `canWriteBooking` per job (RULEBOOK 1.10.0 §16).
-    private var canBookLabour: Bool {
-        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
-    }
+    /// RULEBOOK §2 `canScheduleOperatives` (`UserStore.canOpenJobScheduling`): Book labour and editing bookings here
+    /// are for admins and managers, never operatives; which bookings stays `canWriteBooking`. Worked out once per
+    /// render (`onChange` below), not once per row.
+    @State private var canBookLabour = false
     
     private var isHistoric: Bool {
         displayDate != nil
@@ -495,6 +496,9 @@ struct DailyOverviewView: View {
             }
         }
         .background(PPColor.page.ignoresSafeArea())
+        // Once per render (not per row); `onChange` sees the new user / preset, unlike `onReceive` on a `@Published`
+        // (which fires on willSet and would read the old value).
+        .onChange(of: userStore.canOpenJobScheduling(), initial: true) { _, allowed in canBookLabour = allowed }
         .navigationDestination(isPresented: $showingBookLabour) {
             BookLabourFlowView(bookDate: overviewDate, embedsNavigationStack: false)
                 .environmentObject(appSettings)
