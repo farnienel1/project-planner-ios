@@ -703,10 +703,12 @@ class WarningsService: ObservableObject {
         WarningsRefreshHelper.postWarningsCountDidChange()
     }
 
-    /// Staff only: the store refuses anyone `canViewStaffWarnings` says no to.
+    /// Staff only: the store refuses anyone `canViewStaffWarnings` says no to. An operative clash cluster writes
+    /// every overlapping pair's key too (`WarningResolutionStore.dismiss(_:completion:)`). `completion` gets true
+    /// once the write was accepted; it is not called when this returns false.
     @discardableResult
-    func dismissWarning(_ warning: Warning) -> Bool {
-        guard resolutionStore.dismiss(warning.resolutionKey) else { return false }
+    func dismissWarning(_ warning: Warning, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+        guard resolutionStore.dismiss(warning, completion: completion) else { return false }
         refreshActiveFromGenerated()
         WarningsRefreshHelper.postWarningsCountDidChange()
         return true

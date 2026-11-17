@@ -1723,7 +1723,8 @@ private struct WarningsScheduleIndex {
             let pairRows = group["pairs"] as? [[String: Any]] ?? []
             let pairs: [Warning.ClashPair] = pairRows.compactMap { row in
                 guard let a = row["bookingAId"] as? String, let b = row["bookingBId"] as? String else { return nil }
-                return Warning.ClashPair(bookingAId: a, bookingBId: b)
+                let key = (row["clashResolutionKey"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                return Warning.ClashPair(bookingAId: a, bookingBId: b, clashResolutionKey: key)
             }
             return CanonicalOperativeClash(
                 personKey: personKey,

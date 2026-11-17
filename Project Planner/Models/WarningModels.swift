@@ -218,6 +218,9 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
     struct ClashPair: Hashable, Codable, Sendable {
         var bookingAId: String
         var bookingBId: String
+        /// The pair's `clashResolutionKey` as `operativeClashGroups` returned it. Nil in older caches
+        /// (`WarningResolutionStore.dismissResolutionKeys` then asks `clashResolutionKey` for it).
+        var clashResolutionKey: String? = nil
     }
 
     struct ManagerClashWarningDetails: Hashable, Codable, Sendable {
