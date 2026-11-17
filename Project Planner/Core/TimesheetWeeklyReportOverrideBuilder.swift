@@ -651,6 +651,10 @@ enum TimesheetWeeklyReportOverrideBuilder {
             // re-prices the line; and an overtime line's multiplier (web `otMultiplier`).
             bookingFingerprint: line.bookingFingerprint,
             otMultiplier: line.isOvertimeLine ? line.otMultiplier : nil,
+            // RULEBOOK 1.61.0 §8: the real day rate and divisor at signing, for the hours wording (never worked out from
+            // the amount).
+            otBaseDayRate: line.isOvertimeLine && line.payrollBasis == .dayRate && (line.otBaseDayRate ?? 0) > 0 && (line.standardDayHours ?? 0) >= 1 ? line.otBaseDayRate : nil,
+            otDayRateHours: line.isOvertimeLine && line.payrollBasis == .dayRate && (line.otBaseDayRate ?? 0) > 0 && (line.standardDayHours ?? 0) >= 1 ? line.standardDayHours : nil,
             // RULEBOOK 1.46.0 §8: the line's own PAYE flag and that it is not a leave line (payroll lines never are),
             // so the signed copy alone decides the invoice (`timesheetInvoiceRows`).
             isPayeDay: line.isPayeDay,

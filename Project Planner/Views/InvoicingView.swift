@@ -1903,6 +1903,9 @@ enum TimesheetDraftStore {
                 // multiplier, only when known.
                 if let signed = line.bookingFingerprint, !signed.isEmpty { row["bookingFingerprint"] = signed }
                 if line.isOvertime, let multiplier = line.otMultiplier { row["otMultiplier"] = multiplier }
+                // RULEBOOK 1.61.0 §8 (web `weeklyReportOverrideToFirestore`): the day rate and divisor at signing, when known.
+                if line.isOvertime, let rate = line.otBaseDayRate { row["otBaseDayRate"] = rate }
+                if line.isOvertime, let hours = line.otDayRateHours { row["otDayRateHours"] = hours }
                 if let had = line.bookingHadOvertimeLine { row["bookingHadOvertimeLine"] = had }
                 if let key = line.appliedReviewKey { row["appliedReviewKey"] = key }
                 if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
@@ -1954,6 +1957,8 @@ enum TimesheetDraftStore {
                 payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"]),
                 bookingFingerprint: (row["bookingFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
+                otBaseDayRate: (row["otBaseDayRate"] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil },
+                otDayRateHours: (row["otDayRateHours"] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil },
                 bookingHadOvertimeLine: row["bookingHadOvertimeLine"] as? Bool,
                 appliedReviewKey: row["appliedReviewKey"] as? String,
                 reviewPartOf: (row["reviewPartOf"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -8279,16 +8284,11 @@ enum TimesheetInvoiceRows {
                     )
                     item.isOverlapping = live?.isOverlapping ?? false
                     item.bookingId = line.bookingId ?? live?.bookingId
-                    // RULEBOOK 1.61.0 §8: a signed overtime line reads in hours from its stored hours, days and amount
-                    // when its multiplier is known (stored, or in its stored multiplied text) — never re-priced and
-                    // never a guessed ×1. Its divisor is its own paid day (paid hours ÷ days); the day rate is the one
-                    // that gave the signed amount (amount ÷ days ÷ multiplier, unrounded).
-                    let storedMultiplier = line.otMultiplier ?? CanonicalBusinessEngine.parseMultipliedHoursText(line.details)?.multiplier
-                    if line.isOvertime, let multiplier = storedMultiplier, multiplier > 0, line.days > 0.0001, line.paidHours > 0 {
-                        item.otMultiplier = multiplier
-                        item.dayRateDivisor = line.paidHours / line.days
-                        item.baseDayRate = amount / line.days / multiplier
-                    }
+                    // RULEBOOK 1.61.0 §8 (review of #378, S1): a signed overtime line reads in hours only from the day
+                    // rate and divisor stored at signing, when its amount is exactly what they pay
+                    // (`signedDayRateOvertimeText`). Never a rate worked out from the signed amount or stored days; any
+                    // other signed line keeps the older wording.
+                    item.signedHoursText = CanonicalBusinessEngine.signedDayRateOvertimeText(line: line, amount: amount)
                     rows.append(item)
                 } else if let live = liveById[key(id)] {
                     var item = InvoiceLineItem(
@@ -8299,6 +8299,9 @@ enum TimesheetInvoiceRows {
                     )
                     item.isOverlapping = live.isOverlapping
                     item.bookingId = live.bookingId
+                    // RULEBOOK 1.61.0 §8 (review of #378, S2): Generate invoice and Export read a day-rate overtime line in
+                    // hours like web — the live line's multiplier, the person's own day rate and its divisor.
+                    item.applyLiveOvertimeFigures(from: live)
                     rows.append(item)
                 }
             case "priceWork":
@@ -8365,6 +8368,18 @@ struct InvoiceLineItem {
     var otMultiplier: Double? = nil
     var baseDayRate: Double? = nil
     var dayRateDivisor: Double? = nil
+    /// RULEBOOK 1.61.0 §8: a signed line's hours wording (`signedDayRateOvertimeText`), or nil for the older wording.
+    var signedHoursText: String? = nil
+
+    /// RULEBOOK 1.61.0 §8: a live overtime line's multiplier, the person's own day rate (never the multiplied rate ÷ N)
+    /// and its divisor. Without the collector's own rate, nothing is set (the older wording).
+    mutating func applyLiveOvertimeFigures(from line: TimesheetPayrollLineItem) {
+        guard line.isOvertimeLine, let multiplier = line.otMultiplier, multiplier > 0,
+              let base = line.otBaseDayRate, base > 0 else { return }
+        otMultiplier = multiplier
+        baseDayRate = base
+        dayRateDivisor = line.standardDayHours
+    }
 
     init(
         lineId: String,
@@ -8435,6 +8450,7 @@ struct InvoiceLineItem {
     /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)". Nil for every other line (standard,
     /// hourly, PAYE) or when the multiplier, day rate or divisor is unknown.
     var dayRateOvertimeText: String? {
+        if let signedHoursText { return signedHoursText }
         guard isOvertimeLine, !isPayeDay, payrollBasis == .dayRate,
               let multiplier = otMultiplier, multiplier > 0,
               let dayRate = baseDayRate, dayRate > 0,
@@ -8475,14 +8491,8 @@ struct InvoiceLineItem {
         )
         self.isOverlapping = payrollLine.isOverlapping
         self.bookingId = payrollLine.bookingId
-        // RULEBOOK 1.61.0: the live overtime line's multiplier and divisor; its `dayRate` is the multiplied rate.
-        if payrollLine.isOvertimeLine, let multiplier = payrollLine.otMultiplier, multiplier > 0 {
-            self.otMultiplier = multiplier
-            // The person's own day rate when the collector gave it, so the hourly rate shown is exactly day rate ÷
-            // divisor in pennies (`dayRateHourlyEquivalent`); the multiplied rate ÷ N need not give it back exactly.
-            self.baseDayRate = payrollLine.otBaseDayRate ?? payrollLine.dayRate / multiplier
-            self.dayRateDivisor = payrollLine.standardDayHours
-        }
+        // RULEBOOK 1.61.0: the live overtime line's multiplier, the person's own day rate and divisor.
+        applyLiveOvertimeFigures(from: payrollLine)
     }
 }
 
@@ -8738,8 +8748,26 @@ private enum InvoicePDFBuilder {
             return y
         }
 
+        let detailAttributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
         for item in context.lineItems {
-            if y > pageRect.height - 110 {
+            // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
+            // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
+            // RULEBOOK 1.61.0 §8: a day-rate overtime line reads in hours (`dayRateOvertimeCalcText`).
+            let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
+            let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
+            let ratePart = item.dayRateOvertimeText.map { [$0] } ?? [hoursPart, item.timesheetRateAnnotation]
+            let detail = ([clockPart] + ratePart).filter { !$0.isEmpty }.joined(separator: " · ")
+            // Review of #378 (N3): the detail box grows to the text it holds (measured at the drawn width and font), so a
+            // long hours sum is never clipped, whatever its number of lines; the row grows with it (at least as before).
+            let measured = (detail as NSString).boundingRect(
+                with: CGSize(width: 190, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: detailAttributes,
+                context: nil
+            ).height
+            let detailHeight = max(28, ceil(measured) + 2)
+            let rowHeight = max(50, 22 + detailHeight + 6)
+            if y > pageRect.height - 110 || y + rowHeight > pageRect.height - 60 {
                 pdf.beginPage()
                 y = margin
             }
@@ -8763,26 +8791,16 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
             )
-            // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
-            // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
-            let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
-            let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
-            // RULEBOOK 1.61.0 §8: a day-rate overtime line reads in hours (`dayRateOvertimeCalcText`).
-            let hoursSum = item.dayRateOvertimeText
-            let ratePart = hoursSum.map { [$0] } ?? [hoursPart, item.timesheetRateAnnotation]
-            let detail = ([clockPart] + ratePart).filter { !$0.isEmpty }.joined(separator: " · ")
-            // The hours sum is longer: up to three lines, so it is never cut off.
-            let detailHeight: CGFloat = hoursSum == nil ? 28 : 40
             (detail as NSString).draw(
                 in: CGRect(x: middleX, y: y + 22, width: 190, height: detailHeight),
-                withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
+                withAttributes: detailAttributes
             )
 
             (currency(item.amount) as NSString).draw(
                 in: CGRect(x: amountX, y: y + 16, width: 56, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .bold), .foregroundColor: navy]
             )
-            y += hoursSum == nil ? 50 : 62
+            y += rowHeight
         }
         return y
     }

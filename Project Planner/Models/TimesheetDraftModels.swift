@@ -257,6 +257,11 @@ struct TimesheetWeeklyReportLabourLine: Codable, Hashable, Identifiable {
     var bookingFingerprint: String? = nil
     /// The overtime multiplier of an overtime line (web `otMultiplier`); nil on a standard line or one signed without it.
     var otMultiplier: Double? = nil
+    /// RULEBOOK 1.61.0 §8 (web `otBaseDayRate`, `otDayRateHours`): on a day-rate overtime line, the person's own day rate
+    /// (never multiplied) and the line's day-rate divisor at signing, so the signed line reads in hours without working a
+    /// rate out from its amount (`signedDayRateOvertimeText`). Nil on a line signed before 1.61.0 (older wording).
+    var otBaseDayRate: Double? = nil
+    var otDayRateHours: Double? = nil
     /// RULEBOOK 1.46.0 §8: whether the booking had its own overtime line when the line was signed (the live line's
     /// `bookingHasOvertimeLine`), so a later save tests a review against the sheet as signed. Nil on an older line.
     var bookingHadOvertimeLine: Bool? = nil

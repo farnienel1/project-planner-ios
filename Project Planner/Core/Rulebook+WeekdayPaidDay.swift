@@ -570,6 +570,28 @@ extension CanonicalBusinessEngine {
         )?.text
     }
 
+    /// RULEBOOK 1.61.0 §8 (review of #378, S1) `signedDayRateOvertimeText`: a SIGNED day-rate overtime line in hours,
+    /// only from the day rate and divisor stored on it at signing and only when `amount` is exactly what they pay; nil
+    /// (the older wording) for a line signed before 1.61.0, an edited or declined line, or any other line. Never a rate
+    /// worked out from the signed amount.
+    nonisolated static func signedDayRateOvertimeText(line: TimesheetWeeklyReportLabourLine, amount: Double, currencyCode: String? = nil) -> String? {
+        let input: [String: Any] = [
+            "isOvertime": line.isOvertime,
+            "payBasis": RulebookJSON.orNull(line.payBasis),
+            "decision": line.decision.rawValue,
+            "paidHours": line.paidHours,
+            "amount": amount,
+            "otMultiplier": RulebookJSON.orNull(line.otMultiplier),
+            "otBaseDayRate": RulebookJSON.orNull(line.otBaseDayRate),
+            "otDayRateHours": RulebookJSON.orNull(line.otDayRateHours),
+            "details": line.details,
+        ]
+        guard JSONSerialization.isValidJSONObject(input),
+              let row = callJSON("signedDayRateOvertimeText", arguments: [input, ["currency": currencyCode ?? OrganizationRulebookContext.currencyCode]]) as? [String: Any]
+        else { return nil }
+        return row["text"] as? String
+    }
+
     /// RULEBOOK 1.61.0 §8 `dayRateHourlyEquivalent`: the hourly rate shown for a day rate on one part — the day rate ÷
     /// the divisor rounded to pennies (display only; pay never uses it). Nil when the script refuses it.
     nonisolated static func dayRateHourlyEquivalent(dayRate: Double, dayRateHours: Double) -> Double? {
