@@ -2161,86 +2161,25 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // CRITICAL: Before creating a user, ensure the current user has admin permissions
-        // Check the ACTUAL Firebase document (not just in-memory object) and fix if needed
         guard let currentUserId = firebaseBackend.currentUser?.uid else {
-            print("🔥🔥🔥 DEBUG: ⚠️ No current user ID available")
             errorMessage = "Unable to identify current user. Please sign in again."
             return false
         }
-        
-        // Load the actual user document from Firebase to check permissions
-        if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
-            print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-            print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-            print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            
-            // Check if user has admin permissions in Firebase
-            let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
-            let canInviteOperativesAsManager =
-                !hasAdmin &&
-                !firebaseUserData.permissions.operativeMode &&
-                firebaseUserData.permissions.manager &&
-                firebaseUserData.permissions.operatives
-
-            if !hasAdmin && !canInviteOperativesAsManager {
-                print("🔥🔥🔥 DEBUG: ⚠️ Current user does NOT have admin permissions in Firebase!")
-                errorMessage = "You do not have admin permissions. Please contact an administrator."
-                return false
-            }
-
-            // Managers with Operative Management can ONLY invite operatives
-            if canInviteOperativesAsManager {
-                guard permissions.operativeMode else {
-                    errorMessage = "Managers can only add operatives."
-                    return false
-                }
-            }
-
-            if hasAdmin {
-                print("🔥🔥🔥 DEBUG: ✅ Current user HAS admin permissions in Firebase")
-                print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-                print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-                print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            } else {
-                print("🔥🔥🔥 DEBUG: ✅ Current user can invite operatives as manager")
-            }
-        } else {
-            print("🔥🔥🔥 DEBUG: ⚠️ Current user document does not exist in Firebase!")
-            errorMessage = "Your user document does not exist. Please sign out and sign back in."
+        // Mass-assignment review of #263 (nit 4): one check, the inviter's level in THIS organisation
+        // (`organizationLevelFor`) — never the home company's flags. A non-admin may invite only an operative; the
+        // invitation written is checked again (`InvitationDocument.requireAllowed`) and by the security rules.
+        guard let inviterIsAdmin = await firebaseBackend.inviterIsAdmin(uid: currentUserId, organizationId: organizationId) else {
+            errorMessage = "Couldn't check your permissions. Try again."
             return false
         }
-        
-        // Double-check: admins must still be admins; managers inviting operatives skip this admin-only gate.
-        print("🔥🔥🔥 DEBUG: Final verification - checking user document one more time...")
-        if let finalCheck = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            let hasAdmin = finalCheck.isSuperAdmin || finalCheck.permissions.adminAccess || finalCheck.role == .admin
-            let managerInvitingOperative =
-                !hasAdmin &&
-                !finalCheck.permissions.operativeMode &&
-                finalCheck.permissions.manager &&
-                finalCheck.permissions.operatives &&
-                permissions.operativeMode
-            print("🔥🔥🔥 DEBUG: Final check - hasAdmin: \(hasAdmin), managerInvitingOperative: \(managerInvitingOperative)")
-            if !hasAdmin && !managerInvitingOperative {
-                print("🔥🔥🔥 DEBUG: ⚠️ WARNING: User still doesn't have admin permissions after fix attempt!")
-                errorMessage = "Your user document does not have admin permissions. Please ensure isSuperAdmin=true, adminAccess=true, or role='admin' in Firebase Console. User ID: \(currentUserId)"
-                return false
-            }
+        if !inviterIsAdmin && !permissions.operativeMode {
+            errorMessage = "Managers can only add operatives."
+            return false
         }
-        
         print("🔥🔥🔥 DEBUG: Calling createUserInvitation with organizationId: \(organizationId), invitedBy: \(invitedBy)")
         print("🔥🔥🔥 DEBUG: Current user ID for rules check: \(currentUserId)")
         
         do {
-            // Mass-assignment audit 17 Nov (review of #263): the invitation is always checked against the inviter's
-            // level in THIS organisation (`organizationLevelFor`, never a home company's flags); when that level
-            // could not be read, nothing is invited.
-            guard let inviterIsAdmin = await firebaseBackend.inviterIsAdmin(uid: currentUserId, organizationId: organizationId) else {
-                errorMessage = "Couldn't check your permissions. Try again."
-                return false
-            }
             try await firebaseBackend.createUserInvitation(
                 email: email,
                 organizationId: organizationId,
