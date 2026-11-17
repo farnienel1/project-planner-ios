@@ -862,6 +862,7 @@ var ProjectPlannerCanonical = (() => {
     dataParitySumCounts: () => dataParitySumCounts,
     dataParitySummary: () => dataParitySummary,
     dayKeyInOrganizationZone: () => dayKeyInOrganizationZone,
+    dayRateHourlyEquivalent: () => dayRateHourlyEquivalent,
     dayRateOvertimeCalcText: () => dayRateOvertimeCalcText,
     deadlineAssignedProjectIds: () => deadlineAssignedProjectIds,
     deadlineAssignedRecipients: () => deadlineAssignedRecipients,
@@ -1174,6 +1175,7 @@ var ProjectPlannerCanonical = (() => {
     missingStarterQualificationCodes: () => missingStarterQualificationCodes,
     monthDayOffsetBefore: () => monthDayOffsetBefore,
     monthDayOrdinal: () => monthDayOrdinal,
+    multipliedHoursParts: () => multipliedHoursParts,
     multipliedHoursText: () => multipliedHoursText,
     myProfileBankHolidayRange: () => myProfileBankHolidayRange,
     myProfileSummary: () => myProfileSummary,
@@ -5718,12 +5720,18 @@ var ProjectPlannerCanonical = (() => {
     const { outsideClockHours, outsideBreakHours } = payrollOutsideClockHours(result2);
     if (!(outsideClockHours > 0)) return null;
     const multiplier = Number(result2.outsideMultiplier) > 0 ? Number(result2.outsideMultiplier) : 1;
+    return multipliedHoursParts({ clockHours: outsideClockHours, multiplier, breakHours: outsideBreakHours });
+  }
+  function multipliedHoursParts(input) {
+    const clockHours = Math.max(0, Number(input.clockHours) || 0);
+    const multiplier = Number(input.multiplier) > 0 ? Number(input.multiplier) : 1;
+    const breakHours = Math.max(0, Number(input.breakHours) || 0);
     return {
-      clockHours: outsideClockHours,
+      clockHours,
       multiplier,
-      breakHours: outsideBreakHours,
-      paidHours: Math.max(0, outsideClockHours * multiplier - outsideBreakHours),
-      text: multipliedHoursText({ clockHours: outsideClockHours, multiplier, breakHours: outsideBreakHours })
+      breakHours,
+      paidHours: Math.max(0, clockHours * multiplier - breakHours),
+      text: multipliedHoursText({ clockHours, multiplier, breakHours })
     };
   }
   function clockStartMinutes(row2) {
@@ -8614,6 +8622,14 @@ var ProjectPlannerCanonical = (() => {
   }
   function roundPennies(amount) {
     return Math.round(Number(amount) * 100) / 100;
+  }
+  function dayRateHourlyEquivalent(dayRate, dayRateHours) {
+    const rate = Number(dayRate);
+    const divisor = Number(dayRateHours);
+    if (!(rate > 0) || !Number.isFinite(rate) || !(divisor >= PAY_STANDARD_DAY_MIN_HOURS) || !Number.isFinite(divisor)) return null;
+    const exactRate = rate / divisor;
+    const hourlyRate = roundPennies(exactRate);
+    return { exactRate, hourlyRate, rounded: Math.abs(exactRate - hourlyRate) > 1e-9 };
   }
   var PAY_STANDARD_DAY_MIN_HOURS = 1;
   function orgDayHours(standardPaidHours) {
@@ -13702,7 +13718,7 @@ var ProjectPlannerCanonical = (() => {
   function rulebookStamp() {
     return {
       version: true ? "1.61.0" : "",
-      sha256: true ? "e9eb14309fa09c7236d41265b0f9ffea72a8ced4574f02660f5b08122e1c0044" : ""
+      sha256: true ? "ac37b63c86e491427c9d3066ffe012c040a322c27aa840f6f5e8eb124cb3fc60" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -27845,29 +27861,27 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/dayRateOvertimeText.ts
   var DAY_RATE_OVERTIME_ROUNDED_NOTE = "Hourly rate is rounded; amounts use the exact rate.";
   function dayRateOvertimeCalcText(input) {
-    const clock4 = Number(input.clockHours);
-    const multiplier = Number(input.multiplier);
-    const dayRate = Number(input.dayRate);
-    const divisor = Number(input.dayRateHours);
-    if (!(clock4 > 0) || !(multiplier > 0) || !(dayRate > 0) || !(divisor >= 1) || !Number.isFinite(divisor)) return null;
-    const breakHours = Math.max(0, Number(input.breakHours) || 0);
-    const paidHours = Math.max(0, clock4 * multiplier - breakHours);
-    const hoursText4 = multipliedHoursText({ clockHours: clock4, multiplier, breakHours });
-    const exactHourly = dayRate / divisor;
-    const hourlyRate = roundPennies(exactHourly);
-    const hourlyRateRounded = Math.abs(exactHourly - hourlyRate) > 1e-9;
+    const multiplied = input.multiplied ?? multipliedHoursParts(input);
+    const rate = dayRateHourlyEquivalent(input.dayRate, input.dayRateHours);
+    if (!input.multiplied && !(Number(input.multiplier) > 0)) return null;
+    if (!rate || !(multiplied.clockHours > 0) || !(multiplied.paidHours > 0) || !Number.isFinite(Number(input.pay))) return null;
     const currency = input.currency ?? null;
-    const hourlyText = `${formatMoney(hourlyRate, currency)}/h${hourlyRateRounded ? " (rounded)" : ""}`;
-    const payText = `${plainHoursText(paidHours)} \xD7 ${hourlyText} = ${formatMoney(roundPennies(Number(input.pay) || 0), currency)}`;
-    const derivation = `${formatMoney(roundPennies(dayRate), currency)}/day \xF7 ${plainHoursText(divisor)}`;
+    const pay = roundPennies(Number(input.pay));
+    const payShown = formatMoney(pay, currency);
+    const hourlyText = `${formatMoney(rate.hourlyRate, currency)}/h${rate.rounded ? " (rounded)" : ""}`;
+    const payText = `${plainHoursText(multiplied.paidHours)} \xD7 ${hourlyText} = ${payShown}`;
+    const derivation = `${formatMoney(input.dayRate, currency)}/day \xF7 ${plainHoursText(input.dayRateHours)}`;
     const rateText = `${derivation} = ${hourlyText}`;
-    const first = `${hoursText4} \xB7 ${payText}`;
+    const first = `${multiplied.text} \xB7 ${payText}`;
     return {
-      hoursText: hoursText4,
+      hoursText: multiplied.text,
       payText,
       rateText,
-      hourlyRate,
-      hourlyRateRounded,
+      paidHours: multiplied.paidHours,
+      pay,
+      payShown,
+      hourlyRate: rate.hourlyRate,
+      hourlyRateRounded: rate.rounded,
       lines: [first, rateText],
       text: `${first} (${derivation})`
     };

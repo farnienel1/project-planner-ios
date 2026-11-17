@@ -8442,14 +8442,20 @@ struct InvoiceLineItem {
         // The clock hours and any unpaid break come from the line's multiplied text when it has one (1.20.3);
         // otherwise the line's hours are its clock hours at the multiplier.
         let parsed = CanonicalBusinessEngine.parseMultipliedHoursText(details)
-        return CanonicalBusinessEngine.dayRateOvertimeCalcText(
+        guard let calc = CanonicalBusinessEngine.dayRateOvertimeCalc(
             clockHours: parsed?.clockHours ?? paidHours,
             multiplier: multiplier,
             breakHours: parsed?.breakHours ?? 0,
             dayRate: dayRate,
             dayRateHours: divisor,
             pay: amount
-        )
+        ) else { return nil }
+        // Owner 17 Nov: the amount is priced first and the text only shows it. The text is used only when it shows this
+        // line's own figures — its hours sum the line's paid hours at the multiplier, its £ the line's amount in pennies;
+        // otherwise the older wording stays and the amount is unchanged.
+        guard abs(calc.paidHours - paidHours * multiplier) <= 0.005,
+              calc.pay == CanonicalBusinessEngine.roundPennies(amount) else { return nil }
+        return calc.text
     }
 
     init(payrollLine: TimesheetPayrollLineItem) {
@@ -8472,7 +8478,9 @@ struct InvoiceLineItem {
         // RULEBOOK 1.61.0: the live overtime line's multiplier and divisor; its `dayRate` is the multiplied rate.
         if payrollLine.isOvertimeLine, let multiplier = payrollLine.otMultiplier, multiplier > 0 {
             self.otMultiplier = multiplier
-            self.baseDayRate = payrollLine.dayRate / multiplier
+            // The person's own day rate when the collector gave it, so the hourly rate shown is exactly day rate ÷
+            // divisor in pennies (`dayRateHourlyEquivalent`); the multiplied rate ÷ N need not give it back exactly.
+            self.baseDayRate = payrollLine.otBaseDayRate ?? payrollLine.dayRate / multiplier
             self.dayRateDivisor = payrollLine.standardDayHours
         }
     }

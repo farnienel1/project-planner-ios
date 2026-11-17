@@ -1,7 +1,7 @@
 {
   "rulebookVersion": "1.61.0",
-  "rulebookSha256": "e9eb14309fa09c7236d41265b0f9ffea72a8ced4574f02660f5b08122e1c0044",
-  "bundleSha256": "bffe61dbb71501daf5d00095b75266bd8d5d678d82cec5ba53ff737284409697",
+  "rulebookSha256": "ac37b63c86e491427c9d3066ffe012c040a322c27aa840f6f5e8eb124cb3fc60",
+  "bundleSha256": "4a6831bf514f91d027d287ae47173d62e3d84a2024d41a3eeda34d552fc16cf6",
   "crossPlatformContractSha256": "5b2615b5540b55f716d40617dd791dbcda6290348ef18951186f47e2e5b7cd20",
   "dataParityFixtureSha256": "c2db4a64c22f36ddda48453c0d26da28fc802df9c8c93c0d876e8097a9eb176f",
   "exports": [
@@ -846,6 +846,7 @@
     "dataParitySumCounts",
     "dataParitySummary",
     "dayKeyInOrganizationZone",
+    "dayRateHourlyEquivalent",
     "dayRateOvertimeCalcText",
     "deadlineAssignedProjectIds",
     "deadlineAssignedRecipients",
@@ -1158,6 +1159,7 @@
     "missingStarterQualificationCodes",
     "monthDayOffsetBefore",
     "monthDayOrdinal",
+    "multipliedHoursParts",
     "multipliedHoursText",
     "myProfileBankHolidayRange",
     "myProfileSummary",
