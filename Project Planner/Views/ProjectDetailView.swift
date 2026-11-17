@@ -2552,12 +2552,16 @@ struct ProjectDetailView: View {
         case .all:
             break
         case .operative:
+            // Owner decision 17 Nov (web #364): a person filter matches tasks under any of that person's records,
+            // of either kind (`personIdSet` through `TaskPersonIndex`).
             if let operativeId = taskFilter.operativeId {
-                tasks = tasks.filter { $0.allAssignedOperativeIds.contains(operativeId) }
+                let index = taskPersonIndex
+                tasks = tasks.filter { TaskPeopleRulebook.task($0, isAssignedTo: .operative, operativeId, index: index) }
             }
         case .manager:
             if let managerId = taskFilter.managerId {
-                tasks = tasks.filter { $0.allAssignedManagerIds.contains(managerId) }
+                let index = taskPersonIndex
+                tasks = tasks.filter { TaskPeopleRulebook.task($0, isAssignedTo: .manager, managerId, index: index) }
             }
         case .dateRange:
             if let range = taskFilter.dateRange {
@@ -2708,21 +2712,28 @@ struct ProjectDetailView: View {
         return operativeStore.allOperatives.first(where: { $0.id == id })?.name
     }
     
-    private func operativeNames(for ids: [UUID]) -> [String] {
-        ids.compactMap { id in
-            operativeStore.allOperatives.first(where: { $0.id == id })?.name
-        }
+    /// Owner decision 17 Nov (web #364): one entry per person over every row, old and inactive ones included.
+    private var taskPersonIndex: TaskPersonIndex {
+        TaskPersonIndex.current(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+    }
+
+    /// A task's assignee names, one per person (two stored ids of one person show one name), managers first.
+    private func taskAssigneeNames(_ task: ProjectTask) -> (managers: [String], operatives: [String]) {
+        let names = TaskPeopleRulebook.assigneeNames(
+            managerIds: task.allAssignedManagerIds,
+            operativeIds: task.allAssignedOperativeIds,
+            index: taskPersonIndex
+        )
+        return (names.filter { $0.kind == .manager }.map(\.name), names.filter { $0.kind == .operative }.map(\.name))
     }
     
     private func managerName(for id: UUID?) -> String? {
         guard let id = id else { return nil }
         return operativeStore.allManagers.first(where: { $0.id == id })?.fullName
-    }
-    
-    private func managerNames(for ids: [UUID]) -> [String] {
-        ids.compactMap { id in
-            operativeStore.allManagers.first(where: { $0.id == id })?.fullName
-        }
     }
     
     private var managerDisplayName: String {
@@ -3065,11 +3076,12 @@ struct ProjectDetailView: View {
             } else {
                 VStack(spacing: 10) {
                     ForEach(projectTasksListForCurrentScope) { task in
+                        let names = taskAssigneeNames(task)
                         ProjectTaskRow(
                             task: task,
                             project: project,
-                            operativeNames: operativeNames(for: task.allAssignedOperativeIds),
-                            managerNames: managerNames(for: task.allAssignedManagerIds)
+                            operativeNames: names.operatives,
+                            managerNames: names.managers
                         )
                         .environmentObject(taskStore)
                         .environmentObject(userStore)
@@ -3093,11 +3105,12 @@ struct ProjectDetailView: View {
             .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingTaskFilter) {
+            // One option per person (inactive and ghost people kept: they may have tasks).
             ProjectTaskFilterSheet(
                 filter: $taskFilter,
                 isPresented: $showingTaskFilter,
-                operatives: operativeStore.allOperatives,
-                managers: operativeStore.managers
+                operatives: TaskPeopleRulebook.filterOperatives(operativeStore.allOperatives, index: taskPersonIndex),
+                managers: TaskPeopleRulebook.filterManagers(operativeStore.allManagers, index: taskPersonIndex)
             )
         }
     }
@@ -3670,13 +3683,62 @@ private struct TaskPeoplePickerSheet: View {
     let route: TaskPeoplePickRoute
     @Binding var selectedManagers: Set<UUID>
     @Binding var selectedOperatives: Set<UUID>
+    /// Rows offered for a new assignment (active).
     let managers: [Manager]
     let operatives: [Operative]
-    var excludedOperativeEmails: Set<String> = []
+    /// Every row (inactive and old ones too), so a task already assigned to a person's old row id shows them ticked.
+    let allManagers: [Manager]
+    let allOperatives: [Operative]
+    /// Every users document of the organisation (`personIdSet` folds a person's records on it).
+    let users: [AppUser]
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var tradeFilter: String? = nil
+
+    /// Owner decision 17 Nov (web #364): one row per person; ghosts and no-email `operatives` rows are not offered.
+    private var index: TaskPersonIndex {
+        TaskPersonIndex.current(managers: allManagers, operatives: allOperatives, users: users)
+    }
+
+    private var rulebookRoute: TaskPeopleRulebook.Route {
+        switch route {
+        case .managers: return .managers
+        case .operatives: return .operatives
+        case .combined: return .combined
+        }
+    }
+
+    private var showsManagers: Bool { route != .operatives }
+    private var showsOperatives: Bool { route != .managers }
+
+    private func people(_ index: TaskPersonIndex) -> (managers: [Manager], operatives: [Operative]) {
+        TaskPeopleRulebook.pickerPeople(managers: managers, operatives: operatives, route: rulebookRoute, index: index)
+    }
+
+    /// Guardrail 3: ids already assigned whose person no row shows (old, inactive or ghost rows, rows since deleted).
+    private func extras(_ index: TaskPersonIndex, _ people: (managers: [Manager], operatives: [Operative])) -> [TaskPickerExtra] {
+        var shown: [(kind: TaskPersonKind, id: UUID)] = []
+        for row in people.managers { shown.append((kind: .manager, id: row.id)) }
+        for row in people.operatives { shown.append((kind: .operative, id: row.id)) }
+        return TaskPeopleRulebook.extras(
+            shown: shown,
+            managers: showsManagers ? Array(selectedManagers).sorted { $0.uuidString < $1.uuidString } : [],
+            operatives: showsOperatives ? Array(selectedOperatives).sorted { $0.uuidString < $1.uuidString } : [],
+            index: index
+        )
+    }
+
+    private func isOn(_ kind: TaskPersonKind, _ id: UUID, _ index: TaskPersonIndex) -> Bool {
+        TaskPeopleRulebook.isSelected(kind, id, managers: selectedManagers, operatives: selectedOperatives, index: index)
+    }
+
+    /// Unticking removes every id of the person (both kinds); ticking adds the row's own id.
+    private func toggle(_ kind: TaskPersonKind, _ id: UUID, _ index: TaskPersonIndex) {
+        let next = TaskPeopleRulebook.toggle(kind, id, managers: selectedManagers, operatives: selectedOperatives, index: index)
+        selectedManagers = next.managers
+        selectedOperatives = next.operatives
+    }
 
     private var navigationTitle: String {
         switch route {
@@ -3684,10 +3746,6 @@ private struct TaskPeoplePickerSheet: View {
         case .operatives: return "Select operatives"
         case .combined: return "Managers & operatives"
         }
-    }
-
-    private func normalizeEmail(_ raw: String) -> String {
-        raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func managerTradeLabel(_ m: Manager) -> String {
@@ -3702,41 +3760,21 @@ private struct TaskPeoplePickerSheet: View {
         return (o.tradeTypePreset ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var operativesEligible: [Operative] {
-        operatives.filter { op in
-            let em = normalizeEmail(op.email)
-            return !excludedOperativeEmails.contains(em)
-        }
-    }
-
-    private var tradeChoices: [String] {
+    private func tradeChoices(_ people: (managers: [Manager], operatives: [Operative])) -> [String] {
         var set = Set<String>()
-        switch route {
-        case .managers:
-            for m in managers {
-                let t = managerTradeLabel(m)
-                if !t.isEmpty { set.insert(t) }
-            }
-        case .operatives:
-            for o in operativesEligible {
-                let t = operativeTradeLabel(o)
-                if !t.isEmpty { set.insert(t) }
-            }
-        case .combined:
-            for m in managers {
-                let t = managerTradeLabel(m)
-                if !t.isEmpty { set.insert(t) }
-            }
-            for o in operativesEligible {
-                let t = operativeTradeLabel(o)
-                if !t.isEmpty { set.insert(t) }
-            }
+        for m in people.managers {
+            let t = managerTradeLabel(m)
+            if !t.isEmpty { set.insert(t) }
+        }
+        for o in people.operatives {
+            let t = operativeTradeLabel(o)
+            if !t.isEmpty { set.insert(t) }
         }
         return set.sorted()
     }
 
-    private var filteredManagers: [Manager] {
-        var list = managers
+    private func filteredManagers(_ people: (managers: [Manager], operatives: [Operative])) -> [Manager] {
+        var list = people.managers
         if let t = tradeFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
             list = list.filter { managerTradeLabel($0) == t }
         }
@@ -3751,8 +3789,8 @@ private struct TaskPeoplePickerSheet: View {
         return list.sorted { $0.fullName.localizedCaseInsensitiveCompare($1.fullName) == .orderedAscending }
     }
 
-    private var filteredOperatives: [Operative] {
-        var list = operativesEligible
+    private func filteredOperatives(_ people: (managers: [Manager], operatives: [Operative])) -> [Operative] {
+        var list = people.operatives
         if let t = tradeFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
             list = list.filter { operativeTradeLabel($0) == t }
         }
@@ -3768,17 +3806,22 @@ private struct TaskPeoplePickerSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
+        let index = self.index
+        let people = self.people(index)
+        let extras = self.extras(index, people)
+        let shownManagers = filteredManagers(people)
+        let shownOperatives = filteredOperatives(people)
+        return NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    selectedChipsSection
+                    selectedChipsSection(index: index, people: people, extras: extras)
                     searchFieldCard
-                    tradeFilterCard
+                    tradeFilterCard(tradeChoices(people))
                     if route == .managers || route == .combined {
-                        pickerSectionHeader("Managers", count: filteredManagers.count)
+                        pickerSectionHeader("Managers", count: shownManagers.count)
                         LazyVStack(spacing: 0) {
-                            ForEach(filteredManagers) { manager in
-                                managerRow(manager)
+                            ForEach(shownManagers) { manager in
+                                managerRow(manager, index: index)
                             }
                         }
                         .background(ProjectWorksRevampColors.surface)
@@ -3786,10 +3829,21 @@ private struct TaskPeoplePickerSheet: View {
                         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
                     }
                     if route == .operatives || route == .combined {
-                        pickerSectionHeader("Operatives", count: filteredOperatives.count)
+                        pickerSectionHeader("Operatives", count: shownOperatives.count)
                         LazyVStack(spacing: 0) {
-                            ForEach(filteredOperatives) { operative in
-                                operativeRow(operative)
+                            ForEach(shownOperatives) { operative in
+                                operativeRow(operative, index: index)
+                            }
+                        }
+                        .background(ProjectWorksRevampColors.surface)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
+                    }
+                    if !extras.isEmpty {
+                        pickerSectionHeader("Already assigned", count: extras.count)
+                        LazyVStack(spacing: 0) {
+                            ForEach(extras) { extra in
+                                extraRow(extra, index: index)
                             }
                         }
                         .background(ProjectWorksRevampColors.surface)
@@ -3829,10 +3883,14 @@ private struct TaskPeoplePickerSheet: View {
     }
 
     @ViewBuilder
-    private var selectedChipsSection: some View {
-        let mgrSelections = managers.filter { selectedManagers.contains($0.id) }.sorted { $0.fullName < $1.fullName }
-        let opSelections = operativesEligible.filter { selectedOperatives.contains($0.id) }.sorted { $0.name < $1.name }
-        if mgrSelections.isEmpty && opSelections.isEmpty {
+    private func selectedChipsSection(
+        index: TaskPersonIndex,
+        people: (managers: [Manager], operatives: [Operative]),
+        extras: [TaskPickerExtra]
+    ) -> some View {
+        let mgrSelections = people.managers.filter { isOn(.manager, $0.id, index) }.sorted { $0.fullName < $1.fullName }
+        let opSelections = people.operatives.filter { isOn(.operative, $0.id, index) }.sorted { $0.name < $1.name }
+        if mgrSelections.isEmpty && opSelections.isEmpty && extras.isEmpty {
             Text("Tick people below — selected names appear here and you can remove them.")
                 .font(.system(size: 12))
                 .foregroundStyle(NewTaskScreenPalette.muted)
@@ -3846,12 +3904,17 @@ private struct TaskPeoplePickerSheet: View {
                 HStack(spacing: 8) {
                     ForEach(mgrSelections) { m in
                         selectionChip(label: m.fullName, systemImage: "person.fill.star") {
-                            selectedManagers.remove(m.id)
+                            toggle(.manager, m.id, index)
                         }
                     }
                     ForEach(opSelections) { o in
                         selectionChip(label: o.name, systemImage: "person.fill") {
-                            selectedOperatives.remove(o.id)
+                            toggle(.operative, o.id, index)
+                        }
+                    }
+                    ForEach(extras) { extra in
+                        selectionChip(label: extra.label, systemImage: extra.kind == .manager ? "person.fill.star" : "person.fill") {
+                            toggle(extra.kind, extra.id, index)
                         }
                     }
                 }
@@ -3913,7 +3976,7 @@ private struct TaskPeoplePickerSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
 
-    private var tradeFilterCard: some View {
+    private func tradeFilterCard(_ tradeChoices: [String]) -> some View {
         HStack(spacing: 12) {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(NewTaskScreenPalette.fileIconBg)
@@ -3959,15 +4022,11 @@ private struct TaskPeoplePickerSheet: View {
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(NewTaskScreenPalette.border, lineWidth: 0.5))
     }
 
-    private func managerRow(_ manager: Manager) -> some View {
-        let on = selectedManagers.contains(manager.id)
+    private func managerRow(_ manager: Manager, index: TaskPersonIndex) -> some View {
+        let on = isOn(.manager, manager.id, index)
         let trade = managerTradeLabel(manager)
         return Button {
-            if on {
-                selectedManagers.remove(manager.id)
-            } else {
-                selectedManagers.insert(manager.id)
-            }
+            toggle(.manager, manager.id, index)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: on ? "checkmark.square.fill" : "square")
@@ -3991,15 +4050,11 @@ private struct TaskPeoplePickerSheet: View {
         .buttonStyle(.plain)
     }
 
-    private func operativeRow(_ operative: Operative) -> some View {
-        let on = selectedOperatives.contains(operative.id)
+    private func operativeRow(_ operative: Operative, index: TaskPersonIndex) -> some View {
+        let on = isOn(.operative, operative.id, index)
         let trade = operativeTradeLabel(operative)
         return Button {
-            if on {
-                selectedOperatives.remove(operative.id)
-            } else {
-                selectedOperatives.insert(operative.id)
-            }
+            toggle(.operative, operative.id, index)
         } label: {
             HStack(alignment: .center, spacing: 12) {
                 Image(systemName: on ? "checkmark.square.fill" : "square")
@@ -4020,6 +4075,33 @@ private struct TaskPeoplePickerSheet: View {
             .padding(.vertical, 12)
         }
         .accessibilityIdentifier("taskPeoplePicker.row.\(operative.id).checkmarkSquareFill")
+        .buttonStyle(.plain)
+    }
+
+    /// An assignment no row above shows: ticked, tapping removes every id of that person.
+    private func extraRow(_ extra: TaskPickerExtra, index: TaskPersonIndex) -> some View {
+        Button {
+            toggle(extra.kind, extra.id, index)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: "checkmark.square.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(NewTaskScreenPalette.blue)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(extra.label)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(NewTaskScreenPalette.ink)
+                    Text("Already assigned · tap to remove")
+                        .font(.system(size: 11))
+                        .foregroundStyle(NewTaskScreenPalette.muted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .accessibilityIdentifier("taskPeoplePicker.extra.\(extra.id)")
         .buttonStyle(.plain)
     }
 }
@@ -4065,12 +4147,6 @@ private struct AddProjectTaskView: View {
         errorMessage = message
         showingError = true
     }
-    private var managerEmailsLowercased: Set<String> {
-        Set(operativeStore.activeManagers.map {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        })
-    }
-    
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -4175,7 +4251,9 @@ private struct AddProjectTaskView: View {
                     selectedOperatives: $selectedOperatives,
                     managers: operativeStore.activeManagers,
                     operatives: operativeStore.activeOperatives,
-                    excludedOperativeEmails: managerEmailsLowercased
+                    allManagers: operativeStore.allManagers,
+                    allOperatives: operativeStore.allOperatives,
+                    users: userStore.organizationUsers
                 )
             }
             .onChange(of: includeManagers) { _, on in
@@ -4978,10 +5056,38 @@ private struct EditProjectTaskView: View {
     @State private var showingOperativeSelection = false
     @State private var showingManagerSelection = false
     
-    private var managerEmailsLowercased: Set<String> {
-        Set(operativeStore.activeManagers.map {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        })
+    /// Owner decision 17 Nov (web #364): one entry per person over every row (old and inactive ones too).
+    private var taskPersonIndex: TaskPersonIndex {
+        TaskPersonIndex.current(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+    }
+
+    /// The assigned people of one kind, one per person (stored order kept), with the ids each one stands for removed
+    /// together. An id whose row is gone or inactive stays listed (guardrail 3).
+    private func assignedPeople(_ kind: TaskPersonKind) -> [TaskPickerExtra] {
+        let index = taskPersonIndex
+        let ids = (kind == .manager ? Array(selectedManagers) : Array(selectedOperatives)).sorted { $0.uuidString < $1.uuidString }
+        return TaskPeopleRulebook.extras(
+            shown: [],
+            managers: kind == .manager ? ids : [],
+            operatives: kind == .operative ? ids : [],
+            index: index
+        )
+    }
+
+    private func removeAssignedPerson(_ person: TaskPickerExtra) {
+        let next = TaskPeopleRulebook.toggle(
+            person.kind,
+            person.id,
+            managers: selectedManagers,
+            operatives: selectedOperatives,
+            index: taskPersonIndex
+        )
+        selectedManagers = next.managers
+        selectedOperatives = next.operatives
     }
     
     init(task: ProjectTask, project: Project, isPresented: Binding<Bool>) {
@@ -5079,7 +5185,7 @@ private struct EditProjectTaskView: View {
                                 Text("Tap to select")
                                     .foregroundColor(.secondary)
                             } else {
-                                Text("\(selectedManagers.count) selected")
+                                Text("\(assignedPeople(.manager).count) selected")
                                     .foregroundColor(.blue)
                             }
                             Image(systemName: "chevron.right")
@@ -5089,27 +5195,29 @@ private struct EditProjectTaskView: View {
                     }
                     .accessibilityIdentifier("editProjectTask.managers")
                     .sheet(isPresented: $showingManagerSelection) {
-                        ManagerMultiSelectView(
+                        TaskPersonMultiSelectView(
+                            kind: .manager,
                             selectedManagers: $selectedManagers,
+                            selectedOperatives: $selectedOperatives,
                             managers: operativeStore.activeManagers,
+                            operatives: [],
+                            index: taskPersonIndex,
                             tradePresetFilter: assignmentTradePreset
                         )
                     }
                     
                     if !selectedManagers.isEmpty {
-                        ForEach(Array(selectedManagers), id: \.self) { managerId in
-                            if let manager = operativeStore.activeManagers.first(where: { $0.id == managerId }) {
-                                HStack {
-                                    Text(manager.fullName)
-                                    Spacer()
-                                    Button(action: {
-                                        selectedManagers.remove(managerId)
-                                    }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.red)
-                                    }
-                                        .accessibilityIdentifier("editProjectTask.row.\(managerId).clear")
+                        ForEach(assignedPeople(.manager)) { person in
+                            HStack {
+                                Text(person.label)
+                                Spacer()
+                                Button(action: {
+                                    removeAssignedPerson(person)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
                                 }
+                                    .accessibilityIdentifier("editProjectTask.row.\(person.id).clear")
                             }
                         }
                     }
@@ -5124,7 +5232,7 @@ private struct EditProjectTaskView: View {
                                 Text("Tap to select")
                                     .foregroundColor(.secondary)
                             } else {
-                                Text("\(selectedOperatives.count) selected")
+                                Text("\(assignedPeople(.operative).count) selected")
                                     .foregroundColor(.blue)
                             }
                             Image(systemName: "chevron.right")
@@ -5134,28 +5242,29 @@ private struct EditProjectTaskView: View {
                     }
                     .accessibilityIdentifier("editProjectTask.operatives")
                     .sheet(isPresented: $showingOperativeSelection) {
-                        OperativeMultiSelectView(
+                        TaskPersonMultiSelectView(
+                            kind: .operative,
+                            selectedManagers: $selectedManagers,
                             selectedOperatives: $selectedOperatives,
+                            managers: [],
                             operatives: operativeStore.activeOperatives,
-                            tradePresetFilter: assignmentTradePreset,
-                            excludedEmailsLowercased: managerEmailsLowercased
+                            index: taskPersonIndex,
+                            tradePresetFilter: assignmentTradePreset
                         )
                     }
                     
                     if !selectedOperatives.isEmpty {
-                        ForEach(Array(selectedOperatives), id: \.self) { operativeId in
-                            if let operative = operativeStore.activeOperatives.first(where: { $0.id == operativeId }) {
-                                HStack {
-                                    Text(operative.name)
-                                    Spacer()
-                                    Button(action: {
-                                        selectedOperatives.remove(operativeId)
-                                    }) {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .foregroundColor(.red)
-                                    }
-                                        .accessibilityIdentifier("editProjectTask.row.\(operativeId).clear")
+                        ForEach(assignedPeople(.operative)) { person in
+                            HStack {
+                                Text(person.label)
+                                Spacer()
+                                Button(action: {
+                                    removeAssignedPerson(person)
+                                }) {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .foregroundColor(.red)
                                 }
+                                    .accessibilityIdentifier("editProjectTask.row.\(person.id).clear")
                             }
                         }
                     }
@@ -6207,10 +6316,31 @@ struct CompletedTaskDetailView: View {
         return "Unknown job"
     }
 
+    /// Owner decision 17 Nov (web #364): one entry per person over every row, old and inactive ones included.
+    private var taskPersonIndex: TaskPersonIndex {
+        TaskPersonIndex.current(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+    }
+
+    private var assigneeNames: [(kind: TaskPersonKind, name: String)] {
+        TaskPeopleRulebook.assigneeNames(
+            managerIds: displayTask.allAssignedManagerIds,
+            operativeIds: displayTask.allAssignedOperativeIds,
+            index: taskPersonIndex
+        )
+    }
+
     private var assignedSummary: String {
-        let m = displayTask.allAssignedManagerIds.count
-        let o = displayTask.allAssignedOperativeIds.count
-        let total = m + o
+        // One per person (two stored ids of one person count once); an id whose row is gone still counts.
+        let total = TaskPeopleRulebook.extras(
+            shown: [],
+            managers: displayTask.allAssignedManagerIds,
+            operatives: displayTask.allAssignedOperativeIds,
+            index: taskPersonIndex
+        ).count
         let me = TaskAssignmentRulebook.isAssigned(
             displayTask,
             viewer: userStore.currentUser,
@@ -6223,13 +6353,7 @@ struct CompletedTaskDetailView: View {
             return others == 1 ? "You + 1 other" : "You + \(others) others"
         }
         if me { return "You" }
-        var parts: [String] = []
-        parts.append(contentsOf: displayTask.allAssignedManagerIds.compactMap { id in
-            operativeStore.allManagers.first(where: { $0.id == id })?.fullName
-        })
-        parts.append(contentsOf: displayTask.allAssignedOperativeIds.compactMap { id in
-            operativeStore.allOperatives.first(where: { $0.id == id })?.name
-        })
+        let parts = assigneeNames.map(\.name)
         let joined = parts.filter { !$0.isEmpty }.joined(separator: ", ")
         return joined.isEmpty ? "—" : joined
     }
@@ -6537,18 +6661,7 @@ struct CompletedTaskDetailView: View {
     }
 
     private var assigneeInitialsList: [String] {
-        var out: [String] = []
-        for id in displayTask.allAssignedManagerIds {
-            if let m = operativeStore.allManagers.first(where: { $0.id == id }) {
-                out.append(Self.initials(from: m.fullName))
-            }
-        }
-        for id in displayTask.allAssignedOperativeIds {
-            if let o = operativeStore.allOperatives.first(where: { $0.id == id }) {
-                out.append(Self.initials(from: o.name))
-            }
-        }
-        return Array(out.prefix(4))
+        Array(assigneeNames.map { Self.initials(from: $0.name) }.prefix(4))
     }
 
     private static func initials(from fullName: String) -> String {
@@ -6842,109 +6955,109 @@ struct CompletedTaskDetailView: View {
 
 // MARK: - Multi-Select Views
 
-private struct OperativeMultiSelectView: View {
-    @Binding var selectedOperatives: Set<UUID>
-    let operatives: [Operative]
-    var tradePresetFilter: String? = nil
-    var excludedEmailsLowercased: Set<String> = []
-    @Environment(\.dismiss) private var dismiss
-    
-    private var displayedOperatives: [Operative] {
-        var list = operatives
-        if !excludedEmailsLowercased.isEmpty {
-            list = list.filter { op in
-                let em = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-                return !excludedEmailsLowercased.contains(em)
-            }
-        }
-        if let fp = tradePresetFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty {
-            list = list.filter { ($0.tradeTypePreset ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == fp }
-        }
-        return list
-    }
-    
-    var body: some View {
-        NavigationView {
-            List {
-                ForEach(displayedOperatives) { operative in
-                    Button(action: {
-                        if selectedOperatives.contains(operative.id) {
-                            selectedOperatives.remove(operative.id)
-                        } else {
-                            selectedOperatives.insert(operative.id)
-                        }
-                    }) {
-                        HStack {
-                            Text(operative.name)
-                            Spacer()
-                            if selectedOperatives.contains(operative.id) {
-                                Image(systemName: "checkmark")
-                                    .foregroundColor(.blue)
-                            }
-                        }
-                    }
-                        .accessibilityIdentifier("operativeMultiSelect.row.\(operative.id).checkmark")
-                }
-            }
-            .navigationTitle("Select Operatives")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                        .accessibilityIdentifier("operativeMultiSelect.done")
-                }
-            }
-        }
-    }
-}
-
-private struct ManagerMultiSelectView: View {
+/// The edit-task picker for one kind (owner decision 17 Nov, web #364 `peopleForTaskPicker`): one row per person,
+/// ghosts and no-email `operatives` rows not offered; unticking a person removes every id of theirs (both kinds); an
+/// assignment no row shows stays listed under "Already assigned" so it can be removed (guardrail 3).
+private struct TaskPersonMultiSelectView: View {
+    let kind: TaskPersonKind
     @Binding var selectedManagers: Set<UUID>
+    @Binding var selectedOperatives: Set<UUID>
     let managers: [Manager]
+    let operatives: [Operative]
+    let index: TaskPersonIndex
     var tradePresetFilter: String? = nil
     @Environment(\.dismiss) private var dismiss
-    
-    private var displayedManagers: [Manager] {
-        var list = managers
-        if let fp = tradePresetFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty {
-            list = list.filter { ($0.tradeTypePreset ?? "").trimmingCharacters(in: .whitespacesAndNewlines) == fp }
-        }
-        return list
+
+    private struct Row: Identifiable {
+        let id: UUID
+        let name: String
+        let trade: String
     }
-    
+
+    private var rows: [Row] {
+        let people = TaskPeopleRulebook.pickerPeople(
+            managers: managers,
+            operatives: operatives,
+            route: kind == .manager ? .managers : .operatives,
+            index: index
+        )
+        let all: [Row] = kind == .manager
+            ? people.managers.map { Row(id: $0.id, name: $0.fullName, trade: $0.tradeTypePreset ?? "") }
+            : people.operatives.map { Row(id: $0.id, name: $0.name, trade: $0.tradeTypePreset ?? "") }
+        guard let fp = tradePresetFilter?.trimmingCharacters(in: .whitespacesAndNewlines), !fp.isEmpty else { return all }
+        return all.filter { $0.trade.trimmingCharacters(in: .whitespacesAndNewlines) == fp }
+    }
+
+    private var extras: [TaskPickerExtra] {
+        let rowKind = kind
+        let shown: [(kind: TaskPersonKind, id: UUID)] = rows.map { (kind: rowKind, id: $0.id) }
+        let sortedIds: (Set<UUID>) -> [UUID] = { $0.sorted { $0.uuidString < $1.uuidString } }
+        return TaskPeopleRulebook.extras(
+            shown: shown,
+            managers: kind == .manager ? sortedIds(selectedManagers) : [],
+            operatives: kind == .operative ? sortedIds(selectedOperatives) : [],
+            index: index
+        )
+    }
+
+    private func isOn(_ rowKind: TaskPersonKind, _ id: UUID) -> Bool {
+        TaskPeopleRulebook.isSelected(rowKind, id, managers: selectedManagers, operatives: selectedOperatives, index: index)
+    }
+
+    private func toggle(_ rowKind: TaskPersonKind, _ id: UUID) {
+        let next = TaskPeopleRulebook.toggle(rowKind, id, managers: selectedManagers, operatives: selectedOperatives, index: index)
+        selectedManagers = next.managers
+        selectedOperatives = next.operatives
+    }
+
+    private var idPrefix: String { kind == .manager ? "managerMultiSelect" : "operativeMultiSelect" }
+
     var body: some View {
         NavigationView {
             List {
-                ForEach(displayedManagers) { manager in
-                    Button(action: {
-                        if selectedManagers.contains(manager.id) {
-                            selectedManagers.remove(manager.id)
-                        } else {
-                            selectedManagers.insert(manager.id)
-                        }
-                    }) {
+                ForEach(rows) { row in
+                    Button(action: { toggle(kind, row.id) }) {
                         HStack {
-                            Text(manager.fullName)
+                            Text(row.name)
                             Spacer()
-                            if selectedManagers.contains(manager.id) {
+                            if isOn(kind, row.id) {
                                 Image(systemName: "checkmark")
                                     .foregroundColor(.blue)
                             }
                         }
                     }
-                        .accessibilityIdentifier("managerMultiSelect.row.\(manager.id).checkmark")
+                        .accessibilityIdentifier("\(idPrefix).row.\(row.id).checkmark")
+                }
+                let extras = self.extras
+                if !extras.isEmpty {
+                    Section("Already assigned") {
+                        ForEach(extras) { extra in
+                            Button(action: { toggle(extra.kind, extra.id) }) {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(extra.label)
+                                        Text("Already assigned · tap to remove")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "checkmark")
+                                        .foregroundColor(.blue)
+                                }
+                            }
+                                .accessibilityIdentifier("\(idPrefix).extra.\(extra.id)")
+                        }
+                    }
                 }
             }
-            .navigationTitle("Select Managers")
+            .navigationTitle(kind == .manager ? "Select Managers" : "Select Operatives")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Done") {
                         dismiss()
                     }
-                        .accessibilityIdentifier("managerMultiSelect.done")
+                        .accessibilityIdentifier("\(idPrefix).done")
                 }
             }
         }

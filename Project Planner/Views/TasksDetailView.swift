@@ -867,19 +867,19 @@ private struct MyTasksRedesignTaskCard: View {
         }
     }
 
+    /// One per person (owner decision 17 Nov, web #364): two stored ids of one person show one avatar.
     private var assigneeInitialsList: [String] {
-        var out: [String] = []
-        for id in resolvedTask.allAssignedManagerIds {
-            if let m = operativeStore.allManagers.first(where: { $0.id == id }) {
-                out.append(Self.initials(from: m.fullName))
-            }
-        }
-        for id in resolvedTask.allAssignedOperativeIds {
-            if let o = operativeStore.allOperatives.first(where: { $0.id == id }) {
-                out.append(Self.initials(from: o.name))
-            }
-        }
-        return Array(out.prefix(3))
+        let index = TaskPersonIndex.current(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+        let names = TaskPeopleRulebook.assigneeNames(
+            managerIds: resolvedTask.allAssignedManagerIds,
+            operativeIds: resolvedTask.allAssignedOperativeIds,
+            index: index
+        )
+        return Array(names.map { Self.initials(from: $0.name) }.prefix(3))
     }
 
     private static func initials(from fullName: String) -> String {
