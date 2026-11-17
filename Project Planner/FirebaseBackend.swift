@@ -4305,7 +4305,11 @@ class FirebaseBackend: ObservableObject {
         }
         
         do {
-            try await db.collection("organizations").document(organizationId).collection("operatives").document(Booking.storedOperativeId(for: operativeId)).delete()
+            guard let documentId = Booking.storedOperativeId(for: operativeId) else {
+                print("🔥🔥🔥 DEBUG: Not deleting operative \(operativeId): its stored id is not known on this phone")
+                return
+            }
+            try await db.collection("organizations").document(organizationId).collection("operatives").document(documentId).delete()
             print("🔥🔥🔥 DEBUG: Successfully deleted operative \(operativeId) from Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: Error deleting operative from Firebase: \(error)")
@@ -7867,6 +7871,11 @@ class FirebaseBackend: ObservableObject {
         session: BookingWriteSession? = nil
     ) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
+        // Never a booking under an id no person resolves to (`BookingPersonResolution`): a create always writes the
+        // person, an edit only when it changes them.
+        if booking.writableOperativeId == nil, changedFields == nil || changedFields?.contains("operativeId") == true {
+            throw UnresolvedBookingPersonError()
+        }
         // 1.33.1 review item 1: once per save with `session`.
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
         let ref = db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey)
@@ -7950,6 +7959,7 @@ class FirebaseBackend: ObservableObject {
         let documentKey: String
         var data: [String: Any]
         if let labour {
+            guard labour.writableOperativeId != nil else { throw UnresolvedBookingPersonError() }
             collection = "bookings"
             documentKey = labour.documentKey
             data = BookingWritePatch.labourValues(labour, deletesClearedFields: false)
@@ -9053,7 +9063,8 @@ class FirebaseBackend: ObservableObject {
         guard let fields = CanonicalBusinessEngine.payRateHistoryWriteFields(
             userId: uid,
             // The stored operative id (a non-UUID or lower-case id keeps its stored form), never a re-cased UUID.
-            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            // An id this phone cannot resolve is left out (never a derived id no one goes by).
+            operativeId: operativeId.flatMap { Booking.storedOperativeId(for: $0) },
             rate: dayRate,
             payBasis: payBasis,
             effective: effectiveAt

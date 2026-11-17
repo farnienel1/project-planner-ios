@@ -439,7 +439,7 @@ class BookingStore: ObservableObject {
         // RULEBOOK §1: stored at organisation-zone midnight of its day (`BookingDay`), whatever picker made it.
         var booking = booking
         booking.date = BookingDay.organizationMidnight(for: booking.date)
-        if let refusal = writeRefusal([booking]) {
+        if let refusal = writeRefusal([booking]) ?? BookingPersonResolution.refusal([booking]) {
             errorMessage = refusal
             return .refused(refusal)
         }
@@ -470,7 +470,7 @@ class BookingStore: ObservableObject {
     func addBookingReplacing(_ booking: Booking, replacing targets: [BookingReplaceTarget]) async -> String? {
         var booking = booking
         booking.date = BookingDay.organizationMidnight(for: booking.date)
-        if let refusal = writeRefusal([booking]) {
+        if let refusal = writeRefusal([booking]) ?? BookingPersonResolution.refusal([booking]) {
             errorMessage = refusal
             return refusal
         }
@@ -524,7 +524,7 @@ class BookingStore: ObservableObject {
             booking.date = BookingDay.organizationMidnight(for: booking.date)
             return booking
         }
-        if let refusal = writeRefusal(newBookings) {
+        if let refusal = writeRefusal(newBookings) ?? BookingPersonResolution.refusal(newBookings) {
             errorMessage = refusal
             return Dictionary(newBookings.map { ($0.id, BookingSaveResult.refused(refusal)) }, uniquingKeysWith: { first, _ in first })
         }
@@ -558,11 +558,13 @@ class BookingStore: ObservableObject {
         booking.date = BookingDay.organizationMidnight(for: booking.date)
         if let index = bookings.firstIndex(where: { $0.id == booking.id }) {
             // Both the job it was on and the job it moves to must be the viewer's.
-            if let refusal = writeRefusal([bookings[index], booking]) {
+            let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
+            // An edit that moves the booking to a person this phone cannot name is refused (`BookingPersonResolution`).
+            let personRefusal = changed.contains("operativeId") ? BookingPersonResolution.refusal([booking]) : nil
+            if let refusal = writeRefusal([bookings[index], booking]) ?? personRefusal {
                 errorMessage = refusal
                 return .refused(refusal)
             }
-            let changed = BookingWritePatch.changedLabourFields(from: bookings[index], to: booking)
             // RULEBOOK 1.33.0: the copy before this edit, kept with a queued edit so a later offline delete stores the
             // fingerprint of what the server has (`bookingDeleteFingerprint`).
             let before = bookings[index]
@@ -696,7 +698,7 @@ class BookingStore: ObservableObject {
                         dateMs: $0.date.timeIntervalSince1970 * 1000
                     )
                 },
-                operativeIds: personIds.map { Booking.storedOperativeId(for: $0) },
+                operativeIds: personIds.map { Booking.operativeMatchKey(for: $0) },
                 now: now
               ) else { return [] }
         let remove = Set(ids.map { $0.uppercased() })

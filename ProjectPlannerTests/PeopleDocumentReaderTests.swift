@@ -154,7 +154,7 @@ final class PeopleDocumentReaderTests: XCTestCase {
         XCTAssertEqual(operatives.map(\.documentId), ["op-not-a-uuid", "nameless"])
         let operative = try XCTUnwrap(operatives.first)
         XCTAssertEqual(operative.id, Booking.internalOperativeId(for: "op-not-a-uuid"))
-        XCTAssertEqual(Booking.storedOperativeId(for: operative.id), "op-not-a-uuid")
+        XCTAssertEqual(Booking.operativeMatchKey(for: operative.id), "op-not-a-uuid")
         // Reading twice gives the same in-app id (never random).
         XCTAssertEqual(FirebaseBackend.operatives(fromDocuments: [(id: "op-not-a-uuid", data: ["firstName": "Bo"])]).first?.id, operative.id)
     }
