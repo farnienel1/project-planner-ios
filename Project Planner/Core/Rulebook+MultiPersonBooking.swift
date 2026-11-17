@@ -35,6 +35,21 @@ nonisolated struct RulebookMultiPersonBooking: Hashable, Sendable {
 }
 
 extension CanonicalBusinessEngine {
+    /// RULEBOOK 1.60.0 `leaveCoverBookingWindow(row, day)`: the custom hours to prefill for a "Half-day leave not
+    /// covered" row — the first uncovered stretch, joined across the lunch window, never across a booking. `day` is the
+    /// working-hours input the row was built with (the policy state, or the standard day). Nil for a leave_clash row,
+    /// or when the script did not answer.
+    nonisolated static func leaveCoverBookingWindow(
+        _ row: CanonicalLeaveCoverageRow,
+        day: Any?
+    ) -> (start: String, end: String)? {
+        guard let data = try? JSONEncoder().encode(row),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return nil }
+        guard let answer = callJSON("leaveCoverBookingWindow", arguments: [object, day ?? NSNull()]) as? [String: Any],
+              let start = answer["start"] as? String, let end = answer["end"] as? String else { return nil }
+        return (start, end)
+    }
+
     /// `MULTI_PERSON_ALREADY_BOOKED_MESSAGE`.
     nonisolated static var multiPersonAlreadyBookedMessage: String {
         constant("MULTI_PERSON_ALREADY_BOOKED_MESSAGE", as: String.self)
@@ -80,34 +95,30 @@ extension CanonicalBusinessEngine {
 
 /// App-side wiring: each person's ids (`bookingIdsForAccount`, `personIdSet`) and the day's bookings from the stores.
 enum MultiPersonBookingCheck {
-    /// Every id an account's bookings may be filed under: the rulebook's `bookingIdsForAccount` (users id, former and
-    /// same-email ids, every `operatives` row on the email) plus the same-email users documents.
+    /// Every id an account's bookings may be filed under, from the rulebook only (as web `multiPersonBookingIds`):
+    /// `personIdSet` over the roster (own id, former and same-email ids, same-email users documents) plus
+    /// `bookingIdsForAccount` (every `operatives` row on the email).
     @MainActor
     static func ids(forUserId userId: String, users: [AppUser], operatives: [Operative]) -> [String] {
-        let account = users.first { $0.id == userId }
-        let email = account?.email ?? ""
-        var ids = CanonicalBusinessEngine.bookingIdsForAccount(
-            .init(id: userId, email: email, formerIds: account?.formerUserIds ?? [], aliasIds: account?.sameEmailUserIds ?? []),
+        guard let account = users.first(where: { $0.id == userId }) else { return [userId] }
+        let people = RulebookPeople.ownerIds(for: account, users: users)
+        let rows = CanonicalBusinessEngine.bookingIdsForAccount(
+            .init(id: userId, email: account.email, formerIds: account.formerUserIds, aliasIds: people),
             operatives: operatives.map { .init(id: $0.documentId, email: $0.email) }
-        ) ?? [userId]
-        let key = StaffEmailIdentity.emailKey(email)
-        if !key.isEmpty {
-            ids += users.filter { StaffEmailIdentity.emailKey($0.email) == key }.map(\.id)
-        }
-        ids.append(userId)
-        return Array(Set(ids.filter { !$0.isEmpty }))
+        ) ?? []
+        return Array(Set((people + rows + [userId]).filter { !$0.isEmpty }))
     }
 
-    /// The ids of a catalogue operative: its stored id, and — through the account on its email — every id that person
-    /// goes by.
+    /// The ids of a catalogue operative: its stored ids, and — when an account is on its email (the rulebook's
+    /// `resolveBookingPerson`) — every id that person goes by.
     @MainActor
     static func ids(forOperative operative: Operative, users: [AppUser], operatives: [Operative]) -> [String] {
         var ids = [Booking.storedOperativeId(for: operative.id), operative.documentId]
-        let email = StaffEmailIdentity.emailKey(operative.email)
-        if !email.isEmpty, let account = users.first(where: { StaffEmailIdentity.emailKey($0.email) == email }) {
-            ids += Self.ids(forUserId: account.id, users: users, operatives: operatives)
-        } else if !email.isEmpty {
-            ids += operatives.filter { StaffEmailIdentity.emailKey($0.email) == email }.map(\.documentId)
+        if let resolved = CanonicalBusinessEngine.resolveBookingPerson(
+            operative.documentId,
+            bookingPersonInput(operatives: operatives, users: users)
+        ), let accountId = resolved.accountId {
+            ids += Self.ids(forUserId: accountId, users: users, operatives: operatives)
         }
         return Array(Set(ids.filter { !$0.isEmpty }))
     }

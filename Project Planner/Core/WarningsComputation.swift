@@ -1456,10 +1456,20 @@ enum WarningsComputation {
                 personIds: [row.userId, row.operativeId, row.personKey].compactMap { $0 }
             )
         }
+        // The same working-hours input the rows were built with (the policy state, else this scan's standard day).
+        let windowDay: Any? = input.payrollPolicyState ?? [
+            "standardDayStart": policy.standardDayStart,
+            "standardDayEnd": policy.standardDayEnd,
+            "breakWindowStart": policy.breakWindowStart,
+            "breakWindowEnd": policy.breakWindowEnd,
+        ]
         return scopedRows.compactMap { row in
             guard let date = CanonicalBusinessEngine.date(fromDayKey: row.dayKey, calendar: calendar) else { return nil }
             let severity: Warning.WarningSeverity = row.kind == "leave_clash" || row.severity == "high" ? .high : .medium
             let ranges = row.missing.map { formatClockRange($0.start, $0.end) }
+            let bookingWindow = row.kind == "leave_cover"
+                ? CanonicalBusinessEngine.leaveCoverBookingWindow(row, day: windowDay)
+                : nil
             return Warning(
                 resolutionKey: row.id,
                 type: .annualLeave,
@@ -1477,16 +1487,12 @@ enum WarningsComputation {
                     personKey: row.personKey,
                     dayKey: row.dayKey,
                     leaveLabel: row.leaveLabel,
-                    gapStart: row.missing.map(\.start).min().map { clockText($0) },
-                    gapEnd: row.missing.map(\.end).max().map { clockText($0) }
+                    // RULEBOOK 1.60.0 `leaveCoverBookingWindow`: never across a booking the person already has.
+                    gapStart: bookingWindow?.start,
+                    gapEnd: bookingWindow?.end
                 )
             )
         }
-    }
-
-    nonisolated private static func clockText(_ minutes: Int) -> String {
-        let clamped = max(0, min(minutes, 24 * 60))
-        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
     }
 
     /// RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day leave not covered" rows (`leaveCoverageRows`, kind

@@ -104,6 +104,8 @@ struct BookLabourFlowView: View {
     @State private var breakWarningPrompt: BreakWarningPrompt?
     /// Memo for `candidates` (a reference, so filling it never redraws the view).
     @State private var candidateCache = BookLabourCandidateCache()
+    /// Memo for `multiPersonBlocks` (a reference, so filling it never redraws the view).
+    @State private var multiPersonBlockCache = MultiPersonBlockCache()
 
     private struct BreakWarningPrompt {
         let message: String
@@ -648,6 +650,21 @@ struct BookLabourFlowView: View {
     /// booked on this day (`multiPersonBookingBlocks`). Nil when the script did not answer (Continue then refuses).
     private func multiPersonBlocks(for people: [BookLabourCandidate]) -> [RulebookMultiPersonBlock]? {
         guard people.count > 1 else { return [] }
+        // Memoised per selection and data version (the body reads this on every redraw).
+        let cacheKey = [
+            people.map(\.id).sorted().joined(separator: ","),
+            CanonicalBusinessEngine.bookingDayKey(day),
+            "\(bookingStore.revision)", "\(managerScheduleStore.revision)",
+            "\(operativeStore.revision)", "\(userStore.organizationUsers.count)", "\(RulebookRosterSnapshot.revision)",
+        ].joined(separator: "|")
+        if multiPersonBlockCache.key == cacheKey { return multiPersonBlockCache.value }
+        let value = computeMultiPersonBlocks(for: people)
+        multiPersonBlockCache.key = cacheKey
+        multiPersonBlockCache.value = value
+        return value
+    }
+
+    private func computeMultiPersonBlocks(for people: [BookLabourCandidate]) -> [RulebookMultiPersonBlock]? {
         let key = CanonicalBusinessEngine.bookingDayKey(day)
         let users = userStore.organizationUsers
         let operatives = operativeStore.allOperatives
@@ -2412,11 +2429,7 @@ struct BookLabourFlowView: View {
             guard let user = user(forUnbookedRowUserId: userId, personKey: personKey) else { continue }
             guard seen.insert(user.id).inserted else { continue }
             let linked = BookLabourCandidate.catalogueRow(forRowOperativeId: row.operativeId, in: operativeStore.allOperatives)
-            let operativeOnly = user.permissions.operativeMode
-                && !user.permissions.manager
-                && !user.permissions.adminAccess
-                && !user.isSuperAdmin
-                && user.role != .admin
+            let operativeOnly = isOperativeOnly(user)
             let candidate = BookLabourCandidate(
                 user: user,
                 linkedOperative: linked,
@@ -2449,11 +2462,7 @@ struct BookLabourFlowView: View {
             let linked = cover.operativeId.flatMap {
                 BookLabourCandidate.catalogueRow(forRowOperativeId: $0, in: operativeStore.allOperatives)
             }
-            let operativeOnly = user.permissions.operativeMode
-                && !user.permissions.manager
-                && !user.permissions.adminAccess
-                && !user.isSuperAdmin
-                && user.role != .admin
+            let operativeOnly = isOperativeOnly(user)
             let candidate = BookLabourCandidate(
                 user: user,
                 linkedOperative: linked,
@@ -2469,6 +2478,13 @@ struct BookLabourFlowView: View {
             if lhs.focused != rhs.focused { return lhs.focused && !rhs.focused }
             return lhs.candidate.displayName.localizedCaseInsensitiveCompare(rhs.candidate.displayName) == .orderedAscending
         }.map(\.candidate)
+    }
+
+    /// RULEBOOK `labourBookingKind`: an operative-only account is booked onto jobs through `bookings`. The same call
+    /// Select Operatives / the Scheduling wizard make (`ScheduleBookablePersonBuilder.labourKind`), so both booking
+    /// screens agree on who takes the operative path.
+    private func isOperativeOnly(_ user: AppUser) -> Bool {
+        ScheduleBookablePersonBuilder.labourKind(user) == "operative"
     }
 
     private func user(forUnbookedRowUserId userId: String?, personKey: String) -> AppUser? {
@@ -2748,6 +2764,21 @@ final class BookLabourCandidateCache {
 
     var key: Key?
     var value: [BookLabourCandidate]?
+}
+
+/// The multi-person check for one selection and data version (see `BookLabourFlowView.multiPersonBlocks`).
+final class MultiPersonBlockCache {
+    var key: String?
+    var value: [RulebookMultiPersonBlock]?
+
+    /// The cached answer for `key`, else `compute()` stored under it.
+    func value(for key: String, compute: () -> [RulebookMultiPersonBlock]?) -> [RulebookMultiPersonBlock]? {
+        if self.key == key { return value }
+        let next = compute()
+        self.key = key
+        value = next
+        return next
+    }
 }
 
 /// Book labour copy shared with web `components/book-labour/BookLabourFlowScreen.tsx` (#262).

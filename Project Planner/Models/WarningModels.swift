@@ -259,8 +259,8 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         var dayKey: String? = nil
         /// `AM` or `PM`: the leave half (`leaveSlot` / `leaveLabel`).
         var leaveLabel: String? = nil
-        /// The uncovered time as one custom-hours pair (`HH:mm`): the start of the first `missing` range to the end of
-        /// the last (web `leaveCoverBookingHours`). Nil for a leave_clash row.
+        /// The custom hours to prefill (`HH:mm`), from the rulebook's `leaveCoverBookingWindow`: the first uncovered
+        /// stretch, never across an existing booking. Nil for a leave_clash row.
         var gapStart: String? = nil
         var gapEnd: String? = nil
 

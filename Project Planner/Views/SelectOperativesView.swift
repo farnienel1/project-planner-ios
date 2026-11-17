@@ -28,6 +28,8 @@ struct SelectOperativesView: View {
     @Binding var replacedConflictIds: Set<String>
 
     @State private var searchText = ""
+    /// Memo for `multiPersonBlocks` (RULEBOOK 1.60.0).
+    @State private var multiPersonBlockCache = MultiPersonBlockCache()
     @State private var selectedFilter: AvailabilityFilter = .all
     @State private var tradeFilterPreset: String? = nil
 
@@ -47,7 +49,14 @@ struct SelectOperativesView: View {
     /// RULEBOOK 1.60.0 §5 (owner request 17 Nov): more than one person selected, anyone already booked on a selected
     /// day is named and must be removed (`multiPersonBookingBlocks`). One person keeps the ✓ / ✕ / Replace rows.
     private var multiPersonBlocks: [RulebookMultiPersonBlock]? {
-        MultiPersonBookingCheck.scheduleBlocks(
+        // Memoised per selection, dates and data version (the body reads this on every redraw).
+        let key = [
+            selectedOperatives.map(\.uuidString).sorted().joined(separator: ","),
+            selectedDates.map { CanonicalBusinessEngine.bookingDayKey($0) }.sorted().joined(separator: ","),
+            "\(bookingStore.revision)", "\(managerScheduleStore.revision)", "\(operativeStore.revision)",
+            "\(userStore.organizationUsers.count)", "\(people.count)",
+        ].joined(separator: "|")
+        return multiPersonBlockCache.value(for: key) { MultiPersonBookingCheck.scheduleBlocks(
             people: people,
             selected: selectedOperatives,
             dates: selectedDates,
@@ -56,7 +65,7 @@ struct SelectOperativesView: View {
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
             excludingBookingIds: excludingBookingIds
-        )
+        ) }
     }
 
     private var canSave: Bool {
@@ -121,6 +130,12 @@ struct SelectOperativesView: View {
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 8)
+                } else if multiPersonBlocks == nil {
+                    Text("Couldn't check who is already booked — try again.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.red)
+                        .padding(.horizontal)
+                        .padding(.bottom, 8)
                 }
 
                 if operativeStore.isLoading {

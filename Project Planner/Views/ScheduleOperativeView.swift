@@ -26,6 +26,8 @@ struct ScheduleOperativeView: View {
     var editingGroupId: String? = nil
 
     @State private var selectedOperatives: Set<UUID> = []
+    /// Memo for `multiPersonBlocks` (RULEBOOK 1.60.0).
+    @State private var multiPersonBlockCache = MultiPersonBlockCache()
     @State private var showingSelectOperatives = false
     @State private var selectedDates: Set<Date> = []
     @State private var dateSlotChoices: [String: OperativeDayBookingChoice] = [:]
@@ -453,7 +455,14 @@ struct ScheduleOperativeView: View {
     /// RULEBOOK 1.60.0 §5 (owner request 17 Nov): more than one person, anyone already booked on a selected day must be
     /// removed first (`multiPersonBookingBlocks`). One person keeps the ✓ / ✕ / Replace rows.
     private var multiPersonBlocks: [RulebookMultiPersonBlock]? {
-        MultiPersonBookingCheck.scheduleBlocks(
+        // Memoised per selection, dates and data version (the body reads this on every redraw).
+        let key = [
+            selectedOperatives.map(\.uuidString).sorted().joined(separator: ","),
+            selectedDates.map { CanonicalBusinessEngine.bookingDayKey($0) }.sorted().joined(separator: ","),
+            "\(bookingStore.revision)", "\(managerScheduleStore.revision)", "\(operativeStore.revision)",
+            "\(userStore.organizationUsers.count)", "\(bookablePeople.count)",
+        ].joined(separator: "|")
+        return multiPersonBlockCache.value(for: key) { MultiPersonBookingCheck.scheduleBlocks(
             people: bookablePeople,
             selected: selectedOperatives,
             dates: selectedDates,
@@ -462,7 +471,7 @@ struct ScheduleOperativeView: View {
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
             excludingBookingIds: excludingBookingIds
-        )
+        ) }
     }
 
     private var canConfirmBooking: Bool {
@@ -1170,6 +1179,10 @@ struct ScheduleOperativeView: View {
                 MultiPersonBookingBlocksView(blocks: blocks) { personKey in
                     if let id = UUID(uuidString: personKey) { selectedOperatives.remove(id) }
                 }
+            } else if multiPersonBlocks == nil {
+                Text("Couldn't check who is already booked — try again.")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
             }
             PPSheetSectionTitle("Operatives") {
                 if !selectedOperatives.isEmpty {
@@ -1511,7 +1524,11 @@ struct ScheduleOperativeView: View {
         if !ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(selected: selectedDates, policy: primarySelectedDatePolicy) {
             return "Book Saturday and Sunday separately to confirm"
         }
-        if multiPersonBlocks?.isEmpty != true { return "Remove people already booked to confirm" }
+        switch multiPersonBlocks {
+        case .none: return "Couldn't check who is already booked — try again"
+        case .some(let blocks) where !blocks.isEmpty: return "Remove people already booked to confirm"
+        default: break
+        }
         if !canConfirmBooking { return "Acknowledge each clash to confirm" }
         return nil
     }

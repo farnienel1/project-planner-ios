@@ -58,9 +58,37 @@ final class Rulebook1600Tests: XCTestCase {
         XCTAssertEqual(detail.dayKey, dayKey)
         XCTAssertEqual(detail.leaveLabel, "AM")
         XCTAssertEqual(detail.workingLabel, "PM")
-        XCTAssertEqual(detail.gapEnd, OrgPayrollTimePolicy.default.standardDayEnd)
-        XCTAssertNotNil(detail.gapStart)
-        XCTAssertGreaterThan(detail.missingHours, 0)
+        // Default working day 07:30–16:00, lunch 12:00–12:30: the PM half is 11:45–16:00 (`leaveCoverBookingWindow`).
+        XCTAssertEqual(detail.gapStart, "11:45")
+        XCTAssertEqual(detail.gapEnd, "16:00")
+        XCTAssertEqual(detail.missingHours, 3.75, accuracy: 0.001)
+    }
+
+    /// Review of #373: already booked 13:00–14:00, the prefill stops at that booking (never 11:45–16:00, a clash).
+    func testThePrefillNeverRunsAcrossAnExistingBooking() throws {
+        let booked = ManagerSiteBooking(
+            userId: "TEST-ADMIN",
+            date: day,
+            timeSlot: .customHours,
+            locationType: .office,
+            locationId: nil,
+            workStartTime: "13:00",
+            workEndTime: "14:00"
+        )
+        let rows = WarningsComputation.leaveCoverRowsOnDay(
+            day: day,
+            users: [admin],
+            operatives: [],
+            operativeBookings: [],
+            managerBookings: [booked],
+            holidays: amLeave(),
+            policy: .default,
+            warningDetection: .default
+        )
+        let detail = try XCTUnwrap(rows.first?.annualLeave)
+        XCTAssertEqual(detail.gapStart, "11:45")
+        XCTAssertEqual(detail.gapEnd, "13:00")
+        XCTAssertEqual(detail.missingHours, 2.75, accuracy: 0.001)
     }
 
     func testAPendingRequestIsNotLeaveCover() {
@@ -129,10 +157,58 @@ final class Rulebook1600Tests: XCTestCase {
         XCTAssertEqual(edited, [])
     }
 
-    func testAccountIdsIncludeTheOperativesRowOnTheEmail() {
+    func testAccountIdsAreTheRulebooksPersonIds() {
+        var account = admin
+        account.formerUserIds = ["OLD-INVITE-ID"]
         let row = Operative(id: UUID(), firstName: "Test", lastName: "Admin", email: "TEST.ADMIN@site.test", startDate: Date(timeIntervalSince1970: 0))
-        let ids = MultiPersonBookingCheck.ids(forUserId: "TEST-ADMIN", users: [admin], operatives: [row])
+        let ids = MultiPersonBookingCheck.ids(forUserId: "TEST-ADMIN", users: [account], operatives: [row])
         XCTAssertTrue(ids.contains("TEST-ADMIN"))
-        XCTAssertTrue(ids.contains { $0.caseInsensitiveCompare(row.documentId) == .orderedSame })
+        XCTAssertTrue(ids.contains("OLD-INVITE-ID"), "formerUserIds (personIdSet)")
+        XCTAssertTrue(ids.contains { $0.caseInsensitiveCompare(row.documentId) == .orderedSame }, "operatives row on the email")
+    }
+
+    /// The Scheduling wizard / Select Operatives check: two people selected, one already booked that day.
+    func testTheSchedulingWizardNamesThePersonAlreadyBooked() throws {
+        let opA = UUID()
+        let opB = UUID()
+        let people = [
+            ScheduleBookablePerson(operativeId: opA, userId: nil, name: "Ada", email: "", roleLabel: "Operative", tradeLabel: "", hasPastBookingOnProject: false),
+            ScheduleBookablePerson(operativeId: opB, userId: nil, name: "Ben", email: "", roleLabel: "Operative", tradeLabel: "", hasPastBookingOnProject: false),
+        ]
+        let existing = Booking(operativeId: opB, projectId: UUID(), date: day, timeSlot: .fullDay, bookedBy: "TEST")
+        let blocks = try XCTUnwrap(MultiPersonBookingCheck.scheduleBlocks(
+            people: people,
+            selected: [opA, opB],
+            dates: [day],
+            operativeBookings: [existing],
+            managerBookings: [],
+            users: [],
+            operatives: [],
+            excludingBookingIds: []
+        ))
+        XCTAssertEqual(blocks.map(\.name), ["Ben"])
+        XCTAssertEqual(blocks.first?.dayKeys, [dayKey])
+        // One person selected keeps the ✓ / ✕ / Replace rows: no block.
+        XCTAssertEqual(MultiPersonBookingCheck.scheduleBlocks(
+            people: people,
+            selected: [opB],
+            dates: [day],
+            operativeBookings: [existing],
+            managerBookings: [],
+            users: [],
+            operatives: [],
+            excludingBookingIds: []
+        ), [])
+        // The booking being edited never blocks.
+        XCTAssertEqual(MultiPersonBookingCheck.scheduleBlocks(
+            people: people,
+            selected: [opA, opB],
+            dates: [day],
+            operativeBookings: [existing],
+            managerBookings: [],
+            users: [],
+            operatives: [],
+            excludingBookingIds: [existing.id]
+        ), [])
     }
 }
