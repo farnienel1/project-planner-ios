@@ -477,3 +477,26 @@ enum TimesheetVersionChainCache {
         return byId[documentId] ?? []
     }
 }
+
+/// Review of #243 (M-1): a save goes only to the version the editor opened. `saveToCloud` reads the latest version
+/// fresh; when that is no longer the draft's own version (REV N exported and REV N+1 created elsewhere while this
+/// screen was open), the save is refused instead of landing a signature or snapshot on the newer version.
+nonisolated enum TimesheetVersionSaveGuard {
+    static let newerVersionMessage = "A newer version of this timesheet exists — reload."
+
+    /// - draftVersionId: the version the draft was read from (`versionDocumentId`); nil for a copy read before 1.55.0
+    ///   or a sheet not yet stored, which is the original.
+    /// - serverVersionId: `__documentId` of the fresh read; nil when nothing is stored yet.
+    /// Returns the refusal message, or nil when the save may go ahead. Ids compare exactly (stored case).
+    static func refusal(draftVersionId: String?, serverVersionId: String?) -> String? {
+        let server = serverVersionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !server.isEmpty else { return nil }
+        let draft = draftVersionId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if draft.isEmpty {
+            // No version recorded: the original. Refuse once the latest stored version is a revision.
+            let serverRevision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(server)?.revision ?? 0
+            return serverRevision > 0 ? newerVersionMessage : nil
+        }
+        return draft == server ? nil : newerVersionMessage
+    }
+}

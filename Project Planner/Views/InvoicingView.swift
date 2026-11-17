@@ -1224,6 +1224,14 @@ enum TimesheetDraftStore {
         } catch {
             return "Couldn't save your timesheet: \(error.localizedDescription)"
         }
+        // Review of #243 (M-1): the fresh read is the latest version; save only when it is the version this draft was
+        // read from, so the field diff below is against the draft's own version and nothing lands on a newer one.
+        if let refusal = TimesheetVersionSaveGuard.refusal(
+            draftVersionId: draft.versionDocumentId,
+            serverVersionId: server?["__documentId"] as? String
+        ) {
+            return refusal
+        }
         let reviewer = TimesheetApprovalPolicy.writerIsReviewer(
             writerId: writerId,
             writer: writer,

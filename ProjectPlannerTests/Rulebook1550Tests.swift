@@ -345,6 +345,21 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertNotEqual(key("timesheet_pending_manager_signoff", 1), key("timesheet_pending_manager_signoff", nil))
     }
 
+    /// Review of #243 (M-1): a draft read from REV 1 never saves onto REV 2 created meanwhile.
+    func testSaveIsRefusedWhenANewerVersionExists() {
+        let rev2 = original + "_rev2"
+        XCTAssertNil(TimesheetVersionSaveGuard.refusal(draftVersionId: revision1, serverVersionId: revision1))
+        XCTAssertEqual(TimesheetVersionSaveGuard.refusal(draftVersionId: revision1, serverVersionId: rev2),
+                       TimesheetVersionSaveGuard.newerVersionMessage)
+        XCTAssertEqual(TimesheetVersionSaveGuard.refusal(draftVersionId: original, serverVersionId: revision1),
+                       TimesheetVersionSaveGuard.newerVersionMessage)
+        // Nothing stored yet, or an older local copy of the original while no revision exists: the save goes ahead.
+        XCTAssertNil(TimesheetVersionSaveGuard.refusal(draftVersionId: original, serverVersionId: nil))
+        XCTAssertNil(TimesheetVersionSaveGuard.refusal(draftVersionId: nil, serverVersionId: original))
+        XCTAssertEqual(TimesheetVersionSaveGuard.refusal(draftVersionId: nil, serverVersionId: revision1),
+                       TimesheetVersionSaveGuard.newerVersionMessage)
+    }
+
     func testRevisionEntriesAreFrozenForThePerson() {
         let extras = CanonicalBusinessEngine.timesheetOwnerCanAddExtras(managerSignedAt: nil, approvedAt: nil, selfSigned: false, revision: 1)
         XCTAssertFalse(extras.allowed)
