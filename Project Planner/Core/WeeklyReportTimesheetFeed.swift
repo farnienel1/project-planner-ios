@@ -214,6 +214,7 @@ struct WeeklyReportTimesheetFeed {
             var listedFromCloud = false
             var storedWeekKeys = Set<String>()
             if let orgId {
+                // RULEBOOK 1.55.0 §8 (owner decision J4): one row per pay run — its LATEST version (`timesheetLatestVersion`).
                 if let rows = try? await firebaseBackend.listTimesheetStates(
                     organizationId: orgId,
                     userId: user.id,
@@ -304,6 +305,15 @@ struct WeeklyReportTimesheetFeed {
                 // RULEBOOK 1.54.0 §8: late extras waiting for the line manager never take a signed sheet out of the feed
                 // (its signed money stands; only approved late extras are in its snapshot).
                 if change?.reopened == true && change?.bookingsChanged != false { continue }
+                // RULEBOOK 1.55.0 §8 (owner decision J4): a revision due (the exported latest version's bookings changed)
+                // is not approved either — the live bookings are reported until the revision is signed off. An open
+                // revision is not fully approved, so it never reaches here.
+                if CanonicalBusinessEngine.timesheetRevisionReportState(
+                    revision: draft.revision,
+                    exported: TimesheetApprovalPolicy.isExported(draft),
+                    signedOff: true,
+                    change: change
+                )?.state == "due" { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
                 var working = draft
@@ -389,10 +399,14 @@ struct WeeklyReportTimesheetFeed {
             row["change"] = [
                 "reopened": change.reopened,
                 "changed": change.changed,
+                // RULEBOOK 1.55.0 (J4): an exported sheet whose bookings changed — "Revision due".
+                "exported": change.exported,
                 "waitingFor": RulebookJSON.orNull(change.waitingFor),
             ] as [String: Any]
         }
         row["payrollLines"] = lines.map(\.rulebookTotalsJSON)
+        // RULEBOOK 1.55.0 §8: the version used (0 for the original, N for REV N) — the check line reads "· REV N".
+        row["revision"] = draft.revision ?? 0
         let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
         if !fingerprints.isEmpty { row["entryFingerprints"] = fingerprints }
         return row

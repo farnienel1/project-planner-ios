@@ -106,7 +106,8 @@ extension CanonicalBusinessEngine {
         subjectId: String,
         periodStartDayKey: String,
         timeZone: String,
-        recipientId: String? = nil
+        recipientId: String? = nil,
+        revision: Int? = nil
     ) -> String? {
         var input: [String: Any] = [
             "type": type,
@@ -115,6 +116,9 @@ extension CanonicalBusinessEngine {
             "timeZone": timeZone,
         ]
         if let recipientId { input["recipientId"] = recipientId }
+        // RULEBOOK 1.55.0: a revision (REV N) shares its period start with the original, so its notices get their
+        // own key (`…|rev{N}`); nil / 0 is the original (key unchanged).
+        if let revision { input["revision"] = revision }
         return callJSON("timesheetNotificationDedupeKey", arguments: [input]) as? String
     }
 

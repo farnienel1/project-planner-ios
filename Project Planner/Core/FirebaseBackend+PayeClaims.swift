@@ -427,18 +427,27 @@ extension FirebaseBackend {
     func loadTimesheetClaimSheets(userId: String) async throws -> [[String: Any]] {
         let org = try payeClaimsOrganizationRef()
         let snapshot = try await org.collection("settings").whereField("userId", isEqualTo: userId).getDocuments()
-        return snapshot.documents
-            .filter { $0.documentID.hasPrefix("timesheet_") }
+        // RULEBOOK 1.55.0 §8: a revision copies its pay run's entries — list each pay run once, from its latest version
+        // (`timesheetLatestVersion`), never the original and its revisions side by side.
+        let latest = FirebaseBackend.collapseTimesheetVersions(
+            snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) },
+            versions: .latest
+        )
+        return latest
+            .compactMap { row -> (id: String, data: [String: Any])? in
+                guard let id = row["__documentId"] as? String, id.hasPrefix("timesheet_") else { return nil }
+                return (id, row.filter { entry in !entry.key.hasPrefix("__") })
+            }
             .compactMap { doc -> [String: Any]? in
                 guard let entries = CanonicalBusinessEngine.parseTimesheetEntries(
-                    sheetDocumentId: doc.documentID,
-                    sheet: doc.data(),
+                    sheetDocumentId: doc.id,
+                    sheet: doc.data,
                     organizationId: org.documentID,
                     ownerUserIds: RulebookRosterSnapshot.personIds(forUserId: userId)
                 ) else {
                     return nil
                 }
-                return ["id": doc.documentID, "entries": entries.raw]
+                return ["id": doc.id, "entries": entries.raw]
             }
     }
 

@@ -105,13 +105,16 @@ extension CanonicalBusinessEngine {
         approvedAt: Date?,
         exportedAt: Date?,
         exportedAtStored: Bool?,
-        selfSigned: Bool
+        selfSigned: Bool,
+        revision: Int? = nil
     ) -> RulebookTimesheetExtrasPermission {
         func ms(_ date: Date?) -> Any { date.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull() }
+        // RULEBOOK 1.55.0 §8: `revision` (REV N) — never on a revision.
         var sheet: [String: Any] = [
             "managerSignedAt": ms(managerSignedAt),
             "approvedAt": ms(approvedAt),
             "exportedAt": ms(exportedAt),
+            "revision": revision ?? 0,
         ]
         if let exportedAtStored { sheet["exportedAtStored"] = exportedAtStored }
         return RulebookTimesheetExtrasPermission(

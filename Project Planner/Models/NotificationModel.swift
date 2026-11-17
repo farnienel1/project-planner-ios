@@ -40,6 +40,11 @@ struct AppNotification: Identifiable, Codable, Hashable {
         /// `timesheetBookingsChangedNotice`), never by iOS. Push, toggle `timesheetSignOff`; opens My Timesheets on that
         /// pay run (`notificationDestination` kind `timesheetMine`).
         case timesheetBookingsChanged = "timesheet_bookings_changed"
+        /// RULEBOOK 1.55.0 §8, §13: a revision of the person's exported timesheet to sign — "Update to your exported
+        /// timesheet" (the server, when a booking change made one due) or "Your timesheet has a revision to sign" (an
+        /// admin or line manager's Create revision). Push, toggle `timesheetSignOff`; opens My Timesheets on that pay run
+        /// (`notificationDestination` kind `timesheetMine`), which opens the latest version.
+        case timesheetRevisionToSign = "timesheet_revision_to_sign"
         case lineManagerPeerUpdate = "line_manager_peer_update"
         /// Older iOS rows. The rulebook has no `material_added`: no device push, no toggle, no destination.
         case materialAdded = "material_added"

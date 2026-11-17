@@ -559,6 +559,8 @@ final class SignedTimesheetChangeContext {
             ms(draft.weeklyReportOverride?.approvedAt), record.joined(separator: ","), snapshot.joined(separator: ","),
             money.joined(separator: ","), late.joined(separator: ","), draft.extraEntryReviewsJSON ?? "-",
             draft.exportedAtStored == true ? "x" : "-",
+            // RULEBOOK 1.55.0: the version read (an original and its revision are different sheets).
+            draft.versionDocumentId ?? "-",
         ].joined(separator: "|")
     }
 
@@ -689,9 +691,10 @@ final class SignedTimesheetChangeContext {
     /// person's sheets there is signed and not exported. Plumbing only.
     func ensureHubBookings(user: AppUser, settings: OrganizationInvoicingSettings) {
         guard let firebaseBackend, let bookingStore, let managerScheduleStore else { return }
+        // RULEBOOK 1.55.0 §8: exported sheets too — a booking change after export makes a revision due.
         let signed = hubPeriods(settings: settings).filter { period in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start)
-            return SignedTimesheetChanges.isSigned(draft) && !TimesheetApprovalPolicy.isExported(draft)
+            return SignedTimesheetChanges.isSigned(draft)
         }
         guard let earliest = signed.map(\.start).min() else { return }
         PayInputsLoad.ensurePeriodBookings(
@@ -702,13 +705,39 @@ final class SignedTimesheetChangeContext {
         )
     }
 
+    /// The My Timesheets entry's triangle: a signed, unexported sheet waits for the person to sign again (1.47.0), or
+    /// — RULEBOOK 1.55.0 §8 — an exported sheet has a revision due (`timesheetRevisionDue`).
     func ownSheetNeedsSigningAgain(user: AppUser, settings: OrganizationInvoicingSettings) -> Bool {
+        ownSheetTriangleMessage(user: user, settings: settings) != nil
+    }
+
+    /// The popup of the My Timesheets entry's triangle, or nil when there is none: `SIGNED_TIMESHEET_CHANGED_MESSAGE`
+    /// for a signed sheet to sign again (1.47.0), `TIMESHEET_REVISION_DUE_MESSAGE` for a revision due (1.55.0). The
+    /// newest pay run decides when both occur.
+    func ownSheetTriangleMessage(user: AppUser, settings: OrganizationInvoicingSettings) -> String? {
         let periods = hubPeriods(settings: settings)
         for period in periods {
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: period.start)
-            guard SignedTimesheetChanges.isSigned(draft), !TimesheetApprovalPolicy.isExported(draft) else { continue }
-            if change(draft: draft, user: user, period: period)?.waitingForPerson == true { return true }
+            guard SignedTimesheetChanges.isSigned(draft) else { continue }
+            if TimesheetApprovalPolicy.isExported(draft) {
+                let due = revisionDue(draft: draft, user: user, period: period)
+                if due.due { return due.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage }
+            } else if let reopened = change(draft: draft, user: user, period: period), reopened.waitingForPerson {
+                return reopened.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage
+            }
         }
-        return false
+        return nil
+    }
+
+    /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue`: the draft (its pay run's latest version) is exported and its
+    /// bookings changed since — a revision is due. `.notDue` until the pay run's bookings have loaded.
+    func revisionDue(draft: TimesheetDraft, user: AppUser, period: WeekRange) -> RulebookTimesheetRevisionDue {
+        guard SignedTimesheetChanges.isSigned(draft), TimesheetApprovalPolicy.isExported(draft) else { return .notDue }
+        return TimesheetDraftStore.revisionDue(
+            for: draft,
+            userId: user.id,
+            weekStart: period.start,
+            change: change(draft: draft, user: user, period: period)
+        )
     }
 }

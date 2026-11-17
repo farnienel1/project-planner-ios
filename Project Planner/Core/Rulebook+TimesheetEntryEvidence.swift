@@ -147,11 +147,14 @@ extension CanonicalBusinessEngine {
         managerSignedAt: Date?,
         approvedAt: Date?,
         viewerIsOwner: Bool,
-        selfSigned: Bool
+        selfSigned: Bool,
+        revision: Int? = nil
     ) -> RulebookTimesheetExtrasPermission {
+        // RULEBOOK 1.55.0 §8: `revision` (REV N) — a revision's entries are frozen for the person.
         let sheet: [String: Any] = [
             "managerSignedAt": managerSignedAt.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
             "approvedAt": approvedAt.map { $0.timeIntervalSince1970 * 1000 as Any } ?? NSNull(),
+            "revision": revision ?? 0,
         ]
         return RulebookTimesheetExtrasPermission(
             json: callJSON("canEditTimesheetEntry", arguments: [sheet, ["viewerIsOwner": viewerIsOwner, "selfSigned": selfSigned]])
