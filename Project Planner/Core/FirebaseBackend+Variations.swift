@@ -671,7 +671,12 @@ extension FirebaseBackend {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             let task = storageRef.putData(data, metadata: metadata) { metadata, error in
                 guard watch.finish() else { return }
-                if watch.timedOut {
+                // Review of #261 (as web #388): a finished upload always wins. When the watchdog gave up but the file
+                // still finished (its cancel came too late), it is returned and linked — never reported as a timeout
+                // with the file left in Storage unlinked.
+                if error == nil, let metadata {
+                    continuation.resume(returning: metadata)
+                } else if watch.timedOut {
                     continuation.resume(throwing: NSError(
                         domain: "FirebaseBackend",
                         code: 408,
@@ -679,8 +684,6 @@ extension FirebaseBackend {
                     ))
                 } else if let error {
                     continuation.resume(throwing: error)
-                } else if let metadata {
-                    continuation.resume(returning: metadata)
                 } else {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
                 }

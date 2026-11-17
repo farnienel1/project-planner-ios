@@ -36,9 +36,12 @@ final class VariationStore: ObservableObject {
                 for (index, id) in order.enumerated() { rank[id.lowercased()] = index }
                 return live.sorted { (rank[$0.id.lowercased()] ?? Int.max) < (rank[$1.id.lowercased()] ?? Int.max) }
             }
+            // Only when the script does not answer: the same order (sequence, then VO number, then id).
             return live.sorted {
                 if $0.sequence != $1.sequence { return $0.sequence < $1.sequence }
-                return $0.createdAt > $1.createdAt
+                let byNumber = $0.voNumber.localizedStandardCompare($1.voNumber)
+                if byNumber != .orderedSame { return byNumber == .orderedAscending }
+                return $0.id.lowercased() < $1.id.lowercased()
             }
         }
         return live.sorted { $0.createdAt > $1.createdAt }
