@@ -254,7 +254,8 @@ struct PersonalSiteAuditCreateView: View {
                             Text(value.rawValue).tag(value.rawValue)
                         }
                     }
-                    TextField("Title (optional)", text: $customTitle)
+                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("customTitle") ?? "Title (optional)", text: $customTitle)
+                    PersonalSiteAuditFieldCounter(field: "customTitle", value: customTitle)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
                         .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                 }
@@ -264,10 +265,13 @@ struct PersonalSiteAuditCreateView: View {
                             .resizable()
                             .scaledToFit()
                             .frame(maxHeight: 220)
-                        TextField("Title", text: $item.title)
-                        TextField("Location", text: $item.location)
-                        TextField("Notes", text: $item.comments, axis: .vertical)
+                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("title") ?? "Title", text: $item.title)
+                        PersonalSiteAuditFieldCounter(field: "title", value: item.title)
+                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("location") ?? "Location", text: $item.location)
+                        PersonalSiteAuditFieldCounter(field: "location", value: item.location)
+                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("comments") ?? "Comments", text: $item.comments, axis: .vertical)
                             .lineLimit(2...5)
+                        PersonalSiteAuditFieldCounter(field: "comments", value: item.comments)
                         Button("Remove", role: .destructive) {
                             let id = item.id
                             items.removeAll { $0.id == id }
@@ -367,6 +371,12 @@ struct PersonalSiteAuditCreateView: View {
             error = message
             return
         }
+        // RULEBOOK 1.61.0 §29: field limits of a new audit (`siteAuditFieldLimitError`), before any upload.
+        if let limit = CanonicalBusinessEngine.siteAuditFieldLimitError(["customTitle": customTitle])
+            ?? items.lazy.compactMap({ CanonicalBusinessEngine.siteAuditFieldLimitError(["title": $0.title, "location": $0.location, "comments": $0.comments]) }).first {
+            error = limit
+            return
+        }
         error = nil
         let auditId = UUID().uuidString
         var uploaded: [[String: Any]] = []
@@ -391,6 +401,21 @@ struct PersonalSiteAuditCreateView: View {
             await firebaseBackend.discardPersonalSiteAuditPhotos(uploaded.compactMap { $0["imagePath"] as? String })
             saving = nil
             self.error = error.localizedDescription
+        }
+    }
+}
+
+/// RULEBOOK 1.61.0 §29: the live "34 / 120" counter under a personal site audit field (`siteAuditFieldCounter`).
+struct PersonalSiteAuditFieldCounter: View {
+    let field: String
+    let value: String
+
+    var body: some View {
+        if let counter = CanonicalBusinessEngine.siteAuditFieldCounter(field: field, value: value) {
+            Text(counter.label)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(counter.over ? Color.red : Color.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }

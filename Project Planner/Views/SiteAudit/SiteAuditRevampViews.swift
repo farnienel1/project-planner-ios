@@ -340,11 +340,20 @@ struct SiteAuditDetailsStepView: View {
             icon: "pencil",
             iconTint: SiteAuditColors.primary,
             iconBg: SiteAuditColors.primaryTint,
-            label: "Title · optional"
+            label: CanonicalBusinessEngine.siteAuditFieldLabel("customTitle") ?? "Title (optional)"
         ) {
-            TextField("e.g. Plant room snags", text: $customTitle)
-                .accessibilityIdentifier("siteAuditDetailsStep.eGPlantRoomSnags")
-                .font(.body)
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("e.g. Plant room snags", text: $customTitle)
+                    .accessibilityIdentifier("siteAuditDetailsStep.eGPlantRoomSnags")
+                    .font(.body)
+                // RULEBOOK 1.61.0 §29: the live counter (`siteAuditFieldCounter`); submit checks the limit.
+                if let counter = CanonicalBusinessEngine.siteAuditFieldCounter(field: "customTitle", value: customTitle) {
+                    Text(counter.label)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(counter.over ? SiteAuditColors.danger : SiteAuditColors.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+            }
         }
     }
 

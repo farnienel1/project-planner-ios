@@ -252,14 +252,37 @@ extension FirebaseBackend {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: data, declaredContentType: contentType
         )
+        // Owner bug 17 Nov (a site audit stuck on "Uploading photo 1 of 6"): the Storage SDK retries a dropped
+        // connection silently for up to 10 minutes. The variation-evidence watch cancels the task after
+        // `siteAuditUploadStallSeconds` without progress or `siteAuditUploadTotalSeconds` in all, so the screen
+        // shows a real error at once and the person can try again; nothing is saved until every photo is uploaded.
+        let watch = VariationUploadWatch()
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(data, metadata: metadata) { metadata, error in
-                if let error {
+            let task = storageRef.putData(data, metadata: metadata) { metadata, error in
+                guard watch.finish() else { return }
+                if watch.timedOut {
+                    continuation.resume(throwing: PayeClaimRefused(
+                        message: "A photo upload stopped and was cancelled. Check your connection and try again."
+                    ))
+                } else if let error {
                     continuation.resume(throwing: error)
                 } else if let metadata {
                     continuation.resume(returning: metadata)
                 } else {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+            task.observe(.progress) { _ in watch.touch() }
+            Task {
+                while !watch.isFinished {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if watch.shouldGiveUp(
+                        stallSeconds: FirebaseBackend.siteAuditUploadStallSeconds,
+                        totalSeconds: FirebaseBackend.siteAuditUploadTotalSeconds
+                    ) {
+                        task.cancel()
+                        break
+                    }
                 }
             }
         }
