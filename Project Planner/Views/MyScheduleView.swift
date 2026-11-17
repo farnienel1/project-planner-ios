@@ -2717,14 +2717,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     /// RULEBOOK 1.53.0: the instant showing `minutes` past midnight on the organisation's wall clock on `day` (an
     /// hour/minute set, never midnight plus minutes, so a clock-change day reads right).
     static func wallClock(minutes: Int, on day: Date) -> Date {
-        let calendar = OrganizationRulebookContext.calendar
-        let base = calendar.startOfDay(for: day)
-        let hour = max(0, minutes) / 60
-        let minute = max(0, minutes) % 60
-        if hour < 24, let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) {
-            return date
-        }
-        return calendar.date(byAdding: .minute, value: minutes, to: base) ?? base
+        OrganizationWeekSupport.wallClock(minutes: minutes, on: day)
     }
 
     private static func defaultTimes(for slot: ManagerTimeSlot, day: Date, policy: OrgPayrollTimePolicy) -> (start: Date, end: Date) {

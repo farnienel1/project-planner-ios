@@ -126,15 +126,16 @@ extension ManagerSiteBooking {
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
         // The booking's organisation day and its clock times in the organisation zone (never the phone's, guardrail 2),
         // so a phone abroad exports and shows the booked hours at the right instants.
-        let cal = OrganizationRulebookContext.calendar
-        let startOfDay = cal.startOfDay(for: day)
+        let startOfDay = OrganizationRulebookContext.calendar.startOfDay(for: day)
         // The script's slotInterval with the stored slot and clocks.
         guard let interval = ManagerScheduleInterval.clashInterval(for: self, policy: policy) else {
-            let end = cal.date(byAdding: .hour, value: timeSlot == .morning || timeSlot == .afternoon ? 4 : 8, to: startOfDay) ?? startOfDay
+            let end = OrganizationWeekSupport.wallClock(minutes: (timeSlot == .morning || timeSlot == .afternoon ? 4 : 8) * 60, on: startOfDay)
             return (startOfDay, end)
         }
-        let start = cal.date(byAdding: .minute, value: interval.0, to: startOfDay) ?? startOfDay
-        let end = cal.date(byAdding: .minute, value: interval.1, to: startOfDay) ?? startOfDay
+        // Wall-clock hour and minute on the organisation day (never midnight plus elapsed minutes, so the clock-change
+        // Sundays read right); a finish past 24:00 is on the next organisation day.
+        let start = OrganizationWeekSupport.wallClock(minutes: interval.0, on: startOfDay)
+        let end = OrganizationWeekSupport.wallClock(minutes: interval.1, on: startOfDay)
         return (start, end)
     }
 

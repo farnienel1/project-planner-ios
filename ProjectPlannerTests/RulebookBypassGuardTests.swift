@@ -36,7 +36,7 @@ final class RulebookBypassGuardTests: XCTestCase {
 
     /// Files the ratchet does not count, with the reason.
     private static let allowList: [String: String] = [
-        "Views/ScheduleCalendarExport.swift": "Exports to the phone's own Calendar app, which works in the device zone by design.",
+        "Views/ScheduleCalendarExport.swift": "Event instants come from the organisation zone (`calendarBlock`); only the text and the stamps handed to the phone's own Calendar app are written in the device zone, by design.",
         "Core/PlaygroundDemoSeeder.swift": "Builds TEST demo data for the playground and UI tests; never a business answer.",
         "Core/MondayFirstCalendarSupport.swift": "The Monday-first month-grid helper itself (display layout only).",
         "PPDesign/PPReferencePreviews.swift": "SwiftUI preview code; not shipped behaviour.",

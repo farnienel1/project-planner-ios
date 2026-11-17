@@ -148,6 +148,74 @@ final class OrganizationWeekSupportTests: XCTestCase {
         }
     }
 
+    // MARK: Clock-change Sundays (review of #247)
+
+    /// Failure before: `calendarBlock` added elapsed minutes to midnight, so on the last Sunday of March (23 hours) and
+    /// of October (25 hours) every clock time after 01:00 / 02:00 was an hour out. Now the hour and minute are set.
+    func testWallClockOnTheClockChangeSundays() {
+        onPhonesIn { zone in
+            let spring = instant("2026-03-29T12:00:00Z") // last Sunday of March: 01:00 GMT → 02:00 BST
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 7 * 60 + 30, on: spring, timeZone: london), instant("2026-03-29T06:30:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 16 * 60, on: spring, timeZone: london), instant("2026-03-29T15:00:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 0, on: spring, timeZone: london), instant("2026-03-29T00:00:00Z"), zone)
+            let autumn = instant("2026-10-25T12:00:00Z") // last Sunday of October: 02:00 BST → 01:00 GMT
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 7 * 60 + 30, on: autumn, timeZone: london), instant("2026-10-25T07:30:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 16 * 60, on: autumn, timeZone: london), instant("2026-10-25T16:00:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 0, on: autumn, timeZone: london), instant("2026-10-24T23:00:00Z"), zone)
+        }
+    }
+
+    /// A finish past 24:00 (overnight, 22:00–06:00 is 1320–1800) is on the next organisation day at that day's wall
+    /// clock — across both clock changes too.
+    func testWallClockPastMidnightIsOnTheNextOrganisationDay() {
+        onPhonesIn { zone in
+            // Saturday 28 Mar 22:00 GMT → Sunday 29 Mar 06:00 BST.
+            let saturdaySpring = instant("2026-03-28T12:00:00Z")
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 22 * 60, on: saturdaySpring, timeZone: london), instant("2026-03-28T22:00:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 30 * 60, on: saturdaySpring, timeZone: london), instant("2026-03-29T05:00:00Z"), zone)
+            // Saturday 24 Oct 22:00 BST → Sunday 25 Oct 06:00 GMT.
+            let saturdayAutumn = instant("2026-10-24T12:00:00Z")
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 22 * 60, on: saturdayAutumn, timeZone: london), instant("2026-10-24T21:00:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 30 * 60, on: saturdayAutumn, timeZone: london), instant("2026-10-25T06:00:00Z"), zone)
+            XCTAssertEqual(OrganizationWeekSupport.wallClock(minutes: 24 * 60, on: saturdayAutumn, timeZone: london), instant("2026-10-24T23:00:00Z"), zone) // Sunday 00:00 BST
+        }
+    }
+
+    /// The bookings' clock blocks on both clock-change Sundays read the rulebook's clock times.
+    func testABookingsClockBlockOnTheClockChangeSundays() throws {
+        let zone = OrganizationRulebookContext.timeZoneIdentifier
+        let windows = try XCTUnwrap(CanonicalBusinessEngine.halfDayWindows(.init(policy: LogicFixtures.policy)))
+        for key in ["2026-03-29", "2026-10-25"] {
+            let day = try XCTUnwrap(OrganizationWeekSupport.midnight(dayKey: key, timeZone: zone))
+            let manager = ManagerSiteBooking(userId: "TEST-user", date: day, timeSlot: .afternoon, locationType: .office)
+            let operative = LogicFixtures.booking(on: day, slot: .afternoon)
+            for block in [manager.calendarBlock(on: day, policy: LogicFixtures.policy),
+                          operative.calendarBlock(on: day, policy: LogicFixtures.policy)] {
+                let start = OrganizationRulebookContext.calendar.dateComponents([.hour, .minute], from: block.start)
+                let end = OrganizationRulebookContext.calendar.dateComponents([.hour, .minute], from: block.end)
+                XCTAssertEqual((start.hour ?? 0) * 60 + (start.minute ?? 0), windows.pm.start, key)
+                XCTAssertEqual((end.hour ?? 0) * 60 + (end.minute ?? 0), windows.pm.end, key)
+                XCTAssertEqual(OrganizationWeekSupport.dayKey(block.start, timeZone: zone), key)
+            }
+        }
+    }
+
+    /// Formatters are cached per zone, format and locale, and stay in their zone.
+    func testFormattersAreCachedPerZoneAndFormat() {
+        let a = OrganizationWeekSupport.formatter("EEE d MMM", timeZone: london)
+        XCTAssertTrue(a === OrganizationWeekSupport.formatter("EEE d MMM", timeZone: london))
+        XCTAssertFalse(a === OrganizationWeekSupport.formatter("d MMM", timeZone: london))
+        let auckland = OrganizationWeekSupport.formatter("EEE d MMM", timeZone: "Pacific/Auckland")
+        XCTAssertFalse(a === auckland)
+        XCTAssertEqual(auckland.timeZone.identifier, "Pacific/Auckland")
+        XCTAssertEqual(a.timeZone.identifier, london)
+        let zone = "Europe/London"
+        let now = Date()
+        DispatchQueue.concurrentPerform(iterations: 200) { i in
+            _ = OrganizationWeekSupport.formatter("HH:mm \(i % 7)", timeZone: zone).string(from: now)
+        }
+    }
+
     // MARK: Guardrail 7: no figure changes
 
     /// On a phone in the organisation's zone the grid's columns are exactly what they were before (the Monday-first

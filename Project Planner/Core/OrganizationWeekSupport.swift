@@ -99,11 +99,41 @@ nonisolated enum OrganizationWeekSupport {
         return calendar(timeZone: timeZone).dateComponents([.day], from: today, to: target).day ?? 0
     }
 
-    /// A `DateFormatter` that writes `format` in the organisation zone (display only).
+    /// The instant showing `minutes` past midnight on the organisation's wall clock on `day`'s organisation day. The
+    /// hour and minute are set, never added to midnight as elapsed time, so the clock-change Sundays (23 and 25 hours
+    /// long) read right. Minutes of 24:00 or later (an overnight booking's finish, e.g. 22:00–06:00 is 1320–1800) fall on
+    /// the next organisation day at that day's wall clock.
+    static func wallClock(minutes: Int, on day: Date, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Date {
+        let cal = calendar(timeZone: timeZone)
+        let clamped = max(0, minutes)
+        var base = cal.startOfDay(for: day)
+        let extraDays = clamped / (24 * 60)
+        if extraDays > 0, let next = cal.date(byAdding: .day, value: extraDays, to: base) {
+            base = cal.startOfDay(for: next)
+        }
+        let within = clamped % (24 * 60)
+        return cal.date(bySettingHour: within / 60, minute: within % 60, second: 0, of: base)
+            ?? cal.date(byAdding: .minute, value: clamped, to: cal.startOfDay(for: day))
+            ?? base
+    }
+
+    private static let formatterLock = NSLock()
+    nonisolated(unsafe) private static var formatterCache: [String: DateFormatter] = [:]
+
+    /// A `DateFormatter` that writes `format` in the organisation zone (display only), cached per zone, format and
+    /// locale. Shared: callers only read from it (`string(from:)`, thread-safe since iOS 7), never change it.
     static func formatter(_ format: String, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> DateFormatter {
+        let locale = Locale.current
+        let key = "\(timeZone)|\(format)|\(locale.identifier)"
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        if let cached = formatterCache[key] { return cached }
         let f = DateFormatter()
+        f.locale = locale
         f.timeZone = TimeZone(identifier: timeZone) ?? OrganizationRulebookContext.timeZone
         f.dateFormat = format
+        if formatterCache.count >= 256 { formatterCache.removeAll() }
+        formatterCache[key] = f
         return f
     }
 
