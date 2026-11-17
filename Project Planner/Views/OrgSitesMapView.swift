@@ -211,12 +211,12 @@ struct OrgSitesMapView: View {
         }
         let works = ProjectWorksMerge.uniqueWorks(projectStore.projects)
         let people: [[String: Any]] = userStore.organizationUsers.map(RulebookRosterLists.levelRow)
-            + operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email] as [String: Any] }
+            + operativeStore.allOperatives.map { ["id": Booking.operativeMatchKey(for: $0.id), "email": $0.email] as [String: Any] }
             + operativeStore.allManagers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] }
         let pinInput: [String: Any] = [
             "jobs": works.map { ["id": $0.id.uuidString, "isLive": $0.isLive] as [String: Any] },
             "bookings": bookingStore.bookings.map { booking -> [String: Any] in
-                ["projectId": booking.projectId.uuidString, "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                ["projectId": booking.projectId.uuidString, "operativeId": Booking.operativeMatchKey(for: booking.operativeId),
                  "dayKey": OrganizationRulebookContext.dayKey(booking.date), "status": booking.status.rawValue]
             },
             "managerSiteBookings": managerScheduleStore.managerSiteBookings.map { booking -> [String: Any] in

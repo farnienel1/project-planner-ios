@@ -3800,7 +3800,8 @@ struct EditUserView: View {
                 if op != nil {
                     showingQualificationsEditor = true
                 } else {
-                    saveErrorMessage = "Could not create a linked operative profile for qualifications. Check email and try again."
+                    saveErrorMessage = userStore.operativeProfileLinkError
+                        ?? "Could not create a linked operative profile for qualifications. Check email and try again."
                 }
             }
         }

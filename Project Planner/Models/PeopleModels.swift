@@ -211,7 +211,7 @@ struct Operative: Identifiable, Codable {
     /// The Firestore document id every write, delete and lookup addresses. Never `id.uuidString` for a stored row.
     var documentId: String {
         let stored = firestoreDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return stored.isEmpty ? Booking.storedOperativeId(for: id) : stored
+        return stored.isEmpty ? Booking.operativeMatchKey(for: id) : stored
     }
 
     /// The basis a save writes: the only amount set decides it; with both set, the stored basis (else day).
@@ -365,7 +365,7 @@ nonisolated let unknownLabourPersonName = "Unknown person"
 /// writes every same-email document, so which one the fold keeps can change, #181) or under another letter case read
 /// as "Unknown person" on iOS while web named the person.
 func accountForLabourBooking(operativeId: UUID, users: [AppUser], operatives: [Operative] = []) -> AppUser? {
-    let storedId = Booking.storedOperativeId(for: operativeId)
+    let storedId = Booking.operativeMatchKey(for: operativeId)
     if let exact = users.first(where: { $0.id == storedId }) { return exact }
     if let resolved = CanonicalBusinessEngine.resolveBookingPerson(storedId, bookingPersonInput(operatives: operatives, users: users)) {
         return resolved.accountId.flatMap { id in users.first { $0.id == id } }
@@ -375,7 +375,7 @@ func accountForLabourBooking(operativeId: UUID, users: [AppUser], operatives: [O
 
 /// Only when the script does not answer: the stored id, or the account that replaced it (`formerIdAliases`).
 private func legacyAccountForLabourBooking(operativeId: UUID, users: [AppUser]) -> AppUser? {
-    let storedId = Booking.storedOperativeId(for: operativeId)
+    let storedId = Booking.operativeMatchKey(for: operativeId)
     let aliases = CanonicalBusinessEngine.formerIdAliases(
         users.map { CanonicalFormerIdPerson(id: $0.id, formerIds: $0.formerUserIds) }
     ) ?? [:]
@@ -407,7 +407,7 @@ func rosterNameForLabourBooking(operativeId: UUID, operatives: [Operative], user
     // in-app lookup above misses it. Web finds the row by `normalizeDocumentId`. Bookings store no person name
     // (`parseBookingDocument`), so there is no stored name to fall back to after this.
     if let resolved = CanonicalBusinessEngine.resolveBookingPerson(
-        Booking.storedOperativeId(for: operativeId),
+        Booking.operativeMatchKey(for: operativeId),
         bookingPersonInput(operatives: operatives, users: users)
     ), let rowId = resolved.operativeId,
        let row = operatives.first(where: { $0.documentId.caseInsensitiveCompare(rowId) == .orderedSame }) {
@@ -459,7 +459,7 @@ final class LabourBookingPeople {
     func person(for operativeId: UUID) -> LabourBookingPerson {
         if let hit = cache[operativeId] { return hit }
         let found: LabourBookingPerson
-        if let resolved = CanonicalBusinessEngine.resolveBookingPerson(Booking.storedOperativeId(for: operativeId), input) {
+        if let resolved = CanonicalBusinessEngine.resolveBookingPerson(Booking.operativeMatchKey(for: operativeId), input) {
             found = LabourBookingPerson(
                 user: resolved.accountId.flatMap { id in users.first { $0.id == id } },
                 operative: resolved.operativeId.flatMap { id in
@@ -499,7 +499,7 @@ func labourBookingIds(for user: AppUser, operatives: [Operative]) -> Set<UUID> {
 /// Book Labour and schedule checks call it too). Only `operativeId` itself when the script does not answer.
 func labourBookingIds(sameAs operativeId: UUID, operatives: [Operative], users: [AppUser]) -> Set<UUID> {
     let ids = CanonicalBusinessEngine.bookingIdsForPerson(
-        Booking.storedOperativeId(for: operativeId),
+        Booking.operativeMatchKey(for: operativeId),
         bookingPersonInput(operatives: operatives, users: users)
     ) ?? []
     return Set(ids.map { Booking.internalOperativeId(for: $0) }).union([operativeId])

@@ -351,14 +351,30 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Ensures an `operatives` roster row exists for this app user (matched by email) so qualifications can attach.
+    /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).
+    /// The person's own row is matched by their ids and email only (`operativeRow(for:in:)`, `bookingIdsForAccount`),
+    /// never by name. A missing row is created only by staff (never from an operative-level account) and only once the
+    /// `operatives` list has come from the server — a cache copy without the row proves nothing and created duplicates
+    /// with random ids. The create is confirmed by the server before the row is used (`OperativeStore.addOperative`).
+    /// Nil when nothing may be created or the create failed; `operativeProfileLinkError` then says why.
     func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
-        let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !emailNorm.isEmpty else { return nil }
-        if let existing = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-        }) {
-            return existing
+        operativeProfileLinkError = nil
+        let rows = operativeStore.allOperatives
+        let decision = OperativeProfileLinkPolicy.decide(
+            subject: user,
+            actorLevel: currentUser?.permissionLevel,
+            operatives: rows,
+            bookingIds: OperativeProfileLinkPolicy.bookingIds(for: user, operatives: rows),
+            listConfirmedByServer: operativeStore.operativesConfirmedByServer
+        )
+        switch decision {
+        case .existing(let id):
+            return rows.first { $0.id == id }
+        case .refuseListNotLoaded, .refuseNotStaff, .refuseCannotMatch:
+            operativeProfileLinkError = OperativeProfileLinkPolicy.message(for: decision)
+            return nil
+        case .create:
+            break
         }
         let first = user.firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (String(user.email.split(separator: "@").first ?? "User"))
@@ -375,9 +391,15 @@ class UserStore: ObservableObject {
             tradeTypePreset: user.tradeTypePreset,
             tradeTypeCustom: user.tradeTypeCustom
         )
-        await operativeStore.addOperative(op)
+        guard await operativeStore.addOperative(op) else {
+            operativeProfileLinkError = operativeStore.errorMessage ?? OperativeProfileLinkPolicy.cannotMatchMessage
+            return nil
+        }
         return operativeStore.allOperatives.first(where: { $0.id == op.id }) ?? op
     }
+
+    /// Why the last `ensureOperativeProfileForAppUser` returned nil (shown by the screen that asked).
+    @Published var operativeProfileLinkError: String?
     
     /// Effective user for UI and permission helpers (respects role testing).
     /// RULEBOOK §8: built from `currentUserWithPay` (the signed-in person's own pay profile laid over while `privatePay`
@@ -3573,7 +3595,7 @@ class UserStore: ObservableObject {
         }
         guard let result = CanonicalBusinessEngine.payRateChangeWrites(
             userId: user.id,
-            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            operativeId: operativeId.flatMap { Booking.storedOperativeId(for: $0) },
             previous: (previous.amount, previous.basis == "hourly" ? "hourly" : "day"),
             next: (nextAmount, nextBasis == "hourly" ? "hourly" : "day"),
             historyRowIds: historyIds,

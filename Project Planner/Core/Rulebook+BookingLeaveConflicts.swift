@@ -79,7 +79,7 @@ enum BookingLeaveConflictInputs {
 
     /// The person behind an in-app operative id: its stored id, the linked account and that account's email.
     static func person(operativeId: UUID, operatives: [Operative], users: [AppUser]) -> Person {
-        let stored = Booking.storedOperativeId(for: operativeId)
+        let stored = Booking.operativeMatchKey(for: operativeId)
         let operative = operatives.first { $0.id == operativeId }
         let email = (operative?.email ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let user = users.first { !email.isEmpty && $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == email }
