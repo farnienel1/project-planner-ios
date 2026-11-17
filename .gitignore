@@ -4,8 +4,12 @@
 Project Planner.xcodeproj/xcuserdata/
 Project Planner.xcodeproj/project.xcworkspace/
 
-# Local backup/export artifacts
+# Local backup/export artifacts (Xcode archives hold a signed binary, dSYMs and a provisioning profile)
 Project Planner 2026-05-14 07-58-10/
+Project Planner 20[0-9][0-9]-*/
+*.xcarchive
+*.dSYM/
+*.ipa
 *.zip
 
 # Duplicate scratch files created by Finder copies
@@ -19,6 +23,7 @@ website/.netlify/
 # Rules-unit tests (Firebase emulator). The suite lives at the repo root so it is
 # not a second app; node_modules is local only.
 node_modules/
+node_modules 2/
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
