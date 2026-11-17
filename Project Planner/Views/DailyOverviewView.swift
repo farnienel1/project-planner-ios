@@ -1093,6 +1093,11 @@ struct DailyOverviewView: View {
     private func managerBookingRevampRow(booking: ManagerSiteBooking, locationTitle: String, editable: Bool = true) -> some View {
         let name = managerName(for: booking.userId)
         let canEditRow = canBookLabour && editable
+        let coverage = booking.scheduleCoverageSubtitle(policy: payrollTimePolicy)
+        let subtitle = (
+            text: ProjectBookingCard.timesOnlySubtitle(booking.operativePayrollProbe(), fallback: coverage.text),
+            emphasizedOvertime: coverage.emphasizedOvertime
+        )
         let row = HStack(spacing: 10) {
             HStack(spacing: 10) {
                 Text(PlannerUIInitials.from(name))
@@ -1104,21 +1109,27 @@ struct DailyOverviewView: View {
                     Text(name)
                         .font(.body)
                         .foregroundStyle(.primary)
-                    Text(booking.scheduleLabel(policy: payrollTimePolicy))
+                        .fixedSize(horizontal: false, vertical: true)
+                    // Owner report 17 Nov (UI only): the times read as on a job's row — "Custom 06:00–17:30", or the
+                    // slot's coverage line — never the bare clock range twice or a stored slot word.
+                    Text(subtitle.text)
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                        .foregroundStyle(subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : .secondary)
+                        .lineLimit(2)
                     // RULEBOOK §2: queued offline change not yet confirmed by the server.
                     PendingSyncIndicator(managerBooking: booking)
                 }
             }
             Spacer(minLength: 0)
-            Text(managerTimeSlotDisplayText(for: booking))
+            // RULEBOOK 1.39.0: the hours pill is the pay rule's hours (`payrollHoursResult.totalPaidHours`), as on a
+            // job's row; it was the clock range a second time.
+            Text(booking.scheduleCoveragePillHours(policy: payrollTimePolicy))
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(PPColor.brand)
+                .foregroundStyle(subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand)
                 .padding(.horizontal, 8)
                 .frame(height: 22)
-                .background(Capsule().fill(PPColor.brand.opacity(0.1)))
+                .background(Capsule().fill((subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand).opacity(0.12)))
+                .fixedSize()
             if canEditRow {
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
@@ -1234,47 +1245,9 @@ struct DailyOverviewView: View {
         .padding(.horizontal, 20)
         .ppDailyOverviewCard()
     }
-    
-    @ViewBuilder
-    private func managerScheduleSection(title: String, bookings: [ManagerSiteBooking]) -> some View {
-        if !bookings.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(title)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                    .padding(.horizontal, 20)
-                VStack(spacing: 8) {
-                    ForEach(bookings, id: \.id) { booking in
-                        HStack(spacing: 8) {
-                            Text(managerTimeSlotDisplayText(for: booking))
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.purple)
-                                .cornerRadius(8)
-                            Text(managerName(for: booking.userId))
-                                .font(.subheadline)
-                                .foregroundColor(.primary)
-                            Spacer()
-                        }
-                        .padding(12)
-                        .background(Color.purple.opacity(0.12))
-                        .cornerRadius(12)
-                    }
-                }
-                .padding(.horizontal, 20)
-            }
-        }
-    }
 }
 
 private extension DailyOverviewView {
-    func managerTimeSlotDisplayText(for booking: ManagerSiteBooking) -> String {
-        booking.scheduleLabel(policy: payrollTimePolicy)
-    }
-    
     func managerName(for userId: String) -> String {
         if let user = StaffEmailIdentity.account(forUserId: userId, in: userStore.organizationUsers) {
             return user.fullName.isEmpty ? user.email : user.fullName
@@ -1798,7 +1771,8 @@ struct ProjectBookingCard: View {
     }
 
     /// RULEBOOK 1.39.0: the row's subtitle is the booking's times only ("Custom 07:00–22:00"); the hours are the pill.
-    private static func timesOnlySubtitle(_ booking: Booking, fallback: String) -> String {
+    /// Shared with the Other / Site survey rows (owner report 17 Nov), so both say the times the same way.
+    static func timesOnlySubtitle(_ booking: Booking, fallback: String) -> String {
         guard let s = booking.workStartTime, let e = booking.workEndTime, !s.isEmpty, !e.isEmpty else { return fallback }
         return booking.timeSlot == .customHours ? "Custom \(s)–\(e)" : fallback
     }
