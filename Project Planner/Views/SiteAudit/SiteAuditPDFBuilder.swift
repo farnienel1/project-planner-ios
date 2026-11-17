@@ -74,7 +74,7 @@ enum SiteAuditPDFBuilder {
         organizationAbbreviation: String? = nil,
         logoImage: UIImage?,
         job: [String: String]? = nil,
-        timeZone: String = "Europe/London",
+        timeZone: String,
         typeText: String? = nil
     ) -> URL? {
         var images: [String: UIImage] = [:]
