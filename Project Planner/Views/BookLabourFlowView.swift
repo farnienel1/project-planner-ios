@@ -231,7 +231,14 @@ struct BookLabourFlowView: View {
     }
 
     var body: some View {
-        if embedsNavigationStack {
+        // RULEBOOK §2 `canScheduleOperatives`: an operative never gets into Book labour, whatever way in.
+        if !userStore.canOpenJobScheduling() {
+            ContentUnavailableView(
+                JobSchedulingAccessCopy.noAccessTitle,
+                systemImage: "lock.fill",
+                description: Text(JobSchedulingAccessCopy.noAccessMessage)
+            )
+        } else if embedsNavigationStack {
             NavigationStack { bookFlowRoot }
         } else {
             bookFlowRoot

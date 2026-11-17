@@ -78,8 +78,10 @@ struct DailyOverviewView: View {
     }
     
     /// Staff open Book Labour; which jobs they may book onto is `canWriteBooking` per job (RULEBOOK 1.10.0 §16).
+    /// RULEBOOK §2 `canScheduleOperatives` (`UserStore.canOpenJobScheduling`): Book labour and editing bookings here
+    /// are for admins and managers, never operatives; which bookings stays `canWriteBooking`.
     private var canBookLabour: Bool {
-        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
+        userStore.canOpenJobScheduling()
     }
     
     private var isHistoric: Bool {

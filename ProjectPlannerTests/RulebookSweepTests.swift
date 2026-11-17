@@ -213,6 +213,28 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertFalse(WarningOperativeAccess.canOpen(actor: managerWith, target: managerWithout))
     }
 
+    /// Owner 17 Nov: operatives never reach a job's Scheduling or Book labour. `UserStore.canOpenJobScheduling` and
+    /// `canBookWork` are `CanonicalBusinessEngine.canScheduleOperatives`; nobody else loses access.
+    func testOperativesNeverOpenJobScheduling() {
+        let store = UserStore()
+        XCTAssertFalse(store.canOpenJobScheduling(), "no user loaded yet: the scheduling screens wait")
+        XCTAssertTrue(store.canBookWork(), "no user loaded yet: menus keep their old reading")
+
+        store.currentUser = levelUser(id: "op", role: .operative, permissions: UserPermissions(projects: true, smallWorks: true, operativeMode: true))
+        XCTAssertFalse(store.canOpenJobScheduling())
+        XCTAssertFalse(store.canBookWork())
+
+        store.currentUser = levelUser(id: "op-role", role: .operative, permissions: UserPermissions())
+        XCTAssertFalse(store.canOpenJobScheduling())
+
+        store.currentUser = levelUser(id: "mgr", role: .manager, permissions: UserPermissions(manager: true, operatives: false, projects: false))
+        XCTAssertTrue(store.canOpenJobScheduling())
+        XCTAssertTrue(store.canBookWork())
+
+        store.currentUser = levelUser(id: "adm", role: .admin, permissions: UserPermissions(adminAccess: true))
+        XCTAssertTrue(store.canOpenJobScheduling())
+    }
+
     // Book labour → Other: RULEBOOK 1.32.0 §2 `canBookOtherLocationsFor(viewer, personUserIds)` replaced the
     // per-candidate level check (Rulebook1320BookingTests).
 

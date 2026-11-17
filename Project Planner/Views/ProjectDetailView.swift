@@ -605,7 +605,8 @@ struct ProjectDetailView: View {
                 }
                 return userStore.canViewSiteAudit() ? [.tasks, .healthSafety, .deadlines, .siteAudit] : [.tasks, .healthSafety, .deadlines]
             }
-            var tiles: [DetailTile] = [.scheduling]
+            // RULEBOOK §2 `canScheduleOperatives`: the Scheduling tile only for someone who may schedule.
+            var tiles: [DetailTile] = userStore.canOpenJobScheduling() ? [.scheduling] : []
             if canConfigureProjectVisibility {
                 tiles.append(.visibility)
             }
@@ -717,10 +718,21 @@ struct ProjectDetailView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         case .scheduling:
-            schedulingContent
+            if userStore.canOpenJobScheduling() {
+                schedulingContent
+                    .navigationTitle(tile.rawValue)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .ppNavyNavigationBar()
+            } else {
+                // RULEBOOK §2 `canScheduleOperatives`: never shown to an operative, whatever way they got here.
+                ContentUnavailableView(
+                    JobSchedulingAccessCopy.noAccessTitle,
+                    systemImage: "lock.fill",
+                    description: Text(JobSchedulingAccessCopy.noAccessMessage)
+                )
                 .navigationTitle(tile.rawValue)
                 .navigationBarTitleDisplayMode(.inline)
-                .ppNavyNavigationBar()
+            }
         case .tasks, .location:
             ScrollView {
                 VStack(spacing: 20) {
@@ -6938,3 +6950,9 @@ private struct ManagerMultiSelectView: View {
     }
 }
 
+/// Shown when someone who may not schedule (an operative) reaches a job's Scheduling. Same words as web
+/// `JobSchedulingGate`.
+enum JobSchedulingAccessCopy {
+    static let noAccessTitle = "You can't open scheduling"
+    static let noAccessMessage = "Scheduling is for admins and managers. Your own bookings are on My Schedule."
+}

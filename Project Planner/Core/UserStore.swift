@@ -1786,9 +1786,20 @@ class UserStore: ObservableObject {
         return canAccessQualificationsHub()
     }
     
+    /// RULEBOOK §2 `canScheduleOperatives` (through `CanonicalBusinessEngine`): may this person schedule at all — every
+    /// admin and manager, never an operative. A user not loaded yet reads true, as before (menus and Home); screens that
+    /// open a job's scheduling use `canOpenJobScheduling()`. Which jobs stays `canWriteBooking`.
     func canBookWork() -> Bool {
-        if isOperativeMode() { return false }
-        return true
+        guard let u = displayUser else { return true }
+        return CanonicalBusinessEngine.canScheduleOperatives(u.permissionSubject)
+    }
+
+    /// A job's Scheduling (the tile, its week grid, Schedule booking, Quick add) and Book labour: RULEBOOK §2
+    /// `canScheduleOperatives`. Operatives never — owner 17 Nov: "They can never schedule so they shouldn't even get to
+    /// this stage." A user not loaded yet reads false.
+    func canOpenJobScheduling() -> Bool {
+        guard let u = displayUser else { return false }
+        return CanonicalBusinessEngine.canScheduleOperatives(u.permissionSubject)
     }
     
     /// Directory / menu / home tile for adding and editing sub contractor records.
