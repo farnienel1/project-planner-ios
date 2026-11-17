@@ -180,4 +180,36 @@ final class Rulebook1610Tests: XCTestCase {
         XCTAssertEqual(exportRow.amount, live.amount)
         XCTAssertEqual(row.amount, live.amount)
     }
+
+    /// Review of #378 (SF1): the invoice / export row's amount is the decided amount (after an Edit hours or other
+    /// review) while its hours are the live line's. A sum that would not price to that amount is never shown.
+    func testLiveRowWithARevisedAmountKeepsTheOlderWording() {
+        var live = TimesheetPayrollLineItem(
+            id: "op-b1-ot", date: Date(), jobNumber: "J-1", projectName: "Site (Overtime)", details: "16:00–22:00",
+            paidHours: 6, payrollBasis: .dayRate, dayRate: 337.5, hourlyRate: nil, amount: 238.24, isPayeDay: false, isOvertimeLine: true
+        )
+        live.otMultiplier = 1.5
+        live.standardDayHours = 8.5
+        live.otBaseDayRate = 225
+        // Edit hours revised the line to £300: 6h × 1.5 at £225/day ÷ 8.5h pays £238.24, not £300.
+        var revised = InvoiceLineItem(
+            lineId: live.id, date: live.date, jobNumber: live.jobNumber, projectName: live.projectName, details: live.details,
+            paidHours: live.paidHours, payrollBasis: live.payrollBasis, dayRate: live.dayRate, hourlyRate: live.hourlyRate,
+            amount: 300, isPayeDay: false, isOvertimeLine: true
+        )
+        revised.applyLiveOvertimeFigures(from: live)
+        XCTAssertNil(revised.dayRateOvertimeText, "a calculation that does not add up to £300 is never shown")
+        XCTAssertEqual(revised.amount, 300)
+        // A penny off is refused too: the shown sum must price to the amount exactly.
+        var pennyOff = InvoiceLineItem(
+            lineId: live.id, date: live.date, jobNumber: live.jobNumber, projectName: live.projectName, details: live.details,
+            paidHours: live.paidHours, payrollBasis: live.payrollBasis, dayRate: live.dayRate, hourlyRate: live.hourlyRate,
+            amount: 238.25, isPayeDay: false, isOvertimeLine: true
+        )
+        pennyOff.applyLiveOvertimeFigures(from: live)
+        XCTAssertNil(pennyOff.dayRateOvertimeText)
+        // The unrevised amount still reads in hours.
+        let unrevised = InvoiceLineItem(payrollLine: live)
+        XCTAssertNotNil(unrevised.dayRateOvertimeText)
+    }
 }

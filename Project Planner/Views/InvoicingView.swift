@@ -1957,8 +1957,8 @@ enum TimesheetDraftStore {
                 payBasis: TimesheetSignedLineRate.storedBasis(row["payBasis"]),
                 bookingFingerprint: (row["bookingFingerprint"] as? String).flatMap { $0.isEmpty ? nil : $0 },
                 otMultiplier: (row["otMultiplier"] as? NSNumber)?.doubleValue,
-                otBaseDayRate: (row["otBaseDayRate"] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil },
-                otDayRateHours: (row["otDayRateHours"] as? NSNumber)?.doubleValue.flatMap { $0 > 0 ? $0 : nil },
+                otBaseDayRate: ((row["otBaseDayRate"] as? NSNumber)?.doubleValue).flatMap { $0 > 0 ? $0 : nil },
+                otDayRateHours: ((row["otDayRateHours"] as? NSNumber)?.doubleValue).flatMap { $0 > 0 ? $0 : nil },
                 bookingHadOvertimeLine: row["bookingHadOvertimeLine"] as? Bool,
                 appliedReviewKey: row["appliedReviewKey"] as? String,
                 reviewPartOf: (row["reviewPartOf"] as? String).flatMap { $0.isEmpty ? nil : $0 },
@@ -8467,10 +8467,15 @@ struct InvoiceLineItem {
             pay: amount
         ) else { return nil }
         // Owner 17 Nov: the amount is priced first and the text only shows it. The text is used only when it shows this
-        // line's own figures — its hours sum the line's paid hours at the multiplier, its £ the line's amount in pennies;
-        // otherwise the older wording stays and the amount is unchanged.
+        // line's own figures — its hours sum the line's paid hours at the multiplier, and (review of #378, SF1) the
+        // line's amount is exactly what the rulebook pays for those hours at that day rate and divisor (`payForHours`).
+        // `amount` is the decided amount (after an Edit hours or other review) while the hours are the live line's, so a
+        // revised amount keeps the older wording and the amount is unchanged.
         guard abs(calc.paidHours - paidHours * multiplier) <= 0.005,
-              calc.pay == CanonicalBusinessEngine.roundPennies(amount) else { return nil }
+              let priced = ResolvedPayrollRate(basis: .dayRate, dayRate: dayRate, hourlyRate: nil)
+                .payForHoursIfCalculated(paidHours, standardDayHours: divisor, otMultiplier: multiplier),
+              priced == CanonicalBusinessEngine.roundPennies(amount),
+              calc.pay == priced else { return nil }
         return calc.text
     }
 
