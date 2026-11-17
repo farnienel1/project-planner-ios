@@ -450,8 +450,24 @@ struct ScheduleOperativeView: View {
         }
     }
 
+    /// RULEBOOK 1.60.0 §5 (owner request 17 Nov): more than one person, anyone already booked on a selected day must be
+    /// removed first (`multiPersonBookingBlocks`). One person keeps the ✓ / ✕ / Replace rows.
+    private var multiPersonBlocks: [RulebookMultiPersonBlock]? {
+        MultiPersonBookingCheck.scheduleBlocks(
+            people: bookablePeople,
+            selected: selectedOperatives,
+            dates: selectedDates,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            excludingBookingIds: excludingBookingIds
+        )
+    }
+
     private var canConfirmBooking: Bool {
         guard !selectedOperatives.isEmpty, !selectedDates.isEmpty, !isBooking else { return false }
+        guard multiPersonBlocks?.isEmpty == true else { return false }
         guard ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(
             selected: selectedDates,
             policy: primarySelectedDatePolicy
@@ -1150,6 +1166,11 @@ struct ScheduleOperativeView: View {
 
     private var scheduleBookingOperativesSection: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let blocks = multiPersonBlocks, !blocks.isEmpty {
+                MultiPersonBookingBlocksView(blocks: blocks) { personKey in
+                    if let id = UUID(uuidString: personKey) { selectedOperatives.remove(id) }
+                }
+            }
             PPSheetSectionTitle("Operatives") {
                 if !selectedOperatives.isEmpty {
                     Button { openPeoplePicker() } label: {
@@ -1490,6 +1511,7 @@ struct ScheduleOperativeView: View {
         if !ScheduleDateSelectionPolicy.saturdaySundaySelectionAllowed(selected: selectedDates, policy: primarySelectedDatePolicy) {
             return "Book Saturday and Sunday separately to confirm"
         }
+        if multiPersonBlocks?.isEmpty != true { return "Remove people already booked to confirm" }
         if !canConfirmBooking { return "Acknowledge each clash to confirm" }
         return nil
     }

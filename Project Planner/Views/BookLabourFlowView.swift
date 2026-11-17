@@ -17,6 +17,9 @@ struct BookLabourCandidate: Identifiable {
     /// With no catalogue row: the account itself under its users id, when the rulebook counts it
     /// (`AccountLabourBooking.bookingOperative`, `bookingIdsForAccount`). Nil otherwise.
     var accountBookingOperative: Operative? = nil
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): set when this person is listed for "Half-day leave not covered"
+    /// (`leaveCoverageRows` `leave_cover`), with the uncovered time to prefill custom hours. Nil for an unbooked person.
+    var leaveCover: Warning.AnnualLeaveWarningDetails? = nil
 
     var displayName: String {
         user.fullName.isEmpty ? user.email : user.fullName
@@ -541,6 +544,12 @@ struct BookLabourFlowView: View {
                                                 .font(.system(size: 13, weight: .medium))
                                                 .foregroundStyle(ProjectWorksRevampColors.ink)
                                             BookLabourRoleChipRow(person: person)
+                                            if let cover = person.leaveCover {
+                                                Text("\(cover.leaveLabel ?? "") annual leave · book the \(cover.workingLabel)"
+                                                     + (cover.gapStart.flatMap { s in cover.gapEnd.map { " \(s)–\($0)" } } ?? ""))
+                                                    .font(.system(size: 11, weight: .regular))
+                                                    .foregroundStyle(.orange)
+                                            }
                                         }
                                         Spacer(minLength: 0)
                                         if !isMultiSelectMode {
@@ -577,9 +586,21 @@ struct BookLabourFlowView: View {
                 .scrollIndicators(.hidden)
                 .safeAreaInset(edge: .bottom) {
                     if isMultiSelectMode {
+                        let selectedPeople = candidates.filter { selectedPersonIds.contains($0.id) }
+                        let blocks = multiPersonBlocks(for: selectedPeople)
+                        VStack(spacing: 8) {
+                        if let blocks, !blocks.isEmpty {
+                            MultiPersonBookingBlocksView(blocks: blocks) { personKey in
+                                selectedPersonIds.remove(personKey)
+                            }
+                        } else if blocks == nil {
+                            Text("Couldn't check who is already booked — try again.")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.red)
+                        }
                         Button {
-                            let people = candidates.filter { selectedPersonIds.contains($0.id) }
-                            beginBooking(people: people)
+                            guard let blocks, blocks.isEmpty else { return }
+                            beginBooking(people: selectedPeople)
                         } label: {
                             Text(selectedPersonIds.isEmpty
                                  ? "Continue"
@@ -593,7 +614,8 @@ struct BookLabourFlowView: View {
                         }
                         .accessibilityIdentifier("bookLabourFlow.continue")
                         .buttonStyle(.plain)
-                        .disabled(selectedPersonIds.isEmpty)
+                        .disabled(selectedPersonIds.isEmpty || blocks?.isEmpty != true)
+                        }
                         .padding(.horizontal, 18)
                         .padding(.top, 8)
                         .padding(.bottom, 10)
@@ -612,6 +634,39 @@ struct BookLabourFlowView: View {
 
     private func activeParty(fallback: BookLabourCandidate) -> [BookLabourCandidate] {
         bookingParty.isEmpty ? [fallback] : bookingParty
+    }
+
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): a party listed for "Half-day leave not covered" with one shared gap is
+    /// booked straight into custom hours, prefilled with that gap (web `leaveCoverBookingHours`). Nil otherwise.
+    private var partyLeaveCoverGap: (start: String, end: String)? {
+        guard let first = bookingParty.first?.leaveCover, let start = first.gapStart, let end = first.gapEnd else { return nil }
+        let shared = bookingParty.allSatisfy { $0.leaveCover?.gapStart == start && $0.leaveCover?.gapEnd == end }
+        return shared ? (start, end) : nil
+    }
+
+    /// RULEBOOK 1.60.0 §5 (owner request 17 Nov): with more than one person ticked, everyone who already has hours
+    /// booked on this day (`multiPersonBookingBlocks`). Nil when the script did not answer (Continue then refuses).
+    private func multiPersonBlocks(for people: [BookLabourCandidate]) -> [RulebookMultiPersonBlock]? {
+        guard people.count > 1 else { return [] }
+        let key = CanonicalBusinessEngine.bookingDayKey(day)
+        let users = userStore.organizationUsers
+        let operatives = operativeStore.allOperatives
+        return CanonicalBusinessEngine.multiPersonBookingBlocks(
+            people: people.map {
+                RulebookMultiPersonSelection(
+                    personKey: $0.id,
+                    name: $0.displayName,
+                    ids: MultiPersonBookingCheck.ids(forUserId: $0.user.id, users: users, operatives: operatives)
+                        + ($0.bookingOperative.map { [Booking.storedOperativeId(for: $0.id)] } ?? [])
+                )
+            },
+            dayKeys: [key],
+            bookings: MultiPersonBookingCheck.bookings(
+                operativeBookings: bookingStore.bookings,
+                managerBookings: managerScheduleStore.managerSiteBookings,
+                dayKeys: [key]
+            )
+        )
     }
 
     /// RULEBOOK 1.32.0 §2 `canBookOtherLocationsFor(viewer, personUserIds)`: Office / Working from home / Site survey /
@@ -703,6 +758,16 @@ struct BookLabourFlowView: View {
                         VStack(spacing: 0) {
                             ForEach(Array(picks.enumerated()), id: \.offset) { idx, pick in
                                 Button {
+                                    if partyLeaveCoverGap != nil {
+                                        phase = .pickCustomManager(
+                                            person,
+                                            locationType: pick.managerLocationType,
+                                            locationId: nil,
+                                            customLocationName: pick.customLocationName,
+                                            returnRoute: .other
+                                        )
+                                        return
+                                    }
                                     phase = .pickSlotManager(
                                         person,
                                         locationType: pick.managerLocationType,
@@ -809,7 +874,17 @@ struct BookLabourFlowView: View {
                                         // Single operative keeps the daily-overview clock UI.
                                         // Multiple people use the same Full Day / AM / PM / Custom buttons for everyone.
                                         if party.count == 1, person.usesOperativeProjectBookings {
-                                            phase = .pickSlotOperative(person, project: project)
+                                            phase = partyLeaveCoverGap != nil
+                                                ? .pickCustomOperative(person, project: project)
+                                                : .pickSlotOperative(person, project: project)
+                                        } else if partyLeaveCoverGap != nil {
+                                            phase = .pickCustomManager(
+                                                person,
+                                                locationType: smallWorks ? .smallWork : .project,
+                                                locationId: project.id,
+                                                customLocationName: nil,
+                                                returnRoute: .projectList(smallWorks: smallWorks)
+                                            )
                                         } else {
                                             phase = .pickSlotManager(
                                                 person,
@@ -962,8 +1037,9 @@ struct BookLabourFlowView: View {
             initialChoice: OperativeDayBookingChoice(
                 timeSlot: .customHours,
                 // RULEBOOK 1.13.1 `weekendCustomHoursDefault`: a weekend day opens on that day's window.
-                workStartTime: CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).start,
-                workEndTime: CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).end,
+                // RULEBOOK 1.60.0: a leave-cover party opens on the uncovered time the warning names.
+                workStartTime: partyLeaveCoverGap?.start ?? CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).start,
+                workEndTime: partyLeaveCoverGap?.end ?? CanonicalBusinessEngine.customHoursPrefill(on: day, policy: dayPayrollPolicy).end,
                 isBreakRemoved: false
             ),
             onSave: { start, end, breakRemoved, otMult in
@@ -1283,6 +1359,12 @@ struct BookLabourFlowView: View {
     private func operativeDraft(for projectId: UUID, operativeId: UUID) -> OperativeRectifyDraft {
         if let existing = operativeDraftByProjectId[projectId] {
             return existing
+        }
+        // RULEBOOK 1.60.0: a leave-cover party opens on the uncovered time the warning names.
+        if let gap = partyLeaveCoverGap,
+           let start = ManagerScheduleInterval.parseMinutes(gap.start),
+           let end = ManagerScheduleInterval.parseMinutes(gap.end), end > start {
+            return OperativeRectifyDraft(startMinutes: start, endMinutes: end, breakRemoved: false)
         }
         return defaultOperativeDraft(operativeId: operativeId)
     }
@@ -1727,6 +1809,17 @@ struct BookLabourFlowView: View {
     ) {
         let people = activeParty(fallback: fallbackPerson)
         guard !people.isEmpty else { return }
+        // RULEBOOK 1.60.0 §5: re-checked at save (a booking may have arrived since Continue).
+        if people.count > 1 {
+            guard let blocks = multiPersonBlocks(for: people) else {
+                errorBanner = "Couldn't check who is already booked — try again."
+                return
+            }
+            if let first = blocks.first {
+                errorBanner = "\(blocks.map(\.name).joined(separator: ", ")): \(first.message)"
+                return
+            }
+        }
         let resolvedProject = projectForManagerLocation(locationType: locationType, locationId: locationId)
         let operativeSlot = managerSlotToTimeSlot(slot)
 
@@ -2331,6 +2424,44 @@ struct BookLabourFlowView: View {
                 accountBookingOperative: linked == nil && operativeOnly
                     ? AccountLabourBooking.bookingOperative(for: user, operatives: operativeStore.allOperatives)
                     : nil
+            )
+            listed.append((candidate, isFocused(user, operative: linked, personKey: personKey, userId: userId, focused: focused)))
+        }
+        // RULEBOOK 1.60.0 (owner report 17 Nov): the Warnings "Half-day leave not covered" card links here with "Book the
+        // PM / AM". `unbookedLabourRowsOnDay` leaves half-leave days out (they are `leaveCoverageRows`), so the day's
+        // leave_cover rows are listed too, in the same warning scope, with the uncovered time to prefill.
+        let leaveRows = WarningsComputation.leaveCoverRowsOnDay(
+            day: day,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            holidays: holidayStore.bookings,
+            policy: dayPayrollPolicy,
+            warningDetection: detection
+        )
+        for warning in leaveRows {
+            guard let cover = warning.annualLeave else { continue }
+            let userId = cover.userId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let personKey = (cover.personKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let user = user(forUnbookedRowUserId: userId, personKey: personKey) else { continue }
+            guard seen.insert(user.id).inserted else { continue }
+            let linked = cover.operativeId.flatMap {
+                BookLabourCandidate.catalogueRow(forRowOperativeId: $0, in: operativeStore.allOperatives)
+            }
+            let operativeOnly = user.permissions.operativeMode
+                && !user.permissions.manager
+                && !user.permissions.adminAccess
+                && !user.isSuperAdmin
+                && user.role != .admin
+            let candidate = BookLabourCandidate(
+                user: user,
+                linkedOperative: linked,
+                usesOperativeProjectBookings: operativeOnly,
+                accountBookingOperative: linked == nil && operativeOnly
+                    ? AccountLabourBooking.bookingOperative(for: user, operatives: operativeStore.allOperatives)
+                    : nil,
+                leaveCover: cover
             )
             listed.append((candidate, isFocused(user, operative: linked, personKey: personKey, userId: userId, focused: focused)))
         }

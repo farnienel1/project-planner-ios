@@ -1471,10 +1471,72 @@ enum WarningsComputation {
                     kind: row.kind,
                     personName: row.personName,
                     missingRanges: ranges,
-                    missingHours: row.missingHours
+                    missingHours: row.missingHours,
+                    userId: row.userId,
+                    operativeId: row.operativeId,
+                    personKey: row.personKey,
+                    dayKey: row.dayKey,
+                    leaveLabel: row.leaveLabel,
+                    gapStart: row.missing.map(\.start).min().map { clockText($0) },
+                    gapEnd: row.missing.map(\.end).max().map { clockText($0) }
                 )
             )
         }
+    }
+
+    nonisolated private static func clockText(_ minutes: Int) -> String {
+        let clamped = max(0, min(minutes, 24 * 60))
+        return String(format: "%02d:%02d", clamped / 60, clamped % 60)
+    }
+
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day leave not covered" rows (`leaveCoverageRows`, kind
+    /// `leave_cover`) — the same rows the Warnings scan lists — for Book labour and Daily Overview, in the viewer's
+    /// scope (`warningScopeFor` for Book labour, `dailyOverviewScopeFor` for Daily Overview).
+    @MainActor
+    static func leaveCoverRowsOnDay(
+        day: Date,
+        users: [AppUser],
+        operatives: [Operative],
+        operativeBookings: [Booking],
+        managerBookings: [ManagerSiteBooking],
+        holidays: [HolidayBooking],
+        policy: OrgPayrollTimePolicy,
+        warningDetection: OrgWarningDetectionSettings,
+        scope: UnbookedRowsScope = .warnings
+    ) -> [Warning] {
+        let calendar = CanonicalBusinessEngine.businessCalendar
+        let dayStart = calendar.startOfDay(for: day)
+        let input = WarningsComputationInput(
+            operatives: operatives,
+            bookings: operativeBookings.filter { calendar.isDate($0.date, inSameDayAs: dayStart) },
+            projects: [],
+            users: users,
+            managerSiteBookings: managerBookings.filter { calendar.isDate($0.date, inSameDayAs: dayStart) },
+            holidayBookings: holidays,
+            payrollTimePolicy: policy,
+            warningDetection: warningDetection,
+            coverageStart: dayStart,
+            coverageEnd: dayStart,
+            materialOrderCutOffEnabled: false,
+            materialCutOffOnSaturday: false,
+            materialCutOffOnSunday: false,
+            projectsWithTomorrowBookings: [],
+            materialItemsForTomorrow: []
+        )
+        let snapshot = makeSnapshot(from: input)
+        // The same scope as the day's unbooked rows (`unbookedLabourRowsOnDay`): Book labour the viewer's warning scope,
+        // Daily Overview their team.
+        let rowScope: [String: Any]?
+        switch scope {
+        case .warnings:
+            rowScope = WarningScopeSupport.scope(
+                bookings: operativeBookings, managerBookings: managerBookings, users: users, operatives: operatives
+            )
+        case .dailyOverview:
+            rowScope = DailyOverviewScopeSupport.scope(users: users, operatives: operatives)
+        }
+        let rows = leaveRows(snapshot, coverageStart: dayStart, coverageEnd: dayStart, scope: rowScope) ?? []
+        return rows.filter { $0.annualLeave?.kind == "leave_cover" }
     }
 
     nonisolated private static func formatClockRange(_ start: Int, _ end: Int) -> String {

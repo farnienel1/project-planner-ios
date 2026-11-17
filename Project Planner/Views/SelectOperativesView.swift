@@ -44,8 +44,24 @@ struct SelectOperativesView: View {
         firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
     }
 
+    /// RULEBOOK 1.60.0 §5 (owner request 17 Nov): more than one person selected, anyone already booked on a selected
+    /// day is named and must be removed (`multiPersonBookingBlocks`). One person keeps the ✓ / ✕ / Replace rows.
+    private var multiPersonBlocks: [RulebookMultiPersonBlock]? {
+        MultiPersonBookingCheck.scheduleBlocks(
+            people: people,
+            selected: selectedOperatives,
+            dates: selectedDates,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            excludingBookingIds: excludingBookingIds
+        )
+    }
+
     private var canSave: Bool {
         guard !selectedDates.isEmpty else { return false }
+        guard multiPersonBlocks?.isEmpty == true else { return false }
         return ScheduleBookingConflictEngine.allActionableRowsResolved(
             people: people,
             selectedOperativeIds: selectedOperatives,
@@ -92,6 +108,17 @@ struct SelectOperativesView: View {
                         }
                     }
                     .accessibilityIdentifier("selectOperatives.trade")
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+                }
+
+                if let blocks = multiPersonBlocks, !blocks.isEmpty {
+                    MultiPersonBookingBlocksView(blocks: blocks) { personKey in
+                        if let id = UUID(uuidString: personKey) {
+                            selectedOperatives.remove(id)
+                            expandedPersonIds.remove(id)
+                        }
+                    }
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                 }
