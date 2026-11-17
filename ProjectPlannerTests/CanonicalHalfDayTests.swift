@@ -162,7 +162,7 @@ final class CanonicalHalfDayTests: XCTestCase {
         XCTAssertEqual(ManagerScheduleInterval.clashInterval(for: manager, policy: LogicFixtures.policy)?.1, windows.pm.end)
         XCTAssertEqual(manager.minutesSortKey(policy: LogicFixtures.policy), windows.pm.start)
         let block = manager.calendarBlock(on: monday, policy: LogicFixtures.policy)
-        let minutes = Calendar.current.dateComponents([.hour, .minute], from: block.start)
+        let minutes = OrganizationRulebookContext.calendar.dateComponents([.hour, .minute], from: block.start)
         XCTAssertEqual((minutes.hour ?? 0) * 60 + (minutes.minute ?? 0), windows.pm.start)
 
         // Pay for a half day is unchanged: half the standard paid hours.

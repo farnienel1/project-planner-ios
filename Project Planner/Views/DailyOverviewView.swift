@@ -1282,11 +1282,8 @@ private extension DailyOverviewView {
         return userId
     }
 
-    private static let editDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "EEE d MMM"
-        return f
-    }()
+    // A computed formatter so it follows an organisation switch (organisation zone, never the phone's, guardrail 2).
+    private static var editDateFormatter: DateFormatter { OrganizationWeekSupport.formatter("EEE d MMM") }
 
     func editSheetSubtitle(date: Date, locationTitle: String) -> String {
         "\(Self.editDateFormatter.string(from: date)) · \(locationTitle)"

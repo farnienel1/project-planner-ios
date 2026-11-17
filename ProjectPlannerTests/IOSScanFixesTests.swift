@@ -75,6 +75,10 @@ final class IOSScanFixesTests: XCTestCase {
             XCTAssertFalse(code.contains("sendProjectPlannerEmail"), url.lastPathComponent)
             XCTAssertFalse(code.contains("api.resend.com"), url.lastPathComponent)
             XCTAssertFalse(code.contains("ResendEmailService"), url.lastPathComponent)
+            // The legacy senders (direct SMTP / Resend / SendGrid with a placeholder key) are gone for good.
+            for legacy in ["EmailService.shared", "CloudEmailService", "SendGridEmailService", "smtp.office365", "raccordmep", "nodemailer"] {
+                XCTAssertFalse(code.contains(legacy), "\(url.lastPathComponent): \(legacy)")
+            }
         }
     }
 

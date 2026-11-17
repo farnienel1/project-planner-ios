@@ -36,7 +36,7 @@ final class RulebookBypassGuardTests: XCTestCase {
 
     /// Files the ratchet does not count, with the reason.
     private static let allowList: [String: String] = [
-        "Views/ScheduleCalendarExport.swift": "Exports to the phone's own Calendar app, which works in the device zone by design.",
+        "Views/ScheduleCalendarExport.swift": "Event instants come from the organisation zone (`calendarBlock`); only the text and the stamps handed to the phone's own Calendar app are written in the device zone, by design.",
         "Core/PlaygroundDemoSeeder.swift": "Builds TEST demo data for the playground and UI tests; never a business answer.",
         "Core/MondayFirstCalendarSupport.swift": "The Monday-first month-grid helper itself (display layout only).",
         "PPDesign/PPReferencePreviews.swift": "SwiftUI preview code; not shipped behaviour.",
@@ -68,9 +68,7 @@ final class RulebookBypassGuardTests: XCTestCase {
             "FirebaseBackend.swift": 3,
             "Models/AnnualLeavePolicy.swift": 1,
             "Models/BookingModels.swift": 1,
-            "Models/ManagerScheduleInterval.swift": 1,
             "Models/MaterialsModels.swift": 1,
-            "Models/OperativeBookingInterval.swift": 1,
             "Models/PeopleModels.swift": 1,
             "Models/ProjectModels.swift": 1,
             "Views/BookingHoursEditSheet.swift": 1,
@@ -92,10 +90,8 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/OperativeQualificationsEditorView.swift": 4,
             "Views/OrganisationSettingsHubView.swift": 1,
             "Views/OrganisationWorkingHoursView.swift": 2,
-            "Views/ProjectDetailView.swift": 3,
             "Views/ProjectsView.swift": 1,
             "Views/WholesalersRevampViews.swift": 1,
-            "Views/WorksDashboardCard.swift": 2,
         ],
         "londonLiteral": [
             "Views/OrganisationWorkingHoursView.swift": 1,
@@ -105,8 +101,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/DLModels.swift": 2,
             "Views/MaterialsProjectListUI.swift": 1,
             "Views/MaterialsView.swift": 5,
-            "Views/MyScheduleView.swift": 10,
-            "Views/ProjectDetailView.swift": 3,
             "Views/ProjectHealthSafetyView.swift": 2,
         ],
         "weekdayNumber": [
