@@ -46,6 +46,8 @@ class HolidayStore: ObservableObject {
                 await self?.loadData()
             }
         }
+        // RULEBOOK 1.56.0: re-plan on the switch, user and own-id changes; clear leave on sign-out.
+        observeReplans()
         NotificationCenter.default.addObserver(
             forName: .organizationDidLoad,
             object: nil,
@@ -163,50 +165,336 @@ class HolidayStore: ObservableObject {
         )
     }
 
-    /// RULEBOOK §1, §5, §9, §10: one live listener on the organisation's `holidayBookings`, read through
-    /// `parseHolidayDocuments` (`FirebaseBackend.holidayBookings(fromDocuments:)`). A decision or a request made
-    /// on web shows on Annual leave, Daily Overview, My Schedule and timesheet leave lines, and the warnings
-    /// scan runs again (`.liveWarningInputsDidChange`). Cached copy first; offline keeps the last copy.
-    func startLiveUpdates(organizationId: String) {
-        guard let fb = firebaseBackend else { return }
-        fb.listenOrganizationQuery(
-            key: "holidayBookings",
-            organizationId: organizationId,
-            retryOnFailure: true,
-            query: { $0.collection("holidayBookings") }
-        ) { [weak self] rows, fromCache in
-            guard let self else { return }
-            let parsed = FirebaseBackend.holidayBookings(fromDocuments: rows, organizationId: normalizedOrganizationId(organizationId))
-            // Leave documents arrived but none could be read: keep the leave on screen (queued requests would
-            // otherwise be all that is left).
-            if LiveSnapshotMerge.refusesUnreadSnapshot(
-                collection: "holidayBookings",
-                rowCount: LiveSnapshotMerge.readableRowCount(rows),
-                parsedCount: parsed.count,
-                existingCount: self.bookings.count,
-                fromCache: fromCache
-            ) {
-                return
-            }
-            // §2: a request queued offline stays on screen (Pending sync) until the outbox replays it.
-            let pending = self.bookings.filter { self.isPendingSync($0) }
-            let pendingIds = Set(pending.map(\.id))
-            let incoming = parsed.filter { !pendingIds.contains($0.id) } + pending
-            let firstDelivery = !organizationIdsMatch(self.finishedLoadOrganizationId, organizationId)
-            self.finishedLoadOrganizationId = normalizedOrganizationId(organizationId)
-            guard let next = LiveSnapshotMerge.apply(existing: self.bookings, incoming: incoming, fromCache: fromCache),
-                  Set(next) != Set(self.bookings) else {
-                if firstDelivery {
-                    NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
-                }
-                return
-            }
-            self.bookings = next
-            NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+    // MARK: Live listener (RULEBOOK §1, §5, §9, §10; 1.56.0 `leaveQueryPlan`)
+
+    /// The listener registry key (one leave listener per organisation).
+    nonisolated static let listenerKey = "holidayBookings"
+    /// RULEBOOK 1.56.0: re-plans after a refused own-leave listener are held back — the first after 30 s, the next after
+    /// 120 s, then none until the plan (switch, user, own ids, email) changes. A screen, foreground or organisation
+    /// switch asking again (`startLiveUpdates`) is never held back.
+    nonisolated static let replanRefusalBackoff: [TimeInterval] = [30, 120]
+
+    /// The organisation `startLiveUpdates` last asked for; only that organisation is re-planned, and only while open.
+    private(set) var requestedOrganizationId: String?
+    /// The plan (`LeaveReadDecision.signature`) and the signed-in uid the listener runs.
+    private(set) var plannedSignature: String?
+    private(set) var plannedUserId: String?
+    /// Refused plans by `organisation|uid|signature`: how many times, and when a re-plan may try again.
+    private var refusals: [String: (count: Int, nextAllowedAt: Date)] = [:]
+    private var replanObservers: [NSObjectProtocol] = []
+    /// The planned listener stopped retrying (review of #246): the next re-plan re-attaches it even when the plan is
+    /// unchanged.
+    private(set) var listenerGaveUp = false
+    /// When the planned listener gave up (review of #246): a re-plan re-attaches it only after
+    /// `gaveUpReattachDelay`, so a burst of re-plans never re-attaches a failing listener over and over.
+    private var listenerGaveUpAt: Date?
+    nonisolated static let gaveUpReattachDelay: TimeInterval = 5
+    private var gaveUpReattachTask: Task<Void, Never>?
+    /// RULEBOOK 1.56.0 (review of #246): while the plan is `.unavailable` (the script did not answer for an operative),
+    /// re-plans are scheduled after these waits, then none until something else asks again.
+    nonisolated static let unavailableReplanDelays: [TimeInterval] = [5, 15, 45, 120]
+    private var unavailableAttempts = 0
+    private var unavailableReplanTask: Task<Void, Never>?
+    /// A `loadData` asked for while one was running (review of #246): it runs once the running one finishes.
+    private(set) var pendingLoadRequested = false
+    /// Tests: the clock the refusal back-off reads.
+    var now: () -> Date = { Date() }
+
+    static func refusalKey(organizationId: String, userId: String?, signature: String) -> String {
+        "\(normalizedOrganizationId(organizationId))|\(userId ?? "")|\(signature)"
+    }
+
+    /// RULEBOOK 1.56.0 (review of web #356): never keep another user's leave, nor a whole company's once the plan
+    /// narrows from the collection to the own queries.
+    nonisolated static func mustClearRows(
+        previousUserId: String?,
+        userId: String?,
+        previousSignature: String?,
+        signature: String
+    ) -> Bool {
+        if let previousUserId, previousUserId != userId { return true }
+        return previousSignature == LeaveReadDecision.all.signature && signature != LeaveReadDecision.all.signature
+    }
+
+    /// When a refused plan may be tried again by a re-plan: nil after the last allowed retry (never, until it changes).
+    nonisolated static func nextAllowedReplan(afterRefusals count: Int, at time: Date) -> Date? {
+        guard count >= 1, count <= replanRefusalBackoff.count else { return nil }
+        return time.addingTimeInterval(replanRefusalBackoff[count - 1])
+    }
+
+    /// One refusal per plan attach (review of #246): a plan of several `or` queries is refused once per query, but
+    /// counts once, so the waits are 30 s then 120 s.
+    nonisolated final class RefusalOnce: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counted = false
+        /// True the first time only.
+        func claim() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            if counted { return false }
+            counted = true
+            return true
         }
     }
 
+    /// How long a re-plan still waits before re-attaching a listener that gave up at `gaveUpAt`; nil when it may
+    /// re-attach now.
+    nonisolated static func gaveUpReattachWait(gaveUpAt: Date?, now: Date) -> TimeInterval? {
+        guard let gaveUpAt else { return nil }
+        let wait = gaveUpAt.addingTimeInterval(gaveUpReattachDelay).timeIntervalSince(now)
+        return wait > 0 ? wait : nil
+    }
+
+    private func scheduleGaveUpReattach(after wait: TimeInterval) {
+        guard gaveUpReattachTask == nil else { return }
+        gaveUpReattachTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.gaveUpReattachTask = nil
+            self.replanLiveUpdates()
+        }
+    }
+
+    /// When the next re-plan of an `.unavailable` plan runs: nil after the last allowed attempt.
+    nonisolated static func unavailableReplanDelay(afterAttempts attempts: Int) -> TimeInterval? {
+        guard attempts >= 0, attempts < unavailableReplanDelays.count else { return nil }
+        return unavailableReplanDelays[attempts]
+    }
+
+    /// Drops the leave rows on screen (a previous user's, or a whole company's after the plan narrowed). The person's
+    /// own requests still queued offline stay (Pending sync).
+    private func clearRows() {
+        let pending = bookings.filter { isPendingSync($0) }
+        if bookings != pending { bookings = pending }
+        finishedLoadOrganizationId = nil
+    }
+
+    /// Sign-out: forget the plan, the refusals and every leave row.
+    func resetForSignOut() {
+        requestedOrganizationId = nil
+        plannedSignature = nil
+        plannedUserId = nil
+        refusals.removeAll()
+        listenerGaveUp = false
+        listenerGaveUpAt = nil
+        gaveUpReattachTask?.cancel()
+        gaveUpReattachTask = nil
+        unavailableAttempts = 0
+        unavailableReplanTask?.cancel()
+        unavailableReplanTask = nil
+        pendingLoadRequested = false
+        if !bookings.isEmpty { bookings = [] }
+        finishedLoadOrganizationId = nil
+        errorMessage = nil
+    }
+
+    private func observeReplans() {
+        guard replanObservers.isEmpty else { return }
+        for name in [Notification.Name.jobReadPlanDidChange, .leaveReadPlanDidChange] {
+            replanObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.replanLiveUpdates() }
+            })
+        }
+        replanObservers.append(NotificationCenter.default.addObserver(forName: .userDidSignOut, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.resetForSignOut() }
+        })
+    }
+
+    /// RULEBOOK 1.56.0: the switch, the signed-in user, their level or email, or their own ids (the `operatives` rows)
+    /// changed — re-plan the organisation last asked for, only while it is still the open one.
+    func replanLiveUpdates() {
+        guard let fb = firebaseBackend, fb.isAuthenticated,
+              let orgId = requestedOrganizationId,
+              organizationIdsMatch(fb.currentOrganization?.firestoreDocumentId, orgId) else { return }
+        startLiveUpdates(organizationId: orgId, isReplan: true)
+    }
+
+    /// RULEBOOK §1, §5, §9, §10: one live listener on the organisation's annual leave, read through
+    /// `parseHolidayDocuments` (`FirebaseBackend.holidayBookings(fromDocuments:)`). A decision or a request made
+    /// on web shows on Annual leave, Daily Overview, My Schedule and timesheet leave lines, and the warnings
+    /// scan runs again (`.liveWarningInputsDidChange`). Cached copy first; offline keeps the last copy.
+    /// RULEBOOK 1.56.0 (`leaveQueryPlan`, owner decisions 17 Nov): while `operativeOwnLeave` is off or unread, and for
+    /// everyone not at the operative level, the whole `holidayBookings` collection as before; an operative with the
+    /// switch on listens only to their own `or` queries, merged by document id — never the whole collection.
+    func startLiveUpdates(organizationId: String, isReplan: Bool = false) {
+        guard let fb = firebaseBackend else { return }
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { return }
+        observeReplans()
+        if !organizationIdsMatch(requestedOrganizationId, orgId) {
+            // Another company: its plan, refusals and rows never carry over.
+            plannedSignature = nil
+            plannedUserId = nil
+            refusals.removeAll()
+            listenerGaveUp = false
+            listenerGaveUpAt = nil
+            gaveUpReattachTask?.cancel()
+            gaveUpReattachTask = nil
+            unavailableAttempts = 0
+            unavailableReplanTask?.cancel()
+            unavailableReplanTask = nil
+            let kept = bookings.filter { organizationIdsMatch($0.organizationId, orgId) }
+            if kept.count != bookings.count { bookings = kept }
+        }
+        requestedOrganizationId = orgId
+        let decision = fb.leaveReadDecision(organizationId: orgId)
+        let signature = decision.signature
+        let userId = fb.currentUser?.uid
+        let refusalKey = Self.refusalKey(organizationId: orgId, userId: userId, signature: signature)
+        if isReplan {
+            if let refusal = refusals[refusalKey], now() < refusal.nextAllowedAt { return }
+            // The same plan for the same user: nothing to do — no re-entry. A listener that failed retries on its own
+            // capped back-off (or on the next foreground); only a refused own plan is re-planned here, after its wait.
+            if refusals[refusalKey] == nil, !listenerGaveUp, decision != .unavailable,
+               signature == plannedSignature, userId == plannedUserId {
+                return
+            }
+            // A listener that gave up without a refusal is re-attached after a short back-off, never at once.
+            if refusals[refusalKey] == nil, listenerGaveUp, signature == plannedSignature, userId == plannedUserId,
+               let wait = Self.gaveUpReattachWait(gaveUpAt: listenerGaveUpAt, now: now()) {
+                scheduleGaveUpReattach(after: wait)
+                return
+            }
+        }
+        if Self.mustClearRows(previousUserId: plannedUserId, userId: userId, previousSignature: plannedSignature, signature: signature) {
+            clearRows()
+        }
+        plannedSignature = signature
+        plannedUserId = userId
+        listenerGaveUp = false
+        listenerGaveUpAt = nil
+        gaveUpReattachTask?.cancel()
+        gaveUpReattachTask = nil
+        if decision != .unavailable {
+            unavailableAttempts = 0
+            unavailableReplanTask?.cancel()
+            unavailableReplanTask = nil
+            if errorMessage == LeaveReadDecision.unavailableMessage { errorMessage = nil }
+        }
+        let once = RefusalOnce()
+        let onRefused: @MainActor () -> Void = { [weak self] in
+            guard let self, once.claim() else { return }
+            let count = (self.refusals[refusalKey]?.count ?? 0) + 1
+            self.refusals[refusalKey] = (count, Self.nextAllowedReplan(afterRefusals: count, at: self.now()) ?? .distantFuture)
+        }
+        switch decision {
+        case .all:
+            fb.listenOrganizationQuery(
+                key: Self.listenerKey,
+                organizationId: orgId,
+                retryOnFailure: true,
+                stillWanted: { [weak self] in self?.plannedSignature == signature && self?.plannedUserId == userId },
+                query: { $0.collection("holidayBookings") }
+            ) { [weak self] rows, fromCache in
+                self?.applyLiveRows(rows, fromCache: fromCache, organizationId: orgId, signature: signature, userId: userId)
+            }
+        case .own:
+            let sources = fb.leaveReadSources(organizationId: orgId, decision: decision)
+            fb.listenOrganizationPlan(
+                key: Self.listenerKey,
+                organizationId: orgId,
+                plan: (sources, "leave:\(signature)"),
+                cappedRetries: true,
+                onRefused: onRefused,
+                onGaveUp: { [weak self] in
+                    // Called only while the giving-up listener is still the registered one (its registry token,
+                    // `listenOrganizationPlan`), so an old listener never marks its replacement as given up.
+                    guard let self, self.plannedSignature == signature, self.plannedUserId == userId else { return }
+                    self.listenerGaveUp = true
+                    self.listenerGaveUpAt = self.now()
+                }
+            ) { [weak self] rows, fromCache in
+                self?.applyLiveRows(rows, fromCache: fromCache, organizationId: orgId, signature: signature, userId: userId)
+            }
+        case .nothing:
+            // The viewer is not known yet: no leave read at all.
+            fb.stopLiveListener(key: Self.listenerKey)
+        case .unavailable:
+            // The script did not answer for an operative: no read (never the whole collection), say so and try again.
+            fb.stopLiveListener(key: Self.listenerKey)
+            errorMessage = LeaveReadDecision.unavailableMessage
+            scheduleUnavailableReplan()
+        }
+    }
+
+    /// Re-plans the open organisation after the next `unavailableReplanDelays` wait, while the plan is still unavailable.
+    private func scheduleUnavailableReplan() {
+        guard unavailableReplanTask == nil,
+              let delay = Self.unavailableReplanDelay(afterAttempts: unavailableAttempts) else { return }
+        unavailableAttempts += 1
+        unavailableReplanTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.unavailableReplanTask = nil
+            guard self.plannedSignature == LeaveReadDecision.unavailable.signature else { return }
+            self.replanLiveUpdates()
+        }
+    }
+
+    /// One listener snapshot of `signature`'s plan. A snapshot of a plan replaced meanwhile (another user, the plan
+    /// narrowed) is dropped.
+    private func applyLiveRows(
+        _ rows: LiveDocumentRows,
+        fromCache: Bool,
+        organizationId: String,
+        signature: String,
+        userId: String?
+    ) {
+        guard plannedSignature == signature, plannedUserId == userId,
+              organizationIdsMatch(requestedOrganizationId, organizationId) else { return }
+        if !fromCache {
+            // A plan that works clears the refusals of that company and user (review of web #356).
+            let prefix = Self.refusalKey(organizationId: organizationId, userId: userId, signature: "")
+            refusals = refusals.filter { !$0.key.hasPrefix(prefix) }
+        }
+        let parsed = FirebaseBackend.holidayBookings(fromDocuments: rows, organizationId: normalizedOrganizationId(organizationId))
+        // Leave documents arrived but none could be read: keep the leave on screen (queued requests would
+        // otherwise be all that is left).
+        if LiveSnapshotMerge.refusesUnreadSnapshot(
+            collection: "holidayBookings",
+            rowCount: LiveSnapshotMerge.readableRowCount(rows),
+            parsedCount: parsed.count,
+            existingCount: bookings.count,
+            fromCache: fromCache
+        ) {
+            return
+        }
+        // §2: a request queued offline stays on screen (Pending sync) until the outbox replays it.
+        let pending = bookings.filter { isPendingSync($0) }
+        let pendingIds = Set(pending.map(\.id))
+        let incoming = parsed.filter { !pendingIds.contains($0.id) } + pending
+        let firstDelivery = !organizationIdsMatch(finishedLoadOrganizationId, organizationId)
+        finishedLoadOrganizationId = normalizedOrganizationId(organizationId)
+        guard let next = LiveSnapshotMerge.apply(existing: bookings, incoming: incoming, fromCache: fromCache),
+              Set(next) != Set(bookings) else {
+            if firstDelivery {
+                NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+            }
+            return
+        }
+        bookings = next
+        NotificationCenter.default.post(name: .liveWarningInputsDidChange, object: nil)
+    }
+
+    /// Loads annual leave once. A request made while a load is running is not dropped (review of #246): it runs
+    /// again once that load finishes, so the newest plan, user and company are always read last.
+    /// At most this many reads per `loadData` call (the first and the newer requests made meanwhile): never a loop.
+    nonisolated static let maxLoadRunsPerRequest = 3
+
     func loadData() async {
+        if isLoadingInFlight {
+            pendingLoadRequested = true
+            return
+        }
+        var runs = 0
+        repeat {
+            pendingLoadRequested = false
+            runs += 1
+            await loadDataOnce()
+        } while pendingLoadRequested && runs < Self.maxLoadRunsPerRequest && firebaseBackend?.isAuthenticated == true
+        pendingLoadRequested = false
+    }
+
+    private func loadDataOnce() async {
         guard let fb = firebaseBackend else {
             errorMessage = "Annual leave service unavailable. Please reopen the app."
             isLoading = false
@@ -229,14 +517,50 @@ class HolidayStore: ObservableObject {
             }
         }
         errorMessage = nil
+        // What this load read: its plan, user and company (set once the plan is known), so a stale result or error
+        // is never shown (review of #246).
+        var started: (signature: String, userId: String?, organizationId: String)?
+        func stillCurrent() -> Bool {
+            guard let started else { return true }
+            return Self.loadResultStillCurrent(
+                decisionSignature: started.signature,
+                currentSignature: fb.leaveReadDecision(organizationId: started.organizationId).signature,
+                userId: started.userId,
+                currentUserId: fb.currentUser?.uid,
+                organizationId: started.organizationId,
+                currentOrganizationId: fb.currentOrganization?.firestoreDocumentId
+            )
+        }
         do {
             print("🔥🔥🔥 DEBUG: HolidayStore loadData starting…")
             let orgId = try await resolveOrganizationId()
             attemptedOrganizationId = orgId
+            // RULEBOOK 1.56.0: the same plan as the listener (`leaveQueryPlan`); an operative with the switch on never
+            // reads the whole collection, and nothing is read before the viewer is known.
+            let decision = fb.leaveReadDecision(organizationId: orgId)
+            if decision == .nothing {
+                attemptedOrganizationId = nil
+                return
+            }
+            started = (decision.signature, fb.currentUser?.uid, orgId)
             print("🔥🔥🔥 DEBUG: HolidayStore resolved org \(orgId); fetching holidayBookings…")
-            bookings = try await fb.loadHolidayBookings(organizationId: orgId)
+            let loaded = try await fb.loadHolidayBookings(organizationId: orgId, decision: decision)
+            // The plan, user or open company changed while reading (the plan narrowed, a sign-out): the result is
+            // not this screen's any more.
+            guard stillCurrent() else {
+                attemptedOrganizationId = nil
+                pendingLoadRequested = true
+                return
+            }
+            bookings = loaded
             print("🔥🔥🔥 DEBUG: HolidayStore loaded \(bookings.count) holiday bookings")
         } catch {
+            // A stale load's failure is not this screen's error (review of #246).
+            guard stillCurrent() else {
+                attemptedOrganizationId = nil
+                pendingLoadRequested = true
+                return
+            }
             let nsError = error as NSError
             print("🔥🔥🔥 DEBUG: HolidayStore loadData failed: \(error.localizedDescription)")
             if nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 {
@@ -246,6 +570,20 @@ class HolidayStore: ObservableObject {
             }
             // Keep currently loaded bookings on transient permission/network errors.
         }
+    }
+
+    /// RULEBOOK 1.56.0: a one-off load's result is used only when the plan it read, the signed-in user and the open
+    /// organisation are still the ones it started with.
+    static func loadResultStillCurrent(
+        decisionSignature: String,
+        currentSignature: String,
+        userId: String?,
+        currentUserId: String?,
+        organizationId: String,
+        currentOrganizationId: String?
+    ) -> Bool {
+        decisionSignature == currentSignature && userId == currentUserId
+            && organizationIdsMatch(currentOrganizationId, organizationId)
     }
 
     /// A new booking creates one document (`holidayRequestWriteFields`). A booking already in the store

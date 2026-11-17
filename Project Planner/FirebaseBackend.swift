@@ -374,12 +374,15 @@ class FirebaseBackend: ObservableObject {
     }
 
     private func stopOrganizationDocumentListener() {
+        // Review of #246: the first settings-listener attach at launch (no organisation listened to before) is not
+        // a switch — the job access context and the viewer already belong to this company and are kept.
+        let wasListening = !(organizationDocumentListenerTarget ?? "").isEmpty
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
         organizationDocumentListenerTarget = nil
         organizationMembersSnapshot = nil
         warningSettingsLoadedOrganizationId = nil
-        stopScheduleLiveListeners()
+        stopScheduleLiveListeners(resetsJobAccess: wasListening)
     }
 
     /// RULEBOOK 1.38.0 §27 self-heal: removes the booking (or manager schedule) listener and asks for it again, so its
@@ -402,7 +405,7 @@ class FirebaseBackend: ObservableObject {
         return true
     }
 
-    func stopScheduleLiveListeners() {
+    func stopScheduleLiveListeners(resetsJobAccess: Bool = true) {
         dataParityBookingsListenStart = nil
         dataParityManagerScheduleListenStart = nil
         DataParityListenerLedger.shared.end(key: "bookings")
@@ -419,7 +422,9 @@ class FirebaseBackend: ObservableObject {
         // Organisation switch and sign-out: no attach time, server time or failure count carries over.
         LiveListenerClock.shared.reset()
         DataParityListenerLedger.shared.removeAll()
-        JobAccessContext.resetForOrganizationSwitch()
+        if resetsJobAccess {
+            JobAccessContext.resetForOrganizationSwitchAndRederiveViewer()
+        }
     }
 
     /// RULEBOOK 1.10.0 §17: when the inputs of `jobQueryPlan` / `bookingQueryPlan` change, the booking listeners
@@ -8888,9 +8893,24 @@ class FirebaseBackend: ObservableObject {
             ], merge: true)
     }
 
-    func loadHolidayBookings(organizationId: String) async throws -> [HolidayBooking] {
+    /// RULEBOOK 1.56.0 §9, §17: `decision` is `leaveReadDecision(organizationId:)` — the whole collection (as before,
+    /// `.all`) or an operative's own `or` queries (`.own`, each read from the server with the cache fallback, merged by
+    /// document id; never the whole collection). `.nothing` reads nothing and returns an empty list.
+    func loadHolidayBookings(organizationId: String, decision: LeaveReadDecision = .all) async throws -> [HolidayBooking] {
         // Read path only — do not run writable-org repair (that can hang launch).
         let orgId = try await ensureReadableOrganization(organizationId)
+        if case .nothing = decision { return [] }
+        if case .unavailable = decision {
+            throw NSError(domain: "HolidayStore", code: 503, userInfo: [NSLocalizedDescriptionKey: LeaveReadDecision.unavailableMessage])
+        }
+        if case .own = decision {
+            let docs = try await readPlannedQueryDocuments(leaveReadSources(organizationId: orgId, decision: decision))
+            let parsed = holidayBookingsFromFirestore(docs, organizationId: orgId)
+            if LiveSnapshotMerge.loadYieldedNothing(collection: "holidayBookings", documentIds: docs.map(\.documentID), parsedCount: parsed.count) {
+                throw RulebookReaderYieldedNothingError(collection: "annual leave", rowCount: docs.count)
+            }
+            return parsed
+        }
         let holidaysRef = db.collection("organizations").document(orgId).collection("holidayBookings")
         let snapshot: QuerySnapshot
         do {

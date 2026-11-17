@@ -133,6 +133,9 @@ class UserStore: ObservableObject {
     }
 
     init() {
+        // RULEBOOK 1.56.0 (review of #246): an organisation switch clears the read viewer; re-derive it from this
+        // store's profile straight away (the profile may have loaded before the switch).
+        JobAccessContext.viewerRederiver = { [weak self] in self?.refreshJobAccessViewer() }
         // RULEBOOK 1.8.0 `CanonicalBusinessEngine.parseUserDocument` `annualLeaveDefaultsPending`: a user read before the organisation's
         // `annualLeaveDefaults` were loaded carries the rulebook default figures. Read them again once the
         // organisation document arrives (or its defaults change on another device).

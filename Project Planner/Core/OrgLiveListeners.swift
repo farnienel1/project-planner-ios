@@ -81,10 +81,13 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
 
     /// The listener with `token` stays attached, but the next `needsAttach` for `key` is true, so a re-plan replaces
     /// it (and `set` removes it). A newer listener for `key` is left alone.
-    func markForReattach(key: String, token: UUID) {
+    /// True when `token` is still `key`'s registered listener (and it was marked).
+    @discardableResult
+    func markForReattach(key: String, token: UUID) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let entry = entries[key], entry.token == token else { return }
+        guard let entry = entries[key], entry.token == token else { return false }
         entries[key] = Entry(target: "", token: entry.token, remove: entry.remove)
+        return true
     }
 
     /// Removes `key`'s listener, or only the one with `token` when given (a failed listener drops itself so the
@@ -335,6 +338,9 @@ extension FirebaseBackend {
         organizationId: String,
         targetSuffix: String = "",
         retryOnFailure: Bool = false,
+        /// RULEBOOK 1.56.0: asked before a failed listener is attached again; false means its owner has planned a
+        /// different read meanwhile (the annual-leave plan narrowed), so the old query is never attached again.
+        stillWanted: (@MainActor () -> Bool)? = nil,
         query makeQuery: @escaping (DocumentReference) -> Query,
         onChange: @escaping @MainActor (_ rows: LiveDocumentRows, _ fromCache: Bool) -> Void
     ) {
@@ -367,12 +373,14 @@ extension FirebaseBackend {
                         guard let delay else { return }
                         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
                         guard let self, self.isAuthenticated,
-                              organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId) else { return }
+                              organizationIdsMatch(self.currentOrganization?.firestoreDocumentId, orgId),
+                              stillWanted?() ?? true else { return }
                         self.listenOrganizationQuery(
                             key: key,
                             organizationId: orgId,
                             targetSuffix: targetSuffix,
                             retryOnFailure: true,
+                            stillWanted: stillWanted,
                             query: makeQuery,
                             onChange: onChange
                         )
