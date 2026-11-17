@@ -1875,10 +1875,12 @@ struct EditUserView: View {
         return permissions.manager || user.role == .manager || displayedUser.role == .manager
     }
 
+    /// 17 Nov (owner bug): the annual leave allowance shows for every level, the Super Admin included (web
+    /// `editUserAnnualLeaveSection`); only the Super Admin edits their own (`canEditTargetUserPermissions`).
     private var shouldShowAnnualLeaveAccessToggle: Bool {
-        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
+            || isViewingSuperAdminProfile
     }
 
     private var annualLeaveAccessDirty: Bool {
@@ -1919,10 +1921,11 @@ struct EditUserView: View {
     }
 
     private var shouldShowAnnualLeaveEntitlementSection: Bool {
-        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         guard annualLeaveEnabledDraft else { return false }
-        return permissions.operativeMode || user.role == .operative || permissions.manager
+        // Every level, as web (17 Nov owner bug: admins and the Super Admin had no allowance fields on iPhone).
+        return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
+            || isViewingSuperAdminProfile
     }
 
     /// The remaining figure as the rulebook gives it, or nil until the pay record and the adjustments have loaded

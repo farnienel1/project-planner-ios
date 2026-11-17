@@ -3199,7 +3199,10 @@ class UserStore: ObservableObject {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
+        // 17 Nov (owner bug): the Super Admin's employment type and leave allowance are never refused because they are
+        // the Super Admin (rulebook §4.4, §8). Only the Super Admin edits their own profile
+        // (`canEditTargetUserPermissions`); what they may change is `canChangePersonPay` and the security rules.
+        if (updated.isSuperAdmin || isOrganizationCreator(userId: updated.id)) && !canEditTargetUserPermissions(updated) {
             return false
         }
         let clampedDays = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
@@ -3274,9 +3277,11 @@ class UserStore: ObservableObject {
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
+        // 17 Nov (owner bug): the Super Admin's employment type and leave allowance are never refused because they are
+        // the Super Admin (rulebook §4.4, §8). Only the Super Admin edits their own profile
+        // (`canEditTargetUserPermissions`); what they may change is `canChangePersonPay` and the security rules.
+        if (updated.isSuperAdmin || isOrganizationCreator(userId: updated.id)) && !canEditTargetUserPermissions(updated) {
             return false
         }
 
@@ -3304,12 +3309,14 @@ class UserStore: ObservableObject {
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let storedRow = rosterRow(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
         // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
         var updated = await payEditorRecord(for: storedRow)
         guard let index = rosterIndex(for: userId) else { return false }
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
+        // 17 Nov (owner bug): the Super Admin's employment type and leave allowance are never refused because they are
+        // the Super Admin (rulebook §4.4, §8). Only the Super Admin edits their own profile
+        // (`canEditTargetUserPermissions`); what they may change is `canChangePersonPay` and the security rules.
+        if (updated.isSuperAdmin || isOrganizationCreator(userId: updated.id)) && !canEditTargetUserPermissions(updated) {
             return false
         }
         // RULEBOOK §8: employment type is pay, so it follows `canChangePersonPay`.
