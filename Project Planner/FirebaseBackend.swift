@@ -6414,7 +6414,8 @@ class FirebaseBackend: ObservableObject {
         carriesOver: Bool,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        writeYearAllowance: Bool = false
+        writeYearAllowance: Bool = false,
+        fields: Set<String>? = nil
     ) async throws {
         var payload: [String: Any] = [
             "annualLeaveDaysPerYear": AnnualLeavePolicy.clampDaysPerYear(daysPerYear),
@@ -6423,10 +6424,18 @@ class FirebaseBackend: ObservableObject {
             "annualLeaveCarriesOver": carriesOver,
             "updatedAt": Timestamp(date: Date()),
         ]
+        // Review of #258: only the figures the editor changed (rulebook §1; `fields` nil = all four, as before).
+        if let fields {
+            for key in ["annualLeaveDaysPerYear", "annualLeaveYearStartMonth", "annualLeaveYearEndMonth", "annualLeaveCarriesOver"]
+            where !fields.contains(key) {
+                payload.removeValue(forKey: key)
+            }
+        }
         if writeYearAllowance, let yearAllowance, let yearAllowanceKey, !yearAllowanceKey.isEmpty {
             payload["annualLeaveYearAllowance"] = yearAllowance
             payload["annualLeaveYearAllowanceKey"] = yearAllowanceKey
         }
+        guard payload.keys.contains(where: { $0 != "updatedAt" }) else { return }
         try await db.collection("users").document(userId).updateData(payload)
     }
 

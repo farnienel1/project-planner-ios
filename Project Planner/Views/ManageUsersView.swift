@@ -1621,6 +1621,8 @@ struct EditUserView: View {
     @State private var employmentStartDateDraft: String
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
+    /// The allowance figures the editor was opened with; the save writes only what changed against them (review of #258).
+    @State private var leaveEntitlementSeed: AnnualLeaveEntitlementDraft
     @State private var baselineRemainingText = ""
     /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments, for the remaining figure shown (read only).
     @StateObject private var leaveAdjustmentsModel = AnnualLeaveAdjustmentsModel()
@@ -1659,6 +1661,7 @@ struct EditUserView: View {
         self._annualLeaveStartMonth = State(initialValue: user.annualLeaveYearStartMonth)
         self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
+        self._leaveEntitlementSeed = State(initialValue: AnnualLeaveEntitlementDraft.seeded(from: user, formatDays: EditUserView.formatAnnualLeaveDaysText))
         self._employmentStartDateDraft = State(initialValue: user.employmentStartDate ?? "")
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
@@ -1877,6 +1880,7 @@ struct EditUserView: View {
 
     /// 17 Nov (owner bug): the annual leave allowance shows for every level, the Super Admin included (web
     /// `editUserAnnualLeaveSection`); only the Super Admin edits their own (`canEditTargetUserPermissions`).
+    /// Known duplication: web decides the same in `lib/staff/editUserSections.ts`; change both together.
     private var shouldShowAnnualLeaveAccessToggle: Bool {
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
@@ -1976,14 +1980,21 @@ struct EditUserView: View {
         return AnnualLeavePolicy.clampDaysPerYear(d)
     }
 
+    /// The allowance draft as on screen.
+    private var leaveEntitlementDraft: AnnualLeaveEntitlementDraft {
+        AnnualLeaveEntitlementDraft(
+            daysText: annualLeaveDaysText,
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth,
+            carriesOver: annualLeaveCarriesOver
+        )
+    }
+
+    /// Changed against the figures the editor was opened with — never against the roster row as re-read, so a row
+    /// re-parsed once the organisation's leave defaults arrive, or a stored 0, is not a change (review of #258).
     private var annualLeaveEntitlementDirty: Bool {
         guard shouldShowAnnualLeaveEntitlementSection else { return false }
-        let s = userStore.rosterRow(for: user.id) ?? user
-        guard let p = parsedAnnualLeaveDaysForSave() else { return true }
-        return abs(p - s.annualLeaveDaysPerYear) > 0.0001
-            || annualLeaveStartMonth != s.annualLeaveYearStartMonth
-            || annualLeaveEndMonth != s.annualLeaveYearEndMonth
-            || annualLeaveCarriesOver != s.annualLeaveCarriesOver
+        return !leaveEntitlementDraft.editedFields(since: leaveEntitlementSeed).isEmpty
             || remainingLeaveText != baselineRemainingText
     }
 
@@ -2720,6 +2731,7 @@ struct EditUserView: View {
         annualLeaveStartMonth = u.annualLeaveYearStartMonth
         annualLeaveEndMonth = u.annualLeaveYearEndMonth
         annualLeaveCarriesOver = u.annualLeaveCarriesOver
+        leaveEntitlementSeed = AnnualLeaveEntitlementDraft.seeded(from: u, formatDays: EditUserView.formatAnnualLeaveDaysText)
         annualLeaveEnabledDraft = u.annualLeaveEnabled
         let remaining = EditUserView.formatAnnualLeaveDaysText(currentRemainingDays(for: u))
         remainingLeaveText = remaining
@@ -4613,7 +4625,12 @@ struct EditUserView: View {
 
         var annualLeaveSuccess = true
         if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
-            guard let days = parsedAnnualLeaveDaysForSave() else {
+            let editedLeaveFields = leaveEntitlementDraft.editedFields(since: leaveEntitlementSeed)
+            // A days figure nobody changed is not checked or written (a stored 0 never blocks Save).
+            let typedDays = editedLeaveFields.contains(AnnualLeaveEntitlementDraft.daysField)
+                ? parsedAnnualLeaveDaysForSave()
+                : subjectUser.annualLeaveDaysPerYear
+            guard let days = typedDays else {
                 await MainActor.run {
                     isUpdating = false
                     saveErrorMessage = "Enter a valid annual leave allowance (a positive number of days)."
@@ -4668,8 +4685,10 @@ struct EditUserView: View {
                 carriesOver: annualLeaveCarriesOver,
                 yearAllowance: yearAllowance,
                 yearAllowanceKey: yearAllowanceKey,
-                writeYearAllowance: writeRemaining
+                writeYearAllowance: writeRemaining,
+                fields: AnnualLeaveEntitlementDraft.fieldsToWrite(edited: editedLeaveFields, user: subjectUser)
             )
+            if annualLeaveSuccess { leaveEntitlementSeed = leaveEntitlementDraft }
         }
 
         var billingSuccess = true
