@@ -1266,13 +1266,12 @@ class NotificationService: ObservableObject {
     /// sheet is self-signed. Document ids come from `timesheetNotificationDedupeKey` (organisation-zone period start).
     /// RULEBOOK 1.55.0: `revision` is the signed version's REV number (nil / 0 the original), so signing REV N
     /// writes its own row instead of hitting the original's de-dupe key.
-    /// RULEBOOK 1.60.1: `signedAt` is the person's signature instant (`operativeSignedAt`), so each signature of the
-    /// same pay run writes its own row and push (a re-sign used to hit the first row and reach nobody).
+    /// RULEBOOK 1.60.1: `signature` (`TimesheetSignatureNotices.ownerSigned(draft)`) carries the person's signature
+    /// instant, so each signature of the same pay run writes its own row and push (a re-sign used to reach nobody).
     func notifyTimesheetSubmitted(
         signedByUser: AppUser,
         weekStart: Date,
-        revision: Int? = nil,
-        signedAt: Date? = nil
+        signature: TimesheetSignatureNotices.Signature
     ) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         if let userStore, userStore.organizationUsers.isEmpty {
@@ -1286,22 +1285,15 @@ class NotificationService: ObservableObject {
             print("🔥🔥🔥 DEBUG: [TIMESHEET NOTIFY] timesheetSubmittedRecipients did not answer; no notice written")
             return
         }
-        let periodStartDayKey = OrganizationRulebookContext.dayKey(weekStart)
         let weekDay = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
         let displayName = signedByUser.fullName.isEmpty ? signedByUser.email : signedByUser.fullName
         for managerId in recipients {
-            guard let key = CanonicalBusinessEngine.timesheetNotificationDedupeKey(
-                type: AppNotification.NotificationType.timesheetPendingManagerSignoff.rawValue,
-                subjectId: signedByUser.id,
-                periodStartDayKey: periodStartDayKey,
-                timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-                recipientId: managerId,
-                revision: revision,
-                // RULEBOOK 1.60.1: one notice per signature, so a re-sign of the same pay run reaches the line manager.
-                signedAt: signedAt
+            // RULEBOOK 1.60.1: one row per signature (`TimesheetSignatureNotices.pendingNoticeId`).
+            guard let noticeId = TimesheetSignatureNotices.pendingNoticeId(
+                subjectId: signedByUser.id, managerId: managerId, weekStart: weekStart, signature: signature
             ) else { continue }
             let notification = AppNotification(
-                id: syntheticNotificationId(from: key),
+                id: noticeId,
                 organizationId: organizationId,
                 type: .timesheetPendingManagerSignoff,
                 title: "Timesheet needs sign-off",
@@ -1338,8 +1330,15 @@ class NotificationService: ObservableObject {
         ) ?? []
         let body = message ?? "\(actorName) \(actionVerb): \(actionSummary)"
         for targetId in peers {
-            let dedupeId = syntheticNotificationId(from: Self.peerNoticeKey(
-                actorName: actorName, actionSummary: actionSummary, targetId: targetId, actionVerb: actionVerb, signedAt: signedAt))
+            // RULEBOOK 1.60.1 `lineManagerPeerNoticeKey`: `|sig{ms}` with a counter-sign instant; leave decisions (no
+            // instant) keep the key both apps have always written.
+            guard let peerKey = CanonicalBusinessEngine.lineManagerPeerNoticeKey(
+                actorName: actorName, actionSummary: actionSummary, peerId: targetId, actionVerb: actionVerb, signedAt: signedAt
+            ) else {
+                print("🔥🔥🔥 DEBUG: [PEER NOTIFY] lineManagerPeerNoticeKey did not answer; no notice written")
+                continue
+            }
+            let dedupeId = syntheticNotificationId(from: peerKey)
             let notification = AppNotification(
                 id: dedupeId,
                 organizationId: organizationId,
@@ -1354,15 +1353,31 @@ class NotificationService: ObservableObject {
         }
     }
 
-    /// The `line_manager_peer_update` id key (web `timesheetPeerNoticeKey`). RULEBOOK 1.60.1: with a counter-sign instant
-    /// it ends `|sig{ms}`, so a counter-sign again is its own row; without one (leave decisions) it is as before.
-    nonisolated static func peerNoticeKey(
-        actorName: String, actionSummary: String, targetId: String, actionVerb: String, signedAt: Date?
-    ) -> String {
-        let base = "lmPeer|\(actorName)|\(actionSummary)|\(targetId)|\(actionVerb)"
-        guard let signedAt else { return base }
-        let ms = (signedAt.timeIntervalSince1970 * 1000).rounded(.down)
-        return ms > 0 ? "\(base)|sig\(Int64(ms))" : base
+    /// RULEBOOK 1.60.1: a line manager's counter-signature — `timesheet_signed_by_manager` to the person, then
+    /// `line_manager_peer_update` to the person's other line managers (`lineManagerPeerRecipients`), both keyed by the
+    /// counter-signature (`signature`, from `TimesheetSignatureNotices.counterSigned(draft)`), so a counter-sign again
+    /// after a reopen is its own row.
+    func notifyTimesheetCounterSigned(
+        operative: AppUser,
+        signedByName: String,
+        weekStart: Date,
+        weekTitle: String,
+        signature: TimesheetSignatureNotices.Signature
+    ) async {
+        await notifyTimesheetSignedByManager(
+            targetUserId: operative.id,
+            signedByName: signedByName,
+            weekStart: weekStart,
+            signature: signature
+        )
+        let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
+        await notifyLineManagerPeerAction(
+            actorName: signedByName,
+            actionSummary: TimesheetSignatureNotices.peerSummary(operativeName: operativeName, weekTitle: weekTitle),
+            subject: operative,
+            actionVerb: "signed",
+            signedAt: signature.signedAt
+        )
     }
 
     /// Sent when line manager signs off a timesheet. RULEBOOK 1.55.0: `revision` is the counter-signed version's REV
@@ -1371,8 +1386,7 @@ class NotificationService: ObservableObject {
         targetUserId: String,
         signedByName: String,
         weekStart: Date,
-        revision: Int? = nil,
-        signedAt: Date? = nil
+        signature: TimesheetSignatureNotices.Signature
     ) async {
         // `timesheetSignedRecipients`: the subject's account, unless they are the signer (the signed-in user).
         guard let targetId = CanonicalBusinessEngine.timesheetSignedRecipients(
@@ -1381,16 +1395,10 @@ class NotificationService: ObservableObject {
             roster: recipientRoster
         )?.first else { return }
         let weekDay = OrganizationRulebookContext.calendar.startOfDay(for: weekStart)
-        guard let key = CanonicalBusinessEngine.timesheetNotificationDedupeKey(
-            type: AppNotification.NotificationType.timesheetSignedByManager.rawValue,
-            subjectId: targetId,
-            periodStartDayKey: OrganizationRulebookContext.dayKey(weekStart),
-            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-            revision: revision,
-            // RULEBOOK 1.60.1: one notice per counter-signature, so a counter-sign again reaches the person.
-            signedAt: signedAt
+        // RULEBOOK 1.60.1: one row per counter-signature (`TimesheetSignatureNotices.signedNoticeId`).
+        guard let dedupeId = TimesheetSignatureNotices.signedNoticeId(
+            subjectId: targetId, weekStart: weekStart, signature: signature
         ) else { return }
-        let dedupeId = syntheticNotificationId(from: key)
         let notification = AppNotification(
             id: dedupeId,
             organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
@@ -2309,6 +2317,11 @@ class NotificationService: ObservableObject {
     }
 
     private func syntheticNotificationId(from key: String) -> UUID {
+        Self.syntheticNotificationId(fromKey: key)
+    }
+
+    /// The synthetic UUID of a de-dupe key (web `syntheticUuidFromKey`).
+    nonisolated static func syntheticNotificationId(fromKey key: String) -> UUID {
         let digest = SHA256.hash(data: Data(key.utf8))
         var bytes = Array(digest.prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x40

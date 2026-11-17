@@ -126,6 +126,26 @@ extension CanonicalBusinessEngine {
         return callJSON("timesheetNotificationDedupeKey", arguments: [input]) as? String
     }
 
+    /// RULEBOOK 1.60.1 `lineManagerPeerNoticeKey`: the `line_manager_peer_update` de-dupe key
+    /// (`lmPeer|{actor}|{summary}|{peer}|{verb}`, plus `|sig{ms}` with a counter-sign instant; unchanged without one).
+    /// Nil when the script did not answer or the peer id is missing.
+    nonisolated static func lineManagerPeerNoticeKey(
+        actorName: String,
+        actionSummary: String,
+        peerId: String,
+        actionVerb: String,
+        signedAt: Date? = nil
+    ) -> String? {
+        var input: [String: Any] = [
+            "actorName": actorName,
+            "actionSummary": actionSummary,
+            "peerId": peerId,
+            "actionVerb": actionVerb,
+        ]
+        if let signedAt { input["signedAtMs"] = (signedAt.timeIntervalSince1970 * 1000).rounded(.down) }
+        return callJSON("lineManagerPeerNoticeKey", arguments: [input]) as? String
+    }
+
     /// `inboxNotificationVisibleToUser(row, ids)`: the row's `userId` is one of the person's ids. Ownerless rows
     /// are not inbox rows. Nil when the script did not answer.
     /// RULEBOOK 1.10.0 §13: with `createdAtMs` and `now`, a row dated after `now` is not listed yet (rows count from
