@@ -1045,24 +1045,14 @@ struct BookLabourFlowView: View {
                 ]],
                 fallbackPolicy: dayPayrollPolicy
             )
-            // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the new booking's hours.
-            let weekdaySections = CanonicalBusinessEngine.weekdayExplanationSections(
+            // RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: "How the hours add up" for the new booking (Normal hours /
+            // Overtime / Total paid hours), weekday or weekend, the same text as web.
+            let hoursBreakdown = CanonicalBusinessEngine.hoursBreakdown(
                 on: [day],
                 start: timeText(from: draft.startMinutes),
                 end: timeText(from: draft.endMinutes),
                 isBreakRemoved: draft.breakRemoved,
                 fallbackPolicy: dayPayrollPolicy
-            )
-            // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the new booking as the pay rule
-            // prices it that day (memoised by input in the wrapper); empty on a weekday. 1.39.0: with its explanation.
-            let weekendLines = CanonicalBusinessEngine.collapsedBreakdownSections(
-                CanonicalBusinessEngine.weekendBookingBreakdown(
-                    on: [day],
-                    start: timeText(from: draft.startMinutes),
-                    end: timeText(from: draft.endMinutes),
-                    isBreakRemoved: draft.breakRemoved,
-                    fallbackPolicy: dayPayrollPolicy
-                )
             )
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -1159,16 +1149,14 @@ struct BookLabourFlowView: View {
                         Text("Existing booked: \(ScheduleCoverageFormat.hours(existingPaidHours))h")
                             .font(.system(size: 11))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
-                        if weekendLines.isEmpty {
-                            Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
-                                .font(.system(size: 11))
-                                .foregroundStyle(ProjectWorksRevampColors.activeGreen)
-                            Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundStyle(ProjectWorksRevampColors.ink)
-                            BookingBreakdownSectionsView(sections: weekdaySections)
-                        } else {
-                            BookingBreakdownSectionsView(sections: weekendLines, lineColor: ProjectWorksRevampColors.activeGreen)
+                        Text("New booking: \(ScheduleCoverageFormat.hours(newPaidHours))h")
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                        Text("Total booked: \(ScheduleCoverageFormat.hours(combinedPaidHours))h")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                        if let hoursBreakdown {
+                            HoursBreakdownCardView(breakdown: hoursBreakdown)
                         }
                         if let shortfall {
                             Text("\(shortfall.label): \(shortfall.value)")

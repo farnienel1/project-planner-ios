@@ -1062,12 +1062,20 @@ struct ScheduleOperativeView: View {
         isBreakRemoved: Bool,
         paidHours paidH: Double
     ) -> some View {
-        // RULEBOOK 1.43.0 §25: the rows and the explanation price the booking's own overtime rate (the probe's).
-        let weekendSections = weekendBreakdownSections(
-            start: start, end: end, isBreakRemoved: isBreakRemoved, otMultiplierOverride: probe.otMultiplierOverride
+        // RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: "How the hours add up" for the selected days (1.43.0 §25: at
+        // the booking's own overtime rate, the probe's). A selection with a Saturday or Sunday shows the card only, as the
+        // per-day rows did before.
+        let breakdown = selectedDates.isEmpty ? nil : CanonicalBusinessEngine.hoursBreakdown(
+            on: selectedDates.sorted(),
+            start: start,
+            end: end,
+            isBreakRemoved: isBreakRemoved,
+            fallbackPolicy: primarySelectedDatePolicy,
+            otMultiplierOverride: probe.otMultiplierOverride
         )
-        if !weekendSections.isEmpty {
-            WeekendBookingBreakdownView(sections: weekendSections)
+        let hasWeekend = selectedDates.contains { CanonicalBusinessEngine.isWeekendDayKey(CanonicalBusinessEngine.bookingDayKey($0)) }
+        if hasWeekend {
+            if let breakdown { HoursBreakdownCardView(breakdown: breakdown) }
         } else {
             let otH = probe.overtimeHoursBeyondPaidStandard(policy: p)
             let result = probe.payrollHoursResult(policy: p)
@@ -1086,15 +1094,7 @@ struct ScheduleOperativeView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(tone.background, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .accessibilityElement(children: .combine)
-            // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the figure.
-            BookingBreakdownSectionsView(sections: CanonicalBusinessEngine.weekdayExplanationSections(
-                on: selectedDates.sorted(),
-                start: start,
-                end: end,
-                isBreakRemoved: isBreakRemoved,
-                fallbackPolicy: primarySelectedDatePolicy,
-                otMultiplierOverride: probe.otMultiplierOverride
-            ))
+            if let breakdown { HoursBreakdownCardView(breakdown: breakdown) }
         }
     }
 
@@ -1320,27 +1320,6 @@ struct ScheduleOperativeView: View {
         .overlay(alignment: .bottom) {
             Divider()
         }
-    }
-
-    /// `weekendBookingBreakdown` rows for the selected days with one pair of times, with their 1.39.0 explanation
-    /// (`collapsedBreakdownSections`); empty for a weekday-only selection or no dates.
-    private func weekendBreakdownSections(
-        start: String,
-        end: String,
-        isBreakRemoved: Bool,
-        otMultiplierOverride: Double? = nil
-    ) -> [RulebookBreakdownSection] {
-        guard !selectedDates.isEmpty else { return [] }
-        return CanonicalBusinessEngine.collapsedBreakdownSections(
-            CanonicalBusinessEngine.weekendBookingBreakdown(
-                on: selectedDates.sorted(),
-                start: start,
-                end: end,
-                isBreakRemoved: isBreakRemoved,
-                fallbackPolicy: primarySelectedDatePolicy,
-                otMultiplierOverride: otMultiplierOverride
-            )
-        )
     }
 
     private var scheduleBookingCalendarCardCompact: some View {
