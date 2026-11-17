@@ -24,23 +24,20 @@ enum TaskPersonKind: String, Hashable, Sendable {
     case operative
 }
 
-/// Who each task assignee row is. Keys are computed once per row through `personIdSet` and kept for the life of the
-/// index (`TaskPersonIndex.current` reuses an index while the rows and roster are unchanged).
+/// Who each task assignee row is (web `taskPersonIndex`, final version after the review of #364). Built in one pass:
+/// every record of one person — users documents (folded with the rulebook's `personIdSet` over the whole roster, one
+/// call per roster row), their emails, `operatives` / `managers` rows on those emails or ids and the accounts those
+/// rows link to — is joined into one group first, then each group gets one key: the smallest `account:<id>`, else the
+/// smallest `email:<email>`, else the smallest `id:<id>` (ids and emails without case). A person is a ghost only when
+/// every account in their group is a ghost.
+@MainActor
 final class TaskPersonIndex {
-    private struct RowSeed {
-        let storedId: String
-        let email: String
-        let linkedUserId: String?
-    }
-
     private let managersById: [UUID: Manager]
     private let operativesById: [UUID: Operative]
     private let managersByStoredId: [String: Manager]
     private let operativesByStoredId: [String: Operative]
-    private let rosterRows: [[String: Any]]
-    private let rosterIds: Set<String>
-    private let ghostAccountIds: Set<String>
-    private var cache: [String: String] = [:]
+    private var parent: [String: String] = [:]
+    private var keyByRoot: [String: String] = [:]
     private var ghostKeys: Set<String> = []
 
     init(managers: [Manager], operatives: [Operative], users: [AppUser]) {
@@ -63,9 +60,9 @@ final class TaskPersonIndex {
         self.managersByStoredId = managersByStoredId
         self.operativesByStoredId = operativesByStoredId
 
-        var rows: [[String: Any]] = []
-        var ids = Set<String>()
-        var ghosts = Set<String>()
+        // The roster as `personIdSet` reads it (plus the ghost flag `isGhostUser` reads).
+        var rosterRows: [[String: Any]] = []
+        var rosterById: [String: [String: Any]] = [:]
         for user in users {
             let id = user.id.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !id.isEmpty else { continue }
@@ -76,17 +73,94 @@ final class TaskPersonIndex {
                 "sameEmailUserIds": user.sameEmailUserIds,
                 "ghost": user.isGhost,
             ]
-            rows.append(row)
-            ids.insert(Self.idKey(id))
-            if user.isGhost, CanonicalBusinessEngine.isGhostUser(row) { ghosts.insert(Self.idKey(id)) }
+            rosterRows.append(row)
+            if rosterById[Self.idKey(id)] == nil { rosterById[Self.idKey(id)] = row }
         }
-        self.rosterRows = rows
-        self.rosterIds = ids
-        self.ghostAccountIds = ghosts
+
+        // The whole closure first.
+        for row in rosterRows {
+            let id = row["id"] as? String ?? ""
+            let linked = CanonicalBusinessEngine.personIdSet(person: row, roster: rosterRows)
+                ?? ([id] + (row["formerUserIds"] as? [String] ?? []) + (row["sameEmailUserIds"] as? [String] ?? []))
+            join([Self.idNode(id), Self.emailNode(row["email"] as? String)] + linked.map { Self.idNode($0) })
+        }
+        for row in managers {
+            join([Self.idNode(row.firestoreDocumentId), Self.emailNode(row.email), Self.idNode(row.linkedUserId)])
+        }
+        for row in operatives {
+            join([Self.idNode(row.documentId), Self.emailNode(row.email), Self.idNode(row.linkedUserId)])
+        }
+
+        // One deterministic key per group.
+        var accounts: [String: [String]] = [:]
+        var emails: [String: [String]] = [:]
+        var ids: [String: [String]] = [:]
+        for node in Array(parent.keys) {
+            let root = find(node)
+            if node.hasPrefix("email:") {
+                emails[root, default: []].append(String(node.dropFirst(6)))
+            } else {
+                let id = String(node.dropFirst(3))
+                ids[root, default: []].append(id)
+                if rosterById[id] != nil { accounts[root, default: []].append(id) }
+            }
+        }
+        let roots = Set(accounts.keys).union(emails.keys).union(ids.keys)
+        for root in roots {
+            let groupAccounts = accounts[root] ?? []
+            let key: String
+            if let first = groupAccounts.min() {
+                key = "account:\(first)"
+            } else if let first = emails[root]?.min() {
+                key = "email:\(first)"
+            } else {
+                key = "id:\(ids[root]?.min() ?? "")"
+            }
+            keyByRoot[root] = key
+            // A ghost only when every account of the person is a ghost (a ghost's old record beside a live login is not).
+            if !groupAccounts.isEmpty,
+               groupAccounts.allSatisfy({ id in rosterById[id].map { CanonicalBusinessEngine.isGhostUser($0) } ?? false }) {
+                ghostKeys.insert(key)
+            }
+        }
     }
 
     static func idKey(_ value: String?) -> String {
         (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func idNode(_ value: String?) -> String {
+        let key = idKey(value)
+        return key.isEmpty ? "" : "id:\(key)"
+    }
+
+    private static func emailNode(_ value: String?) -> String {
+        let key = idKey(value)
+        return key.isEmpty ? "" : "email:\(key)"
+    }
+
+    private func find(_ node: String) -> String {
+        var root = node
+        while let next = parent[root], next != root { root = next }
+        if parent[root] == nil { parent[root] = root }
+        var current = node
+        while current != root {
+            let next = parent[current] ?? root
+            parent[current] = root
+            current = next
+        }
+        return root
+    }
+
+    private func join(_ nodes: [String]) {
+        let present = nodes.filter { !$0.isEmpty }
+        guard let first = present.first else { return }
+        _ = find(first)
+        for node in present.dropFirst() {
+            let a = find(first)
+            let b = find(node)
+            if a != b { parent[a] = b }
+        }
     }
 
     /// The stored id a task wrote for `id` (`WorkDocumentKeys`, the task reader's mapping).
@@ -102,74 +176,39 @@ final class TaskPersonIndex {
         operativesById[id] ?? operativesByStoredId[Self.idKey(Self.storedTaskId(id))]
     }
 
-    private func seed(_ kind: TaskPersonKind, _ id: UUID) -> RowSeed {
-        switch kind {
-        case .manager:
-            if let row = manager(id) {
-                return RowSeed(storedId: row.firestoreDocumentId, email: row.email, linkedUserId: row.linkedUserId)
-            }
-        case .operative:
-            if let row = operative(id) {
-                return RowSeed(storedId: row.documentId, email: row.email, linkedUserId: row.linkedUserId)
-            }
-        }
-        return RowSeed(storedId: Self.storedTaskId(id), email: "", linkedUserId: nil)
-    }
-
-    /// One key per person: `account:<id>` when a users document is found, else `email:<email>`, else `id:<id>`.
+    /// One key per person, the same for every record of them.
     func key(_ kind: TaskPersonKind, _ id: UUID) -> String {
-        let cacheKey = "\(kind.rawValue):\(id.uuidString)"
-        if let known = cache[cacheKey] { return known }
-        let row = seed(kind, id)
-        let linked = row.linkedUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let email = row.email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let person: [String: Any] = [
-            "id": row.storedId.trimmingCharacters(in: .whitespacesAndNewlines),
-            "email": email.isEmpty ? NSNull() : email,
-            "formerUserIds": linked.isEmpty ? [String]() : [linked],
-        ]
-        var result: String
-        let ids = CanonicalBusinessEngine.personIdSet(person: person, roster: rosterRows) ?? []
-        let accounts = ids.map { Self.idKey($0) }.filter { rosterIds.contains($0) }.sorted()
-        if let first = accounts.first {
-            result = "account:\(first)"
-            if accounts.contains(where: { ghostAccountIds.contains($0) }) { ghostKeys.insert(result) }
-        } else if !email.isEmpty {
-            result = "email:\(email.lowercased())"
-        } else {
-            result = "id:\(Self.idKey(row.storedId))"
+        let storedId: String
+        switch kind {
+        case .manager: storedId = manager(id)?.firestoreDocumentId ?? Self.storedTaskId(id)
+        case .operative: storedId = operative(id)?.documentId ?? Self.storedTaskId(id)
         }
-        cache[cacheKey] = result
-        return result
+        let node = Self.idNode(storedId)
+        guard !node.isEmpty else { return "id:" }
+        guard parent[node] != nil else { return node }
+        return keyByRoot[find(node)] ?? node
     }
 
-    /// True when the person is a ghost operative (no login).
+    /// True when every users document of the person is a ghost operative (no login).
     func isGhost(_ key: String) -> Bool {
         ghostKeys.contains(key)
     }
 
     // MARK: Shared index
 
-    private static var lastSignature: String?
-    private static var lastIndex: TaskPersonIndex?
+    private static var cached: (key: String, index: TaskPersonIndex)?
 
-    /// The index for these rows, reused while the rows and roster are unchanged (each new row costs one script call).
-    static func current(managers: [Manager], operatives: [Operative], users: [AppUser]) -> TaskPersonIndex {
-        var parts: [String] = []
-        parts.reserveCapacity(managers.count + operatives.count + users.count + 3)
-        parts.append("m")
-        for row in managers { parts.append("\(row.id.uuidString)|\(row.firestoreDocumentId)|\(row.email)|\(row.linkedUserId ?? "")") }
-        parts.append("o")
-        for row in operatives { parts.append("\(row.id.uuidString)|\(row.documentId)|\(row.email)|\(row.linkedUserId ?? "")") }
-        parts.append("u")
-        for user in users {
-            parts.append("\(user.id)|\(user.email)|\(user.formerUserIds.joined(separator: ","))|\(user.sameEmailUserIds.joined(separator: ","))|\(user.isGhost)")
-        }
-        let signature = parts.joined(separator: "\n")
-        if signature == lastSignature, let index = lastIndex { return index }
-        let index = TaskPersonIndex(managers: managers, operatives: operatives, users: users)
-        lastSignature = signature
-        lastIndex = index
+    /// The index for the open stores, rebuilt only when either store's rows change (`revision` bumps on every change,
+    /// renames included, so names read through the index are never stale).
+    static func current(operativeStore: OperativeStore, userStore: UserStore) -> TaskPersonIndex {
+        let key = "\(ObjectIdentifier(operativeStore).hashValue):\(operativeStore.revision):\(ObjectIdentifier(userStore).hashValue):\(userStore.revision)"
+        if let cached, cached.key == key { return cached.index }
+        let index = TaskPersonIndex(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers
+        )
+        cached = (key, index)
         return index
     }
 }
@@ -191,12 +230,35 @@ enum TaskPeopleRulebook {
 
     /// One row per person for a new assignment (web `peopleForTaskPicker`). `operatives` rows without an email are left
     /// out (as web); ghosts are never offered; in the combined picker a person with a `managers` row is shown there only.
+    /// Ids of the rows `listedCurrentLabourPeople` keeps (web `isCurrentLabourNamedPerson`: never an anonymised
+    /// deleted profile). Nil when the script did not answer (then every row is kept).
+    private static func currentLabourIds(_ rows: [(id: UUID, email: String, first: String, last: String)]) -> Set<String>? {
+        let input: [[String: Any]] = rows.map {
+            [
+                "id": $0.id.uuidString,
+                "email": $0.email,
+                "firstName": $0.first,
+                "surname": $0.last,
+                "name": "\($0.first) \($0.last)".trimmingCharacters(in: .whitespaces),
+                "displayName": "",
+            ]
+        }
+        guard let listed = CanonicalBusinessEngine.callJSON("listedCurrentLabourPeople", arguments: [input]) as? [Any] else {
+            return nil
+        }
+        return Set(listed.compactMap { ($0 as? [String: Any])?["id"] as? String })
+    }
+
     static func pickerPeople(
-        managers: [Manager],
-        operatives: [Operative],
+        managers allManagers: [Manager],
+        operatives allOperatives: [Operative],
         route: Route,
         index: TaskPersonIndex
     ) -> (managers: [Manager], operatives: [Operative]) {
+        let currentManagers = currentLabourIds(allManagers.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
+        let currentOperatives = currentLabourIds(allOperatives.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
+        let managers = allManagers.filter { currentManagers?.contains($0.id.uuidString) ?? true }
+        let operatives = allOperatives.filter { currentOperatives?.contains($0.id.uuidString) ?? true }
         var managerKeys = Set<String>()
         var uniqueManagers: [Manager] = []
         for row in managers {

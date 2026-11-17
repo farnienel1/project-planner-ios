@@ -162,6 +162,40 @@ final class TaskPeopleFoldTests: XCTestCase {
         XCTAssertTrue(removed.operatives.isEmpty)
     }
 
+    /// Web "review of #364: every record of one person gets the same key (closure first)".
+    func testReviewOf364EveryRecordOfOnePersonGetsTheSameKey() {
+        let roster = [user("u-a", email: "a@x"), user("u-b", email: "b@x")]
+        let opA = operative("op-a", email: "b@x", first: "Ann", last: "A", linkedUserId: "u-a")
+        let opB = operative("op-b", email: "b@x", first: "Ann", last: "B")
+        let index = index(operatives: [opA, opB], users: roster)
+        XCTAssertEqual(index.key(.operative, opA.id), index.key(.operative, opB.id))
+        XCTAssertEqual(index.key(.operative, opA.id), "account:u-a")
+        let picked = TaskPeopleRulebook.pickerPeople(managers: [], operatives: [opA, opB], route: .operatives, index: index)
+        XCTAssertEqual(picked.operatives.count, 1)
+    }
+
+    /// Web "review of #364: a person is a ghost only when every account is a ghost".
+    func testReviewOf364APersonIsAGhostOnlyWhenEveryAccountIsAGhost() {
+        let roster = [user("g1", email: "c@x", ghost: true), user("u-c", email: "c@x")]
+        let opC = operative("op-c", email: "c@x", first: "Cal", last: "Cee")
+        let index = index(operatives: [opC], users: roster)
+        XCTAssertFalse(index.isGhost(index.key(.operative, opC.id)))
+        let picked = TaskPeopleRulebook.pickerPeople(managers: [], operatives: [opC], route: .operatives, index: index)
+        XCTAssertEqual(picked.operatives.map(\.documentId), ["op-c"])
+
+        let ghostOnly = self.index(operatives: [opC], users: [user("g1", email: "c@x", ghost: true)])
+        XCTAssertTrue(ghostOnly.isGhost(ghostOnly.key(.operative, opC.id)))
+    }
+
+    /// An anonymised deleted profile ("Deleted user", no email) is never offered (web `isCurrentLabourNamedPerson`).
+    func testAnAnonymisedDeletedManagerIsNotOffered() {
+        let deleted = manager("m-gone", email: "", first: "Deleted", last: "user")
+        let live = manager("m-live", email: "live@x", first: "Liv", last: "E")
+        let index = index(managers: [deleted, live], operatives: [], users: [])
+        let picked = TaskPeopleRulebook.pickerPeople(managers: [deleted, live], operatives: [], route: .managers, index: index)
+        XCTAssertEqual(picked.managers.map(\.firestoreDocumentId), ["m-live"])
+    }
+
     /// My tasks (`tasksAssignedToViewer`) still finds a task assigned to an old operatives row id.
     func testMyTasksStillMatchesATaskAssignedToAnOldRowId() {
         let viewer = user("u-sam", email: "sam@site.com", formerUserIds: ["old-row"])

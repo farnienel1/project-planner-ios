@@ -2714,11 +2714,7 @@ struct ProjectDetailView: View {
     
     /// Owner decision 17 Nov (web #364): one entry per person over every row, old and inactive ones included.
     private var taskPersonIndex: TaskPersonIndex {
-        TaskPersonIndex.current(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
-        )
+        TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
     /// A task's assignee names, one per person (two stored ids of one person show one name), managers first.
@@ -3686,20 +3682,13 @@ private struct TaskPeoplePickerSheet: View {
     /// Rows offered for a new assignment (active).
     let managers: [Manager]
     let operatives: [Operative]
-    /// Every row (inactive and old ones too), so a task already assigned to a person's old row id shows them ticked.
-    let allManagers: [Manager]
-    let allOperatives: [Operative]
-    /// Every users document of the organisation (`personIdSet` folds a person's records on it).
-    let users: [AppUser]
+    /// Every record of the organisation (inactive and old rows, every users document), so a task already assigned to
+    /// a person's old row id shows them ticked (`TaskPersonIndex.current`).
+    let index: TaskPersonIndex
 
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var tradeFilter: String? = nil
-
-    /// Owner decision 17 Nov (web #364): one row per person; ghosts and no-email `operatives` rows are not offered.
-    private var index: TaskPersonIndex {
-        TaskPersonIndex.current(managers: allManagers, operatives: allOperatives, users: users)
-    }
 
     private var rulebookRoute: TaskPeopleRulebook.Route {
         switch route {
@@ -3806,7 +3795,7 @@ private struct TaskPeoplePickerSheet: View {
     }
 
     var body: some View {
-        let index = self.index
+        // Owner decision 17 Nov (web #364): one row per person; ghosts and no-email `operatives` rows are not offered.
         let people = self.people(index)
         let extras = self.extras(index, people)
         let shownManagers = filteredManagers(people)
@@ -4251,9 +4240,7 @@ private struct AddProjectTaskView: View {
                     selectedOperatives: $selectedOperatives,
                     managers: operativeStore.activeManagers,
                     operatives: operativeStore.activeOperatives,
-                    allManagers: operativeStore.allManagers,
-                    allOperatives: operativeStore.allOperatives,
-                    users: userStore.organizationUsers
+                    index: TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
                 )
             }
             .onChange(of: includeManagers) { _, on in
@@ -5058,11 +5045,7 @@ private struct EditProjectTaskView: View {
     
     /// Owner decision 17 Nov (web #364): one entry per person over every row (old and inactive ones too).
     private var taskPersonIndex: TaskPersonIndex {
-        TaskPersonIndex.current(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
-        )
+        TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
     /// The assigned people of one kind, one per person (stored order kept), with the ids each one stands for removed
@@ -6318,11 +6301,7 @@ struct CompletedTaskDetailView: View {
 
     /// Owner decision 17 Nov (web #364): one entry per person over every row, old and inactive ones included.
     private var taskPersonIndex: TaskPersonIndex {
-        TaskPersonIndex.current(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
-        )
+        TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
     private var assigneeNames: [(kind: TaskPersonKind, name: String)] {

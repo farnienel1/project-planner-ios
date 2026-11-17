@@ -869,11 +869,7 @@ private struct MyTasksRedesignTaskCard: View {
 
     /// One per person (owner decision 17 Nov, web #364): two stored ids of one person show one avatar.
     private var assigneeInitialsList: [String] {
-        let index = TaskPersonIndex.current(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
-        )
+        let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
         let names = TaskPeopleRulebook.assigneeNames(
             managerIds: resolvedTask.allAssignedManagerIds,
             operativeIds: resolvedTask.allAssignedOperativeIds,
