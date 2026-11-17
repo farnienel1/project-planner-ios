@@ -77,6 +77,12 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
     /// RULEBOOK 1.54.0: the bookings themselves changed (1.47.0). False when only late extras wait — nothing is signed
     /// again or re-priced, and the signed snapshot's figures stand.
     let bookingsChanged: Bool
+    /// RULEBOOK 1.57.0 §8: bookings the person signed (current record) that are still live but missing from the signed
+    /// snapshot — the line manager never counter-signed them. Kept apart from `addedBookingIds`.
+    let snapshotGapBookingIds: [String]
+    /// RULEBOOK 1.57.0 §8: the only change is that snapshot gap. Reports keep the signed figures for it (J1,
+    /// `signedTimesheetChangeForReports`); the sheet itself is still flagged (counter-sign again / revision due).
+    let snapshotGapOnly: Bool
 
     init?(json: Any?) {
         guard let row = json as? [String: Any], let changed = row["changed"] as? Bool else { return nil }
@@ -92,6 +98,43 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
         self.reviewerMessage = row["reviewerMessage"] as? String
         self.lateExtrasWaiting = row["lateExtrasWaiting"] as? Bool ?? false
         self.bookingsChanged = row["bookingsChanged"] as? Bool ?? changed
+        self.snapshotGapBookingIds = row["snapshotGapBookingIds"] as? [String] ?? []
+        self.snapshotGapOnly = row["snapshotGapOnly"] as? Bool ?? false
+    }
+
+    /// The whole answer as script JSON (every field the rulebook returns), for rules that take a change back
+    /// (`signedTimesheetChangeForReports`).
+    var scriptJSON: [String: Any] {
+        [
+            "changed": changed,
+            "exported": exported,
+            "reopened": reopened,
+            "waitingFor": RulebookJSON.orNull(waitingFor),
+            "basis": basis,
+            "changedBookingIds": changedBookingIds,
+            "addedBookingIds": addedBookingIds,
+            "removedBookingIds": removedBookingIds,
+            "message": RulebookJSON.orNull(message),
+            "reviewerMessage": RulebookJSON.orNull(reviewerMessage),
+            "lateExtrasWaiting": lateExtrasWaiting,
+            "bookingsChanged": bookingsChanged,
+            "snapshotGapBookingIds": snapshotGapBookingIds,
+            "snapshotGapOnly": snapshotGapOnly,
+        ]
+    }
+
+    /// RULEBOOK 1.57.0: the `change` a report rule takes (`weeklyReportPayRows` sheets, `payrunSnapshotRows`
+    /// `bookingsChange`) — the fields web `loadTimesheetFeed` / `payrunSnapshotData` pass. The rule applies
+    /// `signedTimesheetChangeForReports` itself.
+    var reportArgument: [String: Any] {
+        [
+            "reopened": reopened,
+            "changed": changed,
+            "exported": exported,
+            "waitingFor": RulebookJSON.orNull(waitingFor),
+            "snapshotGapOnly": snapshotGapOnly,
+            "lateExtrasWaiting": lateExtrasWaiting,
+        ]
     }
 
     /// RULEBOOK 1.54.0: only late extras wait (no booking change) — the reviewer decides them; nobody signs again.
@@ -206,6 +249,18 @@ extension CanonicalBusinessEngine {
             return timesheetChangesWithLateExtras(bookingChange: raw, late: lateExtras)
         }
         return RulebookSignedTimesheetChange(json: raw)
+    }
+
+    /// RULEBOOK 1.57.0 §8 `signedTimesheetChangeForReports(change)` (J1, `SNAPSHOT_GAP_REPORTS`): the change a report
+    /// uses (the weekly report feed's "is this signed sheet still approved?", `timesheetRevisionReportState`). A change
+    /// that is only a snapshot gap counts as none (the signed figures stand) — or, with late extras waiting, as a
+    /// late-extras-only change. Nil for nil, for "no change for reports", and when the script did not answer (then the
+    /// change is kept as given: a report never reads a changed sheet as approved because the script was silent).
+    nonisolated static func signedTimesheetChangeForReports(_ change: RulebookSignedTimesheetChange?) -> RulebookSignedTimesheetChange? {
+        guard let change else { return nil }
+        guard let raw = callJSON("signedTimesheetChangeForReports", arguments: [change.scriptJSON]) else { return change }
+        if raw is NSNull { return nil }
+        return RulebookSignedTimesheetChange(json: raw) ?? change
     }
 
     /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingRecord(liveLines, liveBookings)`: what the person signs, stored as

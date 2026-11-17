@@ -10023,11 +10023,10 @@ extension FirebaseBackend {
         }
         guard existing == nil else { return }
 
-        let inferredBrand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
         let catalogItem = MaterialCatalogItem(
             name: trimmedName,
-            brand: (inferredBrand?.isEmpty == false) ? inferredBrand! : "Custom",
+            brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
             productCode: material.productCode,
             defaultUnit: material.unit,
             size: material.size,
@@ -10059,10 +10058,9 @@ extension FirebaseBackend {
             let key = materialCatalogueNameKey(name: normalizedName)
             guard !knownKeys.contains(key) else { continue }
             let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
-            let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let entry = MaterialCatalogItem(
                 name: normalizedName,
-                brand: brand.isEmpty ? "Custom" : brand,
+                brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
                 productCode: material.productCode,
                 defaultUnit: material.unit,
                 size: material.size,
@@ -10762,7 +10760,7 @@ extension FirebaseBackend {
                 .getDocuments()
         }
         // RULEBOOK 1.8.0 §1: `parseMaterialCatalogueDocument` (document id in stored case, `sizeOrLength` / `packSize`
-        // read as the length, missing brand "Custom"). No write on read.
+        // read as the length, a missing or "Custom" brand '' — RULEBOOK 1.58.0). No write on read.
         let loaded = snapshot.documents.compactMap { Self.materialCatalogItem(documentId: $0.documentID, data: $0.data()) }
         return loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

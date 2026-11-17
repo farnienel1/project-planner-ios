@@ -160,13 +160,30 @@ extension CanonicalBusinessEngine {
         return (status, type)
     }
 
-    /// `parseMaterialCatalogueDocument(docId, data)`. Nil without an id or a name. Missing brand → "Custom".
+    /// RULEBOOK 1.58.0 §28 `materialBrandStored(brand)`: the brand as the app holds and saves it — trimmed, '' for none
+    /// (a blank brand, or the legacy placeholder "Custom" in any case). Never rewrites what is stored. When the script
+    /// does not answer, the trimmed value as given.
+    nonisolated static func materialBrandStored(_ brand: String?) -> String {
+        if let value = callJSON("materialBrandStored", arguments: [brand ?? ""]) as? String { return value }
+        return (brand ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// RULEBOOK 1.58.0 §28 `materialBrandText(brand)`: the brand shown in a brand slot (catalogue list, pickers, the
+    /// email's Manufacturer) — "N/A" (`MATERIAL_BRAND_MISSING_TEXT`) when there is none.
+    nonisolated static func materialBrandText(_ brand: String?) -> String {
+        if let value = callJSON("materialBrandText", arguments: [brand ?? ""]) as? String { return value }
+        let stored = (brand ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return stored.isEmpty ? (constant("MATERIAL_BRAND_MISSING_TEXT", as: String.self) ?? "") : stored
+    }
+
+    /// `parseMaterialCatalogueDocument(docId, data)`. Nil without an id or a name. RULEBOOK 1.58.0: a missing or
+    /// "Custom" brand reads '' (shown "N/A" with `materialBrandText`).
     nonisolated static func parseMaterialCatalogueDocument(documentId: String, data: [String: Any]) -> CanonicalDocumentRow? {
         opsRow("parseMaterialCatalogueDocument", [documentId, peopleDocumentJSON(data)])
     }
 
     /// `materialCatalogueItemFields(item)`: the stored shape of one catalogue item (blank optionals null, missing
-    /// brand "Custom", missing category "Other", `length` mirrored to `sizeOrLength`). JSON values.
+    /// brand '' (1.58.0; was "Custom"), missing category "Other", `length` mirrored to `sizeOrLength`). JSON values.
     nonisolated static func materialCatalogueItemFields(_ item: [String: Any]) -> [String: Any]? {
         callJSON("materialCatalogueItemFields", arguments: [peopleDocumentJSON(item)]) as? [String: Any]
     }
