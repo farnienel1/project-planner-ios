@@ -7147,19 +7147,23 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 let signer = draft.managerSignedByName ?? "Line manager"
                 let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
                 let revision = draft.revision
+                // RULEBOOK 1.60.1: the counter-sign instant keys both notices, so a counter-sign again is its own row.
+                let managerSignedAt = draft.managerSignedAt
                 Task {
                     await notificationService.notifyTimesheetSignedByManager(
                         targetUserId: operative.id,
                         signedByName: signer,
                         weekStart: week.start,
-                        revision: revision
+                        revision: revision,
+                        signedAt: managerSignedAt
                     )
                     // `lineManagerPeerRecipients(operative, signer, roster)` picks the other line managers.
                     await notificationService.notifyLineManagerPeerAction(
                         actorName: signer,
                         actionSummary: "\(operativeName)'s timesheet (\(week.title))",
                         subject: operative,
-                        actionVerb: "signed"
+                        actionVerb: "signed",
+                        signedAt: managerSignedAt
                     )
                 }
                 showingManagerSignSheet = false

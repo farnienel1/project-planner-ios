@@ -1327,7 +1327,8 @@ class NotificationService: ObservableObject {
         subject: AppUser,
         actionVerb: String = "approved",
         message: String? = nil,
-        relatedId: UUID? = nil
+        relatedId: UUID? = nil,
+        signedAt: Date? = nil
     ) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         let peers = CanonicalBusinessEngine.lineManagerPeerRecipients(
@@ -1337,7 +1338,8 @@ class NotificationService: ObservableObject {
         ) ?? []
         let body = message ?? "\(actorName) \(actionVerb): \(actionSummary)"
         for targetId in peers {
-            let dedupeId = syntheticNotificationId(from: "lmPeer|\(actorName)|\(actionSummary)|\(targetId)|\(actionVerb)")
+            let dedupeId = syntheticNotificationId(from: Self.peerNoticeKey(
+                actorName: actorName, actionSummary: actionSummary, targetId: targetId, actionVerb: actionVerb, signedAt: signedAt))
             let notification = AppNotification(
                 id: dedupeId,
                 organizationId: organizationId,
@@ -1352,13 +1354,25 @@ class NotificationService: ObservableObject {
         }
     }
 
+    /// The `line_manager_peer_update` id key (web `timesheetPeerNoticeKey`). RULEBOOK 1.60.1: with a counter-sign instant
+    /// it ends `|sig{ms}`, so a counter-sign again is its own row; without one (leave decisions) it is as before.
+    nonisolated static func peerNoticeKey(
+        actorName: String, actionSummary: String, targetId: String, actionVerb: String, signedAt: Date?
+    ) -> String {
+        let base = "lmPeer|\(actorName)|\(actionSummary)|\(targetId)|\(actionVerb)"
+        guard let signedAt else { return base }
+        let ms = (signedAt.timeIntervalSince1970 * 1000).rounded(.down)
+        return ms > 0 ? "\(base)|sig\(Int64(ms))" : base
+    }
+
     /// Sent when line manager signs off a timesheet. RULEBOOK 1.55.0: `revision` is the counter-signed version's REV
     /// number (nil / 0 the original), so the person is told when REV N is signed too.
     func notifyTimesheetSignedByManager(
         targetUserId: String,
         signedByName: String,
         weekStart: Date,
-        revision: Int? = nil
+        revision: Int? = nil,
+        signedAt: Date? = nil
     ) async {
         // `timesheetSignedRecipients`: the subject's account, unless they are the signer (the signed-in user).
         guard let targetId = CanonicalBusinessEngine.timesheetSignedRecipients(
@@ -1372,7 +1386,9 @@ class NotificationService: ObservableObject {
             subjectId: targetId,
             periodStartDayKey: OrganizationRulebookContext.dayKey(weekStart),
             timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-            revision: revision
+            revision: revision,
+            // RULEBOOK 1.60.1: one notice per counter-signature, so a counter-sign again reaches the person.
+            signedAt: signedAt
         ) else { return }
         let dedupeId = syntheticNotificationId(from: key)
         let notification = AppNotification(

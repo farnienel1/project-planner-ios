@@ -24,4 +24,30 @@ final class Rulebook1601Tests: XCTestCase {
     func testWithoutASignatureInstantTheKeyIsUnchanged() {
         XCTAssertEqual(key(signedAt: nil), "timesheetPending|op-1|lm-1|1782946800")
     }
+
+    /// The counter-signature notice (`timesheet_signed_by_manager`) is keyed by the line manager's counter-sign instant.
+    func testEachCounterSignatureHasItsOwnSignedNoticeKey() {
+        func signed(_ at: Date?) -> String? {
+            CanonicalBusinessEngine.timesheetNotificationDedupeKey(
+                type: "timesheet_signed_by_manager", subjectId: "op-1", periodStartDayKey: "2026-07-02",
+                timeZone: "Europe/London", signedAt: at)
+        }
+        let first = Date(timeIntervalSince1970: 1_783_000_000.1237)
+        XCTAssertEqual(signed(first), "timesheetSigned|op-1|1782946800|sig1783000000123")
+        XCTAssertNotEqual(signed(first), signed(first.addingTimeInterval(60)))
+        XCTAssertEqual(signed(nil), "timesheetSigned|op-1|1782946800")
+    }
+
+    /// `line_manager_peer_update` (web `timesheetPeerNoticeKey`): a counter-sign again is its own row; leave decisions
+    /// (no instant) keep their key.
+    func testPeerNoticeKeyAddsTheCounterSignInstant() {
+        let first = Date(timeIntervalSince1970: 1_783_000_000.1237)
+        func key(_ at: Date?) -> String {
+            NotificationService.peerNoticeKey(
+                actorName: "Lee", actionSummary: "Sam's timesheet (1–15 Nov)", targetId: "lm-2", actionVerb: "signed", signedAt: at)
+        }
+        XCTAssertEqual(key(nil), "lmPeer|Lee|Sam's timesheet (1–15 Nov)|lm-2|signed")
+        XCTAssertEqual(key(first), "lmPeer|Lee|Sam's timesheet (1–15 Nov)|lm-2|signed|sig1783000000123")
+        XCTAssertNotEqual(key(first), key(first.addingTimeInterval(60)))
+    }
 }
