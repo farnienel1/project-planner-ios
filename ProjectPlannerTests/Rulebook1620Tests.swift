@@ -105,6 +105,28 @@ final class Rulebook1620Tests: XCTestCase {
         ])
     }
 
+    /// RULEBOOK 1.62.1 (owner 17 Nov): the shown rows always add up exactly. Saturday 07:30–14:00 counts as 8h with an
+    /// unpaid break, outside at ×1.25, booked 06:00–08:00: Normal 0.667h + Overtime 1.875h = 2.5417h — rounded
+    /// separately 0.67 + 1.88 = 2.55 ≠ 2.54. Normal is now the shown Total less the shown Overtime.
+    func testRowsAlwaysAddUpToTheTotalAndTheSaveLabel() throws {
+        var window = policy
+        window["saturday"] = [
+            "allHoursAtMultiplierMode": false, "allHoursMultiplier": 2, "definedWindowStart": "07:30",
+            "definedWindowEnd": "14:00", "countsAsStandardHours": 8, "outsideWindowMultiplier": 1.25,
+            "sameAsSaturday": false, "breakPaid": false, "breakWindowStart": "12:00", "breakWindowEnd": "12:30",
+            "breakMinutes": 30,
+        ]
+        let booking = CanonicalBusinessEngine.hoursBreakdownBooking(
+            timeSlot: "CUSTOM_HOURS", start: "06:00", end: "08:00", isBreakRemoved: false, otMultiplierOverride: nil
+        )
+        let answer = try XCTUnwrap(RulebookHoursBreakdown(json: CanonicalBusinessEngine.callJSON(
+            "bookingHoursBreakdownDays", arguments: [window, [saturday], booking, zone]
+        )))
+        let group = try XCTUnwrap(answer.groups.first)
+        XCTAssertEqual(group.rows.map(\.value), ["0.66h", "1.88h", "2.54h"])
+        XCTAssertEqual(CanonicalBusinessEngine.saveHoursLabel(group.totalPaidHours), "Save · 2.54 hours")
+    }
+
     func testDaysThatReadTheSameShareOneCard() throws {
         let same = try breakdown([wednesday, tuesday], start: "06:00", end: "17:30")
         XCTAssertEqual(same.groups.count, 1)
