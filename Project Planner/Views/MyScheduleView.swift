@@ -138,8 +138,8 @@ fileprivate func managerBookingOtChipText(_ b: ManagerSiteBooking, policy: OrgPa
 /// Clock range plus paid hours (break deducted for standard window bookings).
 fileprivate func managerBookingClockSubtitle(_ b: ManagerSiteBooking, day: Date, policy: OrgPayrollTimePolicy) -> String {
     let block = b.calendarBlock(on: day, policy: policy)
-    let f = DateFormatter()
-    f.dateFormat = "HH:mm"
+    // Clock text of an organisation-zone instant (never the phone's zone, guardrail 2).
+    let f = OrganizationWeekSupport.formatter("HH:mm")
     let start: String
     let end: String
     if let s = b.workStartTime, let e = b.workEndTime, !s.isEmpty, !e.isEmpty {
@@ -161,8 +161,8 @@ fileprivate func operativeBookingOtChipText(_ b: Booking, policy: OrgPayrollTime
 
 fileprivate func operativeBookingClockSubtitle(_ b: Booking, day: Date, policy: OrgPayrollTimePolicy) -> String {
     let block = b.calendarBlock(on: day, policy: policy)
-    let f = DateFormatter()
-    f.dateFormat = "HH:mm"
+    // Clock text of an organisation-zone instant (never the phone's zone, guardrail 2).
+    let f = OrganizationWeekSupport.formatter("HH:mm")
     let start: String
     let end: String
     if let s = b.workStartTime, let e = b.workEndTime, !s.isEmpty, !e.isEmpty {
@@ -872,9 +872,10 @@ struct ManagerScheduleContentView: View {
         let customLocationName: String?
     }
 
+    /// RULEBOOK §1 `organizationWeekDayKeys`: organisation-zone midnight of each day of the organisation week,
+    /// Monday to Sunday (never the phone's calendar, guardrail 2).
     private var weekDates: [Date] {
-        guard let start = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: weekStart)) else { return [] }
-        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        OrganizationWeekSupport.weekDays(containing: weekStart)
     }
 
     private var liveProjects: [Project] {
@@ -1334,9 +1335,7 @@ struct ManagerScheduleContentView: View {
     private func applySelectedDay(_ day: Date) {
         let start = calendar.startOfDay(for: day)
         selectedDate = start
-        if let week = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: start)) {
-            weekStart = week
-        }
+        weekStart = OrganizationWeekSupport.weekStart(containing: start)
         coverSchedule(from: start)
     }
 
@@ -1617,9 +1616,7 @@ struct ManagerScheduleContentView: View {
         let sod = calendar.startOfDay(for: base)
         guard let newDay = calendar.date(byAdding: .day, value: delta, to: sod) else { return }
         selectedDate = newDay
-        if let ws = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: newDay)) {
-            weekStart = ws
-        }
+        weekStart = OrganizationWeekSupport.weekStart(containing: newDay)
         coverSchedule(from: newDay)
     }
 
@@ -1647,8 +1644,7 @@ struct ManagerScheduleContentView: View {
     }
 
     private func myScheduleEditSubtitle(date: Date, locationTitle: String) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE d MMM"
+        let formatter = OrganizationWeekSupport.formatter("EEE d MMM")
         return "\(formatter.string(from: date)) · \(locationTitle)"
     }
 
@@ -1722,15 +1718,11 @@ struct ManagerScheduleContentView: View {
     }
 
     private func dayLabel(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEE"
-        return f.string(from: date)
+        OrganizationWeekSupport.text(date, format: "EEE")
     }
     
     private func fullDateLabel(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.dateFormat = "EEEE d MMMM"
-        return f.string(from: date)
+        OrganizationWeekSupport.text(date, format: "EEEE d MMMM")
     }
 
     private func dashedAddBookingButton() -> some View {
@@ -2311,7 +2303,7 @@ fileprivate struct ManagerSelfBookingLocationPickerSheet: View {
                         Text("Book yourself in")
                             .font(.system(size: 20, weight: .semibold))
                             .foregroundStyle(ProjectWorksRevampColors.ink)
-                        Text(day.formatted(date: .abbreviated, time: .omitted))
+                        Text(day.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
@@ -2725,14 +2717,7 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     /// RULEBOOK 1.53.0: the instant showing `minutes` past midnight on the organisation's wall clock on `day` (an
     /// hour/minute set, never midnight plus minutes, so a clock-change day reads right).
     static func wallClock(minutes: Int, on day: Date) -> Date {
-        let calendar = OrganizationRulebookContext.calendar
-        let base = calendar.startOfDay(for: day)
-        let hour = max(0, minutes) / 60
-        let minute = max(0, minutes) % 60
-        if hour < 24, let date = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: base) {
-            return date
-        }
-        return calendar.date(byAdding: .minute, value: minutes, to: base) ?? base
+        OrganizationWeekSupport.wallClock(minutes: minutes, on: day)
     }
 
     private static func defaultTimes(for slot: ManagerTimeSlot, day: Date, policy: OrgPayrollTimePolicy) -> (start: Date, end: Date) {
@@ -2858,7 +2843,7 @@ struct ManagerBookingSheet: View {
             VStack(spacing: 20) {
                 Text(locationTitle)
                     .font(.title2)
-                Text("\(date, style: .date) · \(timeSlot.displayName)")
+                Text("\(date.formatted(Date.FormatStyle(date: .long, time: .omitted, timeZone: OrganizationRulebookContext.timeZone))) · \(timeSlot.displayName)")
                     .foregroundColor(.secondary)
                 if alreadyBooked {
                     Text("You're already booked here for this slot.")
@@ -2920,9 +2905,10 @@ struct OperativeScheduleContentView: View {
         )
     }
 
+    /// RULEBOOK §1 `organizationWeekDayKeys`: organisation-zone midnight of each day of the organisation week,
+    /// Monday to Sunday (never the phone's calendar, guardrail 2).
     private var weekDates: [Date] {
-        guard let start = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: weekStart)) else { return [] }
-        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        OrganizationWeekSupport.weekDays(containing: weekStart)
     }
 
     private var myBookingsThisWeek: [Booking] {
@@ -3040,7 +3026,7 @@ struct OperativeScheduleContentView: View {
             .accessibilityIdentifier("operativeScheduleContent.back")
             .buttonStyle(PPOnNavyCircleButtonStyle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(calendar.isDate(weekStart, equalTo: Date(), toGranularity: .weekOfYear) ? "This week" : "Week")
+                Text(OrganizationWeekSupport.isThisWeek(weekStart) ? "This week" : "Week")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(PPColor.onNavySecondary)
                 Text(weekRangeText)
@@ -3062,18 +3048,16 @@ struct OperativeScheduleContentView: View {
 
     private var weekRangeText: String {
         guard let start = weekDates.first, let end = weekDates.last else { return "" }
-        let f = DateFormatter()
-        f.dateFormat = "d MMM"
+        let f = OrganizationWeekSupport.formatter("d MMM")
         return "\(f.string(from: start)) – \(f.string(from: end))"
     }
 
     private func moveWeek(_ delta: Int) {
-        if let newStart = calendar.date(byAdding: .weekOfYear, value: delta, to: weekStart) {
-            weekStart = newStart
-            guard firebaseBackend.noteScheduleNeedsDate(newStart) else { return }
-            bookingStore.loadData()
-            managerScheduleStore.loadData(force: true)
-        }
+        let newStart = OrganizationWeekSupport.shiftedWeekStart(from: weekStart, by: delta)
+        weekStart = newStart
+        guard firebaseBackend.noteScheduleNeedsDate(newStart) else { return }
+        bookingStore.loadData()
+        managerScheduleStore.loadData(force: true)
     }
 
     private var weekContent: some View {

@@ -468,8 +468,8 @@ struct ProjectDetailView: View {
         case .completed, .inactive:
             return ("—", daysLeftCaption)
         default:
-            let cal = Calendar.current
-            let d = cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: project.endDate)).day ?? 0
+            // Organisation days, never the phone's calendar (guardrail 2).
+            let d = OrganizationWeekSupport.daysFromToday(to: project.endDate)
             if d < 0 { return ("—", daysLeftCaption) }
             return ("\(d)", d == 1 ? "Day left" : "Days left")
         }
@@ -494,8 +494,8 @@ struct ProjectDetailView: View {
         case .inactive:
             return "Inactive"
         default:
-            let cal = Calendar.current
-            let d = cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: project.endDate)).day ?? 0
+            // Organisation days, never the phone's calendar (guardrail 2).
+            let d = OrganizationWeekSupport.daysFromToday(to: project.endDate)
             if d < 0 { return "Ended" }
             return "\(d) days left"
         }
@@ -592,8 +592,7 @@ struct ProjectDetailView: View {
     }
 
     private var timelineDetailSummary: String {
-        let f = DateFormatter()
-        f.dateFormat = "dd MMM yy"
+        let f = OrganizationWeekSupport.formatter("dd MMM yy")
         return "\(f.string(from: project.startDate)) – \(f.string(from: project.endDate))"
     }
 
@@ -1412,7 +1411,7 @@ struct ProjectDetailView: View {
         let dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
         return HStack(spacing: 4) {
             ForEach(Array(weekDays.enumerated()), id: \.offset) { index, day in
-                let isToday = OrganizationRulebookContext.calendar.isDate(day, inSameDayAs: Date())
+                let isToday = OrganizationWeekSupport.isToday(day)
                 let isWeekend = index >= 5
                 let count = index < counts.count ? counts[index] : 0
                 VStack(spacing: 3) {
@@ -1534,7 +1533,7 @@ struct ProjectDetailView: View {
                         kind: day.kind,
                         leaveBand: day.leave,
                         dayLabel: day.dayLabel,
-                        isToday: OrganizationRulebookContext.calendar.isDate(day.date, inSameDayAs: Date()),
+                        isToday: OrganizationWeekSupport.isToday(day.date),
                         isWeekend: index >= 5,
                         accessibilityDay: day.date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)),
                         accessibilityPerson: row.name
@@ -1813,7 +1812,7 @@ struct ProjectDetailView: View {
         df.locale = Locale.current
         df.dateFormat = "EEE · d MMM"
         var s = df.string(from: date)
-        if OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date()) {
+        if OrganizationWeekSupport.isToday(date) {
             s += " · Today"
         }
         return s
@@ -2102,7 +2101,7 @@ struct ProjectDetailView: View {
     }
 
     private func schedulingDayCard(for date: Date, isExpanded: Bool) -> some View {
-        let isToday = OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date())
+        let isToday = OrganizationWeekSupport.isToday(date)
         let count = schedulingDayBookedCount(date)
         let dayOT = schedulingDayOvertimeTotal(date)
         let opBookings = bookingsForDate(date)
@@ -2366,7 +2365,7 @@ struct ProjectDetailView: View {
     }
 
     private func schedulingCompactDayCell(for date: Date) -> some View {
-        let isToday = OrganizationRulebookContext.calendar.isDate(date, inSameDayAs: Date())
+        let isToday = OrganizationWeekSupport.isToday(date)
         let count = schedulingDayBookedCount(date)
         let df = DateFormatter()
         df.timeZone = OrganizationRulebookContext.timeZone
@@ -2532,16 +2531,15 @@ struct ProjectDetailView: View {
         return ""
     }
     
+    /// RULEBOOK §1 / §21 `organizationWeekDayKeys`: the organisation's Monday (organisation-zone midnight) of the
+    /// week shown, never the phone's calendar (guardrail 2).
     private var weekStartDate: Date {
-        let calendar = OrganizationRulebookContext.calendar
-        let components = calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: selectedWeek)
-        return calendar.date(from: components) ?? selectedWeek
+        OrganizationWeekSupport.weekStart(containing: selectedWeek)
     }
-    
+
+    /// The grid's columns: organisation-zone midnight of each day key of the organisation week, Monday to Sunday.
     private var weekDays: [Date] {
-        let calendar = OrganizationRulebookContext.calendar
-        let start = weekStartDate
-        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: start) }
+        OrganizationWeekSupport.weekDays(containing: selectedWeek)
     }
     
     /// Tasks on this project that belong in “My tasks” (assigned to you and/or created by you), after advanced filters.
@@ -2805,9 +2803,7 @@ struct ProjectDetailView: View {
     // MARK: - Helper Methods
     
     private func changeWeek(by weeks: Int) {
-        if let newWeek = OrganizationRulebookContext.calendar.date(byAdding: .weekOfYear, value: weeks, to: selectedWeek) {
-            selectedWeek = newWeek
-        }
+        selectedWeek = OrganizationWeekSupport.shiftedWeekStart(from: selectedWeek, by: weeks)
     }
     
     private func loadWeekBookings(force: Bool = false) {
@@ -6452,20 +6448,18 @@ struct CompletedTaskDetailView: View {
     }
 
     private var createdByLine: String {
-        let df = DateFormatter()
-        df.dateFormat = "d MMM"
+        let df = OrganizationWeekSupport.formatter("d MMM")
         return "\(displayTask.createdBy) · \(df.string(from: displayTask.createdAt))"
     }
 
     private func dueLine(_ due: Date) -> String {
-        let df = DateFormatter()
-        df.dateFormat = "EEE d MMM yyyy"
+        let df = OrganizationWeekSupport.formatter("EEE d MMM yyyy")
         let base = df.string(from: due)
         let rel = RelativeDateTimeFormatter()
         rel.unitsStyle = .full
         let tail = rel.localizedString(for: due, relativeTo: Date())
-        let cal = Calendar.current
-        if cal.startOfDay(for: due) >= cal.startOfDay(for: Date()) {
+        // Due today or later on the organisation day (never the phone's calendar, guardrail 2).
+        if OrganizationWeekSupport.daysFromToday(to: due) >= 0 {
             return "\(base) · \(tail)"
         }
         return base

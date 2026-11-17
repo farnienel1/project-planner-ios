@@ -189,13 +189,10 @@ enum WorksDashboardDeadline {
 
     /// Derived at render time. `Project.endDate` is required; a day count that cannot
     /// be formed shows nothing rather than a placeholder.
-    static func from(project: Project, now: Date = Date(), calendar: Calendar = .current) -> WorksDashboardDeadline {
+    /// Days are organisation days (never the phone's calendar, guardrail 2).
+    static func from(project: Project, now: Date = Date()) -> WorksDashboardDeadline {
         if project.status == .completed { return .completed }
-        let start = calendar.startOfDay(for: now)
-        let end = calendar.startOfDay(for: project.endDate)
-        guard let days = calendar.dateComponents([.day], from: start, to: end).day else {
-            return .hidden
-        }
+        let days = OrganizationWeekSupport.daysFromToday(to: project.endDate, now: now)
         if days < 0 { return .overdue(-days) }
         return .remaining(days)
     }
@@ -369,8 +366,8 @@ struct WorksDashboardCard: View {
     private var deadline: WorksDashboardDeadline { WorksDashboardDeadline.from(project: project) }
 
     private var isPastEnd: Bool {
-        let calendar = Calendar.current
-        return calendar.startOfDay(for: Date()) > calendar.startOfDay(for: project.endDate)
+        // Past the job's end on the organisation day (never the phone's calendar, guardrail 2).
+        OrganizationWeekSupport.daysFromToday(to: project.endDate) < 0
     }
 
     private var ringColor: Color {

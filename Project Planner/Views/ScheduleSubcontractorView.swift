@@ -359,7 +359,7 @@ struct ScheduleSubcontractorView: View {
                 ForEach(selectedDates.sorted(), id: \.self) { date in
                     VStack(spacing: 8) {
                         HStack {
-                            Text(date.formatted(date: .abbreviated, time: .omitted))
+                            Text(date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))
                                 .font(.body.weight(.semibold))
                             Spacer()
                             Button(role: .destructive) {
@@ -371,7 +371,7 @@ struct ScheduleSubcontractorView: View {
                                     .foregroundStyle(.secondary)
                             }
                                 .accessibilityIdentifier("scheduleSubcontractor.row.\(date).clear")
-                                .accessibilityLabel("Remove \(date.formatted(date: .abbreviated, time: .omitted))")
+                                .accessibilityLabel("Remove \(date.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))")
                                 .buttonStyle(.plain)
                         }
                         // RULEBOOK 1.13.1 §4.3 `allowedTimeSlotsOnDay`: Saturday and Sunday are custom hours only.
