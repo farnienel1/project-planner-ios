@@ -732,6 +732,7 @@ struct ProjectDetailView: View {
                 )
                 .navigationTitle(tile.rawValue)
                 .navigationBarTitleDisplayMode(.inline)
+                .ppNavyNavigationBar()
             }
         case .tasks, .location:
             ScrollView {
