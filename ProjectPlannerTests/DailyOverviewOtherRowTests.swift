@@ -40,9 +40,43 @@ final class DailyOverviewOtherRowTests: XCTestCase {
         for booking in bookings {
             let coverage = booking.scheduleCoverageSubtitle()
             let subtitle = ProjectBookingCard.timesOnlySubtitle(booking.operativePayrollProbe(), fallback: coverage.text)
-            for text in [subtitle, booking.scheduleCoveragePillHours()] {
-                XCTAssertNil(text.range(of: "[A-Z]+_[A-Z_]+", options: .regularExpression), "raw slot word in \"\(text)\"")
+            let chip = DailyOverviewTypeChip.kind(for: booking.payrollHoursResult(), timeSlot: booking.timeSlot.rawValue)
+            for text in [subtitle, booking.scheduleCoveragePillHours(), chip?.label ?? ""] {
+                // A stored slot word, underscored ("CUSTOM_HOURS") or spaced ("FULL DAY", "CUSTOM HOURS").
+                XCTAssertNil(
+                    text.range(of: "[A-Z]+_[A-Z_]+|\\bFULL DAY\\b|\\bCUSTOM HOURS\\b|\\bCUSTOM\\b", options: .regularExpression),
+                    "raw slot word in \"\(text)\""
+                )
             }
         }
+    }
+
+    /// Owner answer 17 Nov: the Type chip on the By project and Other rows is the rulebook's `scheduleCellKind`
+    /// over `scheduleCellHours`, worded with `JOB_SCHEDULE_LEGEND` — the chip web shows.
+    func testTypeChipIsTheRulebookKindInTheLegendWords() {
+        XCTAssertEqual(DailyOverviewTypeChip.label(forTone: "standard"), "Standard")
+        XCTAssertEqual(DailyOverviewTypeChip.label(forTone: "split"), "Std + OT")
+        XCTAssertEqual(DailyOverviewTypeChip.label(forTone: "otOnly"), "OT only")
+        XCTAssertEqual(DailyOverviewTypeChip.label(forTone: "halfDay"), "Half day")
+
+        let booking = officeBooking(.customHours, start: "06:00", end: "17:30")
+        let result = booking.payrollHoursResult()
+        let chip = DailyOverviewTypeChip.kind(for: result, timeSlot: booking.timeSlot.rawValue)
+        let hours = CanonicalBusinessEngine.scheduleCellHours(result.scheduleCellHoursInput)
+        let kind = hours.flatMap {
+            CanonicalBusinessEngine.scheduleCellKind(paidHours: $0.paidHours, overtimeHours: $0.overtimeHours, timeSlot: "CUSTOM_HOURS")
+        }
+        XCTAssertNotNil(chip)
+        XCTAssertEqual(chip?.tone, kind?.tone)
+        XCTAssertEqual(DailyOverviewTypeChip.kind(for: officeBooking(.morning).payrollHoursResult(), timeSlot: "AM")?.label, "Half day")
+    }
+
+    /// The chip is display only: the hours the row shows are the pay rule's, unchanged by it.
+    func testTypeChipLeavesTheHoursAlone() {
+        let booking = officeBooking(.customHours, start: "06:00", end: "17:30")
+        let before = booking.payrollHoursResult().totalPaidHours
+        _ = DailyOverviewTypeChip.kind(for: booking.payrollHoursResult(), timeSlot: booking.timeSlot.rawValue)
+        XCTAssertEqual(booking.payrollHoursResult().totalPaidHours, before)
+        XCTAssertEqual(booking.scheduleCoveragePillHours(), ScheduleCoverageFormat.hours(before) + "h")
     }
 }

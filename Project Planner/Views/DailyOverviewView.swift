@@ -1123,13 +1123,22 @@ struct DailyOverviewView: View {
             Spacer(minLength: 0)
             // RULEBOOK 1.39.0: the hours pill is the pay rule's hours (`payrollHoursResult.totalPaidHours`), as on a
             // job's row; it was the clock range a second time.
-            Text(booking.scheduleCoveragePillHours(policy: payrollTimePolicy))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand)
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-                .background(Capsule().fill((subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand).opacity(0.12)))
-                .fixedSize()
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(booking.scheduleCoveragePillHours(policy: payrollTimePolicy))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background(Capsule().fill((subtitle.emphasizedOvertime ? ProjectWorksRevampColors.upcomingAmber : PPColor.brand).opacity(0.12)))
+                // The Type chip, as on web and the By project rows (owner answer 17 Nov).
+                if let chip = DailyOverviewTypeChip.kind(
+                    for: booking.payrollHoursResult(policy: payrollTimePolicy),
+                    timeSlot: booking.timeSlot.rawValue
+                ) {
+                    DailyOverviewTypeChip(kind: chip)
+                }
+            }
+            .fixedSize()
             if canEditRow {
                 Image(systemName: "chevron.right")
                     .font(.footnote.weight(.semibold))
@@ -1797,6 +1806,7 @@ struct ProjectBookingCard: View {
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
+                typeChip: DailyOverviewTypeChip.kind(for: b.payrollHoursResult(policy: p), timeSlot: b.timeSlot.rawValue),
                 initials: PlannerUIInitials.from(personName),
                 gradientPair: initialsGradient(for: personName),
                 operativeBooking: b,
@@ -1814,6 +1824,7 @@ struct ProjectBookingCard: View {
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(b.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
+                typeChip: DailyOverviewTypeChip.kind(for: b.payrollHoursResult(policy: p), timeSlot: b.timeSlot.rawValue),
                 initials: PlannerUIInitials.from(managerName(userId: b.userId)),
                 gradientPair: initialsGradient(for: managerName(userId: b.userId)),
                 operativeBooking: nil,
@@ -1836,6 +1847,7 @@ struct ProjectBookingCard: View {
                 subtitleOvertime: sub.emphasizedOvertime,
                 pillText: Self.paidHoursPill(mirror.payrollHoursResult(policy: p)),
                 pillOvertime: sub.emphasizedOvertime,
+                typeChip: DailyOverviewTypeChip.kind(for: mirror.payrollHoursResult(policy: p), timeSlot: mirror.timeSlot.rawValue),
                 initials: PlannerUIInitials.from(baseName),
                 gradientPair: initialsGradient(for: baseName),
                 operativeBooking: nil,
@@ -1938,13 +1950,19 @@ struct ProjectBookingCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(row.pillText)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : ProjectWorksRevampColors.greenTint)
-                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+            VStack(alignment: .trailing, spacing: 4) {
+                Text(row.pillText)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber : ProjectWorksRevampColors.activeGreen)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(row.pillOvertime ? ProjectWorksRevampColors.upcomingAmber.opacity(0.16) : ProjectWorksRevampColors.greenTint)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                if let chip = row.typeChip {
+                    DailyOverviewTypeChip(kind: chip)
+                }
+            }
+            .fixedSize()
             if isEditable {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .medium))
@@ -2006,6 +2024,62 @@ struct ProjectBookingCard: View {
     }
 }
 
+/// The Daily Overview Type chip (owner answer 17 Nov: iOS matches web). Its kind is the rulebook's
+/// (`scheduleCellHours` → `scheduleCellKind`, RULEBOOK 1.37.0 §21) and its words are `JOB_SCHEDULE_LEGEND`
+/// (Standard / Std + OT / OT only / Half day). Display only: the figures are the booking's `payrollHoursResult`.
+struct DailyOverviewTypeChip: View {
+    struct Kind: Equatable {
+        /// standard, split, otOnly or halfDay (`scheduleCellKind.tone`).
+        let tone: String
+        let label: String
+    }
+
+    let kind: Kind
+
+    /// The chip for a booking's pay-rule result and stored slot; nil only when the script did not answer.
+    static func kind(for result: PayrollHoursResult, timeSlot: String?) -> Kind? {
+        guard let hours = CanonicalBusinessEngine.scheduleCellHours(result.scheduleCellHoursInput),
+              let cell = CanonicalBusinessEngine.scheduleCellKind(
+                  paidHours: hours.paidHours,
+                  overtimeHours: hours.overtimeHours,
+                  timeSlot: timeSlot
+              ) else { return nil }
+        return Kind(tone: cell.tone, label: label(forTone: cell.tone))
+    }
+
+    /// `JOB_SCHEDULE_LEGEND` = Standard, Std + OT, OT only, Ann. leave, Half day (the web chip's words).
+    static func label(forTone tone: String) -> String {
+        let legend = CanonicalBusinessEngine.constant("JOB_SCHEDULE_LEGEND", as: [String].self)
+            ?? ["Standard", "Std + OT", "OT only", "Ann. leave", "Half day"]
+        let index: Int
+        switch tone {
+        case "split": index = 1
+        case "otOnly": index = 2
+        case "halfDay": index = 4
+        default: index = 0
+        }
+        return legend.indices.contains(index) ? legend[index] : "Standard"
+    }
+
+    private var tint: Color {
+        switch kind.tone {
+        case "otOnly": return ProjectWorksRevampColors.upcomingAmber
+        case "halfDay": return ProjectWorksRevampColors.muted
+        default: return PPColor.brand
+        }
+    }
+
+    var body: some View {
+        Text(kind.label)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(tint.opacity(0.12)))
+            .accessibilityLabel("Type \(kind.label)")
+    }
+}
+
 private struct ProjectDayPersonRow: Identifiable {
     let id: String
     let name: String
@@ -2014,6 +2088,8 @@ private struct ProjectDayPersonRow: Identifiable {
     let subtitleOvertime: Bool
     let pillText: String
     let pillOvertime: Bool
+    /// The Type chip (Standard / Std + OT / OT only / Half day), as web's By project rows (owner answer 17 Nov).
+    var typeChip: DailyOverviewTypeChip.Kind? = nil
     let initials: String
     let gradientPair: [Color]
     let operativeBooking: Booking?
