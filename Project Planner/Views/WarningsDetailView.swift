@@ -939,8 +939,9 @@ struct WarningsDetailView: View {
     /// opens it); the viewer's own leave when the warning is about them (web `leaveWarningAnnualLeaveHref`).
     private func openAnnualLeave(for detail: Warning.AnnualLeaveWarningDetails?) {
         let personId = detail?.userId ?? detail?.operativeId ?? detail?.personKey
-        let viewer = userStore.organizationUsers.first { $0.id == firebaseBackend.currentUser?.uid }
-        let viewerIdList: [String] = [viewer?.id ?? firebaseBackend.currentUser?.uid ?? ""]
+        // The signed-in profile (`userStore.displayUser`, as this screen's resolution writes use).
+        let viewer = userStore.displayUser
+        let viewerIdList: [String] = [viewer?.id ?? ""]
             + (viewer?.formerUserIds ?? []) + (viewer?.sameEmailUserIds ?? [])
         let viewerIds = Set(viewerIdList.filter { !$0.isEmpty }.map { $0.lowercased() })
         let isViewer = personId.map { viewerIds.contains($0.lowercased()) } ?? true
