@@ -4310,6 +4310,8 @@ private struct MyTimesheetView: View {
     /// RULEBOOK 1.43.0: the details line above now shows only the clock part (`timesheetLineClockText`), so the
     /// multiplied text is shown here, once.
     private func timesheetHoursRateLine(for row: InvoiceLineItem) -> String {
+        // RULEBOOK 1.61.0 §8: a day-rate overtime line reads in hours (`dayRateOvertimeCalcText`).
+        if let text = row.dayRateOvertimeText { return text }
         let hours = CanonicalBusinessEngine.payLineHoursText(
             details: row.details, paidHours: row.paidHours, isOvertimeLine: row.isOvertimeLine
         )
@@ -8277,6 +8279,16 @@ enum TimesheetInvoiceRows {
                     )
                     item.isOverlapping = live?.isOverlapping ?? false
                     item.bookingId = line.bookingId ?? live?.bookingId
+                    // RULEBOOK 1.61.0 §8: a signed overtime line reads in hours from its stored hours, days and amount
+                    // when its multiplier is known (stored, or in its stored multiplied text) — never re-priced and
+                    // never a guessed ×1. Its divisor is its own paid day (paid hours ÷ days); the day rate is the one
+                    // that gave the signed amount (amount ÷ days ÷ multiplier, unrounded).
+                    let storedMultiplier = line.otMultiplier ?? CanonicalBusinessEngine.parseMultipliedHoursText(line.details)?.multiplier
+                    if line.isOvertime, let multiplier = storedMultiplier, multiplier > 0, line.days > 0.0001, line.paidHours > 0 {
+                        item.otMultiplier = multiplier
+                        item.dayRateDivisor = line.paidHours / line.days
+                        item.baseDayRate = amount / line.days / multiplier
+                    }
                     rows.append(item)
                 } else if let live = liveById[key(id)] {
                     var item = InvoiceLineItem(
@@ -8347,6 +8359,12 @@ struct InvoiceLineItem {
     /// `overlappingBookingIds`: shown amber with `OVERLAPPING_BOOKING_NOTE`; still paid.
     var isOverlapping: Bool = false
     var bookingId: String? = nil
+    /// RULEBOOK 1.61.0 §8 (display only): an overtime line's multiplier, the person's own day rate (never multiplied)
+    /// and the line's day-rate divisor, so a day-rate overtime line reads in hours (`dayRateOvertimeText`). Nil when
+    /// unknown (the older "hours · rate" text stays).
+    var otMultiplier: Double? = nil
+    var baseDayRate: Double? = nil
+    var dayRateDivisor: Double? = nil
 
     init(
         lineId: String,
@@ -8413,6 +8431,27 @@ struct InvoiceLineItem {
         isPayeDay || !hasPayrollRate
     }
 
+    /// RULEBOOK 1.61.0 §8 `dayRateOvertimeCalcText`: the whole hours-and-rate text of a day-rate overtime line, e.g.
+    /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)". Nil for every other line (standard,
+    /// hourly, PAYE) or when the multiplier, day rate or divisor is unknown.
+    var dayRateOvertimeText: String? {
+        guard isOvertimeLine, !isPayeDay, payrollBasis == .dayRate,
+              let multiplier = otMultiplier, multiplier > 0,
+              let dayRate = baseDayRate, dayRate > 0,
+              let divisor = dayRateDivisor, divisor >= 1 else { return nil }
+        // The clock hours and any unpaid break come from the line's multiplied text when it has one (1.20.3);
+        // otherwise the line's hours are its clock hours at the multiplier.
+        let parsed = CanonicalBusinessEngine.parseMultipliedHoursText(details)
+        return CanonicalBusinessEngine.dayRateOvertimeCalcText(
+            clockHours: parsed?.clockHours ?? paidHours,
+            multiplier: multiplier,
+            breakHours: parsed?.breakHours ?? 0,
+            dayRate: dayRate,
+            dayRateHours: divisor,
+            pay: amount
+        )
+    }
+
     init(payrollLine: TimesheetPayrollLineItem) {
         self.init(
             lineId: payrollLine.id,
@@ -8430,6 +8469,12 @@ struct InvoiceLineItem {
         )
         self.isOverlapping = payrollLine.isOverlapping
         self.bookingId = payrollLine.bookingId
+        // RULEBOOK 1.61.0: the live overtime line's multiplier and divisor; its `dayRate` is the multiplied rate.
+        if payrollLine.isOvertimeLine, let multiplier = payrollLine.otMultiplier, multiplier > 0 {
+            self.otMultiplier = multiplier
+            self.baseDayRate = payrollLine.dayRate / multiplier
+            self.dayRateDivisor = payrollLine.standardDayHours
+        }
     }
 }
 
@@ -8714,9 +8759,14 @@ private enum InvoicePDFBuilder {
             // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
             let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
             let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
-            let detail = [clockPart, hoursPart, item.timesheetRateAnnotation].filter { !$0.isEmpty }.joined(separator: " · ")
+            // RULEBOOK 1.61.0 §8: a day-rate overtime line reads in hours (`dayRateOvertimeCalcText`).
+            let hoursSum = item.dayRateOvertimeText
+            let ratePart = hoursSum.map { [$0] } ?? [hoursPart, item.timesheetRateAnnotation]
+            let detail = ([clockPart] + ratePart).filter { !$0.isEmpty }.joined(separator: " · ")
+            // The hours sum is longer: up to three lines, so it is never cut off.
+            let detailHeight: CGFloat = hoursSum == nil ? 28 : 40
             (detail as NSString).draw(
-                in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
+                in: CGRect(x: middleX, y: y + 22, width: 190, height: detailHeight),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
             )
 
@@ -8724,7 +8774,7 @@ private enum InvoicePDFBuilder {
                 in: CGRect(x: amountX, y: y + 16, width: 56, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .bold), .foregroundColor: navy]
             )
-            y += 50
+            y += hoursSum == nil ? 50 : 62
         }
         return y
     }

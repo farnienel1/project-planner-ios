@@ -534,6 +534,24 @@ extension CanonicalBusinessEngine {
         if text.hasSuffix(".") { text.removeLast() }
         return "\(text)h"
     }
+
+    /// RULEBOOK 1.61.0 §8 (owner decision 17 Nov) `dayRateOvertimeCalcText`: a day-rate overtime line reads in hours —
+    /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)" — never a multiplied day rate. `dayRate`
+    /// is the person's day rate (not multiplied), `dayRateHours` the line's divisor, `pay` the line's amount (shown as
+    /// given, never re-worked out). Nil when the script cannot show it in hours (the caller keeps its older text).
+    nonisolated static func dayRateOvertimeCalcText(
+        clockHours: Double, multiplier: Double, breakHours: Double,
+        dayRate: Double, dayRateHours: Double, pay: Double, currencyCode: String? = nil
+    ) -> String? {
+        let input: [String: Any] = [
+            "clockHours": clockHours, "multiplier": multiplier, "breakHours": breakHours,
+            "dayRate": dayRate, "dayRateHours": dayRateHours, "pay": pay,
+            "currency": currencyCode ?? OrganizationRulebookContext.currencyCode,
+        ]
+        guard JSONSerialization.isValidJSONObject(input),
+              let row = callJSON("dayRateOvertimeCalcText", arguments: [input]) as? [String: Any] else { return nil }
+        return row["text"] as? String
+    }
 }
 
 /// A memoised `payrollMultipliedHours` answer, including "no hours at a multiplier".
