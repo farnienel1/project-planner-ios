@@ -374,12 +374,15 @@ class FirebaseBackend: ObservableObject {
     }
 
     private func stopOrganizationDocumentListener() {
+        // Review of #246: the first settings-listener attach at launch (no organisation listened to before) is not
+        // a switch — the job access context and the viewer already belong to this company and are kept.
+        let wasListening = !(organizationDocumentListenerTarget ?? "").isEmpty
         organizationDocumentListener?.remove()
         organizationDocumentListener = nil
         organizationDocumentListenerTarget = nil
         organizationMembersSnapshot = nil
         warningSettingsLoadedOrganizationId = nil
-        stopScheduleLiveListeners()
+        stopScheduleLiveListeners(resetsJobAccess: wasListening)
     }
 
     /// RULEBOOK 1.38.0 §27 self-heal: removes the booking (or manager schedule) listener and asks for it again, so its
@@ -402,7 +405,7 @@ class FirebaseBackend: ObservableObject {
         return true
     }
 
-    func stopScheduleLiveListeners() {
+    func stopScheduleLiveListeners(resetsJobAccess: Bool = true) {
         dataParityBookingsListenStart = nil
         dataParityManagerScheduleListenStart = nil
         DataParityListenerLedger.shared.end(key: "bookings")
@@ -419,7 +422,9 @@ class FirebaseBackend: ObservableObject {
         // Organisation switch and sign-out: no attach time, server time or failure count carries over.
         LiveListenerClock.shared.reset()
         DataParityListenerLedger.shared.removeAll()
-        JobAccessContext.resetForOrganizationSwitch()
+        if resetsJobAccess {
+            JobAccessContext.resetForOrganizationSwitchAndRederiveViewer()
+        }
     }
 
     /// RULEBOOK 1.10.0 §17: when the inputs of `jobQueryPlan` / `bookingQueryPlan` change, the booking listeners

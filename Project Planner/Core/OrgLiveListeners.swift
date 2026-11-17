@@ -81,10 +81,13 @@ nonisolated final class OrgListenerRegistry: @unchecked Sendable {
 
     /// The listener with `token` stays attached, but the next `needsAttach` for `key` is true, so a re-plan replaces
     /// it (and `set` removes it). A newer listener for `key` is left alone.
-    func markForReattach(key: String, token: UUID) {
+    /// True when `token` is still `key`'s registered listener (and it was marked).
+    @discardableResult
+    func markForReattach(key: String, token: UUID) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let entry = entries[key], entry.token == token else { return }
+        guard let entry = entries[key], entry.token == token else { return false }
         entries[key] = Entry(target: "", token: entry.token, remove: entry.remove)
+        return true
     }
 
     /// Removes `key`'s listener, or only the one with `token` when given (a failed listener drops itself so the

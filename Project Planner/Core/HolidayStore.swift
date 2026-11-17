@@ -185,6 +185,11 @@ class HolidayStore: ObservableObject {
     /// The planned listener stopped retrying (review of #246): the next re-plan re-attaches it even when the plan is
     /// unchanged.
     private(set) var listenerGaveUp = false
+    /// When the planned listener gave up (review of #246): a re-plan re-attaches it only after
+    /// `gaveUpReattachDelay`, so a burst of re-plans never re-attaches a failing listener over and over.
+    private var listenerGaveUpAt: Date?
+    nonisolated static let gaveUpReattachDelay: TimeInterval = 5
+    private var gaveUpReattachTask: Task<Void, Never>?
     /// RULEBOOK 1.56.0 (review of #246): while the plan is `.unavailable` (the script did not answer for an operative),
     /// re-plans are scheduled after these waits, then none until something else asks again.
     nonisolated static let unavailableReplanDelays: [TimeInterval] = [5, 15, 45, 120]
@@ -231,6 +236,24 @@ class HolidayStore: ObservableObject {
         }
     }
 
+    /// How long a re-plan still waits before re-attaching a listener that gave up at `gaveUpAt`; nil when it may
+    /// re-attach now.
+    nonisolated static func gaveUpReattachWait(gaveUpAt: Date?, now: Date) -> TimeInterval? {
+        guard let gaveUpAt else { return nil }
+        let wait = gaveUpAt.addingTimeInterval(gaveUpReattachDelay).timeIntervalSince(now)
+        return wait > 0 ? wait : nil
+    }
+
+    private func scheduleGaveUpReattach(after wait: TimeInterval) {
+        guard gaveUpReattachTask == nil else { return }
+        gaveUpReattachTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            self.gaveUpReattachTask = nil
+            self.replanLiveUpdates()
+        }
+    }
+
     /// When the next re-plan of an `.unavailable` plan runs: nil after the last allowed attempt.
     nonisolated static func unavailableReplanDelay(afterAttempts attempts: Int) -> TimeInterval? {
         guard attempts >= 0, attempts < unavailableReplanDelays.count else { return nil }
@@ -252,6 +275,9 @@ class HolidayStore: ObservableObject {
         plannedUserId = nil
         refusals.removeAll()
         listenerGaveUp = false
+        listenerGaveUpAt = nil
+        gaveUpReattachTask?.cancel()
+        gaveUpReattachTask = nil
         unavailableAttempts = 0
         unavailableReplanTask?.cancel()
         unavailableReplanTask = nil
@@ -300,6 +326,9 @@ class HolidayStore: ObservableObject {
             plannedUserId = nil
             refusals.removeAll()
             listenerGaveUp = false
+            listenerGaveUpAt = nil
+            gaveUpReattachTask?.cancel()
+            gaveUpReattachTask = nil
             unavailableAttempts = 0
             unavailableReplanTask?.cancel()
             unavailableReplanTask = nil
@@ -319,6 +348,12 @@ class HolidayStore: ObservableObject {
                signature == plannedSignature, userId == plannedUserId {
                 return
             }
+            // A listener that gave up without a refusal is re-attached after a short back-off, never at once.
+            if refusals[refusalKey] == nil, listenerGaveUp, signature == plannedSignature, userId == plannedUserId,
+               let wait = Self.gaveUpReattachWait(gaveUpAt: listenerGaveUpAt, now: now()) {
+                scheduleGaveUpReattach(after: wait)
+                return
+            }
         }
         if Self.mustClearRows(previousUserId: plannedUserId, userId: userId, previousSignature: plannedSignature, signature: signature) {
             clearRows()
@@ -326,6 +361,9 @@ class HolidayStore: ObservableObject {
         plannedSignature = signature
         plannedUserId = userId
         listenerGaveUp = false
+        listenerGaveUpAt = nil
+        gaveUpReattachTask?.cancel()
+        gaveUpReattachTask = nil
         if decision != .unavailable {
             unavailableAttempts = 0
             unavailableReplanTask?.cancel()
@@ -358,8 +396,11 @@ class HolidayStore: ObservableObject {
                 cappedRetries: true,
                 onRefused: onRefused,
                 onGaveUp: { [weak self] in
+                    // Called only while the giving-up listener is still the registered one (its registry token,
+                    // `listenOrganizationPlan`), so an old listener never marks its replacement as given up.
                     guard let self, self.plannedSignature == signature, self.plannedUserId == userId else { return }
                     self.listenerGaveUp = true
+                    self.listenerGaveUpAt = self.now()
                 }
             ) { [weak self] rows, fromCache in
                 self?.applyLiveRows(rows, fromCache: fromCache, organizationId: orgId, signature: signature, userId: userId)

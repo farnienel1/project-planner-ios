@@ -556,7 +556,9 @@ extension FirebaseBackend {
             cappedRetries: cappedRetries,
             onGaveUp: {
                 // RULEBOOK 1.56.0 (review of #246): retries ran out — the next re-plan or foreground re-attaches it.
-                if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
+                // Only while this listener is still the registered one (its token): a replaced listener giving up
+                // late never marks the newer one.
+                guard let token = tokenBox.value, registry.markForReattach(key: key, token: token) else { return }
                 onGaveUp?()
             }
         ) { [weak self] rows, fromCache in

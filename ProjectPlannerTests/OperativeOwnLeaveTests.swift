@@ -26,8 +26,26 @@ final class OperativeOwnLeaveTests: XCTestCase {
         JobAccessViewer(role: role, projectsToggle: false, smallWorksToggle: false, uid: uid, ids: ids, email: "op@x.com")
     }
 
+    private var savedViewer: JobAccessViewer?
+    private var savedLeaveOperativeLevel = false
+    private var savedLeaveEmail: String?
+    private var savedRederiver: (@MainActor () -> Void)?
+    private static var retained: [AnyObject] = []
+
+    override func setUp() {
+        super.setUp()
+        savedViewer = JobAccessContext.readViewer
+        savedLeaveOperativeLevel = JobAccessContext.leaveOperativeLevel
+        savedLeaveEmail = JobAccessContext.leaveEmail
+        savedRederiver = JobAccessContext.viewerRederiver
+    }
+
     override func tearDown() {
         SecuritySwitchContext.reset()
+        // Review of #246: the shared viewer state never leaks into the next test.
+        JobAccessContext.viewerRederiver = savedRederiver
+        JobAccessContext.updateViewer(savedViewer)
+        JobAccessContext.updateLeaveViewer(operativeLevel: savedLeaveOperativeLevel, email: savedLeaveEmail)
         super.tearDown()
     }
 
@@ -289,14 +307,76 @@ final class OperativeOwnLeaveTests: XCTestCase {
         XCTAssertNil(HolidayStore.unavailableReplanDelay(afterAttempts: 4), "capped")
     }
 
+    /// Review of #246: a listener that gave up (not refused) is re-attached by a re-plan only after a short back-off.
+    func testAGivenUpListenerIsReattachedAfterABackOff() {
+        let t0 = Date(timeIntervalSince1970: 1_000)
+        XCTAssertEqual(HolidayStore.gaveUpReattachDelay, 5)
+        XCTAssertNil(HolidayStore.gaveUpReattachWait(gaveUpAt: nil, now: t0))
+        XCTAssertEqual(HolidayStore.gaveUpReattachWait(gaveUpAt: t0, now: t0), 5)
+        XCTAssertEqual(HolidayStore.gaveUpReattachWait(gaveUpAt: t0, now: t0.addingTimeInterval(2)), 3)
+        XCTAssertNil(HolidayStore.gaveUpReattachWait(gaveUpAt: t0, now: t0.addingTimeInterval(5)))
+    }
+
+    /// Review of #246: only the listener still registered under its token reports giving up.
+    func testOnlyTheRegisteredListenerCanBeMarkedForReattach() {
+        let registry = OrgListenerRegistry()
+        let old = registry.set(key: "holidayBookings", target: "a", remove: {})
+        let current = registry.set(key: "holidayBookings", target: "b", remove: {})
+        XCTAssertFalse(registry.markForReattach(key: "holidayBookings", token: old))
+        XCTAssertTrue(registry.markForReattach(key: "holidayBookings", token: current))
+    }
+
     func testAnOrganisationSwitchForgetsThePreviousCompanysRoleAndEmail() {
+        JobAccessContext.viewerRederiver = nil
+        JobAccessContext.updateViewer(viewer(role(operative: true)))
         JobAccessContext.updateLeaveViewer(operativeLevel: true, email: "op@x.com")
         XCTAssertTrue(JobAccessContext.leaveOperativeLevel)
         XCTAssertEqual(JobAccessContext.leaveEmail, "op@x.com")
-        JobAccessContext.resetForOrganizationSwitch()
+        JobAccessContext.resetForOrganizationSwitchAndRederiveViewer()
         XCTAssertFalse(JobAccessContext.leaveOperativeLevel)
         XCTAssertNil(JobAccessContext.leaveEmail)
-        XCTAssertNil(JobAccessContext.readViewer)
+        XCTAssertNil(JobAccessContext.readViewer, "no profile to re-derive from")
+    }
+
+    /// Review of #246 (2nd round): `switchOrganization` loads the new company's profile before it stops the
+    /// listeners. The switch then clears the viewer and re-derives it at once from that profile, so screens never
+    /// stay on "Loading your team…" waiting for a profile change that already happened.
+    func testACompanySwitchAfterTheProfileLoadedStillEndsWithAViewer() {
+        let store = UserStore()
+        Self.retained.append(store)
+        store.currentUser = AppUser(
+            id: "op-switch-1",
+            email: "op-switch-1@example.test",
+            organizationId: "ORG-B",
+            role: .operative,
+            firstName: "TEST-Op",
+            surname: "Person",
+            permissions: UserPermissions(operativeMode: true)
+        )
+        let before = JobAccessContext.readViewer
+        XCTAssertNotNil(before)
+        XCTAssertEqual(JobAccessContext.leaveEmail, "op-switch-1@example.test")
+
+        let backend = FirebaseBackend()
+        Self.retained.append(backend)
+        backend.stopScheduleLiveListeners()
+
+        XCTAssertNotNil(JobAccessContext.readViewer, "the viewer is set again from the profile already loaded")
+        XCTAssertEqual(JobAccessContext.readViewer, before)
+        XCTAssertEqual(JobAccessContext.leaveEmail, "op-switch-1@example.test")
+        XCTAssertFalse(JobAccessContext.viewerPending)
+    }
+
+    /// Review of #246: the first settings-listener attach at launch is not a switch and clears nothing.
+    func testTheFirstSettingsListenerAttachIsNotASwitch() throws {
+        let backend = try String(contentsOfFile: Self.sourcePath("Project Planner/FirebaseBackend.swift"), encoding: .utf8)
+        XCTAssertTrue(backend.contains("stopScheduleLiveListeners(resetsJobAccess: wasListening)"))
+        XCTAssertTrue(backend.contains("JobAccessContext.resetForOrganizationSwitchAndRederiveViewer()"))
+    }
+
+    private static func sourcePath(_ relative: String) -> String {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(relative).path
     }
 
     func testALoadWithNoBackendLeavesNoPendingRequest() async {

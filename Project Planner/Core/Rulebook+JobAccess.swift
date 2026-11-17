@@ -635,14 +635,25 @@ nonisolated enum JobAccessContext {
         post()
     }
 
+    /// Re-derives the read viewer and the leave viewer from the signed-in profile the app holds now (set by
+    /// `UserStore`; `refreshJobAccessViewer`). Called right after the viewer is cleared on an organisation switch.
+    nonisolated(unsafe) static var viewerRederiver: (@MainActor () -> Void)?
+
     /// Organisation switch and sign-out: another company's job ids and managers never plan this one's reads.
-    /// The viewer is set again by `UserStore` when the profile of the new organisation loads.
+    /// RULEBOOK 1.56.0 (review of #246, 2nd round): the viewer and the leave viewer are cleared (posting the same
+    /// notifications `updateViewer` / `updateLeaveViewer` post, so every consumer re-plans) and then re-derived at
+    /// once from the profile `UserStore` holds — when the new company's profile loaded before the switch, nothing
+    /// else would set them again and screens would stay on "Loading your team…".
+    @MainActor static func resetForOrganizationSwitchAndRederiveViewer() {
+        resetForOrganizationSwitch()
+        updateLeaveViewer(operativeLevel: false, email: nil)
+        updateViewer(nil)
+        viewerRederiver?()
+    }
+
+    /// The reads that belong to one organisation (job ids, managers, accounts, own booking ids). The viewer is kept;
+    /// `resetForOrganizationSwitchAndRederiveViewer` clears and re-derives it.
     static func resetForOrganizationSwitch() {
-        // RULEBOOK 1.56.0 (review of #246): the previous company's role and email never plan this one's leave; the
-        // viewer is set again when this company's profile loads (`refreshJobAccessContext`).
-        readViewer = nil
-        leaveOperativeLevel = false
-        leaveEmail = nil
         operativeRows = []
         jobFieldsById = [:]
         BookingJobCollectionContext.reset()
@@ -699,6 +710,13 @@ extension UserStore {
         // Review of #242: the launch placeholder (`isProvisional`, an admin-shaped stand-in while `users/{uid}` loads)
         // is never a viewer: its admin flags would show a manager the whole company. Until the real profile loads the
         // viewer is pending (warnings and Daily Overview show nobody; the read plans read as before the profile).
+        refreshJobAccessViewer()
+    }
+
+    /// The read viewer and the leave viewer from the real profile only (never the accounts, managers or job ids,
+    /// which belong to the organisation the roster was loaded for). Also run right after an organisation switch
+    /// clears them (`JobAccessContext.viewerRederiver`).
+    func refreshJobAccessViewer() {
         let readUser = currentUser.flatMap { $0.isProvisional ? nil : $0 }
         // RULEBOOK 1.56.0 §9 (owner answer 17 Nov Q2): only the operative level (`permissionLevelOf`) is narrowed.
         JobAccessContext.updateLeaveViewer(operativeLevel: readUser?.permissionLevel == .operative, email: readUser?.email)
