@@ -682,7 +682,7 @@ extension UserStore {
         let readUser = currentUser.flatMap { $0.isProvisional ? nil : $0 }
         // RULEBOOK 1.56.0 §9 (owner answer 17 Nov Q2): only the operative level (`permissionLevelOf`) is narrowed.
         JobAccessContext.updateLeaveViewer(operativeLevel: readUser?.permissionLevel == .operative, email: readUser?.email)
-        JobAccessContext.updateViewer(readUser.map { jobAccessViewer(for: $0) })
+        JobAccessContext.updateViewer(currentUser.flatMap { $0.isProvisional ? nil : jobAccessViewer(for: $0) })
     }
 
     // MARK: Gates the screens call
