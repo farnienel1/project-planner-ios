@@ -254,8 +254,8 @@ extension FirebaseBackend {
         )
         // Owner bug 17 Nov (a site audit stuck on "Uploading photo 1 of 6"): the Storage SDK retries a dropped
         // connection silently for up to 10 minutes. The variation-evidence watch cancels the task after
-        // `siteAuditUploadStallSeconds` without progress or `siteAuditUploadTotalSeconds` in all, so the screen
-        // shows a real error at once and the person can try again; nothing is saved until every photo is uploaded.
+        // `siteAuditUploadStallSeconds` WITHOUT PROGRESS only — no total limit (review of #262: a slow but moving
+        // 10 MB claim file must never be cut off) — so the screen shows a real error and the person can try again.
         let watch = VariationUploadWatch()
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             let task = storageRef.putData(data, metadata: metadata) { metadata, error in
@@ -278,7 +278,7 @@ extension FirebaseBackend {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
                     if watch.shouldGiveUp(
                         stallSeconds: FirebaseBackend.siteAuditUploadStallSeconds,
-                        totalSeconds: FirebaseBackend.siteAuditUploadTotalSeconds
+                        totalSeconds: .infinity
                     ) {
                         task.cancel()
                         break

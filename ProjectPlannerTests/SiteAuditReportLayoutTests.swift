@@ -3,7 +3,7 @@ import UIKit
 import FirebaseFirestore
 @testable import Project_Planner
 
-/// RULEBOOK 1.61.0 §29 (owner decision 17 Nov): the iPhone site audit PDF is the web one. Both apps lay the shared
+/// RULEBOOK 1.65.0 §29 (owner decision 17 Nov): the iPhone site audit PDF is the web one. Both apps lay the shared
 /// fixture (`siteAuditReportFixtureForApps`) out through the rulebook and must get the same text lines and page
 /// breaks as `SITE_AUDIT_REPORT_FIXTURE_EXPECTED`; the renderer must draw every op; field limits come from the
 /// rulebook and stored longer text is never refused.
@@ -11,7 +11,7 @@ import FirebaseFirestore
 final class SiteAuditReportLayoutTests: XCTestCase {
     func testSharedFixtureGivesTheSameLinesAndPagesAsWeb() throws {
         let fixture = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportFixture(), "the packed script has no site audit fixture")
-        XCTAssertEqual(fixture.inputs.count, 6)
+        XCTAssertEqual(fixture.inputs.count, 7)
         XCTAssertEqual(fixture.expected.count, fixture.inputs.count)
         for (index, entry) in fixture.inputs.enumerated() {
             let name = entry["name"] as? String ?? "#\(index)"
@@ -33,7 +33,7 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         let owner = try XCTUnwrap(fixture.inputs.first { $0["name"] as? String == "owner-c646" }?["input"] as? [String: Any])
         let layout = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportLayout(owner))
         let lines = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportTextLines(layout))
-        // Before 1.61.0 every footer read "Page n of n".
+        // Before 1.65.0 every footer read "Page n of n".
         for (index, page) in lines.enumerated() {
             XCTAssertTrue(page.contains("Page \(index + 1) of \(lines.count)"), "page \(index + 1)")
         }
@@ -72,7 +72,7 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         }
     }
 
-    /// 1.61.1 (owner request 17 Nov): the company logo at the top right, fitted whole; the initials badge when
+    /// 1.65.0 (owner request 17 Nov): the company logo at the top right, fitted whole; the initials badge when
     /// there is no logo or it could not be loaded (the app passes no logo).
     func testCompanyLogoTopRightOrInitialsBadge() throws {
         let fixture = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportFixture())
@@ -106,6 +106,25 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         let missing = await CompanyLogoLoader.logo(urlString: nil)
         XCTAssertNil(missing)
         XCTAssertNil(UIImage(data: Data("%PDF-1.7 logo".utf8)), "a PDF logo is not a picture: the badge shows")
+    }
+
+    /// Review of #262: the input is composed by the rulebook (`siteAuditReportInput`) — the job's address lines, never
+    /// map coordinates; a stored photo that did not load keeps a 4 : 3 box; the same audit gives the same pages.
+    func testInputIsComposedByTheRulebook() throws {
+        let input = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportInput([
+            "audit": ["id": "A", "projectJobNumber": "C1", "projectName": "Job", "type": "General", "authorName": "Ann",
+                      "dateMs": 0, "createdAtMs": 0,
+                      "items": [["id": "loaded", "imageURL": "https://x/a.jpg"], ["id": "failed", "imageURL": "https://x/b.jpg"], ["id": "none"]]],
+            "job": ["clientName": "RED", "addressLine1": "71 Broadwick St", "addressLine2": "", "townCity": "London", "postcode": "W1F 9QY"],
+            "photos": ["loaded": ["width": 300, "height": 400]],
+            "timeZone": "Europe/London",
+        ]))
+        XCTAssertEqual(input["siteAddress"] as? String, "71 Broadwick St, London, W1F 9QY")
+        XCTAssertEqual(input["clientName"] as? String, "RED")
+        let items = try XCTUnwrap((input["audit"] as? [String: Any])?["items"] as? [[String: Any]])
+        XCTAssertEqual((items[0]["photo"] as? [String: Double])?["height"], 400)
+        XCTAssertEqual((items[1]["photo"] as? [String: Double])?["width"], 4)
+        XCTAssertTrue(items[2]["photo"] is NSNull || items[2]["photo"] == nil)
     }
 
     func testFieldLimitsComeFromTheRulebook() throws {

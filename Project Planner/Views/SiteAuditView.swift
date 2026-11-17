@@ -1501,6 +1501,7 @@ struct SiteAuditCreateFlowView: View {
         let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
         let logoURL = firebaseBackend.currentOrganization?.companyLogoURL
 
+        let jobForPDF = SiteAuditPDFBuilder.job(for: project)
         Task {
             let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId
             var orgId = cachedOrgId
@@ -1522,8 +1523,7 @@ struct SiteAuditCreateFlowView: View {
                     organizationName: orgName,
                     organizationAbbreviation: orgAbbrev,
                     logoImage: logo,
-                    clientName: project.client.name,
-                    siteAddress: project.siteAddress
+                    job: jobForPDF
                 )
             }
             do {
@@ -2399,16 +2399,14 @@ struct SiteAuditDetailView: View {
         let audit = displayAudit
         let orgName = firebaseBackend.currentOrganization?.name
         let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
-        let client = clientProject?.client.name
-        let address = clientProject?.siteAddress
+        let job = SiteAuditPDFBuilder.job(for: clientProject)
         let generated = await SiteAuditPDFBuilder.makePDFAsync(
             audit: audit,
             localItems: drafts,
             organizationName: orgName,
             organizationAbbreviation: orgAbbrev,
             logoImage: logo,
-            clientName: client,
-            siteAddress: address
+            job: job
         )
         await MainActor.run { pdfURL = generated }
     }

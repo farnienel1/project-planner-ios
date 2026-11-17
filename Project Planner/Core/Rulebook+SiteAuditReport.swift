@@ -9,6 +9,13 @@ extension CanonicalBusinessEngine {
         callJSON("siteAuditReportLayout", arguments: [input]) as? [String: Any]
     }
 
+    /// `siteAuditReportInput({ audit, organizationName, job, photos, logo, timeZone })` (review of #262): the report's
+    /// input composed the same way as web — the job's address lines (never map coordinates), a stored photo that did
+    /// not load keeps a 4 : 3 box — so the same audit gives the same pages on both apps.
+    nonisolated static func siteAuditReportInput(_ args: [String: Any]) -> [String: Any]? {
+        callJSON("siteAuditReportInput", arguments: [args]) as? [String: Any]
+    }
+
     /// `siteAuditReportTextLines(layout)`: each page's text, in drawing order (the shared fixture compares these).
     nonisolated static func siteAuditReportTextLines(_ layout: [String: Any]) -> [[String]]? {
         callJSON("siteAuditReportTextLines", arguments: [layout]) as? [[String]]

@@ -2,7 +2,7 @@
 //  SiteAuditPDFBuilder.swift
 //  Project Planner
 //
-//  RULEBOOK 1.61.0 §29 (owner decision 17 Nov): the site audit PDF is laid out by the rulebook
+//  RULEBOOK 1.65.0 §29 (owner decision 17 Nov): the site audit PDF is laid out by the rulebook
 //  (`siteAuditReportLayout`) and this file only draws its ops, so the iPhone PDF is the same as web's:
 //  the same fields, labels, order, wrapped lines, card heights, page breaks, photo boxes and "Page n of N".
 //  Before 1.61.0 cards had a fixed height (annotations fell outside the border), photos were squeezed into a
@@ -22,6 +22,19 @@ enum SiteAuditPDFBuilder {
         let siteAddress: String?
     }
 
+    /// The job as the report reads it (`siteAuditReportInput`): its client and address lines. Built on the caller's
+    /// actor, so the off-main PDF work only gets plain text.
+    static func job(for project: Project?) -> [String: String]? {
+        guard let project else { return nil }
+        return [
+            "clientName": project.client.name,
+            "addressLine1": project.addressLine1,
+            "addressLine2": project.addressLine2 ?? "",
+            "townCity": project.townCity,
+            "postcode": project.postcode,
+        ]
+    }
+
     /// Generates the PDF off the main thread so submit does not freeze with many photos.
     static func makePDFAsync(
         audit: SiteAudit,
@@ -29,15 +42,13 @@ enum SiteAuditPDFBuilder {
         organizationName: String?,
         organizationAbbreviation: String? = nil,
         logoImage: UIImage?,
-        clientName: String? = nil,
-        siteAddress: String? = nil
+        job: [String: String]? = nil
     ) async -> URL? {
         let auditCopy = audit
         let itemsCopy = localItems
         let orgName = organizationName
         let logo = logoImage
-        let client = clientName
-        let address = siteAddress
+        let jobCopy = job
         // Read on the caller's actor; the detached task must not touch main-actor state.
         let timeZone = OrganizationRulebookContext.timeZoneIdentifier
         let typeText = audit.storedTypeText
@@ -47,8 +58,7 @@ enum SiteAuditPDFBuilder {
                 localItems: itemsCopy,
                 organizationName: orgName,
                 logoImage: logo,
-                clientName: client,
-                siteAddress: address,
+                job: jobCopy,
                 timeZone: timeZone,
                 typeText: typeText
             )
@@ -63,12 +73,12 @@ enum SiteAuditPDFBuilder {
         organizationName: String?,
         organizationAbbreviation: String? = nil,
         logoImage: UIImage?,
-        clientName: String? = nil,
-        siteAddress: String? = nil,
+        job: [String: String]? = nil,
         timeZone: String = "Europe/London",
         typeText: String? = nil
     ) -> URL? {
         var images: [String: UIImage] = [:]
+        var photos: [String: Any] = [:]
         var itemInputs: [[String: Any]] = []
         for item in audit.items {
             let ref = item.id.uuidString
@@ -79,21 +89,20 @@ enum SiteAuditPDFBuilder {
                 "assignee": item.assignee,
                 "comments": item.comments,
                 "annotations": item.annotations,
+                "imageURL": item.imageURL ?? "",
                 "createdAtMs": milliseconds(item.createdAt)
             ]
             if let captured = item.imageCapturedAt { row["imageCapturedAtMs"] = milliseconds(captured) }
             if let raw = localItems.first(where: { $0.id == item.id })?.image {
                 let prepared = autoreleasepool { SiteAuditMediaProcessor.preparedForPDF(raw) }
                 images[ref] = prepared
-                row["photo"] = ["width": Double(prepared.size.width), "height": Double(prepared.size.height)]
-            } else if item.imageURL?.isEmpty == false {
-                // A stored photo that could not be loaded keeps its box (the same layout as web).
-                row["photo"] = ["width": 4, "height": 3]
+                photos[ref] = ["width": Double(prepared.size.width), "height": Double(prepared.size.height)]
             }
             itemInputs.append(row)
         }
-        var input: [String: Any] = [
+        var args: [String: Any] = [
             "timeZone": timeZone,
+            "photos": photos,
             "audit": [
                 "id": audit.id.uuidString,
                 "projectJobNumber": audit.projectJobNumber,
@@ -106,13 +115,17 @@ enum SiteAuditPDFBuilder {
                 "items": itemInputs
             ] as [String: Any]
         ]
-        if let organizationName { input["organizationName"] = organizationName }
-        if let clientName { input["clientName"] = clientName }
-        if let siteAddress { input["siteAddress"] = siteAddress }
+        if let organizationName { args["organizationName"] = organizationName }
+        if let job { args["job"] = job }
         if let logoImage {
             let prepared = autoreleasepool { compressedImage(logoImage, maxWidth: 400) } ?? logoImage
             images["logo"] = prepared
-            input["logo"] = ["width": Double(prepared.size.width), "height": Double(prepared.size.height)]
+            args["logo"] = ["width": Double(prepared.size.width), "height": Double(prepared.size.height)]
+        }
+        // RULEBOOK 1.65.0 §29: the input is composed by the rulebook (`siteAuditReportInput`), as on web.
+        guard let input = CanonicalBusinessEngine.siteAuditReportInput(args) else {
+            print("PDF generation error: the rulebook did not compose the site audit report")
+            return nil
         }
 
         guard let layout = CanonicalBusinessEngine.siteAuditReportLayout(input) else {
@@ -133,7 +146,7 @@ enum SiteAuditPDFBuilder {
     // MARK: - Drawing the rulebook's ops
 
     /// One drawn op, for tests: the page number, the kind and (for text) the text.
-    struct DrawnOp: Equatable {
+    nonisolated struct DrawnOp: Equatable {
         let page: Int
         let kind: String
         let text: String?
