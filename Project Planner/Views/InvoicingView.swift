@@ -4050,11 +4050,14 @@ private struct MyTimesheetView: View {
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
         let weekStart = week.start
         let revision = draft.revision
+        // RULEBOOK 1.60.1: the signature instant, so this signature's notice is its own row and push.
+        let signedAt = draft.operativeSignedAt
         Task {
             await notificationService.notifyTimesheetSubmitted(
                 signedByUser: current,
                 weekStart: weekStart,
-                revision: revision
+                revision: revision,
+                signedAt: signedAt
             )
         }
     }

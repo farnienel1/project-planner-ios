@@ -1266,10 +1266,13 @@ class NotificationService: ObservableObject {
     /// sheet is self-signed. Document ids come from `timesheetNotificationDedupeKey` (organisation-zone period start).
     /// RULEBOOK 1.55.0: `revision` is the signed version's REV number (nil / 0 the original), so signing REV N
     /// writes its own row instead of hitting the original's de-dupe key.
+    /// RULEBOOK 1.60.1: `signedAt` is the person's signature instant (`operativeSignedAt`), so each signature of the
+    /// same pay run writes its own row and push (a re-sign used to hit the first row and reach nobody).
     func notifyTimesheetSubmitted(
         signedByUser: AppUser,
         weekStart: Date,
-        revision: Int? = nil
+        revision: Int? = nil,
+        signedAt: Date? = nil
     ) async {
         guard let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return }
         if let userStore, userStore.organizationUsers.isEmpty {
@@ -1293,7 +1296,9 @@ class NotificationService: ObservableObject {
                 periodStartDayKey: periodStartDayKey,
                 timeZone: OrganizationRulebookContext.timeZoneIdentifier,
                 recipientId: managerId,
-                revision: revision
+                revision: revision,
+                // RULEBOOK 1.60.1: one notice per signature, so a re-sign of the same pay run reaches the line manager.
+                signedAt: signedAt
             ) else { continue }
             let notification = AppNotification(
                 id: syntheticNotificationId(from: key),

@@ -107,7 +107,8 @@ extension CanonicalBusinessEngine {
         periodStartDayKey: String,
         timeZone: String,
         recipientId: String? = nil,
-        revision: Int? = nil
+        revision: Int? = nil,
+        signedAt: Date? = nil
     ) -> String? {
         var input: [String: Any] = [
             "type": type,
@@ -119,6 +120,9 @@ extension CanonicalBusinessEngine {
         // RULEBOOK 1.55.0: a revision (REV N) shares its period start with the original, so its notices get their
         // own key (`…|rev{N}`); nil / 0 is the original (key unchanged).
         if let revision { input["revision"] = revision }
+        // RULEBOOK 1.60.1: the signature instant (`…|sig{ms}`), so a re-sign of the same pay run is its own row and
+        // push instead of hitting the first signature's row. Nil: the key is unchanged.
+        if let signedAt { input["signedAtMs"] = (signedAt.timeIntervalSince1970 * 1000).rounded(.down) }
         return callJSON("timesheetNotificationDedupeKey", arguments: [input]) as? String
     }
 
