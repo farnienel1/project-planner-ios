@@ -196,19 +196,72 @@ final class TaskPersonIndex {
 
     // MARK: Shared index
 
-    private static var cached: (key: String, index: TaskPersonIndex)?
+    /// The last index, the store revisions it was checked against, and the hash of the fields it reads.
+    private static var cached: (
+        operativeStore: ObjectIdentifier,
+        operativeRevision: Int,
+        userStore: ObjectIdentifier,
+        userRevision: Int,
+        contentHash: Int,
+        index: TaskPersonIndex
+    )?
 
-    /// The index for the open stores, rebuilt only when either store's rows change (`revision` bumps on every change,
-    /// renames included, so names read through the index are never stale).
+    /// A hash of exactly the fields the index reads: every users document's id, email, former and same-email ids and
+    /// ghost flag; every row's id, stored id, email, account link and name (names are shown through the index).
+    /// Anything else on a user (`lastSeenAt`, pay, permissions) does not rebuild it.
+    static func contentHash(managers: [Manager], operatives: [Operative], users: [AppUser]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(managers.count)
+        for row in managers {
+            hasher.combine(row.id)
+            hasher.combine(row.firestoreDocumentId)
+            hasher.combine(row.email)
+            hasher.combine(row.linkedUserId)
+            hasher.combine(row.firstName)
+            hasher.combine(row.lastName)
+        }
+        hasher.combine(operatives.count)
+        for row in operatives {
+            hasher.combine(row.id)
+            hasher.combine(row.documentId)
+            hasher.combine(row.email)
+            hasher.combine(row.linkedUserId)
+            hasher.combine(row.firstName)
+            hasher.combine(row.lastName)
+        }
+        hasher.combine(users.count)
+        for user in users {
+            hasher.combine(user.id)
+            hasher.combine(user.email)
+            hasher.combine(user.formerUserIds)
+            hasher.combine(user.sameEmailUserIds)
+            hasher.combine(user.isGhost)
+        }
+        return hasher.finalize()
+    }
+
+    /// The index for the open stores. Unchanged store revisions reuse it at once (task cards call this on every
+    /// redraw). When a revision moved, the fields the index reads are hashed, and the closure (one `personIdSet` call
+    /// per roster row) is rebuilt only when that hash changed — never for a `lastSeenAt` or other unrelated write.
     static func current(operativeStore: OperativeStore, userStore: UserStore) -> TaskPersonIndex {
-        let key = "\(ObjectIdentifier(operativeStore).hashValue):\(operativeStore.revision):\(ObjectIdentifier(userStore).hashValue):\(userStore.revision)"
-        if let cached, cached.key == key { return cached.index }
-        let index = TaskPersonIndex(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.organizationUsers
-        )
-        cached = (key, index)
+        let operativeId = ObjectIdentifier(operativeStore)
+        let userId = ObjectIdentifier(userStore)
+        if let cached,
+           cached.operativeStore == operativeId, cached.operativeRevision == operativeStore.revision,
+           cached.userStore == userId, cached.userRevision == userStore.revision {
+            return cached.index
+        }
+        let managers = operativeStore.allManagers
+        let operatives = operativeStore.allOperatives
+        let users = userStore.organizationUsers
+        let hash = contentHash(managers: managers, operatives: operatives, users: users)
+        let index: TaskPersonIndex
+        if let cached, cached.contentHash == hash {
+            index = cached.index
+        } else {
+            index = TaskPersonIndex(managers: managers, operatives: operatives, users: users)
+        }
+        cached = (operativeId, operativeStore.revision, userId, userStore.revision, hash, index)
         return index
     }
 }
@@ -340,7 +393,7 @@ enum TaskPeopleRulebook {
         }
     }
 
-    /// Guardrail 3: ids already assigned whose person no picker row shows, one entry per person, in stored order
+    /// Guardrail 3: ids already assigned whose person no picker row shows, one entry per person, in the order given
     /// (managers first). Pass empty sets for a kind the picker does not show.
     static func extras(
         shown: [(kind: TaskPersonKind, id: UUID)],

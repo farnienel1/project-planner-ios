@@ -5048,7 +5048,7 @@ private struct EditProjectTaskView: View {
         TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
-    /// The assigned people of one kind, one per person (stored order kept), with the ids each one stands for removed
+    /// The assigned people of one kind, one per person (sorted by id so the list is stable), with the ids each one stands for removed
     /// together. An id whose row is gone or inactive stays listed (guardrail 3).
     private func assignedPeople(_ kind: TaskPersonKind) -> [TaskPickerExtra] {
         let index = taskPersonIndex

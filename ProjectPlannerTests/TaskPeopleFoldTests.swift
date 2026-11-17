@@ -196,6 +196,23 @@ final class TaskPeopleFoldTests: XCTestCase {
         XCTAssertEqual(picked.managers.map(\.firestoreDocumentId), ["m-live"])
     }
 
+    /// The cached index is rebuilt only when a field it reads changes: a `lastSeenAt` write does not, a rename does.
+    func testTheIndexHashIgnoresUnrelatedUserFields() {
+        let users = ghostRoster
+        let rows = [ghostRow, patRow]
+        let base = TaskPersonIndex.contentHash(managers: [], operatives: rows, users: users)
+        var seen = users
+        seen[1].lastSeenAt = Date(timeIntervalSince1970: 1_000)
+        seen[1].mobileNumber = "07000 000000"
+        XCTAssertEqual(TaskPersonIndex.contentHash(managers: [], operatives: rows, users: seen), base)
+        var renamed = rows
+        renamed[1].firstName = "Patricia"
+        XCTAssertNotEqual(TaskPersonIndex.contentHash(managers: [], operatives: renamed, users: users), base)
+        var relinked = users
+        relinked[1].formerUserIds = ["op-pat"]
+        XCTAssertNotEqual(TaskPersonIndex.contentHash(managers: [], operatives: rows, users: relinked), base)
+    }
+
     /// My tasks (`tasksAssignedToViewer`) still finds a task assigned to an old operatives row id.
     func testMyTasksStillMatchesATaskAssignedToAnOldRowId() {
         let viewer = user("u-sam", email: "sam@site.com", formerUserIds: ["old-row"])
