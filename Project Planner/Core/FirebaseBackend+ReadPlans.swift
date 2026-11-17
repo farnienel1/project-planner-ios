@@ -243,7 +243,7 @@ extension FirebaseBackend {
         switch decision {
         case .all:
             return [PlannedReadSource(kind: .query(base, withoutDateBound: nil))]
-        case .nothing:
+        case .nothing, .unavailable:
             return []
         case .own(let queries):
             return queries.compactMap { Self.ownLeaveQuery(base, $0).map { PlannedReadSource(kind: .query($0, withoutDateBound: nil)) } }
@@ -359,6 +359,9 @@ extension FirebaseBackend {
         /// (`LiveListenerAttachPolicy.retryDelay`: a refusal once after 30 s, other errors a few times, then none until
         /// the next re-plan, foreground or organisation switch). False keeps the open-ended back-off.
         cappedRetries: Bool = false,
+        /// With `cappedRetries`: a part stopped retrying (any error). The owner marks the plan for re-attach, so the
+        /// next re-plan or foreground return starts it again (review of #246).
+        onGaveUp: (@MainActor () -> Void)? = nil,
         onChange: @escaping @MainActor (_ docs: [Doc], _ fromCache: Bool) -> Void
     ) -> ListenerRegistration {
         let registration = CompositeListenerRegistration()
@@ -429,7 +432,11 @@ extension FirebaseBackend {
                         guard let capped = LiveListenerAttachPolicy.retryDelay(
                             afterFailures: attempt + 1,
                             permissionDenied: Self.isPermissionDenied(error)
-                        ) else { return }
+                        ) else {
+                            // Retries ran out (refusal or any other error): never a dead listener for good.
+                            if let onGaveUp { Task { @MainActor in onGaveUp() } }
+                            return
+                        }
                         delay = capped
                     } else {
                         delay = Self.plannedListenerRetryDelay(attempt: attempt)
@@ -524,6 +531,7 @@ extension FirebaseBackend {
         plan: (sources: [PlannedReadSource], signature: String),
         cappedRetries: Bool = false,
         onRefused: (@MainActor () -> Void)? = nil,
+        onGaveUp: (@MainActor () -> Void)? = nil,
         onChange: @escaping @MainActor (_ rows: LiveDocumentRows, _ fromCache: Bool) -> Void
     ) {
         let orgId = normalizedOrganizationId(organizationId)
@@ -545,7 +553,12 @@ extension FirebaseBackend {
                 onRefused?()
             },
             parity: (key: key, organizationId: orgId),
-            cappedRetries: cappedRetries
+            cappedRetries: cappedRetries,
+            onGaveUp: {
+                // RULEBOOK 1.56.0 (review of #246): retries ran out — the next re-plan or foreground re-attaches it.
+                if let token = tokenBox.value { registry.markForReattach(key: key, token: token) }
+                onGaveUp?()
+            }
         ) { [weak self] rows, fromCache in
             guard let self, self.acceptsLiveSnapshot(organizationId: orgId) else { return }
             onChange(rows, fromCache)

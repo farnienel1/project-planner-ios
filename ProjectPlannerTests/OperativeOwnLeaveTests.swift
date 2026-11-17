@@ -267,6 +267,47 @@ final class OperativeOwnLeaveTests: XCTestCase {
         XCTAssertNil(store.finishedLoadOrganizationId)
     }
 
+    // MARK: - Review of #246
+
+    func testOneRefusalIsCountedOncePerPlanEvenWithSeveralQueries() {
+        let once = HolidayStore.RefusalOnce()
+        XCTAssertTrue(once.claim(), "the first refused query counts")
+        XCTAssertFalse(once.claim(), "the second query of the same plan does not")
+        XCTAssertFalse(once.claim())
+        XCTAssertTrue(HolidayStore.RefusalOnce().claim(), "a new attach counts again")
+    }
+
+    func testAnOperativeWhosePlanCannotBeWorkedOutIsToldAndRetried() {
+        XCTAssertEqual(LeaveReadDecision.unavailable.signature, "unavailable")
+        XCTAssertFalse(LeaveReadDecision.unavailable.readsLeave, "never the whole collection")
+        XCTAssertFalse(LeaveReadDecision.nothing.readsLeave)
+        XCTAssertTrue(LeaveReadDecision.all.readsLeave)
+        XCTAssertTrue(LeaveReadDecision.own([RulebookOwnLeaveQuery(userIdValues: ["U"], operativeIdValues: ["U"])]).readsLeave)
+        XCTAssertEqual(LeaveReadDecision.unavailableMessage, "Couldn't load your leave — try again.")
+        XCTAssertEqual(HolidayStore.unavailableReplanDelay(afterAttempts: 0), 5)
+        XCTAssertEqual(HolidayStore.unavailableReplanDelay(afterAttempts: 3), 120)
+        XCTAssertNil(HolidayStore.unavailableReplanDelay(afterAttempts: 4), "capped")
+    }
+
+    func testAnOrganisationSwitchForgetsThePreviousCompanysRoleAndEmail() {
+        JobAccessContext.updateLeaveViewer(operativeLevel: true, email: "op@x.com")
+        XCTAssertTrue(JobAccessContext.leaveOperativeLevel)
+        XCTAssertEqual(JobAccessContext.leaveEmail, "op@x.com")
+        JobAccessContext.resetForOrganizationSwitch()
+        XCTAssertFalse(JobAccessContext.leaveOperativeLevel)
+        XCTAssertNil(JobAccessContext.leaveEmail)
+        XCTAssertNil(JobAccessContext.readViewer)
+    }
+
+    func testALoadWithNoBackendLeavesNoPendingRequest() async {
+        let store = HolidayStore()
+        await store.loadData()
+        XCTAssertFalse(store.pendingLoadRequested)
+        XCTAssertFalse(store.isLoading)
+        XCTAssertNotNil(store.errorMessage)
+        XCTAssertEqual(HolidayStore.maxLoadRunsPerRequest, 3)
+    }
+
     func testAReplanWithNoBackendOrOrganisationDoesNothing() {
         let store = HolidayStore()
         store.replanLiveUpdates()

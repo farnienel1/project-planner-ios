@@ -293,7 +293,7 @@ final class DataParityMonitor: ObservableObject {
                 return RulebookDataParityListInput(key: key, skipped: "notListening")
             }
             let decision = firebaseBackend.leaveReadDecision(organizationId: orgId)
-            guard decision != .nothing, holidayStore?.plannedSignature == decision.signature else {
+            guard decision.readsLeave, holidayStore?.plannedSignature == decision.signature else {
                 return RulebookDataParityListInput(key: key, skipped: "notListening")
             }
             let listener = listenerDocuments(key: key, organizationId: orgId, writesSettled: writesSettled)

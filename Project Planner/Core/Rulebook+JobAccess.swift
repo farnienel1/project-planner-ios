@@ -84,11 +84,26 @@ nonisolated enum LeaveReadDecision: Equatable, Sendable {
     /// No leave read at all (switch on and the viewer not known yet, an operative whose plan the script did not
     /// answer, or no uid).
     case nothing
+    /// The switch is on, the viewer is at the operative level and the script did not answer: no leave read (never the
+    /// whole collection); the screen says so (`unavailableMessage`) and the store tries again (review of #246).
+    case unavailable
+
+    /// What an operative sees when their leave plan could not be worked out.
+    nonisolated static let unavailableMessage = "Couldn't load your leave — try again."
+
+    /// True when the decision runs a read (the whole collection or own queries).
+    var readsLeave: Bool {
+        switch self {
+        case .all, .own: return true
+        case .nothing, .unavailable: return false
+        }
+    }
 
     var signature: String {
         switch self {
         case .all: return "all"
         case .nothing: return "nothing"
+        case .unavailable: return "unavailable"
         case .own(let queries): return "own:" + queries.map(\.signature).joined(separator: ",")
         }
     }
@@ -96,7 +111,7 @@ nonisolated enum LeaveReadDecision: Equatable, Sendable {
     /// RULEBOOK 1.56.0 (owner decisions 17 Nov): the switch gates the narrowing — while `operativeOwnLeave` is off or
     /// not read yet everyone reads the whole collection exactly as before 1.56.0, without asking for a viewer. With it
     /// on: `leaveQueryPlan` for the viewer at their real level; no viewer yet → nothing; no answer → the whole
-    /// collection for staff, nothing for an operative (never the whole collection).
+    /// collection for staff, `unavailable` for an operative (never the whole collection).
     nonisolated static func decide(
         viewer: JobAccessViewer?,
         operativeLevel: Bool,
@@ -113,7 +128,7 @@ nonisolated enum LeaveReadDecision: Equatable, Sendable {
             email: email,
             operativeOwnLeave: true
         ) else {
-            return operativeLevel ? .nothing : .all
+            return operativeLevel ? .unavailable : .all
         }
         if plan.readsEveryLeave { return .all }
         return plan.ownQueries.isEmpty ? .nothing : .own(plan.ownQueries)
@@ -623,6 +638,11 @@ nonisolated enum JobAccessContext {
     /// Organisation switch and sign-out: another company's job ids and managers never plan this one's reads.
     /// The viewer is set again by `UserStore` when the profile of the new organisation loads.
     static func resetForOrganizationSwitch() {
+        // RULEBOOK 1.56.0 (review of #246): the previous company's role and email never plan this one's leave; the
+        // viewer is set again when this company's profile loads (`refreshJobAccessContext`).
+        readViewer = nil
+        leaveOperativeLevel = false
+        leaveEmail = nil
         operativeRows = []
         jobFieldsById = [:]
         BookingJobCollectionContext.reset()

@@ -8895,6 +8895,9 @@ class FirebaseBackend: ObservableObject {
         // Read path only — do not run writable-org repair (that can hang launch).
         let orgId = try await ensureReadableOrganization(organizationId)
         if case .nothing = decision { return [] }
+        if case .unavailable = decision {
+            throw NSError(domain: "HolidayStore", code: 503, userInfo: [NSLocalizedDescriptionKey: LeaveReadDecision.unavailableMessage])
+        }
         if case .own = decision {
             let docs = try await readPlannedQueryDocuments(leaveReadSources(organizationId: orgId, decision: decision))
             let parsed = holidayBookingsFromFirestore(docs, organizationId: orgId)
