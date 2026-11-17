@@ -11628,16 +11628,6 @@ extension FirebaseBackend {
         return out
     }
 
-    /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
-    /// `exportedAt != null`). Each row carries `__documentId` and `__subjectId`, the subject read from the document id
-    /// (`timesheetDocumentSubjectId`). Rows that do carry `userId` are left to `listTimesheetStates`.
-    /// Kept for callers that only want those; `listExportedTimesheets` returns every exported sheet.
-    func listExportedTimesheetsWithoutUserId(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
-        try await listExportedTimesheets(organizationId: organizationId, now: now).filter { row in
-            ((row["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "").isEmpty
-        }
-    }
-
     /// `w-timesheet-lookups` (web `loadExportedTimesheetHistory` fast path): every exported timesheet of the
     /// organisation (`exportedAt != null`, timesheet documents only). Each row carries `__documentId` and `__subjectId` —
     /// its stored `userId`, else the id its document id names (`timesheetDocumentSubjectId`). Memoised per organisation
@@ -11667,6 +11657,8 @@ extension FirebaseBackend {
     }
 
     static let exportedHistoryMemoSeconds: TimeInterval = 20
+    /// The end of a Firestore document-id prefix range: U+F8FF, the highest code point used in ids.
+    static let documentIdPrefixEnd = "\u{F8FF}"
     private static var exportedTimesheetsMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
 
     /// `w-timesheet-lookups` (guardrail 1, web `listPersonTimesheetStates`): one person's timesheet rows under every id
@@ -11680,39 +11672,32 @@ extension FirebaseBackend {
         organizationId: String,
         ids: [String],
         limit: Int = 400,
-        versions: TimesheetListVersions = .latest
+        versions: TimesheetListVersions = .latest,
+        /// Review of #259 (N1): the rules refuse the document-id query to an operative — not asked for them.
+        includeDocumentPrefix: Bool = true
     ) async -> [[String: Any]] {
-        let unique = PersonTimesheetLookup.uniqueIds(ids)
-        guard let own = unique.first else { return [] }
         let settings = db.collection("organizations").document(organizationId).collection("settings")
-        func documents(_ query: Query, _ label: String) async -> [(documentId: String, data: [String: Any])] {
-            do {
-                return try await query.getDocuments().documents.map { (documentId: $0.documentID, data: $0.data()) }
-            } catch {
-                NSLog("TIMESHEET_PERSON_QUERY_SKIPPED org=%@ %@ %@", organizationId, label, error.localizedDescription)
-                return []
-            }
+        let documents: (Query) async throws -> [PersonTimesheetLookup.Document] = { query in
+            try await query.getDocuments().documents.map { (documentId: $0.documentID, data: $0.data()) }
         }
-        var found = await documents(settings.whereField("userId", isEqualTo: own), "own")
-        for chunk in PersonTimesheetLookup.aliasChunks(unique) {
-            do {
-                found += try await settings.whereField("userId", in: chunk).getDocuments().documents
-                    .map { (documentId: $0.documentID, data: $0.data()) }
-            } catch {
-                // One unreadable alias never empties the chunk: ask each id on its own (web `queryIdsSkippingRefused`).
-                for id in chunk { found += await documents(settings.whereField("userId", isEqualTo: id), "alias") }
-            }
-        }
-        for id in unique {
-            let prefix = "timesheet_\(id)_"
-            found += await documents(
-                settings
+        var byDocumentPrefix: ((String) async throws -> [PersonTimesheetLookup.Document])?
+        if includeDocumentPrefix {
+            byDocumentPrefix = { id in
+                let prefix = "timesheet_\(id)_"
+                return try await documents(settings
                     .whereField(FieldPath.documentID(), isGreaterThanOrEqualTo: prefix)
-                    .whereField(FieldPath.documentID(), isLessThan: prefix + "\u{f8ff}"),
-                "prefix"
-            )
+                    .whereField(FieldPath.documentID(), isLessThan: prefix + Self.documentIdPrefixEnd))
+            }
         }
-        let mine = PersonTimesheetLookup.documentsForPerson(ids: unique, documents: found)
+        let mine = await PersonTimesheetLookup.gather(
+            ids: ids,
+            byUserIds: { chunk in
+                if chunk.count == 1 { return try await documents(settings.whereField("userId", isEqualTo: chunk[0])) }
+                return try await documents(settings.whereField("userId", in: chunk))
+            },
+            byDocumentPrefix: byDocumentPrefix,
+            warn: { NSLog("TIMESHEET_PERSON_QUERY_SKIPPED org=%@ %@", organizationId, $0) }
+        )
         let rows = Self.collapseTimesheetVersions(mine, versions: versions).map { row -> [String: Any] in
             var row = row
             let documentId = (row["__documentId"] as? String) ?? ""
