@@ -471,6 +471,18 @@ class UserStore: ObservableObject {
         return u
     }
     
+    /// Mass-assignment audit 17 Nov: a confirmed-missing `users/{uid}` is re-created (as the Super Admin) only for the
+    /// organisation's creator. Compared exactly (Firebase Auth uids are case-sensitive); a missing creator never matches.
+    nonisolated static func mayRecreateOwnProfileAsSuperAdmin(uid: String, organizationCreatorUserId: String?) -> Bool {
+        let creator = (organizationCreatorUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let me = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !creator.isEmpty && !me.isEmpty && creator == me
+    }
+
+    /// Shown when the signed-in person's profile is missing from the open organisation and they are not its creator.
+    static let missingOwnProfileMessage =
+        "Your profile was not found in this organisation. Ask an admin to add you again."
+
     // MARK: - User Management
     
     func loadCurrentUser() async {
@@ -509,7 +521,13 @@ class UserStore: ObservableObject {
                         userData = existing
                     case .unconfirmed, .permissionDenied:
                         print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
-                    case .confirmedMissing:
+                    case .confirmedMissing where Self.mayRecreateOwnProfileAsSuperAdmin(
+                        uid: firebaseUser.uid,
+                        organizationCreatorUserId: organization.creatorUserId
+                    ):
+                        // Mass-assignment audit 17 Nov: only the organisation's creator re-creates their own missing
+                        // profile, and only as its Super Admin (RULEBOOK §16: a self-created profile is super admin
+                        // only for the creator). Anyone else never writes their own privileged profile.
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
@@ -535,6 +553,11 @@ class UserStore: ObservableObject {
                             policyAcceptedAt: nil
                         )
                         try await firebaseBackend.saveUser(userData!)
+                    case .confirmedMissing:
+                        // Not the creator: no profile is written from this device (the security rules would refuse a
+                        // privileged self-create, and a plain one would hide the real problem). An admin re-adds them.
+                        print("🔥🔥🔥 DEBUG: Not creating users/\(firebaseUser.uid) — only the organisation's creator re-creates their own profile")
+                        errorMessage = Self.missingOwnProfileMessage
                     }
                 }
 
@@ -2204,6 +2227,12 @@ class UserStore: ObservableObject {
         print("🔥🔥🔥 DEBUG: Current user ID for rules check: \(currentUserId)")
         
         do {
+            // Mass-assignment audit 17 Nov: the invitation is always checked against a known inviter
+            // (`InvitationDocument.requireAllowed`); an inviter whose own profile could not be read invites nothing.
+            guard let inviterIsAdmin else {
+                errorMessage = "Couldn't check your permissions. Try again."
+                return false
+            }
             try await firebaseBackend.createUserInvitation(
                 email: email,
                 organizationId: organizationId,

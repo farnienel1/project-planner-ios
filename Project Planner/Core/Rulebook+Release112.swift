@@ -94,6 +94,17 @@ extension InvitationDocument {
 }
 
 extension InvitationDocument {
+    /// Mass-assignment audit 17 Nov: the create fields of an invitation (`createFields`, `invitationCreateFields`)
+    /// checked against the inviter (`requireAllowed`) — the fields actually written, never only a draft of the
+    /// person's stored flags. `inviterIsAdmin` is always known here (false when the inviter's profile is unknown).
+    nonisolated static func checkedCreateFields(from data: [String: Any], inviterIsAdmin: Bool) throws -> [String: Any] {
+        let fields = try createFields(from: data)
+        try requireAllowed(fields, inviterIsAdmin: inviterIsAdmin)
+        return fields
+    }
+}
+
+extension InvitationDocument {
     /// The message to show instead of re-inviting `subject` (resend sign-up from Manage Users), or nil to go ahead:
     /// the invitation would carry the subject's admin / manager / operatives / operative-mode flags, and a signed-in
     /// inviter who is not an admin may write only an operative-only one (`invitationIsOperativeOnly`). Checked before

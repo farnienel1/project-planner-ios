@@ -1172,6 +1172,9 @@ struct ManageUserRowView: View {
             rowEmailFeedback = "❌ \(refusal)"
             return
         }
+        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
+        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
+        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
 
         Task {
             let db = Firestore.firestore()
@@ -1218,7 +1221,7 @@ struct ManageUserRowView: View {
                     // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                     // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                     try RulebookRosterLists.requireInviteLevel(invitationData)
-                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(
@@ -4789,6 +4792,9 @@ struct EditUserView: View {
             isResendingEmail = false
             return
         }
+        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
+        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
+        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
         let db = Firestore.firestore()
         do {
             // A brand new invitation, created FIRST; only then are the earlier links closed, skipping the new one
@@ -4833,7 +4839,7 @@ struct EditUserView: View {
                 // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                 // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                 try RulebookRosterLists.requireInviteLevel(invitationData)
-                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                 return invitationId
             }, closeEarlier: { newInvitationId in
                 await InvitationDocument.closeEarlierInvitations(
@@ -4882,6 +4888,9 @@ struct EditUserView: View {
             resendEmailMessage = "❌ \(refusal)"
             return
         }
+        // Mass-assignment audit 17 Nov: the invitation actually written is checked again (`checkedCreateFields`) with
+        // the inviter always known — a signed-in user whose profile has not loaded counts as not an admin.
+        let inviterIsAdmin = userStore.currentUser?.isRosterAdmin ?? false
 
         Task {
             let db = Firestore.firestore()
@@ -4928,7 +4937,7 @@ struct EditUserView: View {
                     // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                     // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                     try RulebookRosterLists.requireInviteLevel(invitationData)
-                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(
