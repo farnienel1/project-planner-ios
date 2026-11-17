@@ -3,7 +3,7 @@ import XCTest
 
 /// Owner decision 17 Nov (guardrail 2, follow-up FU-4): the Scheduling week grid and the week screens use the
 /// organisation's Monday–Sunday week and time zone (`organizationWeekDayKeys`), never the phone's
-/// `Calendar.current` / `TimeZone.current`. Each test runs with the phone set to a zone far from the organisation's
+/// `Calendar.current` / `TimeZone.current`. Each test runs with the default zone set to one far from the organisation's
 /// (Europe/London): America/Los_Angeles (8 hours behind) and Pacific/Auckland (13 hours ahead).
 @MainActor
 final class OrganizationWeekSupportTests: XCTestCase {
@@ -29,7 +29,9 @@ final class OrganizationWeekSupportTests: XCTestCase {
     private func onPhonesIn(_ body: (String) throws -> Void) rethrows {
         for zone in ["America/Los_Angeles", "Pacific/Auckland"] {
             NSTimeZone.default = TimeZone(identifier: zone)!
-            XCTAssertEqual(TimeZone.current.identifier, zone)
+            // The process's default zone (what a `DateFormatter` with no zone writes in). `TimeZone.current` is cached
+            // from the simulator's TZ on the CI runner, so it is not asserted.
+            XCTAssertEqual(NSTimeZone.default.identifier, zone)
             try body(zone)
         }
     }
