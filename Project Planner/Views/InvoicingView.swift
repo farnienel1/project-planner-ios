@@ -574,6 +574,15 @@ struct InvoicingView: View {
     }
 
     private func landingAwaitingTimesheetCount(users: [AppUser]) -> Int {
+        // RULEBOOK 1.62.0 §8 (owner decision 17 Nov): every stored sheet waiting, however old — one per person per pay
+        // run, PAYE runs left out (`userTimesheetQueue`, the rule web's hub tile counts with).
+        if let viewer = userStore.displayUser,
+           let rows = UserTimesheetQueueRulebook.rows(
+               viewer: viewer, roster: userStore.organizationUsers, subjects: users, settings: settings
+           ) {
+            return rows.filter { $0.bucket == "awaiting" }.count
+        }
+        // The script did not answer: the count this device used before 1.62.0.
         var seen = Set<String>()
         for user in users {
             let documentStarts = TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id)
@@ -608,23 +617,14 @@ struct InvoicingView: View {
                 )
             }
         }
-        let listIds: Set<String>
-        if isAdminViewer && ids.count > 25 {
-            listIds = pendingReviewUserId.map { Set([$0]) } ?? []
-        } else {
-            listIds = ids
+        // RULEBOOK 1.62.0 §8: every stored sheet of the people listed, under every id they go by, however old — one
+        // `userId in` query per 10 ids (before 1.62.0 one query per person, skipped for an admin with over 25 people).
+        let listUsers = await MainActor.run { () -> [AppUser] in
+            var users = managerReviewUsersIncludingPending()
+            if let me = userStore.displayUser, !users.contains(where: { $0.id == me.id }) { users.append(me) }
+            return users
         }
-        for userId in listIds {
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: userId,
-                limit: 200
-            ) {
-                for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId, organizationId: orgId)
-                }
-            }
-        }
+        await UserTimesheetQueueRulebook.refreshFromCloud(users: listUsers, firebaseBackend: firebaseBackend, organizationId: orgId)
         await MainActor.run { landingVersion += 1 }
     }
 
@@ -5039,16 +5039,9 @@ struct OperativeTimesheetsView: View {
                     organizationId: orgId
                 )
             }
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: user.id,
-                limit: 200
-            ) {
-                for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id, organizationId: orgId)
-                }
-            }
         }
+        // RULEBOOK 1.62.0 §8: every stored sheet of these people, under every id they go by, however old.
+        await UserTimesheetQueueRulebook.refreshFromCloud(users: users, firebaseBackend: firebaseBackend, organizationId: orgId)
         await MainActor.run {
             rebuildAwaitingRows()
             refreshVersion += 1
@@ -5057,6 +5050,22 @@ struct OperativeTimesheetsView: View {
 
     private func rebuildAwaitingRows() {
         let _ = refreshVersion
+        // RULEBOOK 1.62.0 §8 (owner decision 17 Nov): every stored sheet waiting, however old, one row per person per pay
+        // run, PAYE runs left out — `userTimesheetQueue`, the rule web's User Timesheets list uses.
+        if let viewer = userStore.displayUser,
+           let queue = UserTimesheetQueueRulebook.rows(
+               viewer: viewer, roster: userStore.organizationUsers, subjects: managerScopeUsers, settings: settings
+           ) {
+            let roster = userStore.organizationUsers + (extraReviewUser.map { [$0] } ?? [])
+            awaitingRows = queue.filter { $0.bucket == "awaiting" }.compactMap { row -> ManagerTimesheetRow? in
+                guard let user = roster.first(where: { $0.id == row.personId }) else { return nil }
+                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: row.sheetUserId, weekStart: row.weekStart)
+                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(row.weekStart, storedEnd: storedEnd, settings: settings)
+                return ManagerTimesheetRow(id: "\(user.id)|\(Int(period.start.timeIntervalSince1970))", user: user, week: period)
+            }
+            return
+        }
+        // The script did not answer: the list this device built before 1.62.0.
         var rows: [ManagerTimesheetRow] = []
         var seen = Set<String>()
         for user in managerScopeUsers {

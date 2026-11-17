@@ -11597,6 +11597,40 @@ extension FirebaseBackend {
         return Array(sorted.prefix(max(1, limit)))
     }
 
+    /// RULEBOOK 1.62.0 §8 (web `loadTimesheetQueueSheets`): every stored timesheet of `userIds`, however old, grouped by the
+    /// stored `userId` — one `userId in` query per 10 ids instead of one query per person. A chunk the rules refuse is asked
+    /// id by id and only the refused ids are skipped (web review of #368 S1); any other failure throws. Each group is the
+    /// latest version of each pay run (`collapseTimesheetVersions`), as `listTimesheetStates` gives one person.
+    func listTimesheetStates(organizationId: String, userIds: [String]) async throws -> [String: [[String: Any]]] {
+        var seen = Set<String>()
+        let ids = userIds.filter { !$0.isEmpty && seen.insert($0).inserted }
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        var documents: [(documentId: String, data: [String: Any])] = []
+        var start = 0
+        while start < ids.count {
+            let chunk = Array(ids[start..<min(start + 10, ids.count)])
+            start += 10
+            do {
+                let snapshot = try await settings.whereField("userId", in: chunk).getDocuments()
+                documents += snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) }
+            } catch {
+                let nsError = error as NSError
+                guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 else { throw error }
+                for id in chunk {
+                    if let snapshot = try? await settings.whereField("userId", isEqualTo: id).getDocuments() {
+                        documents += snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) }
+                    }
+                }
+            }
+        }
+        var byUser: [String: [(documentId: String, data: [String: Any])]] = [:]
+        for document in documents {
+            guard let userId = document.data["userId"] as? String, !userId.isEmpty else { continue }
+            byUser[userId, default: []].append(document)
+        }
+        return byUser.mapValues { Self.collapseTimesheetVersions($0, versions: .latest) }
+    }
+
     /// RULEBOOK 1.55.0 §8 (web `collapseVersionRows`): one row per pay run of each original — its latest version
     /// (`timesheetLatestVersion`, the script's choice; owner decision J4: lists and reports alike), or every version for `all`.
     /// Settings documents that are not timesheets pass through. Each row carries `__documentId` (and, on a revision,
