@@ -124,7 +124,9 @@ extension ManagerSiteBooking {
 
     /// Start/end instants on the booking’s calendar day (for Calendar export and reminders).
     func calendarBlock(on day: Date, policy: OrgPayrollTimePolicy = .default) -> (start: Date, end: Date) {
-        let cal = Calendar.current
+        // The booking's organisation day and its clock times in the organisation zone (never the phone's, guardrail 2),
+        // so a phone abroad exports and shows the booked hours at the right instants.
+        let cal = OrganizationRulebookContext.calendar
         let startOfDay = cal.startOfDay(for: day)
         // The script's slotInterval with the stored slot and clocks.
         guard let interval = ManagerScheduleInterval.clashInterval(for: self, policy: policy) else {

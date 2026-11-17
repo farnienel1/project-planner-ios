@@ -74,7 +74,7 @@ struct ScheduleQuickAddSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Text(day.formatted(.dateTime.weekday(.wide).day().month(.abbreviated)))
+                    Text(day.formatted(Date.FormatStyle(timeZone: OrganizationRulebookContext.timeZone).weekday(.wide).day().month(.abbreviated)))
                         .font(.system(size: 12))
                         .foregroundStyle(ProjectWorksRevampColors.muted)
                     slotPicker
