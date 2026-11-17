@@ -8365,17 +8365,27 @@ struct InvoiceLineItem {
     /// RULEBOOK 1.61.0 §8 (display only): an overtime line's multiplier, the person's own day rate (never multiplied)
     /// and the line's day-rate divisor, so a day-rate overtime line reads in hours (`dayRateOvertimeText`). Nil when
     /// unknown (the older "hours · rate" text stays).
-    var otMultiplier: Double? = nil
-    var baseDayRate: Double? = nil
-    var dayRateDivisor: Double? = nil
+    var otMultiplier: Double? = nil { didSet { refreshDayRateOvertimeText() } }
+    var baseDayRate: Double? = nil { didSet { refreshDayRateOvertimeText() } }
+    var dayRateDivisor: Double? = nil { didSet { refreshDayRateOvertimeText() } }
     /// RULEBOOK 1.61.0 §8: a signed line's hours wording (`signedDayRateOvertimeText`), or nil for the older wording.
-    var signedHoursText: String? = nil
+    var signedHoursText: String? = nil { didSet { refreshDayRateOvertimeText() } }
+    /// RULEBOOK 1.61.0 §8 `dayRateOvertimeCalcText`: the whole hours-and-rate text of a day-rate overtime line, e.g.
+    /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)". Nil for every other line (standard,
+    /// hourly, PAYE) or when the multiplier, day rate or divisor is unknown. Worked out once when its inputs are set
+    /// (review of #378: never several script calls per SwiftUI render); every other input is a `let`.
+    private(set) var dayRateOvertimeText: String? = nil
+
+    private mutating func refreshDayRateOvertimeText() {
+        dayRateOvertimeText = computeDayRateOvertimeText()
+    }
 
     /// RULEBOOK 1.61.0 §8: a live overtime line's multiplier, the person's own day rate (never the multiplied rate ÷ N)
     /// and its divisor. Without the collector's own rate, nothing is set (the older wording).
     mutating func applyLiveOvertimeFigures(from line: TimesheetPayrollLineItem) {
         guard line.isOvertimeLine, let multiplier = line.otMultiplier, multiplier > 0,
               let base = line.otBaseDayRate, base > 0 else { return }
+        // The divisor is set last: until it is, the text stops at its guard without calling the script.
         otMultiplier = multiplier
         baseDayRate = base
         dayRateDivisor = line.standardDayHours
@@ -8407,6 +8417,7 @@ struct InvoiceLineItem {
         self.amount = amount
         self.isPayeDay = isPayeDay
         self.isOvertimeLine = isOvertimeLine
+        refreshDayRateOvertimeText()
     }
 
     var payrollLine: TimesheetPayrollLineItem {
@@ -8446,10 +8457,8 @@ struct InvoiceLineItem {
         isPayeDay || !hasPayrollRate
     }
 
-    /// RULEBOOK 1.61.0 §8 `dayRateOvertimeCalcText`: the whole hours-and-rate text of a day-rate overtime line, e.g.
-    /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)". Nil for every other line (standard,
-    /// hourly, PAYE) or when the multiplier, day rate or divisor is unknown.
-    var dayRateOvertimeText: String? {
+    /// Works out `dayRateOvertimeText` (see there); called only when an input changes.
+    private func computeDayRateOvertimeText() -> String? {
         if let signedHoursText { return signedHoursText }
         guard isOvertimeLine, !isPayeDay, payrollBasis == .dayRate,
               let multiplier = otMultiplier, multiplier > 0,
@@ -8498,6 +8507,7 @@ struct InvoiceLineItem {
         self.bookingId = payrollLine.bookingId
         // RULEBOOK 1.61.0: the live overtime line's multiplier, the person's own day rate and divisor.
         applyLiveOvertimeFigures(from: payrollLine)
+        refreshDayRateOvertimeText()
     }
 }
 
@@ -8765,7 +8775,7 @@ private enum InvoicePDFBuilder {
             // Review of #378 (N3): the detail box grows to the text it holds (measured at the drawn width and font), so a
             // long hours sum is never clipped, whatever its number of lines; the row grows with it (at least as before).
             let measured = (detail as NSString).boundingRect(
-                with: CGSize(width: 190, height: .greatestFiniteMagnitude),
+                with: CGSize(width: 190, height: CGFloat.greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: detailAttributes,
                 context: nil
