@@ -1069,6 +1069,10 @@ class FirebaseBackend: ObservableObject {
         // offered again when they sign back in.
         let signedOutUserId = auth.currentUser?.uid
         let keepDrafts = reason != .userRequested
+        if reason == .userRequested {
+            // Still signed in: stop audits uploading and delete the photos they already uploaded (as web).
+            await SiteAuditOfflineStore.shared.stopUploadsAndDiscardPhotosForChosenSignOut(firebaseBackend: self)
+        }
         await SignOutSequence.run(
             cleanup: { [weak self] in
                 guard let self, let target else { return }
@@ -3200,6 +3204,7 @@ class FirebaseBackend: ObservableObject {
         // `siteAuditUploadTotalSeconds` in all; the audit stays queued (`SiteAuditOfflineStore`) and the next pass
         // retries it, keeping every photo already uploaded.
         let watch = VariationUploadWatch()
+        let stopGeneration = SiteAuditUploadStop.shared.current
         do {
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             let task = storageRef.putData(imageData, metadata: metadata) { metadata, error in
@@ -3222,7 +3227,8 @@ class FirebaseBackend: ObservableObject {
             Task {
                 while !watch.isFinished {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    if watch.shouldGiveUp(stallSeconds: Self.siteAuditUploadStallSeconds, totalSeconds: Self.siteAuditUploadTotalSeconds) {
+                    if watch.shouldGiveUp(stallSeconds: Self.siteAuditUploadStallSeconds, totalSeconds: Self.siteAuditUploadTotalSeconds)
+                        || SiteAuditUploadStop.shared.stopped(since: stopGeneration) {
                         task.cancel()
                         break
                     }
@@ -3238,6 +3244,29 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK §1 / §24: only a download URL is stored, never a Storage bucket address (web shows https links
         // only): retry, else fail the upload visibly.
         return try await downloadURLOrRemoveUpload(storageRef, path: imagePath, organizationId: organizationId, userId: userId, logTag: "SiteAudit")
+    }
+
+    /// Whether `organizations/{org}/siteAudits/{id}` exists on the server; nil when that cannot be read (offline).
+    func siteAuditDocumentExistsOnServer(id: UUID, organizationId: String) async -> Bool? {
+        do {
+            let snapshot = try await db.collection("organizations").document(organizationId)
+                .collection("siteAudits").document(id.uuidString).getDocument(source: .server)
+            return snapshot.exists
+        } catch {
+            return nil
+        }
+    }
+
+    /// Deletes uploaded site audit photos by their download URLs. The Storage rules allow it only to the uploader
+    /// inside the §24 undo window; a refused or failed delete keeps the file (logged).
+    func deleteUploadedSiteAuditPhotos(_ urls: [String]) async {
+        for url in urls {
+            do {
+                try await storage.reference(forURL: url).delete()
+            } catch {
+                print("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// The download URL of the object at `storageRef` when `error` is a Storage refusal and the object exists, else nil.
