@@ -2236,13 +2236,20 @@ private struct MyTimesheetsHubView: View {
             // Sheets filed under another id the person goes by (a former invite id, a second users document) are NOT
             // listed here yet: the period screen reads and saves `timesheet_{uid}_…` only, so such a period would open
             // as a blank new sheet and a signature would make a second copy (follow-up; web reads and saves the alias).
-            // Review of #259 (N1): an operative may not run the document-id query (the rules refuse it).
-            let isOperative = userStore.displayUser?.rosterListKind == .operatives
+            // Review of #259 (N1) and final review: the document-id query only when the rules allow it — never for an
+            // operative, and while privatePay is on for admins only (`PersonTimesheetLookup.lookupPlan`).
+            let viewer = userStore.displayUser
+            let plan = PersonTimesheetLookup.lookupPlan(
+                ids: [userId],
+                viewerIsOperative: viewer?.rosterListKind == .operatives,
+                viewerIsAdmin: viewer?.isRosterAdmin == true,
+                privatePay: PersonTimesheetLookup.privatePayForLookups(organizationId: orgId)
+            )
             let rows = await firebaseBackend.listPersonTimesheetStates(
                 organizationId: orgId,
-                ids: [userId],
+                ids: plan.ids,
                 limit: 200,
-                includeDocumentPrefix: !isOperative
+                includeDocumentPrefix: plan.includeDocumentPrefix
             )
             for row in rows {
                 guard let weekStart = firestoreDate(row["weekStart"]),
@@ -5563,14 +5570,23 @@ struct OperativeTimesheetsView: View {
                 complete = true
                 // Each person under every id, up to 8 people at a time (review of #259, S2; web `mapInBatches`).
                 let backend = firebaseBackend
-                let results = await PersonTimesheetLookup.mapInBatches(people, size: 8) { person in
-                    (person, await backend.listPersonTimesheetStates(
-                        organizationId: orgId,
+                let privatePay = PersonTimesheetLookup.privatePayForLookups(organizationId: orgId)
+                let results = await PersonTimesheetLookup.mapInBatches(people, size: 8) { (person: AppUser) -> (AppUser, [[String: Any]]) in
+                    // Final review of #259: only the queries this viewer may run — an operative their own id; while
+                    // privatePay is on, everyone but an admin the person's current id (web `timesheetLookupPlan`).
+                    let plan = PersonTimesheetLookup.lookupPlan(
                         ids: idsOf(person),
+                        viewerIsOperative: viewerIsOperative,
+                        viewerIsAdmin: viewerIsAdmin,
+                        privatePay: privatePay
+                    )
+                    return (person, await backend.listPersonTimesheetStates(
+                        organizationId: orgId,
+                        ids: plan.ids,
                         limit: 400,
                         // RULEBOOK 1.55.0 §8: every version, grouped below into one row per pay run.
                         versions: .all,
-                        includeDocumentPrefix: !viewerIsOperative
+                        includeDocumentPrefix: plan.includeDocumentPrefix
                     ))
                 }
                 for (person, rows) in results {
@@ -5632,24 +5648,38 @@ struct OperativeTimesheetsView: View {
             }
         }
 
-        // This device's own copies (a sheet exported here before the server answered), under each person's own id.
+        // This device's own copies (a sheet exported here before the server answered), under every id of each listed
+        // person (final review of #259: a sheet saved locally under a second users document of the person still lists).
+        var candidateStarts = Set(TimesheetPayrollPolicy.previousPayPeriods(count: 260, settings: settings).map(\.start))
+        candidateStarts.insert(week.start)
         for person in people {
-            var weekStarts = Set(TimesheetDraftStore.discoverStoredWeekStarts(userId: person.id))
-            for period in TimesheetPayrollPolicy.previousPayPeriods(count: 260, settings: settings) {
-                weekStarts.insert(period.start)
+            var copyIds: [String] = []
+            let sameRecords = users.filter { owner($0.id)?.user.id == person.id }.map(\.id)
+            for id in [person.id] + sameRecords + idsOf(person) where !id.isEmpty && !copyIds.contains(id) {
+                copyIds.append(id)
             }
-            weekStarts.insert(week.start)
-            for start in weekStarts {
-                let draft = TimesheetDraftStore.load(userId: person.id, weekStart: start)
-                guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: person)) == "exported" else { continue }
-                let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: person.id, weekStart: start)
-                let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
-                let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
-                let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? ""
-                let rowId = "\(person.id)|\(startKey)|\(endKey)"
-                // RULEBOOK 1.55.0 §8: a pay run read from the server keeps that row (latest exported version).
-                if byId[rowId] != nil { continue }
-                byId[rowId] = ExportedTimesheetHistoryRow(id: rowId, user: person, week: period, draft: draft)
+            for copyId in copyIds {
+                let weekStarts = candidateStarts.union(TimesheetDraftStore.discoverStoredWeekStarts(userId: copyId))
+                for start in weekStarts {
+                    let draft = TimesheetDraftStore.load(userId: copyId, weekStart: start)
+                    guard TimesheetDraftStore.listBucket(for: draft, hasLineManager: TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: person)) == "exported" else { continue }
+                    let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: copyId, weekStart: start)
+                    let period = TimesheetPayrollPolicy.periodMatchingStoredStart(start, storedEnd: storedEnd, settings: settings)
+                    let startKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? ""
+                    let endKey = CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? ""
+                    let rowId = "\(person.id)|\(startKey)|\(endKey)"
+                    // RULEBOOK 1.55.0 §8: a pay run read from the server keeps that row (latest exported version); the
+                    // own id's copy comes first and wins its pay run.
+                    if byId[rowId] != nil { continue }
+                    // B1: only the copy kept under the person's own id may open the review screen.
+                    byId[rowId] = ExportedTimesheetHistoryRow(
+                        id: rowId,
+                        user: person,
+                        week: period,
+                        draft: draft,
+                        opensReview: copyId == person.id
+                    )
+                }
             }
         }
 

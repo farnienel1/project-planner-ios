@@ -138,6 +138,26 @@ enum PersonTimesheetLookup {
         init(_ value: R) { self.value = value }
     }
 
+    /// Final review of #259 (web `timesheetLookupPlan`): which of a person's timesheet queries this viewer's rules allow,
+    /// so nobody sends doomed queries. An operative may query only their own `userId`. While `privatePay` is on for the
+    /// organisation (or not read yet) only admins may query a person's other ids or the document-id prefix; a manager or
+    /// line manager is refused both, so they ask the person's current id (`ids[0]`) only.
+    nonisolated static func lookupPlan(
+        ids: [String],
+        viewerIsOperative: Bool,
+        viewerIsAdmin: Bool,
+        privatePay: Bool
+    ) -> (ids: [String], includeDocumentPrefix: Bool) {
+        let cleaned = ids.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let extended = !viewerIsOperative && (viewerIsAdmin || !privatePay)
+        return extended ? (cleaned, true) : (Array(cleaned.prefix(1)), false)
+    }
+
+    /// The `privatePay` switch for `organizationId`, read as on until `platformConfig/app` has been read.
+    nonisolated static func privatePayForLookups(organizationId: String?) -> Bool {
+        !SecuritySwitchContext.hasRead || SecuritySwitchContext.switches(organizationId: organizationId).privatePay
+    }
+
     /// Review of #259 (S1, S2, N1; web `personTimesheetDocs`): reads one person's timesheet documents with the queries
     /// given — the own id (`ids[0]`, `userId ==`), the other ids in chunks of `idChunk` (`userId in`, a refused chunk
     /// asked id by id only when the rules refused it), and, when `byDocumentPrefix` is given (never for an operative: the rules refuse it), each id's

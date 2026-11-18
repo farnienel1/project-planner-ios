@@ -202,6 +202,25 @@ final class PersonTimesheetLookupTests: XCTestCase {
         XCTAssertEqual(asked.values.filter { $0.count == 1 && $0 != [own] }, [], "no id-by-id retry after a non-refusal")
     }
 
+    /// Final review of #259 (web `timesheetLookupPlan`): only the queries the viewer may run.
+    func testLookupPlanSendsNoQueryTheRulesRefuse() {
+        let ids = ["U1", "INVITE-1", "U1B"]
+        // privatePay off: admins and managers ask every id and the document-id prefix; an operative their own id.
+        var plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: false, viewerIsAdmin: true, privatePay: false)
+        XCTAssertEqual(plan.ids, ids); XCTAssertTrue(plan.includeDocumentPrefix)
+        plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: false, viewerIsAdmin: false, privatePay: false)
+        XCTAssertEqual(plan.ids, ids); XCTAssertTrue(plan.includeDocumentPrefix)
+        plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: true, viewerIsAdmin: false, privatePay: false)
+        XCTAssertEqual(plan.ids, ["U1"]); XCTAssertFalse(plan.includeDocumentPrefix)
+        // privatePay on (production): only admins keep the extra lookups.
+        plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: false, viewerIsAdmin: true, privatePay: true)
+        XCTAssertEqual(plan.ids, ids); XCTAssertTrue(plan.includeDocumentPrefix)
+        plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: false, viewerIsAdmin: false, privatePay: true)
+        XCTAssertEqual(plan.ids, ["U1"]); XCTAssertFalse(plan.includeDocumentPrefix)
+        plan = PersonTimesheetLookup.lookupPlan(ids: ids, viewerIsOperative: true, viewerIsAdmin: false, privatePay: true)
+        XCTAssertEqual(plan.ids, ["U1"]); XCTAssertFalse(plan.includeDocumentPrefix)
+    }
+
     func testGatherAsksNoDocumentIdQueryForAnOperative() async {
         let queries = fakeQueries(documents)
         let found = await PersonTimesheetLookup.gather(ids: ["U1"], byUserIds: queries.byUserIds, byDocumentPrefix: nil)
