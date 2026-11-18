@@ -408,7 +408,7 @@ enum SignedTimesheetChangeInputs {
                 "timeSlot": booking.timeSlot.rawValue,
                 "isBreakRemoved": booking.isBreakRemoved,
                 "status": booking.status.rawValue,
-                "personId": booking.operativeKey ?? Booking.storedOperativeId(for: booking.operativeId),
+                "personId": booking.operativeKey ?? Booking.operativeMatchKey(for: booking.operativeId),
                 "projectId": booking.projectKey ?? WorkDocumentKeys.storedId(for: booking.projectId),
             ]
             row["workStartTime"] = booking.workStartTime ?? NSNull()
