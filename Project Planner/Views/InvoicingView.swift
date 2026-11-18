@@ -20,6 +20,9 @@ struct InvoicingView: View {
     @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     @State private var landingVersion = 0
+    /// RULEBOOK 1.66.0 §8 (web User Timesheets load error): the every-age sheet load failed; the counts are from this
+    /// device's cache until a reload works.
+    @State private var landingQueueLoadError: String?
     @State private var pendingReviewUserId: String?
     @State private var pendingReviewWeek: WeekRange?
     @State private var didConsumeDeepLink = false
@@ -412,6 +415,12 @@ struct InvoicingView: View {
         }.count
 
         VStack(alignment: .leading, spacing: 14) {
+            if let landingQueueLoadError {
+                Label(landingQueueLoadError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("timesheets.landing.loadError")
+            }
             PPGroupedCard {
                 if canShowMyTimesheets {
                     NavigationLink {
@@ -633,10 +642,18 @@ struct InvoicingView: View {
             return users
         }
         let landingRoster = await MainActor.run { userStore.organizationUsers }
-        await UserTimesheetQueueRulebook.refreshFromCloud(
-            users: listUsers, roster: landingRoster, firebaseBackend: firebaseBackend, organizationId: orgId
-        )
-        await MainActor.run { landingVersion += 1 }
+        var loadError: String?
+        do {
+            try await UserTimesheetQueueRulebook.refreshFromCloud(
+                users: listUsers, roster: landingRoster, firebaseBackend: firebaseBackend, organizationId: orgId
+            )
+        } catch {
+            loadError = UserTimesheetQueueRulebook.loadFailedMessage
+        }
+        await MainActor.run {
+            landingQueueLoadError = loadError
+            landingVersion += 1
+        }
     }
 
     private func captureTimesheetDeepLink() {
@@ -4421,6 +4438,8 @@ struct OperativeTimesheetsView: View {
     @State private var awaitingRows: [ManagerTimesheetRow] = []
     /// RULEBOOK 1.66.0 §8: Signed off — every signed, unexported sheet however old (`userTimesheetQueue`, as web).
     @State private var signedRows: [ManagerTimesheetRow] = []
+    /// RULEBOOK 1.66.0 §8 (web User Timesheets): the every-age sheet load failed — shown, never an empty list.
+    @State private var queueLoadError: String?
     @State private var autoOpenReview: TimesheetAutoOpenTarget?
     @State private var didAutoOpenReview = false
     /// Scope the list was last built and fetched for. Nil until the first appear.
@@ -4505,6 +4524,12 @@ struct OperativeTimesheetsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                if let queueLoadError, selectedTab != .exported {
+                    Label(queueLoadError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("timesheets.queueLoadError")
+                }
                 if let exportMessage {
                     Text(exportMessage)
                         .font(.caption)
@@ -5049,10 +5074,16 @@ struct OperativeTimesheetsView: View {
         }
         // RULEBOOK 1.66.0 §8: every stored sheet of these people, under every id they go by (`personIdSet`), however old.
         let roster = userStore.organizationUsers
-        await UserTimesheetQueueRulebook.refreshFromCloud(
-            users: users, roster: roster, firebaseBackend: firebaseBackend, organizationId: orgId
-        )
+        var loadError: String?
+        do {
+            try await UserTimesheetQueueRulebook.refreshFromCloud(
+                users: users, roster: roster, firebaseBackend: firebaseBackend, organizationId: orgId
+            )
+        } catch {
+            loadError = UserTimesheetQueueRulebook.loadFailedMessage
+        }
         await MainActor.run {
+            queueLoadError = loadError
             rebuildAwaitingRows()
             refreshVersion += 1
         }
@@ -5362,9 +5393,10 @@ struct OperativeTimesheetsView: View {
             }
             // RULEBOOK 1.66.0 §8: one delivery (PDFs, backup and one email) per pay run, oldest first — the export
             // pipeline is built around one pay run.
-            let byRun = Dictionary(grouping: stamped, by: { $0.week.start })
-            for runStart in byRun.keys.sorted() {
-                guard let rows = byRun[runStart], let runWeek = rows.first?.week else { continue }
+            // Grouped by the pay run's start and end, so two runs that share a start day never share an email.
+            let byRun = Dictionary(grouping: stamped, by: { "\(Int64($0.week.start.timeIntervalSince1970))|\(Int64($0.week.end.timeIntervalSince1970))" })
+            for runKey in byRun.keys.sorted() {
+                guard let rows = byRun[runKey], let runWeek = rows.first?.week else { continue }
                 let part = await TimesheetExportHelper.deliver(
                     stamped: rows.map { (operative: $0.operative, draft: $0.draft) },
                     week: runWeek,

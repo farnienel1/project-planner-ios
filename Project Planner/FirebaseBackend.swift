@@ -11616,9 +11616,15 @@ extension FirebaseBackend {
             } catch {
                 let nsError = error as NSError
                 guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 else { throw error }
+                // Only a per-id permission refusal is skipped (an unreadable alias id); any other failure throws, so
+                // the list shows its load error instead of an incomplete queue (web `queryIdsSkippingRefused`).
                 for id in chunk {
-                    if let snapshot = try? await settings.whereField("userId", isEqualTo: id).getDocuments() {
+                    do {
+                        let snapshot = try await settings.whereField("userId", isEqualTo: id).getDocuments()
                         documents += snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) }
+                    } catch {
+                        let single = error as NSError
+                        guard single.domain == "FIRFirestoreErrorDomain" && single.code == 7 else { throw error }
                     }
                 }
             }

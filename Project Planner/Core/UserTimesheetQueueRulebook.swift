@@ -34,6 +34,9 @@ enum UserTimesheetQueueRulebook {
         let weekStart: Date
     }
 
+    /// Web User Timesheets' load error, word for word.
+    static let loadFailedMessage = "Timesheets did not finish loading. Check the connection and try again."
+
     /// True once the packed script exports `userTimesheetQueue`.
     static var isAvailable: Bool {
         CanonicalBusinessEngine.exportKind(functionName) == "function"
@@ -141,12 +144,15 @@ enum UserTimesheetQueueRulebook {
                 "data": data,
                 "documentId": documentId,
             ]
-            // RULEBOOK 1.47.0 / 1.54.0: the sheet's booking change folded with its late extras, only for a signed,
-            // unexported sheet; a run whose bookings are not loaded reads as not changed, its waiting late extras still
-            // decide (`SignedTimesheetChangeContext` answers with the late extras alone then).
+            // RULEBOOK 1.47.0 / 1.54.0 / 1.66.0: the sheet's booking change folded with its late extras, only for a signed,
+            // unexported sheet, over the last six pay runs (the window web's hub and list use); an older run, or one whose
+            // bookings are not loaded, reads as not changed and its waiting late extras still decide
+            // (`SignedTimesheetChangeContext.queueChange`). Late extras are decided by that Swift summary of the real rows;
+            // the placeholder rows in `data` below only feed `timesheetSheetHasActivity` (known limit: if the context is
+            // not attached, the rule reads no waiting late extra from them).
             if !TimesheetApprovalPolicy.isExported(draft),
                let user = owner(sheet.userId),
-               let change = SignedTimesheetChangeContext.shared.change(draft: draft, user: user, period: period) {
+               let change = SignedTimesheetChangeContext.shared.queueChange(draft: draft, user: user, period: period, settings: settings) {
                 row["bookingsChange"] = [
                     "reopened": change.reopened,
                     "waitingFor": change.waitingFor ?? NSNull(),
@@ -194,10 +200,11 @@ enum UserTimesheetQueueRulebook {
         roster: [AppUser],
         firebaseBackend: FirebaseBackend,
         organizationId: String
-    ) async {
+    ) async throws {
         // `personIdSet` runs in the packed script, on the main actor like every other rule this file calls.
         let userIds = await MainActor.run { withCaseVariants(users.flatMap { ids(of: $0, roster: roster) }) }
-        guard let grouped = try? await firebaseBackend.listTimesheetStates(organizationId: organizationId, userIds: userIds) else { return }
+        // A failed load throws (the caller shows it); only per-id permission refusals are skipped inside the query.
+        let grouped = try await firebaseBackend.listTimesheetStates(organizationId: organizationId, userIds: userIds)
         for (userId, rows) in grouped {
             for row in rows {
                 _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId, organizationId: organizationId)
