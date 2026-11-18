@@ -70,26 +70,104 @@ final class AddUserScreenChecksTests: PPUITestCase {
             XCTAssertTrue(row.exists, "More has no 'Operatives' row")
             if row.exists { row.tap() }
         }
+        // The Operatives tab tap can be lost while Home is still settling after launch (AU09 on #249: the screen
+        // never opened, so `operatives.add` never appeared). Tap the tab once more before failing.
+        let add = element("operatives.add")
+        if !add.waitForExistence(timeout: 8), tab.exists, tab.isHittable {
+            tab.tap()
+        }
         tap("operatives.add", timeout: 8)
         assertExists("addUser.cancel", timeout: 8)
     }
 
-    /// A cold CI simulator can take 30s+ to settle (first test of a run on the SE), so Next waits for the
-    /// button to stop moving before it taps.
-    private func next() {
-        let button = waitFor("addUser.creating", timeout: 10)
-        waitUntilSettled(button)
-        XCTAssertTrue(button.isEnabled, "Next is disabled where it should be enabled")
-        button.tap()
+    /// The wizard step the tracker reads ("Step 2 of 4" → 2), or nil when the tracker is not on screen.
+    private func currentStep() -> Int? {
+        let tracker = element("addUser.stepTracker")
+        guard tracker.exists else { return nil }
+        let words = tracker.label.split(separator: " ")
+        guard words.count >= 2, words[0] == "Step" else { return nil }
+        return Int(words[1])
     }
 
+    private func waitForStep(_ step: Int, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if currentStep() == step { return true }
+            Thread.sleep(forTimeInterval: 0.25)
+        } while Date() < deadline
+        return false
+    }
+
+    /// Taps Next and checks the wizard really moved one step on. A cold CI simulator can take 30s+ to settle
+    /// (first test of a run on the SE), so Next waits for the button to stop moving before it taps.
+    ///
+    /// Before, the tap was fire-and-forget: on the Pro Max leg (AU09 on #259, run 44197731455) the step 2 → 3 tap
+    /// was sent with Next enabled and not moving, and it had no effect — the wizard did not reach step 3. Why the
+    /// tap was dropped is not known (the screenshots could not be read). The miss only showed 15s later as
+    /// "permissionToggle.chevronDown did not appear" and "could not scroll to addUser.annualLeaveAllowance" (both
+    /// are step 3 only). Now the step tracker is read before and after: a tap that left the step unchanged is tapped
+    /// again — only after re-checking the wizard is still on that step, so a late first tap can never let the retry
+    /// land on the next step's button (Create User on step 4) — and every retry is recorded (`recordRetry`). Any
+    /// other result fails here, naming the step.
+    private func next(file: StaticString = #filePath, line: UInt = #line) {
+        let button = waitFor("addUser.creating", timeout: 10, file: file, line: line)
+        waitUntilSettled(button)
+        XCTAssertTrue(button.isEnabled, "Next is disabled where it should be enabled", file: file, line: line)
+        guard let from = currentStep() else {
+            XCTFail("GAP: 'addUser.stepTracker' did not say which step the wizard is on", file: file, line: line)
+            return
+        }
+        let target = from + 1
+        let attempts = 3
+        for attempt in 1...attempts {
+            if attempt > 1 {
+                waitUntilSettled(button)
+                // A late first tap may have moved the wizard while we waited: never retry from another step.
+                let before = currentStep()
+                if before == target { return }
+                guard before == from else {
+                    attachHierarchy("Next went from step \(from) to \(before.map { "\($0)" } ?? "none")")
+                    XCTFail("Next moved the wizard from step \(from) to \(before.map { "\($0)" } ?? "no step"), not step \(target)", file: file, line: line)
+                    return
+                }
+                guard button.isEnabled else {
+                    XCTFail("Next turned disabled on step \(from)", file: file, line: line)
+                    return
+                }
+                recordRetry("Retry tap \(attempt) of \(attempts) on Next: step \(from) did not move to \(target)")
+            }
+            button.tap()
+            if waitForStep(target, timeout: 10) { return }
+            let now = currentStep()
+            guard now == from else {
+                attachHierarchy("Next went from step \(from) to \(now.map { "\($0)" } ?? "none")")
+                XCTFail("Next moved the wizard from step \(from) to \(now.map { "\($0)" } ?? "no step"), not step \(target)", file: file, line: line)
+                return
+            }
+        }
+        attachHierarchy("Next stayed on step \(from)")
+        XCTFail("Next did not move the wizard from step \(from) after \(attempts) taps", file: file, line: line)
+    }
+
+    /// The accessibility tree as text, kept with the result bundle, so a failure here says what was on screen.
+    private func attachHierarchy(_ name: String) {
+        let attachment = XCTAttachment(string: app.debugDescription)
+        attachment.name = "\(deviceName) \(name)"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    /// Dismisses the keyboard and waits for it to finish going: the form grows and the footer slides down as it
+    /// goes, so the next tap must not land mid-move.
     private func dismissKeyboard() {
         let keyboard = app.keyboards.firstMatch
         guard keyboard.exists else { return }
         for key in ["return", "Return", "done", "Done"] where keyboard.buttons[key].exists {
             keyboard.buttons[key].tap()
-            return
+            break
         }
+        let goneBy = Date().addingTimeInterval(5)
+        while keyboard.exists && Date() < goneBy { Thread.sleep(forTimeInterval: 0.25) }
     }
 
     /// Steps 1 → 4. `accountType` nil keeps the preselected / locked type. `employment` is "paye" or "self_employed".
@@ -107,7 +185,9 @@ final class AddUserScreenChecksTests: PPUITestCase {
         type("addUser.enterSurname", who.replacingOccurrences(of: " ", with: ""))
         type("addUser.enterEmailAddress", "test-au\(number)@example.test")
         dismissKeyboard()
-        tap("addUser.employmentType.\(employment)")
+        let employmentPill = waitFor("addUser.employmentType.\(employment)")
+        waitUntilSettled(employmentPill)
+        employmentPill.tap()
         shot("\(tag) 2 Details top")
         scrollTo("addUser.chevronRight", timeout: 8)
         let blocked = element("addUser.blockingMessage")
