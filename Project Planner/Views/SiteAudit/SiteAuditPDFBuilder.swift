@@ -2,7 +2,7 @@
 //  SiteAuditPDFBuilder.swift
 //  Project Planner
 //
-//  RULEBOOK 1.65.0 §29 (owner decision 17 Nov): the site audit PDF is laid out by the rulebook
+//  RULEBOOK 1.68.0 §29 (owner decision 17 Nov): the site audit PDF is laid out by the rulebook
 //  (`siteAuditReportLayout`) and this file only draws its ops, so the iPhone PDF is the same as web's:
 //  the same fields, labels, order, wrapped lines, card heights, page breaks, photo boxes and "Page n of N".
 //  Before 1.61.0 cards had a fixed height (annotations fell outside the border), photos were squeezed into a
@@ -122,7 +122,7 @@ enum SiteAuditPDFBuilder {
             images["logo"] = prepared
             args["logo"] = ["width": Double(prepared.size.width), "height": Double(prepared.size.height)]
         }
-        // RULEBOOK 1.65.0 §29: the input is composed by the rulebook (`siteAuditReportInput`), as on web.
+        // RULEBOOK 1.68.0 §29: the input is composed by the rulebook (`siteAuditReportInput`), as on web.
         guard let input = CanonicalBusinessEngine.siteAuditReportInput(args) else {
             print("PDF generation error: the rulebook did not compose the site audit report")
             return nil

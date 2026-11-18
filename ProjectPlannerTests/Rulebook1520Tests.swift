@@ -94,7 +94,7 @@ final class Rulebook1520Tests: XCTestCase {
         let locked = try XCTUnwrap(CanonicalBusinessEngine.variationRenumberPlan(rows: rows, prefix: "VO-", padding: 3, orderLocked: true))
         XCTAssertEqual(locked.refused, CanonicalBusinessEngine.variationOrderLockedMessage)
         XCTAssertTrue(CanonicalBusinessEngine.variationIsPinned(status: "closed", voNumberLocked: false))
-        XCTAssertTrue(CanonicalBusinessEngine.variationIsPinned(status: "open", voNumberLocked: true))
+        XCTAssertFalse(CanonicalBusinessEngine.variationIsPinned(status: "open", voNumberLocked: true), "rulebook 1.63.0: an Open variation is never pinned by a stale lock")
     }
 
     func testExportRowsAndWorkbookParts() throws {

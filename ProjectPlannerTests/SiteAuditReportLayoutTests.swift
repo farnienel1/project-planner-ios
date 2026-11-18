@@ -3,7 +3,7 @@ import UIKit
 import FirebaseFirestore
 @testable import Project_Planner
 
-/// RULEBOOK 1.65.0 §29 (owner decision 17 Nov): the iPhone site audit PDF is the web one. Both apps lay the shared
+/// RULEBOOK 1.68.0 §29 (owner decision 17 Nov): the iPhone site audit PDF is the web one. Both apps lay the shared
 /// fixture (`siteAuditReportFixtureForApps`) out through the rulebook and must get the same text lines and page
 /// breaks as `SITE_AUDIT_REPORT_FIXTURE_EXPECTED`; the renderer must draw every op; field limits come from the
 /// rulebook and stored longer text is never refused.
@@ -33,7 +33,7 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         let owner = try XCTUnwrap(fixture.inputs.first { $0["name"] as? String == "owner-c646" }?["input"] as? [String: Any])
         let layout = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportLayout(owner))
         let lines = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportTextLines(layout))
-        // Before 1.65.0 every footer read "Page n of n".
+        // Before 1.68.0 every footer read "Page n of n".
         for (index, page) in lines.enumerated() {
             XCTAssertTrue(page.contains("Page \(index + 1) of \(lines.count)"), "page \(index + 1)")
         }
@@ -72,7 +72,7 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         }
     }
 
-    /// 1.65.0 (owner request 17 Nov): the company logo at the top right, fitted whole; the initials badge when
+    /// 1.68.0 (owner request 17 Nov): the company logo at the top right, fitted whole; the initials badge when
     /// there is no logo or it could not be loaded (the app passes no logo).
     func testCompanyLogoTopRightOrInitialsBadge() throws {
         let fixture = try XCTUnwrap(CanonicalBusinessEngine.siteAuditReportFixture())
