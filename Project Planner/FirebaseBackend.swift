@@ -11597,7 +11597,7 @@ extension FirebaseBackend {
         return Array(sorted.prefix(max(1, limit)))
     }
 
-    /// RULEBOOK 1.62.0 §8 (web `loadTimesheetQueueSheets`): every stored timesheet of `userIds`, however old, grouped by the
+    /// RULEBOOK 1.66.0 §8 (web `loadTimesheetQueueSheets`): every stored timesheet of `userIds`, however old, grouped by the
     /// stored `userId` — one `userId in` query per 10 ids instead of one query per person. A chunk the rules refuse is asked
     /// id by id and only the refused ids are skipped (web review of #368 S1); any other failure throws. Each group is the
     /// latest version of each pay run (`collapseTimesheetVersions`), as `listTimesheetStates` gives one person.

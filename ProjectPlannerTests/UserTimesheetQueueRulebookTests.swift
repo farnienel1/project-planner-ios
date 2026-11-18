@@ -1,7 +1,7 @@
 import XCTest
 @testable import Project_Planner
 
-/// RULEBOOK 1.62.0 §8: the Awaiting sign-off queue and its landing count come from the rulebook's `userTimesheetQueue`
+/// RULEBOOK 1.66.0 §8: the Awaiting sign-off queue and its landing count come from the rulebook's `userTimesheetQueue`
 /// (the rule web's User Timesheets list and hub tile use). The shared scenario itself is in `CanonicalParityFixture.json`
 /// (run by `CanonicalParityFixtureTests`); these check the Swift side builds an input the rule reads the same way.
 @MainActor
@@ -53,7 +53,7 @@ final class UserTimesheetQueueRulebookTests: XCTestCase {
         XCTAssertTrue(UserTimesheetQueueRulebook.isAvailable)
     }
 
-    /// A person with two users documents on one email is one row per pay run (iOS counted them twice before 1.62.0).
+    /// A person with two users documents on one email is one row per pay run (iOS counted them twice before 1.66.0).
     func testTwoRecordsOfOnePersonAreOneRow() throws {
         let roster = [admin(), worker("W-1"), worker("w-1b", email: "Worker@Example.test")]
         let sheet: (String) -> [String: Any] = { id in
@@ -89,10 +89,50 @@ final class UserTimesheetQueueRulebookTests: XCTestCase {
         XCTAssertEqual(result.first?["bucket"] as? String, "awaiting")
     }
 
-    func testIdsOfAPersonIncludeFormerAndSameEmailIds() {
+    /// The ids come from the rulebook's `personIdSet` (as web `timesheetMemberIds`): own, former, stored same-email ids
+    /// and every users document on the person's email.
+    func testIdsOfAPersonComeFromPersonIdSet() {
         var user = worker("W-1")
         user.formerUserIds = ["old-invite"]
-        user.sameEmailUserIds = ["w-1b", "W-1"]
-        XCTAssertEqual(UserTimesheetQueueRulebook.ids(of: user), ["W-1", "old-invite", "w-1b"])
+        let second = worker("w-1c", email: "WORKER@example.test")
+        let ids = Set(UserTimesheetQueueRulebook.ids(of: user, roster: [admin(), user, second]).map { $0.lowercased() })
+        XCTAssertTrue(ids.isSuperset(of: ["w-1", "old-invite", "w-1c"]))
+    }
+
+    /// UUID-shaped ids are also asked for in the other letter case (Firestore `in` is exact); other ids as stored.
+    func testCaseVariantsOfUuidIdsOnly() {
+        let upper = "6A9632BA-1111-4222-8333-444455556666"
+        XCTAssertEqual(
+            UserTimesheetQueueRulebook.withCaseVariants([upper, "Mixed-Auth-Uid"]),
+            [upper, "Mixed-Auth-Uid", upper.lowercased()]
+        )
+    }
+
+    /// RULEBOOK 1.66.0 §8: Signed off lists a signed, unexported sheet however old (as web), not only the current run.
+    func testOldSignedSheetIsSignedOff() throws {
+        let roster = [admin(), worker("W-1")]
+        var signed = awaitingData
+        signed["managerSignedAt"] = 1_792_100_000_000.0
+        signed["managerSignedByName"] = "Ada Admin"
+        let sheets: [[String: Any]] = [
+            ["userId": "W-1", "startDayKey": "2025-11-01", "endDayKey": "2025-11-15", "data": signed,
+             "documentId": "timesheet_W-1_1761955200"],
+        ]
+        let result = try XCTUnwrap(rows(roster: roster, sheets: sheets))
+        XCTAssertEqual(result.first?["bucket"] as? String, "signed")
+    }
+
+    /// RULEBOOK 1.66.0 §8 `timesheetSheetHasActivity`: with no flag, the copy of a run with activity (here only a signed
+    /// snapshot, as `payload` passes it) is picked over the empty copy stored first.
+    func testActivityComesFromTheRule() throws {
+        let roster = [admin(), worker("W-1"), worker("w-1b", email: "Worker@Example.test")]
+        let sheets: [[String: Any]] = [
+            ["userId": "w-1b", "startDayKey": "2026-08-01", "endDayKey": "2026-08-15", "data": [String: Any](),
+             "documentId": "timesheet_w-1b_1785538800"],
+            ["userId": "W-1", "startDayKey": "2026-08-01", "endDayKey": "2026-08-15",
+             "data": ["weeklyReportOverride": [String: Any]()], "documentId": "timesheet_W-1_1785538800"],
+        ]
+        let result = try XCTUnwrap(rows(roster: roster, sheets: sheets))
+        XCTAssertEqual(result.first?["documentId"] as? String, "timesheet_W-1_1785538800")
     }
 }
