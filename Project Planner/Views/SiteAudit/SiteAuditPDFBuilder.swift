@@ -5,7 +5,7 @@
 //  RULEBOOK 1.68.0 §29 (owner decision 17 Nov): the site audit PDF is laid out by the rulebook
 //  (`siteAuditReportLayout`) and this file only draws its ops, so the iPhone PDF is the same as web's:
 //  the same fields, labels, order, wrapped lines, card heights, page breaks, photo boxes and "Page n of N".
-//  Before 1.61.0 cards had a fixed height (annotations fell outside the border), photos were squeezed into a
+//  Before 1.68.0 cards had a fixed height (annotations fell outside the border), photos were squeezed into a
 //  200 × 118 box and every footer read "Page n of n".
 //
 

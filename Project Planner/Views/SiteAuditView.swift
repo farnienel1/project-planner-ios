@@ -1443,7 +1443,7 @@ struct SiteAuditCreateFlowView: View {
             errorMessage = "Connect to the internet to update this audit."
             return
         }
-        // RULEBOOK 1.61.0 §29: the audit's title is limited for a new edit only; a stored longer one passes.
+        // RULEBOOK 1.68.0 §29: the audit's title is limited for a new edit only; a stored longer one passes.
         if let limit = CanonicalBusinessEngine.siteAuditFieldLimitError(
             ["customTitle": customTitle],
             stored: existingAudit.map { ["customTitle": $0.customTitle] }
@@ -1850,7 +1850,7 @@ struct SiteAuditProjectPickerView: View {
 struct SiteAuditAddItemView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: SiteAuditDraftItem
-    /// The item as it was opened (RULEBOOK 1.61.0 §29): a field left as stored passes whatever its length,
+    /// The item as it was opened (RULEBOOK 1.68.0 §29): a field left as stored passes whatever its length,
     /// so text saved before the limits is never cut or refused (guardrail 3); only new edits are limited.
     private let storedItem: SiteAuditDraftItem
     @State private var showingCamera = false
@@ -1884,7 +1884,7 @@ struct SiteAuditAddItemView: View {
         draft.image != nil && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && limitError == nil
     }
 
-    /// `siteAuditFieldLimitError` (RULEBOOK 1.61.0 §29): nil when every edited field is within its limit.
+    /// `siteAuditFieldLimitError` (RULEBOOK 1.68.0 §29): nil when every edited field is within its limit.
     private var limitError: String? {
         CanonicalBusinessEngine.siteAuditFieldLimitError(
             ["title": draft.title, "location": draft.location, "assignee": draft.assignee,

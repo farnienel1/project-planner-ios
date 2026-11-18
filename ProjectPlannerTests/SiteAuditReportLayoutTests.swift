@@ -135,10 +135,37 @@ final class SiteAuditReportLayoutTests: XCTestCase {
         XCTAssertEqual(limits["comments"], 2000)
         XCTAssertEqual(limits["annotations"], 2000)
         XCTAssertEqual(limits["customTitle"], 120)
+        // Final review of #389 / #262: personal audit job number and name are limited, never cut.
+        XCTAssertEqual(limits["jobNumber"], 60)
+        XCTAssertEqual(limits["jobName"], 200)
+        XCTAssertEqual(CanonicalBusinessEngine.siteAuditFieldLabel("jobName"), "Job name")
+        let longJob: [String: Any] = [
+            "jobNumber": String(repeating: "9", count: 61), "jobName": "Job", "date": "2026-11-18",
+            "items": [["id": "i", "title": "T"]],
+        ]
+        XCTAssertNotNil(CanonicalBusinessEngine.personalSiteAuditValidationError(draft: longJob, organizationId: nil, ownerUserId: nil))
         XCTAssertEqual(CanonicalBusinessEngine.siteAuditFieldLabel("location"), "Location")
         let counter = try XCTUnwrap(CanonicalBusinessEngine.siteAuditFieldCounter(field: "title", value: String(repeating: "a", count: 34)))
         XCTAssertEqual(counter.label, "34 / 120")
         XCTAssertFalse(counter.blocksSave)
+    }
+
+    /// Final review of #389 / #262: each photo's object name is unique per item and the same on every retry.
+    func testPhotoObjectPathIsUniquePerItemAndStable() {
+        let paths = (0..<3).map {
+            CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+                kind: "project", organizationId: "org", userId: "U1abc", auditId: "A1",
+                createdAtMs: 1_763_400_000_000, index: $0, fileExtension: "jpg"
+            )
+        }
+        XCTAssertEqual(paths, (0..<3).map { "organizations/org/siteAudits/A1/images/U1abc_\(1_763_400_000_000 + $0).jpg" })
+        XCTAssertEqual(
+            CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+                kind: "personal", organizationId: "org", userId: "U1abc", auditId: "A1",
+                createdAtMs: 1_763_400_000_000, index: 1, fileExtension: "jpg"
+            ),
+            "organizations/org/personalSiteAudits/U1abc/A1/U1abc_1763400000001.jpg"
+        )
     }
 
     func testOnlyNewEditsAreLimitedStoredTextPasses() {

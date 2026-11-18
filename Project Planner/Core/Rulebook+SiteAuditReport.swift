@@ -1,6 +1,6 @@
 import Foundation
 
-/// RULEBOOK 1.61.0 §29: the site audit report and field limits come from the packed script, never Swift.
+/// RULEBOOK 1.68.0 §29: the site audit report and field limits come from the packed script, never Swift.
 /// `siteAuditReportLayout` lays the whole report out (wrapped lines, card heights, page breaks, "Page n of N",
 /// photo boxes); `SiteAuditPDFBuilder` only draws its ops, so the iPhone PDF matches web's.
 extension CanonicalBusinessEngine {
@@ -21,8 +21,28 @@ extension CanonicalBusinessEngine {
         callJSON("siteAuditReportTextLines", arguments: [layout]) as? [[String]]
     }
 
+    /// `siteAuditPhotoObjectPath({ kind, organizationId, userId, auditId, createdAtMs, index, extension })` (final
+    /// review of #389 / #262): where one site audit photo is stored, `{uid}_{createdAtMs + index}.{ext}` — unique per
+    /// item, the same on every retry of that queued copy.
+    nonisolated static func siteAuditPhotoObjectPath(
+        kind: String,
+        organizationId: String,
+        userId: String,
+        auditId: String,
+        createdAtMs: Int64,
+        index: Int,
+        fileExtension: String
+    ) -> String? {
+        let input: [String: Any] = [
+            "kind": kind, "organizationId": organizationId, "userId": userId, "auditId": auditId,
+            "createdAtMs": createdAtMs, "index": index, "extension": fileExtension,
+        ]
+        return callJSON("siteAuditPhotoObjectPath", arguments: [input]) as? String
+    }
+
     /// `SITE_AUDIT_FIELD_LIMITS`: maximum characters of a NEW edit (title 120, location 120, assignee 80,
-    /// comments 2000, annotations 2000, customTitle 120). Stored longer text is never cut.
+    /// comments 2000, annotations 2000, customTitle 120; personal audits jobNumber 60, jobName 200). Stored longer
+    /// text is never cut.
     nonisolated static var siteAuditFieldLimits: [String: Int] {
         constant("SITE_AUDIT_FIELD_LIMITS", as: [String: Int].self) ?? [:]
     }

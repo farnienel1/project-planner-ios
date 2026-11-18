@@ -346,7 +346,7 @@ struct SiteAuditDetailsStepView: View {
                 TextField("e.g. Plant room snags", text: $customTitle)
                     .accessibilityIdentifier("siteAuditDetailsStep.eGPlantRoomSnags")
                     .font(.body)
-                // RULEBOOK 1.61.0 §29: the live counter (`siteAuditFieldCounter`); submit checks the limit.
+                // RULEBOOK 1.68.0 §29: the live counter (`siteAuditFieldCounter`); submit checks the limit.
                 if let counter = CanonicalBusinessEngine.siteAuditFieldCounter(field: "customTitle", value: customTitle) {
                     Text(counter.label)
                         .font(.caption2.monospacedDigit())

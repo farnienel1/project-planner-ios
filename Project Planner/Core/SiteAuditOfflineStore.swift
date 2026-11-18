@@ -257,15 +257,19 @@ final class SiteAuditOfflineStore: ObservableObject {
             defer { releaseAuditClaim(id: recordId) }
             do {
                 var items: [SiteAuditItem] = []
-                for item in record.audit.items {
+                for (index, item) in record.audit.items.enumerated() {
                     var remoteURL = item.imageURL
                     if remoteURL == nil,
                        let fileName = record.localImageNames[item.id.uuidString],
                        let image = UIImage(contentsOfFile: pendingFolderURL(for: record.id).appendingPathComponent(fileName).path) {
+                        // The queued copy's own created time plus the item's place: unique per photo, stable on retry
+                        // (a re-queued copy has a new created time, so it never reuses an older copy's names).
                         remoteURL = try await firebaseBackend.uploadSiteAuditImage(
                             image,
                             auditId: record.audit.id,
-                            organizationId: record.organizationId
+                            organizationId: record.organizationId,
+                            createdAtMs: Int64((record.createdAt.timeIntervalSince1970 * 1000).rounded(.down)),
+                            index: index
                         )
                         if let remoteURL {
                             recordUploadedPhoto(auditId: record.id, revision: record.revision, itemId: item.id, url: remoteURL)

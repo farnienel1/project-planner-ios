@@ -561,13 +561,17 @@ extension FirebaseBackend {
     }
 
     /// Uploads one personal audit photo (JPEG) into the owner's folder (`personalSiteAuditImagePath`); returns its path.
-    func uploadPersonalSiteAuditPhoto(auditId: String, jpegData: Data) async throws -> String {
+    /// `createdAtMs` / `index`: the audit's submit time and the photo's place (`siteAuditPhotoObjectPath`, final review
+    /// of #389 / #262), so no two photos of one audit ever share a name.
+    func uploadPersonalSiteAuditPhoto(auditId: String, jpegData: Data, createdAtMs: Int64, index: Int) async throws -> String {
         guard let orgId = payeClaimsOrganizationId, let uid = payeClaimsUid,
-              let path = CanonicalBusinessEngine.personalSiteAuditImagePath(
+              let path = CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+                kind: "personal",
                 organizationId: orgId,
-                ownerUserId: uid,
+                userId: uid,
                 auditId: auditId,
-                unixMs: StorageUploadPolicy.unixMillisecondsNow(),
+                createdAtMs: createdAtMs,
+                index: index,
                 fileExtension: "jpg"
               ) else {
             throw PayeClaimRefused(message: "You must be signed in to upload photos.")

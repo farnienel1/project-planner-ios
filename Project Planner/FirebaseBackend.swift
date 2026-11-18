@@ -3160,7 +3160,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
-    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String) async throws -> String {
+    /// `createdAtMs` / `index`: the queued copy's created time and the item's place in the audit — the photo's object
+    /// name (`siteAuditPhotoObjectPath`, final review of #389 / #262) is unique per item and the same on every retry.
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, createdAtMs: Int64, index: Int) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
@@ -3174,7 +3176,17 @@ class FirebaseBackend: ObservableObject {
             encodeFailedMessage: "Failed to process image",
             oversizedMessage: "Site audit photo is too large. It must be 10 MB or smaller."
         )
-        let imagePath = "organizations/\(organizationId)/siteAudits/\(auditId.uuidString)/images/\(prepared.objectName)"
+        guard let imagePath = CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+            kind: "project",
+            organizationId: organizationId,
+            userId: userId,
+            auditId: auditId.uuidString,
+            createdAtMs: createdAtMs,
+            index: index,
+            fileExtension: "jpg"
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This photo has no valid place to upload to."])
+        }
         let imageData = prepared.data
         let storageRef = storage.reference().child(imagePath)
         let metadata = StorageMetadata()
@@ -3188,6 +3200,7 @@ class FirebaseBackend: ObservableObject {
         // `siteAuditUploadTotalSeconds` in all; the audit stays queued (`SiteAuditOfflineStore`) and the next pass
         // retries it, keeping every photo already uploaded.
         let watch = VariationUploadWatch()
+        do {
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             let task = storageRef.putData(imageData, metadata: metadata) { metadata, error in
                 guard watch.finish() else { return }
@@ -3216,9 +3229,22 @@ class FirebaseBackend: ObservableObject {
                 }
             }
         }
+        } catch {
+            // A retry refused because this item's object is already there (an earlier attempt finished on the server,
+            // past the §24 overwrite window): that photo counts as uploaded instead of being refused for ever.
+            if let existing = await Self.existingDownloadURLAfterRefusal(error, storageRef: storageRef) { return existing }
+            throw error
+        }
         // RULEBOOK §1 / §24: only a download URL is stored, never a Storage bucket address (web shows https links
         // only): retry, else fail the upload visibly.
         return try await downloadURLOrRemoveUpload(storageRef, path: imagePath, organizationId: organizationId, userId: userId, logTag: "SiteAudit")
+    }
+
+    /// The download URL of the object at `storageRef` when `error` is a Storage refusal and the object exists, else nil.
+    static func existingDownloadURLAfterRefusal(_ error: Error, storageRef: StorageReference) async -> String? {
+        let nsError = error as NSError
+        guard nsError.domain == StorageErrorDomain, nsError.code == StorageErrorCode.unauthorized.rawValue else { return nil }
+        return try? await storageRef.downloadURL().absoluteString
     }
 
     static let siteAuditUploadStallSeconds: TimeInterval = 60

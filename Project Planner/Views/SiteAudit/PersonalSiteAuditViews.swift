@@ -246,9 +246,11 @@ struct PersonalSiteAuditCreateView: View {
                     Text("\(CanonicalBusinessEngine.payeClaimText("PERSONAL_SITE_AUDIT_PRIVATE_NOTE", fallback: "Only you can see your personal site audits.")) Not linked to any job.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    TextField("Job number", text: $jobNumber)
-                    TextField("Job name", text: $jobName)
+                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("jobNumber") ?? "Job number", text: $jobNumber)
+                    PersonalSiteAuditFieldCounter(field: "jobNumber", value: jobNumber)
+                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("jobName") ?? "Job name", text: $jobName)
                         .accessibilityIdentifier("personalSiteAudits.jobName")
+                    PersonalSiteAuditFieldCounter(field: "jobName", value: jobName)
                     Picker("Audit type", selection: $type) {
                         ForEach(SiteAuditType.allCases) { value in
                             Text(value.rawValue).tag(value.rawValue)
@@ -371,7 +373,7 @@ struct PersonalSiteAuditCreateView: View {
             error = message
             return
         }
-        // RULEBOOK 1.61.0 §29: field limits of a new audit (`siteAuditFieldLimitError`), before any upload.
+        // RULEBOOK 1.68.0 §29: field limits of a new audit (`siteAuditFieldLimitError`), before any upload.
         if let limit = CanonicalBusinessEngine.siteAuditFieldLimitError(["customTitle": customTitle])
             ?? items.lazy.compactMap({ CanonicalBusinessEngine.siteAuditFieldLimitError(["title": $0.title, "location": $0.location, "comments": $0.comments]) }).first {
             error = limit
@@ -379,11 +381,12 @@ struct PersonalSiteAuditCreateView: View {
         }
         error = nil
         let auditId = UUID().uuidString
+        let createdAtMs = StorageUploadPolicy.unixMillisecondsNow()
         var uploaded: [[String: Any]] = []
         do {
             for (index, item) in items.enumerated() {
                 saving = "Uploading photo \(index + 1) of \(items.count)"
-                let path = try await firebaseBackend.uploadPersonalSiteAuditPhoto(auditId: auditId, jpegData: item.jpeg)
+                let path = try await firebaseBackend.uploadPersonalSiteAuditPhoto(auditId: auditId, jpegData: item.jpeg, createdAtMs: createdAtMs, index: index)
                 uploaded.append([
                     "id": item.id,
                     "title": item.title,
@@ -405,7 +408,7 @@ struct PersonalSiteAuditCreateView: View {
     }
 }
 
-/// RULEBOOK 1.61.0 §29: the live "34 / 120" counter under a personal site audit field (`siteAuditFieldCounter`).
+/// RULEBOOK 1.68.0 §29: the live "34 / 120" counter under a personal site audit field (`siteAuditFieldCounter`).
 struct PersonalSiteAuditFieldCounter: View {
     let field: String
     let value: String
