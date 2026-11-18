@@ -37,8 +37,10 @@ import XCTest
 /// New baseline (mass-assignment audit 17 Nov, owner approved, iOS #263 — a deliberate behaviour change):
 /// `FirebaseBackend.createUserInvitation` now requires `inviterIsAdmin` (the inviter's level in the open organisation,
 /// `organizationLevelFor`; no default) so every invitation is checked by `InvitationDocument.requireAllowed`, which
-/// fails closed, and the placeholder users document never carries `isSuperAdmin`. Its hash was recomputed with this
-/// test's own extraction. Every other recorded hash is unchanged.
+/// fails closed, and the placeholder users document never carries `isSuperAdmin`. `UserStore.inviteUser` drops the
+/// check of the inviter's home-company users document (read twice) for that one open-organisation level
+/// (`FirebaseBackend.inviterIsAdmin`): it refuses when the level cannot be read and lets a non-admin add only an
+/// operative. Both hashes were recomputed with this test's own extraction. Every other recorded hash is unchanged.
 final class AddUserSavedDataGuardTests: XCTestCase {
     private var repoRoot: URL {
         URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -83,7 +85,7 @@ final class AddUserSavedDataGuardTests: XCTestCase {
         ("Project Planner/Views/AddUserView.swift", ".onChange(of: utrNumber) { _, newValue in", "8afb250c477bd0f7c77cc43adfdb2ea6ef1fa5742986d583dda31625a679fdb2"),
         ("Project Planner/FirebaseBackend.swift", "func createUserInvitation(email: String,", "68f0ee260d971337a99c24413826396e594df4d9112a9930be712e53f8dae1ac"), // mass-assignment audit 17 Nov (#263): `inviterIsAdmin` required and the placeholder never carries `isSuperAdmin`
         ("Project Planner/FirebaseBackend.swift", "static func inviteUserRateFields(dayRate: Double?) -> InviteUserRateFields? {", "d048aab66526037ceaf3e3e6e90702c98ffc043e60b942f63a1bd7d19d1feffa"),
-        ("Project Planner/Core/UserStore.swift", "func inviteUser(firstName: String,", "890f7b91c366ffaef2a4ddfb45ec24d69d3d478cd3e5f2ab72728ee5cbd41793"),
+        ("Project Planner/Core/UserStore.swift", "func inviteUser(firstName: String,", "d9ad961778243fb8483e3283ce28db45cbb24c058962075d7066c720b04a518f"), // mass-assignment audit 17 Nov (#263): one check, the inviter's level in the open organisation
         ("Project Planner/Core/AddUserPermissionSeeding.swift", "static func select(", "18c09df467b70a01b69c82b87b9025dff0b3e6ab8864ed2e6af52d0a1322dc23"),
     ]
 
