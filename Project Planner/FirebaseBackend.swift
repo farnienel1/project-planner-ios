@@ -11646,40 +11646,91 @@ extension FirebaseBackend {
         return out
     }
 
-    /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
-    /// `exportedAt != null`). Each row carries `__documentId` and `__subjectId`, the subject read from the document id
-    /// (`timesheetDocumentSubjectId`). Rows that do carry `userId` are left to `listTimesheetStates`.
-    /// Memoised per organisation for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s), so
-    /// reopening the Exported list does not repeat the organisation-wide read.
-    func listExportedTimesheetsWithoutUserId(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
+    /// `w-timesheet-lookups` (web `loadExportedTimesheetHistory` fast path): every exported timesheet of the
+    /// organisation (`exportedAt != null`, timesheet documents only). Each row carries `__documentId` and `__subjectId` —
+    /// its stored `userId`, else the id its document id names (`timesheetDocumentSubjectId`). Memoised per organisation
+    /// for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s). Throws when the rules refuse the read
+    /// (for example a manager while `privatePay` is on); the caller then reads person by person.
+    func listExportedTimesheets(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
         let key = normalizedOrganizationId(organizationId)
-        if let hit = Self.exportedWithoutUserIdMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
+        if let hit = Self.exportedTimesheetsMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
             return hit.rows
         }
-        let rows = try await readExportedTimesheetsWithoutUserId(organizationId: organizationId)
-        Self.exportedWithoutUserIdMemo[key] = (now, rows)
-        return rows
-    }
-
-    static let exportedHistoryMemoSeconds: TimeInterval = 20
-    private static var exportedWithoutUserIdMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
-
-    private func readExportedTimesheetsWithoutUserId(organizationId: String) async throws -> [[String: Any]] {
         let snapshot = try await db.collection("organizations")
             .document(organizationId)
             .collection("settings")
             .whereField("exportedAt", isNotEqualTo: NSNull())
             .getDocuments()
-        return snapshot.documents.compactMap { doc -> [String: Any]? in
+        let rows = snapshot.documents.compactMap { doc -> [String: Any]? in
+            guard doc.documentID.hasPrefix("timesheet_") else { return nil }
             var row = doc.data()
-            let stored = (row["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard stored.isEmpty,
-                  let subject = CanonicalBusinessEngine.timesheetDocumentSubjectId(doc.documentID),
-                  !subject.isEmpty else { return nil }
+            let subject = PersonTimesheetLookup.documentOwnerId(documentId: doc.documentID, data: row)
+            guard !subject.isEmpty else { return nil }
             row["__documentId"] = doc.documentID
             row["__subjectId"] = subject
             return row
         }
+        Self.exportedTimesheetsMemo[key] = (now, rows)
+        return rows
+    }
+
+    static let exportedHistoryMemoSeconds: TimeInterval = 20
+    /// The end of a Firestore document-id prefix range: U+F8FF, the highest code point used in ids.
+    static let documentIdPrefixEnd = "\u{F8FF}"
+    private static var exportedTimesheetsMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
+
+    /// `w-timesheet-lookups` (guardrail 1, web `listPersonTimesheetStates`): one person's timesheet rows under every id
+    /// they go by. `ids[0]` is their own id (`userId ==`, the query the 1.43.0 rules allow everyone for themselves);
+    /// the other ids (`personIdSet`: former invite ids, a second users document on the same email) are asked with
+    /// `userId in` in chunks of `PersonTimesheetLookup.idChunk`, and every id's document-id prefix `timesheet_{id}_`
+    /// finds sheets stored without `userId`. A query the rules refuse (an operative asking about their own former id)
+    /// is skipped and logged, never at the cost of the rows already read. Rows carry `__documentId` and `__subjectId`
+    /// (the id they are filed under); versions collapse as `listTimesheetStates`; newest `weekStart` first.
+    func listPersonTimesheetStates(
+        organizationId: String,
+        ids: [String],
+        limit: Int = 400,
+        versions: TimesheetListVersions = .latest,
+        /// Review of #259 (N1): the rules refuse the document-id query to an operative — not asked for them.
+        includeDocumentPrefix: Bool = true
+    ) async -> [[String: Any]] {
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        let documents: (Query) async throws -> [PersonTimesheetLookup.Document] = { query in
+            try await query.getDocuments().documents.map { (documentId: $0.documentID, data: $0.data()) }
+        }
+        var byDocumentPrefix: ((String) async throws -> [PersonTimesheetLookup.Document])?
+        if includeDocumentPrefix {
+            byDocumentPrefix = { id in
+                let prefix = "timesheet_\(id)_"
+                return try await documents(settings
+                    .whereField(FieldPath.documentID(), isGreaterThanOrEqualTo: prefix)
+                    .whereField(FieldPath.documentID(), isLessThan: prefix + Self.documentIdPrefixEnd))
+            }
+        }
+        let mine = await PersonTimesheetLookup.gather(
+            ids: ids,
+            byUserIds: { chunk in
+                if chunk.count == 1 { return try await documents(settings.whereField("userId", isEqualTo: chunk[0])) }
+                return try await documents(settings.whereField("userId", in: chunk))
+            },
+            byDocumentPrefix: byDocumentPrefix,
+            warn: { NSLog("TIMESHEET_PERSON_QUERY_SKIPPED org=%@ %@", organizationId, $0) }
+        )
+        let rows = Self.collapseTimesheetVersions(mine, versions: versions).map { row -> [String: Any] in
+            var row = row
+            let documentId = (row["__documentId"] as? String) ?? ""
+            row["__subjectId"] = PersonTimesheetLookup.documentOwnerId(
+                documentId: documentId,
+                data: row.filter { !$0.key.hasPrefix("__") }
+            )
+            return row
+        }
+        let sorted = rows.sorted { lhs, rhs in
+            let left = (lhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            let right = (rhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            return left > right
+        }
+        return Array(sorted.prefix(max(1, limit)))
     }
 
     private func hsCollectionName(for project: Project) -> String {
