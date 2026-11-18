@@ -1,4 +1,5 @@
 import XCTest
+import FirebaseFirestore
 @testable import Project_Planner
 
 /// Mass-assignment audit 17 Nov (owner approved): a person never writes their own privileges, pay or line manager when
