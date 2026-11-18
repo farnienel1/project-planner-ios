@@ -462,6 +462,12 @@ struct DailyOverviewView: View {
                             .padding(.top, 20)
                     }
 
+                    // RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day leave not covered" rows, as Warnings.
+                    if !JobAccessContext.viewerPending, !leaveCoverRows.isEmpty {
+                        leaveCoverRevampCard
+                            .padding(.top, 20)
+                    }
+
                     if dayLeave == nil || !dayHolidays.isEmpty {
                         annualLeaveRevampBlock
                     }
@@ -795,6 +801,84 @@ struct DailyOverviewView: View {
                 .foregroundStyle(PPColor.onNavyCaption)
         }
         .opacity(dimmed ? 0.5 : 1)
+    }
+
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): the day's `leaveCoverageRows` `leave_cover` rows, in this viewer's Daily
+    /// Overview scope (`dailyOverviewScopeFor`), under the working hours in effect that day — the rows Warnings lists.
+    private var leaveCoverRows: [Warning] {
+        WarningsComputation.leaveCoverRowsOnDay(
+            day: overviewDate,
+            users: userStore.organizationUsers,
+            operatives: operativeStore.allOperatives,
+            operativeBookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            holidays: holidayStore.bookings,
+            policy: payrollTimePolicy,
+            warningDetection: firebaseBackend.currentOrganization?.settings.warningDetection ?? .default,
+            scope: .dailyOverview
+        )
+    }
+
+    private var leaveCoverRevampCard: some View {
+        let rows = leaveCoverRows
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 13) {
+                PPIconTile(symbol: "sun.max.fill", family: .trade, size: PPMetrics.menuIcon)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Half-day leave not covered")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text("\(rows.count) \(rows.count == 1 ? "person" : "people") with half a day not booked")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if canBookLabour {
+                    Button(action: { showingBookLabour = true }) {
+                        Text("Book labour")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .frame(height: 32)
+                            .background(Capsule().fill(Color.orange))
+                    }
+                    .accessibilityIdentifier("dailyOverview.leaveCover.bookLabour")
+                    .buttonStyle(PPPressableButtonStyle())
+                }
+            }
+            .padding(14)
+
+            ForEach(rows) { warning in
+                let detail = warning.annualLeave
+                let name = detail?.personName ?? ""
+                PPRowDivider()
+                HStack(spacing: 13) {
+                    Text(PlannerUIInitials.from(name))
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                        .background(PPFamily.trade.gradient, in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(name)
+                            .font(.body)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Text("\(detail?.leaveLabel ?? "") annual leave · Not booked: \((detail?.missingRanges ?? []).joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 14)
+                .frame(minHeight: 48)
+            }
+        }
+        .background(PPColor.card)
+        .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.35), lineWidth: 1)
+        )
     }
 
     private var unbookedLabourRevampCard: some View {
