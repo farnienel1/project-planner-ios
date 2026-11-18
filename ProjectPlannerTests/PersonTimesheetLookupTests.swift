@@ -198,7 +198,8 @@ final class PersonTimesheetLookupTests: XCTestCase {
             },
             byDocumentPrefix: nil
         )
-        XCTAssertEqual(found.map(\.documentId).sorted(), ["timesheet_U1_1754006400", "timesheet_U1_1761955200"])
+        // The own `userId ==` sheet stays; `timesheet_U1_1754006400` has no `userId` and the document-id query is off here.
+        XCTAssertEqual(found.map(\.documentId), ["timesheet_U1_1761955200"])
         XCTAssertEqual(asked.values.filter { $0.count == 1 && $0 != [own] }, [], "no id-by-id retry after a non-refusal")
     }
 
