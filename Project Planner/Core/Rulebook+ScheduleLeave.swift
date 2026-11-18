@@ -150,7 +150,7 @@ enum ScheduleLeaveMarksInput {
             "people": people.map { person -> [String: Any] in
                 [
                     "key": person.key,
-                    "ids": person.operativeIds.map { Booking.storedOperativeId(for: $0) } + person.userIds,
+                    "ids": person.operativeIds.map { Booking.operativeMatchKey(for: $0) } + person.userIds,
                 ]
             },
             "holidays": records.map(\.json),

@@ -428,7 +428,7 @@ class NotificationService: ObservableObject {
         // RULEBOOK 1.16.0 §13 `bookingCreatedRecipients(bookedIds, booker, roster, catalogue)`: the booked id as stored
         // (an operatives row, a uid or a former id) resolves to the person's account; never the booker, so booking
         // yourself writes nothing.
-        let storedOperativeId = Booking.storedOperativeId(for: operativeId)
+        let storedOperativeId = Booking.operativeMatchKey(for: operativeId)
         guard let canonicalUserId = CanonicalBusinessEngine.bookingCreatedRecipients(
             bookedIds: [storedOperativeId],
             booker: actorPerson,
@@ -487,7 +487,7 @@ class NotificationService: ObservableObject {
         let operativesCatalogue = recipientCatalogue
         for recipient in recipients {
             guard let canonicalUserId = CanonicalBusinessEngine.bookingCreatedRecipients(
-                bookedIds: [Booking.storedOperativeId(for: recipient.operativeId)],
+                bookedIds: [Booking.operativeMatchKey(for: recipient.operativeId)],
                 booker: booker,
                 roster: roster,
                 catalogue: operativesCatalogue

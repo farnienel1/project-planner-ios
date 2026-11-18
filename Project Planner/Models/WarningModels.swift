@@ -251,6 +251,21 @@ nonisolated struct Warning: Identifiable, Hashable, Codable, Sendable {
         /// Clock ranges still open on the working half, formatted `09:30–12:00`.
         var missingRanges: [String]
         var missingHours: Double
+        /// RULEBOOK 1.60.0 (owner report 17 Nov): who and which day, so the card's buttons open Book labour, Daily
+        /// Overview and Annual leave on that person and day. Optional — older cached rows decode without them.
+        var userId: String? = nil
+        var operativeId: String? = nil
+        var personKey: String? = nil
+        var dayKey: String? = nil
+        /// `AM` or `PM`: the leave half (`leaveSlot` / `leaveLabel`).
+        var leaveLabel: String? = nil
+        /// The custom hours to prefill (`HH:mm`), from the rulebook's `leaveCoverBookingWindow`: the first uncovered
+        /// stretch, never across an existing booking. Nil for a leave_clash row.
+        var gapStart: String? = nil
+        var gapEnd: String? = nil
+
+        /// `AM` / `PM`: the half to book (the other half from the leave).
+        var workingLabel: String { leaveLabel == "PM" ? "AM" : "PM" }
     }
 
     struct QualificationExpiryWarningDetails: Hashable, Codable, Sendable {
