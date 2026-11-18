@@ -113,7 +113,7 @@ enum MultiPersonBookingCheck {
     /// `resolveBookingPerson`) — every id that person goes by.
     @MainActor
     static func ids(forOperative operative: Operative, users: [AppUser], operatives: [Operative]) -> [String] {
-        var ids = [Booking.storedOperativeId(for: operative.id), operative.documentId]
+        var ids = [Booking.operativeMatchKey(for: operative.id), operative.documentId]
         if let resolved = CanonicalBusinessEngine.resolveBookingPerson(
             operative.documentId,
             bookingPersonInput(operatives: operatives, users: users)
@@ -137,7 +137,7 @@ enum MultiPersonBookingCheck {
             guard dayKeys.contains(key) else { continue }
             rows.append(.init(
                 id: booking.id.uuidString,
-                personId: Booking.storedOperativeId(for: booking.operativeId),
+                personId: Booking.operativeMatchKey(for: booking.operativeId),
                 dayKey: key,
                 status: booking.status.rawValue
             ))
@@ -184,8 +184,8 @@ extension MultiPersonBookingCheck {
         let dayKeys = Set(dates.map { CanonicalBusinessEngine.bookingDayKey($0) })
         return CanonicalBusinessEngine.multiPersonBookingBlocks(
             people: chosen.map { person in
-                var ids = [Booking.storedOperativeId(for: person.operativeId)]
-                    + person.bookingIds.map { Booking.storedOperativeId(for: $0) }
+                var ids = [Booking.operativeMatchKey(for: person.operativeId)]
+                    + person.bookingIds.map { Booking.operativeMatchKey(for: $0) }
                 if let userId = person.userId, !userId.isEmpty {
                     ids += Self.ids(forUserId: userId, users: users, operatives: operatives)
                 }

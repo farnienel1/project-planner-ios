@@ -674,7 +674,7 @@ struct BookLabourFlowView: View {
                     personKey: $0.id,
                     name: $0.displayName,
                     ids: MultiPersonBookingCheck.ids(forUserId: $0.user.id, users: users, operatives: operatives)
-                        + ($0.bookingOperative.flatMap { Booking.storedOperativeId(for: $0.id) }.map { [$0] } ?? [])
+                        + ($0.bookingOperative.map { [Booking.operativeMatchKey(for: $0.id)] } ?? [])
                 )
             },
             dayKeys: [key],
