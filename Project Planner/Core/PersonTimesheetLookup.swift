@@ -140,7 +140,7 @@ enum PersonTimesheetLookup {
 
     /// Review of #259 (S1, S2, N1; web `personTimesheetDocs`): reads one person's timesheet documents with the queries
     /// given — the own id (`ids[0]`, `userId ==`), the other ids in chunks of `idChunk` (`userId in`, a refused chunk
-    /// asked id by id), and, when `byDocumentPrefix` is given (never for an operative: the rules refuse it), each id's
+    /// asked id by id only when the rules refused it), and, when `byDocumentPrefix` is given (never for an operative: the rules refuse it), each id's
     /// document-id prefix — up to 8 at a time. Firestore matches ids exactly as stored (case-sensitive), so each id is
     /// asked as `personIdSet` lists it. A refused query is skipped and reported to `warn`, never at the cost of the
     /// rows already read. Returns only the person's documents (`documentsForPerson`).
@@ -159,6 +159,12 @@ enum PersonTimesheetLookup {
         for chunk in aliasChunks(unique) {
             jobs.append {
                 do { return try await byUserIds(chunk) } catch {
+                    // Re-review of #259 (web `queryIdsSkippingRefused`): only a refusal by the rules is asked again
+                    // id by id; any other failure (offline, unavailable) drops the chunk and is logged.
+                    guard FirebaseBackend.isPermissionDenied(error) else {
+                        warn("alias userId query failed")
+                        return []
+                    }
                     var rows: [Document] = []
                     for id in chunk {
                         do { rows += try await byUserIds([id]) } catch { warn("alias userId query refused") }

@@ -182,6 +182,26 @@ final class PersonTimesheetLookupTests: XCTestCase {
         XCTAssertFalse(warnings.values.isEmpty)
     }
 
+    /// Re-review of #259: a chunk that fails for any reason but a refusal (here: unavailable) is not asked id by id.
+    func testGatherRetriesIdByIdOnlyWhenTheRulesRefuse() async {
+        let ids = RulebookPeople.ownerIds(for: farnie, users: roster)
+        let asked = Recorder<[String]>()
+        let unavailable = NSError(domain: "FIRFirestoreErrorDomain", code: 14)
+        let source = documents
+        let own = ids[0]
+        let found = await PersonTimesheetLookup.gather(
+            ids: ids,
+            byUserIds: { chunk in
+                asked.add(chunk)
+                if chunk != [own] { throw unavailable }
+                return source.filter { chunk.contains(($0.data["userId"] as? String) ?? "") }
+            },
+            byDocumentPrefix: nil
+        )
+        XCTAssertEqual(found.map(\.documentId).sorted(), ["timesheet_U1_1754006400", "timesheet_U1_1761955200"])
+        XCTAssertEqual(asked.values.filter { $0.count == 1 && $0 != [own] }, [], "no id-by-id retry after a non-refusal")
+    }
+
     func testGatherAsksNoDocumentIdQueryForAnOperative() async {
         let queries = fakeQueries(documents)
         let found = await PersonTimesheetLookup.gather(ids: ["U1"], byUserIds: queries.byUserIds, byDocumentPrefix: nil)
