@@ -645,7 +645,8 @@ struct InvoicingView: View {
         var loadError: String?
         do {
             try await UserTimesheetQueueRulebook.refreshFromCloud(
-                users: listUsers, roster: landingRoster, firebaseBackend: firebaseBackend, organizationId: orgId
+                users: listUsers, roster: landingRoster, firebaseBackend: firebaseBackend, organizationId: orgId,
+                recentRunSettings: isAdminViewer ? settings : nil
             )
         } catch {
             loadError = UserTimesheetQueueRulebook.loadFailedMessage
@@ -5077,7 +5078,8 @@ struct OperativeTimesheetsView: View {
         var loadError: String?
         do {
             try await UserTimesheetQueueRulebook.refreshFromCloud(
-                users: users, roster: roster, firebaseBackend: firebaseBackend, organizationId: orgId
+                users: users, roster: roster, firebaseBackend: firebaseBackend, organizationId: orgId,
+                recentRunSettings: isAdminViewer ? settings : nil
             )
         } catch {
             loadError = UserTimesheetQueueRulebook.loadFailedMessage

@@ -737,9 +737,7 @@ final class SignedTimesheetChangeContext {
     /// The My Timesheets entry: whether any of the person's own signed, unexported sheets of the last six pay runs waits
     /// for them to sign again. Bookings are asked for only from the earliest of those runs.
     private func hubPeriods(settings: OrganizationInvoicingSettings) -> [WeekRange] {
-        var periods = [TimesheetPayrollPolicy.payPeriodContaining(settings: settings)]
-        periods.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: Self.hubScanRuns - 1, settings: settings))
-        return periods
+        UserTimesheetQueueRulebook.recentPayRuns(settings: settings)
     }
 
     /// RULEBOOK 1.66.0 §8 (web `TimesheetsScreen` / hub `coversPeriod`): the change User Timesheets reads for a sheet.

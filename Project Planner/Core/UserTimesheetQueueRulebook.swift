@@ -199,16 +199,40 @@ enum UserTimesheetQueueRulebook {
         users: [AppUser],
         roster: [AppUser],
         firebaseBackend: FirebaseBackend,
-        organizationId: String
+        organizationId: String,
+        /// Admins only (web `loadTimesheetQueueSheets` `recentRunStartDayKeys`): the last six pay runs are also read by
+        /// `weekStartKey`, so a sheet stored under another spelling of an id, or with no `userId`, stays listed.
+        recentRunSettings: OrganizationInvoicingSettings? = nil
     ) async throws {
         // `personIdSet` runs in the packed script, on the main actor like every other rule this file calls.
         let userIds = await MainActor.run { withCaseVariants(users.flatMap { ids(of: $0, roster: roster) }) }
         // A failed load throws (the caller shows it); only per-id permission refusals are skipped inside the query.
         let grouped = try await firebaseBackend.listTimesheetStates(organizationId: organizationId, userIds: userIds)
-        for (userId, rows) in grouped {
+        var recent: [String: [[String: Any]]] = [:]
+        if let recentRunSettings {
+            let startDayKeys = await MainActor.run {
+                recentPayRuns(settings: recentRunSettings).compactMap { CanonicalBusinessEngine.dayKeyInOrganizationZone($0.start) }
+            }
+            recent = try await firebaseBackend.listRecentRunTimesheetStates(
+                organizationId: organizationId, userIds: userIds, startDayKeys: startDayKeys
+            )
+        }
+        // One copy per stored document (web dedupes by document id); the `userId in` copy first.
+        var documentSeen = Set<String>()
+        for (userId, rows) in Array(grouped) + Array(recent) {
             for row in rows {
+                if let documentId = row["__documentId"] as? String, !documentId.isEmpty {
+                    guard documentSeen.insert(documentId).inserted else { continue }
+                }
                 _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId, organizationId: organizationId)
             }
         }
+    }
+
+    /// The current pay run and the five before it (web `recentPayRuns`, `RECENT_PAY_RUN_COUNT` 6): the booking-change
+    /// window and the admin `weekStartKey` pass.
+    static func recentPayRuns(settings: OrganizationInvoicingSettings) -> [WeekRange] {
+        [TimesheetPayrollPolicy.payPeriodContaining(settings: settings)]
+            + TimesheetPayrollPolicy.previousPayPeriods(count: SignedTimesheetChangeContext.hubScanRuns - 1, settings: settings)
     }
 }
