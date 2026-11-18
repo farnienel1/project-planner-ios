@@ -4305,7 +4305,11 @@ class FirebaseBackend: ObservableObject {
         }
         
         do {
-            try await db.collection("organizations").document(organizationId).collection("operatives").document(Booking.storedOperativeId(for: operativeId)).delete()
+            guard let documentId = Booking.storedOperativeId(for: operativeId) else {
+                print("🔥🔥🔥 DEBUG: Not deleting operative \(operativeId): its stored id is not known on this phone")
+                return
+            }
+            try await db.collection("organizations").document(organizationId).collection("operatives").document(documentId).delete()
             print("🔥🔥🔥 DEBUG: Successfully deleted operative \(operativeId) from Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: Error deleting operative from Firebase: \(error)")
@@ -6414,7 +6418,8 @@ class FirebaseBackend: ObservableObject {
         carriesOver: Bool,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        writeYearAllowance: Bool = false
+        writeYearAllowance: Bool = false,
+        fields: Set<String>? = nil
     ) async throws {
         var payload: [String: Any] = [
             "annualLeaveDaysPerYear": AnnualLeavePolicy.clampDaysPerYear(daysPerYear),
@@ -6423,10 +6428,18 @@ class FirebaseBackend: ObservableObject {
             "annualLeaveCarriesOver": carriesOver,
             "updatedAt": Timestamp(date: Date()),
         ]
+        // Review of #258: only the figures the editor changed (rulebook §1; `fields` nil = all four, as before).
+        if let fields {
+            for key in ["annualLeaveDaysPerYear", "annualLeaveYearStartMonth", "annualLeaveYearEndMonth", "annualLeaveCarriesOver"]
+            where !fields.contains(key) {
+                payload.removeValue(forKey: key)
+            }
+        }
         if writeYearAllowance, let yearAllowance, let yearAllowanceKey, !yearAllowanceKey.isEmpty {
             payload["annualLeaveYearAllowance"] = yearAllowance
             payload["annualLeaveYearAllowanceKey"] = yearAllowanceKey
         }
+        guard payload.keys.contains(where: { $0 != "updatedAt" }) else { return }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
@@ -7867,6 +7880,11 @@ class FirebaseBackend: ObservableObject {
         session: BookingWriteSession? = nil
     ) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
+        // Never a booking under an id no person resolves to (`BookingPersonResolution`): a create always writes the
+        // person, an edit only when it changes them.
+        if booking.writableOperativeId == nil, changedFields == nil || changedFields?.contains("operativeId") == true {
+            throw UnresolvedBookingPersonError()
+        }
         // 1.33.1 review item 1: once per save with `session`.
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
         let ref = db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey)
@@ -7950,6 +7968,7 @@ class FirebaseBackend: ObservableObject {
         let documentKey: String
         var data: [String: Any]
         if let labour {
+            guard labour.writableOperativeId != nil else { throw UnresolvedBookingPersonError() }
             collection = "bookings"
             documentKey = labour.documentKey
             data = BookingWritePatch.labourValues(labour, deletesClearedFields: false)
@@ -9053,7 +9072,8 @@ class FirebaseBackend: ObservableObject {
         guard let fields = CanonicalBusinessEngine.payRateHistoryWriteFields(
             userId: uid,
             // The stored operative id (a non-UUID or lower-case id keeps its stored form), never a re-cased UUID.
-            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            // An id this phone cannot resolve is left out (never a derived id no one goes by).
+            operativeId: operativeId.flatMap { Booking.storedOperativeId(for: $0) },
             rate: dayRate,
             payBasis: payBasis,
             effective: effectiveAt
@@ -10023,11 +10043,10 @@ extension FirebaseBackend {
         }
         guard existing == nil else { return }
 
-        let inferredBrand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
         let catalogItem = MaterialCatalogItem(
             name: trimmedName,
-            brand: (inferredBrand?.isEmpty == false) ? inferredBrand! : "Custom",
+            brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
             productCode: material.productCode,
             defaultUnit: material.unit,
             size: material.size,
@@ -10059,10 +10078,9 @@ extension FirebaseBackend {
             let key = materialCatalogueNameKey(name: normalizedName)
             guard !knownKeys.contains(key) else { continue }
             let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
-            let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let entry = MaterialCatalogItem(
                 name: normalizedName,
-                brand: brand.isEmpty ? "Custom" : brand,
+                brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
                 productCode: material.productCode,
                 defaultUnit: material.unit,
                 size: material.size,
@@ -10762,7 +10780,7 @@ extension FirebaseBackend {
                 .getDocuments()
         }
         // RULEBOOK 1.8.0 §1: `parseMaterialCatalogueDocument` (document id in stored case, `sizeOrLength` / `packSize`
-        // read as the length, missing brand "Custom"). No write on read.
+        // read as the length, a missing or "Custom" brand '' — RULEBOOK 1.58.0). No write on read.
         let loaded = snapshot.documents.compactMap { Self.materialCatalogItem(documentId: $0.documentID, data: $0.data()) }
         return loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }

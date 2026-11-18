@@ -8291,19 +8291,19 @@ enum TimesheetInvoiceRows {
                 }
             case "priceWork":
                 if fromOverride, let line = overridePriceWork[key(id)] {
-                    rows.append(moneyRow(prefix: "pw", id: line.id, date: line.date, jobNumber: line.jobNumber, projectName: "Price work", details: line.title, amount: amount))
+                    rows.append(moneyRow(prefix: "pw", id: line.id, date: line.date, jobNumber: line.jobNumber, projectName: "Price work", details: line.title, description: line.details, amount: amount))
                 } else if let entry = priceWork[key(id)] {
-                    rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, amount: amount))
+                    rows.append(moneyRow(prefix: "pw", id: entry.id.uuidString, date: entry.startDate, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, description: entry.details, amount: amount))
                 } else if let entry = late[key(id)], entry.isPriceWork {
-                    rows.append(moneyRow(prefix: "pw", id: entry.id, date: entry.date, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, amount: amount))
+                    rows.append(moneyRow(prefix: "pw", id: entry.id, date: entry.date, jobNumber: CanonicalBusinessEngine.priceWorkJobNumberText(entry.jobNumber), projectName: "Price work", details: entry.title, description: entry.details, amount: amount))
                 }
             case "expense":
                 if fromOverride, let line = overrideExpenses[key(id)] {
-                    rows.append(moneyRow(prefix: "exp", id: line.id, date: line.date, jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber, projectName: "Expense", details: line.title, amount: amount))
+                    rows.append(moneyRow(prefix: "exp", id: line.id, date: line.date, jobNumber: line.jobNumber.isEmpty ? "—" : line.jobNumber, projectName: "Expense", details: line.title, description: line.details, amount: amount))
                 } else if let entry = expenses[key(id)] {
-                    rows.append(moneyRow(prefix: "exp", id: entry.id.uuidString, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, amount: amount))
+                    rows.append(moneyRow(prefix: "exp", id: entry.id.uuidString, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, description: entry.details, amount: amount))
                 } else if let entry = late[key(id)], !entry.isPriceWork {
-                    rows.append(moneyRow(prefix: "exp", id: entry.id, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, amount: amount))
+                    rows.append(moneyRow(prefix: "exp", id: entry.id, date: entry.date, jobNumber: entry.jobNumber.isEmpty ? "—" : entry.jobNumber, projectName: "Expense", details: entry.title, description: entry.details, amount: amount))
                 }
             default:
                 continue
@@ -8313,12 +8313,14 @@ enum TimesheetInvoiceRows {
     }
 
     /// A price work or expense row (no hours). Not a PAYE day: `timesheetInvoiceRows` already decided it goes on.
-    private static func moneyRow(prefix: String, id: String, date: Date, jobNumber: String, projectName: String, details: String, amount: Double) -> InvoiceLineItem {
-        InvoiceLineItem(
+    private static func moneyRow(prefix: String, id: String, date: Date, jobNumber: String, projectName: String, details: String, description: String = "", amount: Double) -> InvoiceLineItem {
+        var item = InvoiceLineItem(
             lineId: "\(prefix)-\(id)", date: date, jobNumber: jobNumber, projectName: projectName, details: details,
             paidHours: 0, payrollBasis: .dayRate, dayRate: 0, hourlyRate: nil, amount: amount,
             isPayeDay: false
         )
+        item.moneyDescription = description
+        return item
     }
 }
 
@@ -8347,6 +8349,16 @@ struct InvoiceLineItem {
     /// `overlappingBookingIds`: shown amber with `OVERLAPPING_BOOKING_NOTE`; still paid.
     var isOverlapping: Bool = false
     var bookingId: String? = nil
+    /// A price work or expense row (no hours, no rate): its description ('' when none). Nil on labour rows.
+    var moneyDescription: String? = nil
+
+    /// Web 1.57.0 (owner, 17 Nov; web `extraInvoiceDetails`): a price work or expense row's details on the PDF read its
+    /// title, then its description when it has one — never "0h · rate not set" (no rate prices those amounts).
+    static func moneyRowDetails(title: String, description: String) -> String {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let more = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !more.isEmpty && more != name ? "\(name) · \(more)" : name
+    }
 
     init(
         lineId: String,
@@ -8685,8 +8697,28 @@ private enum InvoicePDFBuilder {
             return y
         }
 
+        let nameAttributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
+        let detailAttributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
         for item in context.lineItems {
-            if y > pageRect.height - 110 {
+            let detail: String
+            if let description = item.moneyDescription {
+                // Web 1.57.0 (owner, 17 Nov): a price work or expense row reads its title (and description), never
+                // "0h · rate not set".
+                detail = InvoiceLineItem.moneyRowDetails(title: item.details, description: description)
+            } else {
+                // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
+                // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
+                let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
+                let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
+                detail = [clockPart, hoursPart, item.timesheetRateAnnotation].filter { !$0.isEmpty }.joined(separator: " · ")
+            }
+            // Web 1.57.0 (owner, 17 Nov): the project name and the details wrap onto as many lines as they need — never
+            // cut off — and the row grows to fit ("0.29 days × £225.00/day = £66.18" always shows whole).
+            let nameHeight = wrappedHeight(item.projectName, width: 190, attributes: nameAttributes)
+            let detailHeight = wrappedHeight(detail, width: 190, attributes: detailAttributes)
+            let detailOffset = 7 + max(15, nameHeight)
+            let rowHeight = max(50, detailOffset + detailHeight + 6)
+            if y > pageRect.height - 110 || (y + rowHeight > pageRect.height - 60 && y > margin) {
                 pdf.beginPage()
                 y = margin
             }
@@ -8705,26 +8737,20 @@ private enum InvoicePDFBuilder {
                 at: CGPoint(x: leftX, y: y + 22),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 9.5, weight: .medium), .foregroundColor: slate]
             )
-
             (item.projectName as NSString).draw(
-                in: CGRect(x: middleX, y: y + 7, width: 190, height: 18),
-                withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .semibold), .foregroundColor: navy]
+                in: CGRect(x: middleX, y: y + 7, width: 190, height: nameHeight + 2),
+                withAttributes: nameAttributes
             )
-            // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
-            // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
-            let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
-            let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
-            let detail = [clockPart, hoursPart, item.timesheetRateAnnotation].filter { !$0.isEmpty }.joined(separator: " · ")
             (detail as NSString).draw(
-                in: CGRect(x: middleX, y: y + 22, width: 190, height: 28),
-                withAttributes: [.font: UIFont.systemFont(ofSize: 9.5), .foregroundColor: slate]
+                in: CGRect(x: middleX, y: y + detailOffset, width: 190, height: detailHeight + 2),
+                withAttributes: detailAttributes
             )
 
             (currency(item.amount) as NSString).draw(
                 in: CGRect(x: amountX, y: y + 16, width: 56, height: 18),
                 withAttributes: [.font: UIFont.systemFont(ofSize: 11.5, weight: .bold), .foregroundColor: navy]
             )
-            y += 50
+            y += rowHeight
         }
         return y
     }
@@ -8788,6 +8814,18 @@ private enum InvoicePDFBuilder {
 
     private static func currency(_ value: Double) -> String {
         OrgMoney.format(value)
+    }
+
+    /// The height `text` takes when wrapped to `width` (web 1.57.0: PDF line details wrap, never cut off).
+    private static func wrappedHeight(_ text: String, width: CGFloat, attributes: [NSAttributedString.Key: Any]) -> CGFloat {
+        guard !text.isEmpty else { return 0 }
+        let rect = (text as NSString).boundingRect(
+            with: CGSize(width: width, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attributes,
+            context: nil
+        )
+        return ceil(rect.height)
     }
 
     private static func hoursString(_ value: Double) -> String {

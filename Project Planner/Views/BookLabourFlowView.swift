@@ -63,7 +63,7 @@ struct BookLabourCandidate: Identifiable {
         let stored = rowOperativeId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !stored.isEmpty else { return nil }
         return operatives.first {
-            Booking.storedOperativeId(for: $0.id).caseInsensitiveCompare(stored) == .orderedSame
+            Booking.operativeMatchKey(for: $0.id).caseInsensitiveCompare(stored) == .orderedSame
                 || $0.documentId.caseInsensitiveCompare(stored) == .orderedSame
         }
     }
@@ -2170,7 +2170,7 @@ struct BookLabourFlowView: View {
                 breakRemoved: breakRemoved
            ) {
             clashRows.append(.doubleBooking(
-                personKey: Booking.storedOperativeId(for: operative.id),
+                personKey: Booking.operativeMatchKey(for: operative.id),
                 dayKey: OrganizationRulebookContext.dayKey(day),
                 personName: operative.name,
                 detail: (["Already booked"] + clashLines).joined(separator: " · "),

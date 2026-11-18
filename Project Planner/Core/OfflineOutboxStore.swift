@@ -292,6 +292,10 @@ final class OfflineOutboxStore: ObservableObject {
         baselineFingerprint: String? = nil,
         previous: Booking? = nil
     ) {
+        // The person's stored id travels with the queued booking, so a replay after a restart (when this phone's
+        // in-memory id map is empty again) still writes that id and never an unresolved one (`BookingPersonResolution`).
+        var booking = booking
+        if booking.operativeKey == nil, let stored = booking.writableOperativeId { booking.operativeKey = stored }
         var fields: [String]? = changedFields.map { Array($0).sorted() }
         // RULEBOOK 1.33.0: the first queued edit keeps the fingerprint of the copy last synced from the server.
         var baseline = changedFields == nil ? nil : baselineFingerprint

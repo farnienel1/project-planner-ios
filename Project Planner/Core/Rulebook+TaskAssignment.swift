@@ -36,14 +36,14 @@ enum TaskAssignmentRulebook {
             "viewer": ["id": optional(viewerId), "email": optional(viewerEmail)],
             "roster": organizationUsers.map(RulebookRosterLists.levelRow),
             "operatives": operatives.map { operative -> [String: Any] in
-                ["id": Booking.storedOperativeId(for: operative.id), "email": operative.email, "isActive": operative.isActive]
+                ["id": Booking.operativeMatchKey(for: operative.id), "email": operative.email, "isActive": operative.isActive]
             },
             "managers": managers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] },
             "tasks": tasks.map { task -> [String: Any] in
                 [
                     "id": task.id.uuidString,
-                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.storedOperativeId(for: $0) },
-                    "assignedOperativeId": task.assignedOperativeId.map { Booking.storedOperativeId(for: $0) as Any } ?? NSNull(),
+                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.operativeMatchKey(for: $0) },
+                    "assignedOperativeId": task.assignedOperativeId.map { Booking.operativeMatchKey(for: $0) as Any } ?? NSNull(),
                     "assignedManagerIds": task.assignedManagerIds.map(\.uuidString),
                     "assignedManagerId": task.assignedManagerId.map { $0.uuidString as Any } ?? NSNull(),
                 ]

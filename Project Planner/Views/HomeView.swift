@@ -1797,8 +1797,6 @@ struct OperativeQualificationsReadOnlyView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var notificationService: NotificationService
-    @State private var isRepairingLink = false
-    @State private var repairMessage: String?
     
     private var operative: Operative? {
         // The person's own row (`personDedupeKey`); an empty email never matches another no-email row.
@@ -1821,24 +1819,14 @@ struct OperativeQualificationsReadOnlyView: View {
                 .environmentObject(userStore)
             } else {
                 NavigationStack {
+                    // No automatic "repair" from an operative's phone: it created `operatives` rows with random ids
+                    // and re-linked another row's email by a name match (the rules refuse both). Staff link the
+                    // person in Manage Users (`OperativeProfileLinkPolicy`).
                     ContentUnavailableView(
                         "Profile not linked",
                         systemImage: "person.crop.circle.badge.questionmark",
-                        description: Text("No operative record matches your email. Ask an admin to check your account email matches your operative profile.")
+                        description: Text(OperativeProfileLinkPolicy.notStaffMessage)
                     )
-                    if let repairMessage {
-                        Text(repairMessage)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                    }
-                    Button(isRepairingLink ? "Repairing..." : "Repair link now") {
-                        Task { await repairOperativeLinkIfNeeded() }
-                    }
-                    .accessibilityIdentifier("operativeQualificationsReadOnly.repairing")
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isRepairingLink)
                     .navigationTitle("My Qualifications")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
@@ -1848,74 +1836,8 @@ struct OperativeQualificationsReadOnlyView: View {
                         }
                     }
                 }
-                .task {
-                    await repairOperativeLinkIfNeeded()
-                }
             }
         }
-    }
-    
-    /// Auto-repairs broken operative ↔ user linkage for operative accounts:
-    /// 1) direct email match (already linked)
-    /// 2) name match then update operative email
-    /// 3) create missing operative profile from current user details
-    @MainActor
-    private func repairOperativeLinkIfNeeded() async {
-        guard userStore.isOperativeMode() else { return }
-        guard !isRepairingLink else { return }
-        guard let u = userStore.currentUser else { return }
-        // RULEBOOK 1.34.0 §11: a ghost is a users document only; never create an `operatives` row for one (an invited
-        // ghost signs in only after accepting, which drops the ghost flag).
-        guard !u.isGhost else { return }
-        
-        let email = u.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !email.isEmpty else { return }
-        
-        // Already linked
-        if operativeStore.allOperatives.contains(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == email
-        }) {
-            repairMessage = nil
-            return
-        }
-        
-        isRepairingLink = true
-        defer { isRepairingLink = false }
-        
-        let normalizedFirst = u.firstName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalizedLast = u.surname.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        
-        // Try name-based relink first (legacy rows where email drifted)
-        if let idx = operativeStore.allOperatives.firstIndex(where: { op in
-            op.firstName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedFirst &&
-            op.lastName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedLast
-        }) {
-            var op = operativeStore.allOperatives[idx]
-            op.email = email
-            op.updatedAt = Date()
-            await operativeStore.updateOperative(op)
-            repairMessage = "Linked to existing operative profile."
-            return
-        }
-        
-        // No match found: create missing operative profile so operative-mode features can work.
-        let first = u.firstName.isEmpty ? u.email.components(separatedBy: "@").first ?? "Operative" : u.firstName
-        let last = u.surname.isEmpty ? "User" : u.surname
-        let newOperative = Operative(
-            firstName: first,
-            lastName: last,
-            email: email,
-            startDate: Date(),
-            skills: [],
-            qualifications: [],
-            qualificationExpiryDates: [:],
-            isActive: u.isActive,
-            dayRate: u.dayRate,
-            tradeTypePreset: u.tradeTypePreset,
-            tradeTypeCustom: u.tradeTypeCustom
-        )
-        await operativeStore.addOperative(newOperative)
-        repairMessage = "Created and linked operative profile."
     }
 }
 
@@ -2074,22 +1996,22 @@ private struct HomeOverviewMetrics: Equatable {
             "viewer": ["id": optional(viewerId), "email": optional(userEmail)],
             "roster": organizationUsers.map(RulebookRosterLists.levelRow),
             "operatives": operatives.map { operative -> [String: Any] in
-                ["id": Booking.storedOperativeId(for: operative.id), "email": operative.email, "isActive": operative.isActive]
+                ["id": Booking.operativeMatchKey(for: operative.id), "email": operative.email, "isActive": operative.isActive]
             },
             "managers": managers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] },
             "tasks": tasks.map { task -> [String: Any] in
                 [
                     "status": task.status.rawValue,
                     "dueDate": task.dueDate.map { ($0.timeIntervalSince1970 * 1000).rounded() as Any } ?? NSNull(),
-                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.storedOperativeId(for: $0) },
-                    "assignedOperativeId": task.assignedOperativeId.map { Booking.storedOperativeId(for: $0) as Any } ?? NSNull(),
+                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.operativeMatchKey(for: $0) },
+                    "assignedOperativeId": task.assignedOperativeId.map { Booking.operativeMatchKey(for: $0) as Any } ?? NSNull(),
                     "assignedManagerIds": task.assignedManagerIds.map(\.uuidString),
                     "assignedManagerId": task.assignedManagerId.map { $0.uuidString as Any } ?? NSNull(),
                 ]
             },
             "bookings": bookings.map { booking -> [String: Any] in
                 [
-                    "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                    "operativeId": Booking.operativeMatchKey(for: booking.operativeId),
                     "dayKey": OrganizationRulebookContext.dayKey(booking.date),
                     "status": booking.status.rawValue,
                 ]
