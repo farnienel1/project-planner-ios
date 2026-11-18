@@ -95,9 +95,12 @@ class PPUITestCase: XCTestCase {
     /// take. Still fails when the field never takes focus.
     @discardableResult
     func focusTextInput(_ el: XCUIElement, id: String, attempts: Int = 3, file: StaticString = #filePath, line: UInt = #line) -> Bool {
-        for _ in 0..<attempts {
+        for attempt in 1...attempts {
             if hasKeyboardFocus(el) { return true }
             waitUntilSettled(el)
+            if attempt > 1 {
+                recordRetry("Retry tap \(attempt) of \(attempts) on '\(id)': the previous tap did not give it keyboard focus")
+            }
             el.tap()
             let deadline = Date().addingTimeInterval(3)
             while Date() < deadline {
@@ -107,6 +110,18 @@ class PPUITestCase: XCTestCase {
         }
         XCTFail("GAP: tapping '\(id)' did not give it keyboard focus after \(attempts) taps", file: file, line: line)
         return false
+    }
+
+    /// Records a retried tap in the result bundle: a named activity (shown in the test log) holding a text
+    /// attachment kept even when the test passes, so a pattern of dropped first taps across runs can be found by
+    /// searching result bundles for "Retry tap" — a dropped tap may be a real app problem, not only CI speed.
+    func recordRetry(_ note: String) {
+        XCTContext.runActivity(named: note) { activity in
+            let attachment = XCTAttachment(string: "\(note)\n\n\(app.debugDescription)")
+            attachment.name = "Retry tap: \(name)"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
     }
 
     func assertExists(_ id: String, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line) {

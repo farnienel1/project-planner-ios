@@ -102,10 +102,13 @@ final class AddUserScreenChecksTests: PPUITestCase {
     /// (first test of a run on the SE), so Next waits for the button to stop moving before it taps.
     ///
     /// Before, the tap was fire-and-forget: on the Pro Max leg (AU09 on #259, run 44197731455) the step 2 → 3 tap
-    /// was synthesized with Next enabled and settled, the wizard stayed on step 2, and the miss only showed 15s
-    /// later as "permissionToggle.chevronDown did not appear" and "could not scroll to addUser.annualLeaveAllowance"
-    /// (both are step 3 only). Now the step tracker is read before and after: a tap that left the step unchanged is
-    /// tapped again (the button is still enabled and settled), and any other result fails here, naming the step.
+    /// was sent with Next enabled and not moving, and it had no effect — the wizard did not reach step 3. Why the
+    /// tap was dropped is not known (the screenshots could not be read). The miss only showed 15s later as
+    /// "permissionToggle.chevronDown did not appear" and "could not scroll to addUser.annualLeaveAllowance" (both
+    /// are step 3 only). Now the step tracker is read before and after: a tap that left the step unchanged is tapped
+    /// again — only after re-checking the wizard is still on that step, so a late first tap can never let the retry
+    /// land on the next step's button (Create User on step 4) — and every retry is recorded (`recordRetry`). Any
+    /// other result fails here, naming the step.
     private func next(file: StaticString = #filePath, line: UInt = #line) {
         let button = waitFor("addUser.creating", timeout: 10, file: file, line: line)
         waitUntilSettled(button)
@@ -117,6 +120,22 @@ final class AddUserScreenChecksTests: PPUITestCase {
         let target = from + 1
         let attempts = 3
         for attempt in 1...attempts {
+            if attempt > 1 {
+                waitUntilSettled(button)
+                // A late first tap may have moved the wizard while we waited: never retry from another step.
+                let before = currentStep()
+                if before == target { return }
+                guard before == from else {
+                    attachHierarchy("Next went from step \(from) to \(before.map { "\($0)" } ?? "none")")
+                    XCTFail("Next moved the wizard from step \(from) to \(before.map { "\($0)" } ?? "no step"), not step \(target)", file: file, line: line)
+                    return
+                }
+                guard button.isEnabled else {
+                    XCTFail("Next turned disabled on step \(from)", file: file, line: line)
+                    return
+                }
+                recordRetry("Retry tap \(attempt) of \(attempts) on Next: step \(from) did not move to \(target)")
+            }
             button.tap()
             if waitForStep(target, timeout: 10) { return }
             let now = currentStep()
@@ -124,10 +143,6 @@ final class AddUserScreenChecksTests: PPUITestCase {
                 attachHierarchy("Next went from step \(from) to \(now.map { "\($0)" } ?? "none")")
                 XCTFail("Next moved the wizard from step \(from) to \(now.map { "\($0)" } ?? "no step"), not step \(target)", file: file, line: line)
                 return
-            }
-            if attempt < attempts {
-                waitUntilSettled(button)
-                XCTAssertTrue(button.isEnabled, "Next turned disabled on step \(from)", file: file, line: line)
             }
         }
         attachHierarchy("Next stayed on step \(from)")
