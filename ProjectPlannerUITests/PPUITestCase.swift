@@ -73,8 +73,40 @@ class PPUITestCase: XCTestCase {
 
     func type(_ id: String, _ text: String, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line) {
         let el = waitFor(id, timeout: timeout, file: file, line: line)
-        el.tap()
+        guard el.exists else { return }
+        guard focusTextInput(el, id: id, file: file, line: line) else { return }
         el.typeText(text)
+    }
+
+    /// True when the element or one of its descendants holds keyboard focus (the condition `typeText` needs).
+    func hasKeyboardFocus(_ el: XCUIElement) -> Bool {
+        if (el.value(forKey: "hasKeyboardFocus") as? Bool) == true { return true }
+        return el.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+            .firstMatch
+            .exists
+    }
+
+    /// Taps a text field until it holds keyboard focus, and only then lets the caller type. A tap that lands while
+    /// the scroll view under the field is still moving (the keyboard coming up shrinks the form and SwiftUI scrolls
+    /// the focused field into view) is taken by the scroll view to stop the scroll and never focuses the field; on a
+    /// slow CI simulator `typeText` then fails with "Neither element nor any descendant has keyboard focus" (AU09 on
+    /// #260, run 44160943129). Waits for the field to stop moving, taps, and checks focus; taps again if it did not
+    /// take. Still fails when the field never takes focus.
+    @discardableResult
+    func focusTextInput(_ el: XCUIElement, id: String, attempts: Int = 3, file: StaticString = #filePath, line: UInt = #line) -> Bool {
+        for _ in 0..<attempts {
+            if hasKeyboardFocus(el) { return true }
+            waitUntilSettled(el)
+            el.tap()
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if hasKeyboardFocus(el) { return true }
+                Thread.sleep(forTimeInterval: 0.25)
+            }
+        }
+        XCTFail("GAP: tapping '\(id)' did not give it keyboard focus after \(attempts) taps", file: file, line: line)
+        return false
     }
 
     func assertExists(_ id: String, timeout: TimeInterval = 5, file: StaticString = #filePath, line: UInt = #line) {
