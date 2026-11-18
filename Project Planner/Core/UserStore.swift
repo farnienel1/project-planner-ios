@@ -1951,6 +1951,18 @@ class UserStore: ObservableObject {
         return false
     }
     
+    /// 17 Nov (owner bug, Super Admin never PAYE): may the signed-in person save `target`'s employment type and annual
+    /// leave allowance from Edit user? Being the Super Admin (or the organisation creator) is never a reason to refuse
+    /// (rulebook §4.4, §8); only the Super Admin edits their own profile (`canEditTargetUserPermissions`). Everyone else
+    /// is not decided here: `canChangePersonPay` (employment type) and the leave saves' own admin / operatives-manager
+    /// checks follow, and the security rules have the last word. Used by `updateUserEmploymentType`,
+    /// `updateUserAnnualLeaveEntitlement` and `updateUserAnnualLeaveEnabled`.
+    func mayChangeEmploymentAndLeaveFields(of target: AppUser) -> Bool {
+        guard currentUser != nil else { return false }
+        if isProtectedSuperAdmin(target) { return canEditTargetUserPermissions(target) }
+        return true
+    }
+
     /// The signed-in person and `target` are one person (their id or a folded same-email id).
     private func isSamePerson(_ acting: AppUser, _ target: AppUser) -> Bool {
         let ids = Set(([acting.id] + acting.sameEmailUserIds).map { $0.lowercased() })
@@ -3216,14 +3228,13 @@ class UserStore: ObservableObject {
         carriesOver: Bool,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        writeYearAllowance: Bool = false
+        writeYearAllowance: Bool = false,
+        fields: Set<String>? = nil
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
         let clampedDays = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
         let sm = AnnualLeavePolicy.clampMonth(startMonth)
         let em = AnnualLeavePolicy.clampMonth(endMonth)
@@ -3250,7 +3261,8 @@ class UserStore: ObservableObject {
                 carriesOver: carriesOver,
                 yearAllowance: yearAllowance,
                 yearAllowanceKey: yearAllowanceKey,
-                writeYearAllowance: writeYearAllowance
+                writeYearAllowance: writeYearAllowance,
+                fields: fields
             )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
@@ -3296,11 +3308,8 @@ class UserStore: ObservableObject {
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
 
         updated.annualLeaveEnabled = enabled
 
@@ -3326,14 +3335,11 @@ class UserStore: ObservableObject {
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let storedRow = rosterRow(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
         // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
         var updated = await payEditorRecord(for: storedRow)
         guard let index = rosterIndex(for: userId) else { return false }
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
         // RULEBOOK §8: employment type is pay, so it follows `canChangePersonPay`.
         guard canChangePay(of: updated) else {
             errorMessage = Self.payChangeRefusedMessage
