@@ -304,7 +304,10 @@ struct WeeklyReportTimesheetFeed {
                 // report shows its live bookings.
                 // RULEBOOK 1.54.0 §8: late extras waiting for the line manager never take a signed sheet out of the feed
                 // (its signed money stands; only approved late extras are in its snapshot).
-                if change?.reopened == true && change?.bookingsChanged != false { continue }
+                // RULEBOOK 1.57.0 §8 (J1, `SNAPSHOT_GAP_REPORTS`): a change that is only a snapshot gap keeps the signed
+                // figures here (`signedTimesheetChangeForReports`, as web `loadTimesheetFeed`).
+                let reportChange = CanonicalBusinessEngine.signedTimesheetChangeForReports(change)
+                if reportChange?.reopened == true && reportChange?.bookingsChanged != false { continue }
                 // RULEBOOK 1.55.0 §8 (owner decision J4): a revision due (the exported latest version's bookings changed)
                 // is not approved either — the live bookings are reported until the revision is signed off. An open
                 // revision is not fully approved, so it never reaches here.
@@ -312,7 +315,7 @@ struct WeeklyReportTimesheetFeed {
                     revision: draft.revision,
                     exported: TimesheetApprovalPolicy.isExported(draft),
                     signedOff: true,
-                    change: change
+                    change: reportChange
                 )?.state == "due" { continue }
 
                 let storedAlready = draft.weeklyReportOverride != nil
@@ -396,13 +399,10 @@ struct WeeklyReportTimesheetFeed {
             row["status"] = status
         }
         if let change {
-            row["change"] = [
-                "reopened": change.reopened,
-                "changed": change.changed,
-                // RULEBOOK 1.55.0 (J4): an exported sheet whose bookings changed — "Revision due".
-                "exported": change.exported,
-                "waitingFor": RulebookJSON.orNull(change.waitingFor),
-            ] as [String: Any]
+            // RULEBOOK 1.55.0 (J4): `changed` / `exported` — an exported sheet whose bookings changed reads "Revision due".
+            // RULEBOOK 1.57.0: `snapshotGapOnly` and `lateExtrasWaiting` too — the rule keeps the signed figures for a
+            // gap-only change (`signedTimesheetChangeForReports`, applied inside `weeklyReportPayRows`).
+            row["change"] = change.reportArgument
         }
         row["payrollLines"] = lines.map(\.rulebookTotalsJSON)
         // RULEBOOK 1.55.0 §8: the version used (0 for the original, N for REV N) — the check line reads "· REV N".
