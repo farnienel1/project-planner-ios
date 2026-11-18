@@ -574,7 +574,7 @@ enum WarningsComputation {
                 guard scannedKey(group.dayKey) else { continue }
                 guard inScope(
                     jobIds: sortedCluster.map { JobKeys.storedJobId(for: $0.projectId) },
-                    personIds: [group.personKey] + sortedCluster.map { Booking.storedOperativeId(for: $0.operativeId) }
+                    personIds: [group.personKey] + sortedCluster.map { Booking.operativeMatchKey(for: $0.operativeId) }
                 ) else { continue }
                 let personDay = "\(group.personKey)|\(group.dayKey)"
                 let clusterIndex = clusterIndexByPersonDay[personDay, default: 0]
@@ -801,7 +801,7 @@ enum WarningsComputation {
                 ]
             }
             // Row id and dismiss key use the stored document id, matching web (`operative.id`).
-            let storedId = operative.documentId.isEmpty ? Booking.storedOperativeId(for: operative.id) : operative.documentId
+            let storedId = operative.documentId.isEmpty ? Booking.operativeMatchKey(for: operative.id) : operative.documentId
             return [
                 "id": storedId,
                 "isActive": operative.isActive,
@@ -869,7 +869,7 @@ enum WarningsComputation {
         // RULEBOOK 1.53.0 (A5): every operative and person with `isActive`; the rule skips an inactive row or account.
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
-                "id": Booking.storedOperativeId(for: operative.id),
+                "id": Booking.operativeMatchKey(for: operative.id),
                 "email": operative.emailLowercased,
                 "name": operative.name,
                 "isActive": operative.isActive,
@@ -1021,7 +1021,7 @@ enum WarningsComputation {
             let foldedName = operative.name.lowercased()
             let foldedEmail = operative.email.lowercased()
             return [
-                "id": Booking.storedOperativeId(for: operative.id),
+                "id": Booking.operativeMatchKey(for: operative.id),
                 "email": operative.email.lowercased(),
                 "name": operative.name,
                 "isActive": operative.isActive,
@@ -1034,7 +1034,7 @@ enum WarningsComputation {
         var bookingRows: [[String: Any]] = []
         for booking in operativeBookings where CanonicalBusinessEngine.bookingOccupiesDay(booking.status.rawValue) == true && calendar.isDate(booking.date, inSameDayAs: dayStart) {
             bookingRows.append([
-                "personId": Booking.storedOperativeId(for: booking.operativeId),
+                "personId": Booking.operativeMatchKey(for: booking.operativeId),
                 "dayKey": dayKey,
                 "kind": "operative",
                 "timeSlot": booking.timeSlot.rawValue,
@@ -1207,7 +1207,7 @@ enum WarningsComputation {
         var bookings: [[String: Any]] = []
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= rowEnd {
             bookings.append([
-                "personId": Booking.storedOperativeId(for: booking.operativeId),
+                "personId": Booking.operativeMatchKey(for: booking.operativeId),
                 "dayKey": dayKeyString(booking.dayStart, calendar: calendar),
                 "kind": "operative",
                 "timeSlot": booking.timeSlot,
@@ -1253,7 +1253,7 @@ enum WarningsComputation {
         guard let people = unbookedPeopleOnePerEmail(peopleRows) else { return nil }
         let operatives: [[String: Any]] = input.operatives.map { operative in
             [
-                "id": Booking.storedOperativeId(for: operative.id),
+                "id": Booking.operativeMatchKey(for: operative.id),
                 "email": operative.emailLowercased,
                 "name": operative.name,
                 "isActive": operative.isActive,
@@ -1339,7 +1339,7 @@ enum WarningsComputation {
 
         var operativeIdsByEmail: [String: [String]] = [:]
         for operative in input.operatives where !operative.emailLowercased.isEmpty {
-            let id = Booking.storedOperativeId(for: operative.id)
+            let id = Booking.operativeMatchKey(for: operative.id)
             if operativeIdsByEmail[operative.emailLowercased]?.contains(id) != true {
                 operativeIdsByEmail[operative.emailLowercased, default: []].append(id)
             }
@@ -1368,10 +1368,10 @@ enum WarningsComputation {
             if !email.isEmpty && claimedEmails.contains(email) { continue }
             if !email.isEmpty { claimedEmails.insert(email) }
             let ids = email.isEmpty
-                ? [Booking.storedOperativeId(for: operative.id)]
-                : (operativeIdsByEmail[email] ?? [Booking.storedOperativeId(for: operative.id)])
+                ? [Booking.operativeMatchKey(for: operative.id)]
+                : (operativeIdsByEmail[email] ?? [Booking.operativeMatchKey(for: operative.id)])
             people.append(CanonicalLeavePerson(
-                personKey: Booking.storedOperativeId(for: operative.id),
+                personKey: Booking.operativeMatchKey(for: operative.id),
                 name: operative.name,
                 userId: nil,
                 operativeIds: ids
@@ -1384,7 +1384,7 @@ enum WarningsComputation {
         for booking in input.bookings where booking.isActiveStatus && booking.dayStart >= coverageStart && booking.dayStart <= coverageEnd {
             bookings.append(CanonicalLeaveBooking(
                 id: booking.id.uuidString,
-                personId: Booking.storedOperativeId(for: booking.operativeId),
+                personId: Booking.operativeMatchKey(for: booking.operativeId),
                 kind: "operative",
                 dayKey: dayKeyString(booking.dayStart, calendar: calendar),
                 timeSlot: booking.timeSlot,
@@ -1757,7 +1757,7 @@ private struct WarningsScheduleIndex {
                         "aliasIds": user.sameEmailUserIds
                     ]
                 },
-                "operatives": input.operatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.emailLowercased] }
+                "operatives": input.operatives.map { ["id": Booking.operativeMatchKey(for: $0.id), "email": $0.emailLowercased] }
             ],
             // RULEBOOK 1.23.0 §5: the working-hours state (`standardDayOn` / `bookingStandardDayOn` in
             // `CanonicalBusinessEngine` `operativeClashGroups` / `managerClashGroups`), so each booking's named slot is
@@ -1771,7 +1771,7 @@ private struct WarningsScheduleIndex {
             "operativeBookings": operativeBookings.map { booking -> [String: Any] in
                 [
                     "id": booking.id.uuidString,
-                    "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                    "operativeId": Booking.operativeMatchKey(for: booking.operativeId),
                     "dayKey": dayKey(booking.dayStart),
                     "timeSlot": booking.timeSlot,
                     "workStartTime": booking.workStart ?? NSNull(),
@@ -1800,7 +1800,7 @@ nonisolated final class WarningsBookingPeople {
                 )
             },
             operatives: operatives.map {
-                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: Booking.storedOperativeId(for: $0.id), email: $0.emailLowercased)
+                CanonicalBusinessEngine.CanonicalBookingPersonOperative(id: Booking.operativeMatchKey(for: $0.id), email: $0.emailLowercased)
             }
         )
         accountIdByFormerId = CanonicalBusinessEngine.formerIdAliases(
@@ -1810,7 +1810,7 @@ nonisolated final class WarningsBookingPeople {
 
     func key(for operativeId: UUID) -> String {
         if let hit = keys[operativeId] { return hit }
-        let stored = Booking.storedOperativeId(for: operativeId)
+        let stored = Booking.operativeMatchKey(for: operativeId)
         let key = CanonicalBusinessEngine.bookingPersonKey(stored, input) ?? "id:\(stored.lowercased())"
         keys[operativeId] = key
         return key
@@ -1818,7 +1818,7 @@ nonisolated final class WarningsBookingPeople {
 
     func person(for operativeId: UUID) -> CanonicalBusinessEngine.CanonicalResolvedBookingPerson? {
         if let hit = people[operativeId] { return hit }
-        let found = CanonicalBusinessEngine.resolveBookingPerson(Booking.storedOperativeId(for: operativeId), input)
+        let found = CanonicalBusinessEngine.resolveBookingPerson(Booking.operativeMatchKey(for: operativeId), input)
         people[operativeId] = found
         return found
     }
