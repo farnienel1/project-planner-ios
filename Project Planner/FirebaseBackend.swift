@@ -4441,6 +4441,78 @@ class FirebaseBackend: ObservableObject {
     /// document (the rules refuse it). Only `ghostCreateWrites` / `ghostUpgradeWrites` (another person's document) do.
     nonisolated static let ownProfileForbiddenFields = ["ghost", "inviteEmailHint"]
 
+    /// Mass-assignment audit 17 Nov: the keys a person may write when their OWN users document is created from this
+    /// device and they are not the open organisation's creator — identity and acceptance only. Role, privilege flags,
+    /// `permissions`, `passwordSet`, `isActive`, pay, employment type, line manager, `organizationId` and alias ids
+    /// are never self-written (RULEBOOK §16: a person never sets their own privileges, pay or line manager).
+    nonisolated static let ownProfileCreateAllowedFields: Set<String> = [
+        "email", "firstName", "surname", "lastName", "name", "displayName", "mobileNumber",
+        "profilePhotoURL", "createdAt", "policyAccepted", "policyAcceptedAt", "legalPackVersion",
+    ]
+
+    /// The fields of a new `users/{id}` document this device may write (`saveUser` create branch):
+    /// - the signed-in person's own document: everything (but the ghost markers) only for the open organisation's
+    ///   creator re-creating their own Super Admin profile; anyone else only `ownProfileCreateAllowedFields`;
+    /// - someone else's document (an invite placeholder): `isSuperAdmin` is never sent on a placeholder
+    ///   (`passwordSet` false) or when it is false (RULEBOOK 1.34.0 note: an operatives manager's create carrying it
+    ///   is refused / crashed the emulator); the rest as built (the rules check the writer).
+    /// Delete sentinels are dropped: a create has nothing to delete.
+    nonisolated static func userCreatePayload(
+        _ payload: [String: Any],
+        userId: String,
+        signedInUid: String?,
+        isOrganizationCreator: Bool,
+        passwordSet: Bool
+    ) -> [String: Any] {
+        let own = signedInUid != nil && userId == signedInUid
+        return payload.filter { key, value in
+            if value is FieldValue { return false }
+            if own {
+                if isOrganizationCreator { return !ownProfileForbiddenFields.contains(key) }
+                return ownProfileCreateAllowedFields.contains(key)
+            }
+            if key == "isSuperAdmin" { return passwordSet && (value as? Bool) == true }
+            return true
+        }
+    }
+
+    /// The signed-in account is the creator of the open organisation, and the profile being written is for it.
+    /// Mass-assignment review of #263: whether `uid` is an admin of `organizationId`, read for THAT organisation
+    /// (`organizationLevelFor`: their users document when it names this organisation, else their membership here, else
+    /// the `members` role; the creator is the Super Admin) — never a home company's flags. Nil when a document could
+    /// not be read or the script did not answer; callers then refuse (fail closed).
+    func inviterIsAdmin(uid: String, organizationId: String) async -> Bool? {
+        let userRef = db.collection("users").document(uid)
+        let membershipRef = userRef.collection("orgMemberships").document(organizationId)
+        let orgRef = db.collection("organizations").document(organizationId)
+        do {
+            let org = try await orgRef.getDocument()
+            let user = try await userRef.getDocument()
+            let membership = try await membershipRef.getDocument()
+            guard org.exists else { return nil }
+            let orgData = org.data() ?? [:]
+            let membersRole = (orgData["members"] as? [String: Any])?[uid] as? String
+            guard let level = CanonicalBusinessEngine.organizationLevelFor(
+                organizationId: organizationId,
+                userId: uid,
+                user: user.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membership: membership.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membersRole: membersRole,
+                creatorUserId: orgData["creatorUserId"] as? String
+            ) else { return nil }
+            return level.level == .admin
+        } catch {
+            NSLog("INVITER_LEVEL_UNREAD org=%@ — %@", organizationId, String(describing: error))
+            return nil
+        }
+    }
+
+    func isOpenOrganizationCreator(uid: String?, organizationId: String) -> Bool {
+        guard let uid, let org = currentOrganization else { return false }
+        guard organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return false }
+        return UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: uid, organizationId: org.firestoreDocumentId, organizationCreatorUserId: org.creatorUserId)
+    }
+
     static func parseAppUserDocument(
         userId: String,
         data: [String: Any],
@@ -5155,69 +5227,6 @@ class FirebaseBackend: ObservableObject {
         return rank
     }
     
-    // MARK: - Simplified User Management (Placeholder)
-    
-    
-    func createOrganization(
-        id: String,
-        name: String,
-        adminUserId: String,
-        officeAddressLine1: String? = nil,
-        officeCity: String? = nil,
-        officePostcode: String? = nil,
-        countryCode: String,
-        defaultLatitude: Double? = nil,
-        defaultLongitude: Double? = nil
-    ) async throws {
-        guard let nameFields = CanonicalBusinessEngine.organizationNameToFirestore(name),
-              let writtenName = nameFields["name"] as? String,
-              !writtenName.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Organisation name is required"]
-            )
-        }
-        var payload: [String: Any] = nameFields
-        payload["id"] = id
-        payload["adminUserId"] = adminUserId
-        payload["creatorUserId"] = adminUserId
-        payload["countryCode"] = countryCode.uppercased()
-        payload["createdAt"] = Timestamp(date: Date())
-        payload["updatedAt"] = Timestamp(date: Date())
-        if let officeAddressLine1, !officeAddressLine1.isEmpty {
-            payload["officeAddressLine1"] = officeAddressLine1
-        }
-        if let officeCity, !officeCity.isEmpty {
-            payload["officeCity"] = officeCity
-        }
-        if let officePostcode, !officePostcode.isEmpty {
-            payload["officePostcode"] = officePostcode
-        }
-        if let defaultLatitude {
-            payload["defaultLatitude"] = defaultLatitude
-        }
-        if let defaultLongitude {
-            payload["defaultLongitude"] = defaultLongitude
-        }
-        // RULEBOOK 1.20.0 §4.3: a new company's first working hours are a derived policy
-        // (`withDerivedWeekdayPaidHours`: `paidHoursDerived: true`, `standardPaidHours` = finish − start − unpaid break).
-        // RULEBOOK 1.49.0 §4.3: from `newOrganizationPayrollPolicy()` (Saturday and Sunday on "Same as Monday–Friday").
-        let startPolicy = CanonicalBusinessEngine.newOrganizationPayrollPolicy() ?? .default
-        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(startPolicy) ?? startPolicy).asFirestoreDictionary()
-        payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
-        payload["annualLeaveDefaults"] = [
-            "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
-            "startMonth": OrganizationAnnualLeaveDefaults.default.startMonth,
-            "endMonth": OrganizationAnnualLeaveDefaults.default.endMonth,
-            "carriesOver": OrganizationAnnualLeaveDefaults.default.carriesOver,
-        ]
-        payload["warningDetection"] = Self.warningDetectionFirestoreMap(OrgWarningDetectionSettings.default)
-        try await db.collection("organizations").document(id).setData(payload, merge: true)
-        let organizationId = id
-        Task { await self.seedStarterQualificationLibraryIfEmpty(organizationId: organizationId) }
-    }
-
     /// Admin: update company-wide warning detection settings (`organizations/{orgId}.warningDetection`).
     func updateOrganizationWarningDetectionSettings(_ settings: OrgWarningDetectionSettings) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
@@ -6083,9 +6092,13 @@ class FirebaseBackend: ObservableObject {
         } else {
             let snapshot = try await ref.getDocument(source: .server)
             guard snapshot.exists, let stored = snapshot.data() else {
-                let create = payload.filter {
-                    !($0.value is FieldValue) && !(user.id == uid && Self.ownProfileForbiddenFields.contains($0.key))
-                }
+                let create = Self.userCreatePayload(
+                    payload,
+                    userId: user.id,
+                    signedInUid: uid,
+                    isOrganizationCreator: isOpenOrganizationCreator(uid: uid, organizationId: user.organizationId),
+                    passwordSet: user.passwordSet
+                )
                 // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: with `privatePay` on the new
                 // users document carries no pay; the pay goes to `payProfiles/{uid}` once the document exists.
                 let privatePay = SecuritySwitchContext.privatePay
@@ -6781,23 +6794,6 @@ class FirebaseBackend: ObservableObject {
         return mapped
     }
     
-    // Helper method to update only user permissions (for fixing admin status)
-    /// Never persists isSuperAdmin for operatives – prevents elevation from ever being saved.
-    func updateUserPermissions(userId: String, isSuperAdmin: Bool, adminAccess: Bool, role: UserRole) async throws {
-        var isSuperAdminToWrite = isSuperAdmin
-        if isSuperAdminToWrite {
-            let doc = try? await db.collection("users").document(userId).getDocument()
-            if let data = doc?.data(), data["operativeMode"] as? Bool == true {
-                isSuperAdminToWrite = false
-            }
-        }
-        try await db.collection("users").document(userId).updateData([
-            "isSuperAdmin": isSuperAdminToWrite,
-            "adminAccess": adminAccess,
-            "role": role.rawValue
-        ])
-    }
-
     // Placeholder cleanup no longer needed - placeholders are no longer created
     
     func verifyOrganizationStructure() async {
@@ -7323,7 +7319,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         // RULEBOOK 1.23.1 §11 (`CanonicalBusinessEngine` `userMissingLevel`): Add User never writes a profile or an
         // invitation without a user level (admin, manager or operative).
@@ -7678,8 +7674,7 @@ class FirebaseBackend: ObservableObject {
                     "dailyOverview": newUser.permissions.dailyOverview,
                     "subContractors": newUser.permissions.subContractors,
                     "siteAudit": newUser.permissions.siteAudit,
-                    "wholesalersOrderHistory": newUser.permissions.wholesalersOrderHistory,
-                    "isSuperAdmin": newUser.isSuperAdmin
+                    "wholesalersOrderHistory": newUser.permissions.wholesalersOrderHistory
                 ]
                 if let mobileNumber = newUser.mobileNumber {
                     userData["mobileNumber"] = mobileNumber

@@ -493,6 +493,27 @@ class UserStore: ObservableObject {
         return u
     }
     
+    /// Mass-assignment audit 17 Nov: a confirmed-missing `users/{uid}` is re-created (as the Super Admin) only for the
+    /// organisation's creator.
+    /// The rulebook decides (`isOrganizationSuperAdmin`, review of #263): with no profile there is no stored flag, so
+    /// only the creator matches. A blank uid, a blank creator, or no answer from the script never matches.
+    nonisolated static func mayRecreateOwnProfileAsSuperAdmin(uid: String, organizationId: String, organizationCreatorUserId: String?) -> Bool {
+        let creator = (organizationCreatorUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let me = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !creator.isEmpty, !me.isEmpty else { return false }
+        return CanonicalBusinessEngine.isOrganizationSuperAdmin(
+            viewerId: me,
+            viewerIsSuperAdmin: false,
+            viewerOrganizationId: nil,
+            organizationId: organizationId,
+            creatorUserId: creator
+        ) == true
+    }
+
+    /// Shown when the signed-in person's profile is missing from the open organisation and they are not its creator.
+    static let missingOwnProfileMessage =
+        "Your profile was not found in this organisation. Ask an admin to add you again."
+
     // MARK: - User Management
     
     func loadCurrentUser() async {
@@ -531,7 +552,14 @@ class UserStore: ObservableObject {
                         userData = existing
                     case .unconfirmed, .permissionDenied:
                         print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
-                    case .confirmedMissing:
+                    case .confirmedMissing where Self.mayRecreateOwnProfileAsSuperAdmin(
+                        uid: firebaseUser.uid,
+                        organizationId: organization.firestoreDocumentId,
+                        organizationCreatorUserId: organization.creatorUserId
+                    ):
+                        // Mass-assignment audit 17 Nov: only the organisation's creator re-creates their own missing
+                        // profile, and only as its Super Admin (RULEBOOK §16: a self-created profile is super admin
+                        // only for the creator). Anyone else never writes their own privileged profile.
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
@@ -557,6 +585,11 @@ class UserStore: ObservableObject {
                             policyAcceptedAt: nil
                         )
                         try await firebaseBackend.saveUser(userData!)
+                    case .confirmedMissing:
+                        // Not the creator: no profile is written from this device (the security rules would refuse a
+                        // privileged self-create, and a plain one would hide the real problem). An admin re-adds them.
+                        print("🔥🔥🔥 DEBUG: Not creating users/\(firebaseUser.uid) — only the organisation's creator re-creates their own profile")
+                        errorMessage = Self.missingOwnProfileMessage
                     }
                 }
 
@@ -2162,78 +2195,21 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // CRITICAL: Before creating a user, ensure the current user has admin permissions
-        // Check the ACTUAL Firebase document (not just in-memory object) and fix if needed
         guard let currentUserId = firebaseBackend.currentUser?.uid else {
-            print("🔥🔥🔥 DEBUG: ⚠️ No current user ID available")
             errorMessage = "Unable to identify current user. Please sign in again."
             return false
         }
-        
-        // Whether the inviter is an admin, from their stored document; nil when it could not be read (the rules decide).
-        var inviterIsAdmin: Bool?
-        // Load the actual user document from Firebase to check permissions
-        if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
-            print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-            print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-            print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            
-            // Check if user has admin permissions in Firebase
-            let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
-            inviterIsAdmin = hasAdmin
-            let canInviteOperativesAsManager =
-                !hasAdmin &&
-                !firebaseUserData.permissions.operativeMode &&
-                firebaseUserData.permissions.manager &&
-                firebaseUserData.permissions.operatives
-
-            if !hasAdmin && !canInviteOperativesAsManager {
-                print("🔥🔥🔥 DEBUG: ⚠️ Current user does NOT have admin permissions in Firebase!")
-                errorMessage = "You do not have admin permissions. Please contact an administrator."
-                return false
-            }
-
-            // Managers with Operative Management can ONLY invite operatives
-            if canInviteOperativesAsManager {
-                guard permissions.operativeMode else {
-                    errorMessage = "Managers can only add operatives."
-                    return false
-                }
-            }
-
-            if hasAdmin {
-                print("🔥🔥🔥 DEBUG: ✅ Current user HAS admin permissions in Firebase")
-                print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-                print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-                print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            } else {
-                print("🔥🔥🔥 DEBUG: ✅ Current user can invite operatives as manager")
-            }
-        } else {
-            print("🔥🔥🔥 DEBUG: ⚠️ Current user document does not exist in Firebase!")
-            errorMessage = "Your user document does not exist. Please sign out and sign back in."
+        // Mass-assignment review of #263 (nit 4): one check, the inviter's level in THIS organisation
+        // (`organizationLevelFor`) — never the home company's flags. A non-admin may invite only an operative; the
+        // invitation written is checked again (`InvitationDocument.requireAllowed`) and by the security rules.
+        guard let inviterIsAdmin = await firebaseBackend.inviterIsAdmin(uid: currentUserId, organizationId: organizationId) else {
+            errorMessage = "Couldn't check your permissions. Try again."
             return false
         }
-        
-        // Double-check: admins must still be admins; managers inviting operatives skip this admin-only gate.
-        print("🔥🔥🔥 DEBUG: Final verification - checking user document one more time...")
-        if let finalCheck = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            let hasAdmin = finalCheck.isSuperAdmin || finalCheck.permissions.adminAccess || finalCheck.role == .admin
-            let managerInvitingOperative =
-                !hasAdmin &&
-                !finalCheck.permissions.operativeMode &&
-                finalCheck.permissions.manager &&
-                finalCheck.permissions.operatives &&
-                permissions.operativeMode
-            print("🔥🔥🔥 DEBUG: Final check - hasAdmin: \(hasAdmin), managerInvitingOperative: \(managerInvitingOperative)")
-            if !hasAdmin && !managerInvitingOperative {
-                print("🔥🔥🔥 DEBUG: ⚠️ WARNING: User still doesn't have admin permissions after fix attempt!")
-                errorMessage = "Your user document does not have admin permissions. Please ensure isSuperAdmin=true, adminAccess=true, or role='admin' in Firebase Console. User ID: \(currentUserId)"
-                return false
-            }
+        if !inviterIsAdmin && !permissions.operativeMode {
+            errorMessage = "Managers can only add operatives."
+            return false
         }
-        
         print("🔥🔥🔥 DEBUG: Calling createUserInvitation with organizationId: \(organizationId), invitedBy: \(invitedBy)")
         print("🔥🔥🔥 DEBUG: Current user ID for rules check: \(currentUserId)")
         
@@ -3914,6 +3890,15 @@ class UserStore: ObservableObject {
              
              /// The organisation open on this device — every invitation Manage Users writes is for it (AGENTS rule 2;
              /// never `user.organizationId`, the person's home company). Throws when none is open.
+             /// Mass-assignment review of #263: whether the signed-in user is an admin of `organizationId`, read for that
+             /// organisation (`FirebaseBackend.inviterIsAdmin`). Throws when it cannot be read: no invitation is written then.
+             func requireInviterIsAdmin(organizationId: String) async throws -> Bool {
+                 guard let firebaseBackend, let uid = firebaseBackend.currentUser?.uid,
+                       let isAdmin = await firebaseBackend.inviterIsAdmin(uid: uid, organizationId: organizationId)
+                 else { throw InvitationCheckUnavailableError() }
+                 return isAdmin
+             }
+
              func requireOpenOrganizationId() throws -> String {
                  let id = firebaseBackend?.currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                  guard !id.isEmpty else {
