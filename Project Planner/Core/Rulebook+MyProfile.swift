@@ -222,15 +222,15 @@ enum MyProfileSummaryInput {
                 [
                     "status": task.status.rawValue,
                     "dueDate": task.dueDate.map { ($0.timeIntervalSince1970 * 1000).rounded() as Any } ?? NSNull(),
-                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.storedOperativeId(for: $0) },
-                    "assignedOperativeId": task.assignedOperativeId.map { Booking.storedOperativeId(for: $0) as Any } ?? NSNull(),
+                    "assignedOperativeIds": task.assignedOperativeIds.map { Booking.operativeMatchKey(for: $0) },
+                    "assignedOperativeId": task.assignedOperativeId.map { Booking.operativeMatchKey(for: $0) as Any } ?? NSNull(),
                     "assignedManagerIds": task.assignedManagerIds.map(\.uuidString),
                     "assignedManagerId": task.assignedManagerId.map { $0.uuidString as Any } ?? NSNull(),
                 ]
             },
             "bookings": bookings.map { booking -> [String: Any] in
                 [
-                    "operativeId": Booking.storedOperativeId(for: booking.operativeId),
+                    "operativeId": Booking.operativeMatchKey(for: booking.operativeId),
                     "dayKey": OrganizationRulebookContext.dayKey(booking.date),
                     "status": booking.status.rawValue,
                     "timeSlot": booking.timeSlot.rawValue,

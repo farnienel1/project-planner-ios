@@ -213,7 +213,8 @@ final class MaterialCatalogStore: ObservableObject {
     }
 
     var brandCount: Int {
-        Set(items.map { MaterialCatalogDuplicateDetection.normalizeName($0.brand) }.filter { !$0.isEmpty }).count
+        // RULEBOOK 1.58.0 §28: "no brand" (blank or the legacy "Custom") is not a brand.
+        Set(items.map { MaterialCatalogDuplicateDetection.normalizeName(CanonicalBusinessEngine.materialBrandStored($0.brand)) }.filter { !$0.isEmpty }).count
     }
 
     var categoryCount: Int {
@@ -392,7 +393,8 @@ final class MaterialCatalogStore: ObservableObject {
 
     private func hasCatalogueFieldChanges(_ lhs: MaterialCatalogItem, _ rhs: MaterialCatalogItem) -> Bool {
         lhs.name != rhs.name
-            || lhs.brand != rhs.brand
+            // RULEBOOK 1.58.0: a blank and the legacy "Custom" are the same "no brand" (`materialBrandStored`).
+            || CanonicalBusinessEngine.materialBrandStored(lhs.brand) != CanonicalBusinessEngine.materialBrandStored(rhs.brand)
             || normalizedOptional(lhs.productCode) != normalizedOptional(rhs.productCode)
             // RULEBOOK 1.48.0: the quantity meaning (`effectiveQuantityModel`), not the old unit / length spelling.
             || lhs.effectiveQuantityModel != rhs.effectiveQuantityModel
@@ -426,11 +428,10 @@ final class MaterialCatalogStore: ObservableObject {
             guard !name.isEmpty else { continue }
             let key = MaterialCatalogDuplicateDetection.normalizeName(name)
             if byName[key] != nil { continue }
-            let brand = line.brand?.trimmingCharacters(in: .whitespacesAndNewlines)
             let category = normalizedCategory(line.category)
             byName[key] = MaterialCatalogItem(
                 name: name,
-                brand: (brand?.isEmpty == false) ? brand! : "Custom",
+                brand: CanonicalBusinessEngine.materialBrandStored(line.brand), // RULEBOOK 1.58.0: no brand is '', never "Custom"
                 productCode: line.productCode,
                 defaultUnit: line.unit,
                 orderUnit: line.effectiveQuantityModel.orderUnit,

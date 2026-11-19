@@ -36,14 +36,14 @@ final class BookingIdentityTests: XCTestCase {
     func testUuidOperativeIdIsUsedAsIs() {
         let uuid = UUID()
         XCTAssertEqual(Booking.internalOperativeId(for: uuid.uuidString), uuid)
-        XCTAssertEqual(Booking.storedOperativeId(for: uuid), uuid.uuidString)
+        XCTAssertEqual(Booking.operativeMatchKey(for: uuid), uuid.uuidString)
     }
 
     func testAuthUidMapsToStableIdAndSavesBackAsTheUid() {
         let first = Booking.internalOperativeId(for: authUid)
         let second = Booking.internalOperativeId(for: " \(authUid) ")
         XCTAssertEqual(first, second)
-        XCTAssertEqual(Booking.storedOperativeId(for: first), authUid)
+        XCTAssertEqual(Booking.operativeMatchKey(for: first), authUid)
 
         let booking = Booking(operativeId: first, projectId: UUID(), date: Date(), timeSlot: .fullDay, bookedBy: "Admin")
         XCTAssertNil(booking.operativeKey)
@@ -74,10 +74,11 @@ final class BookingIdentityTests: XCTestCase {
         let data = try JSONEncoder().encode([saved])
 
         let loaded = try JSONDecoder().decode([Booking].self, from: data)
-        XCTAssertEqual(Booking.storedOperativeId(for: derived), derived.uuidString)
+        XCTAssertNil(Booking.storedOperativeId(for: derived), "an unremembered derived id is never written")
+        XCTAssertEqual(Booking.operativeMatchKey(for: derived), derived.uuidString)
 
         Booking.registerStoredOperativeKeys(loaded)
-        XCTAssertEqual(Booking.storedOperativeId(for: derived), cachedUid)
+        XCTAssertEqual(Booking.operativeMatchKey(for: derived), cachedUid)
     }
 
     // MARK: - Rulebook wrappers
@@ -120,7 +121,7 @@ final class BookingIdentityTests: XCTestCase {
         let rehired = user(id: authUid, email: "rehired@test.com")
         let rows = ScheduleBookablePersonBuilder.operativesForScheduling(operatives: [], users: [rehired])
         XCTAssertEqual(rows.count, 1)
-        XCTAssertEqual(rows.first.map { Booking.storedOperativeId(for: $0.id) }, authUid)
+        XCTAssertEqual(rows.first.map { Booking.operativeMatchKey(for: $0.id) }, authUid)
     }
 
     func testBookingUnderTheOldPlaceholderNamesTheCurrentAccount() {

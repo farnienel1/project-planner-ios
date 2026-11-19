@@ -215,7 +215,7 @@ enum WorksListContextBuilder {
             bookings: bookings.map {
                 [
                     "projectId": $0.storedProjectId,
-                    "operativeId": Booking.storedOperativeId(for: $0.operativeId),
+                    "operativeId": Booking.operativeMatchKey(for: $0.operativeId),
                     "status": $0.status.rawValue,
                 ]
             },
@@ -230,7 +230,7 @@ enum WorksListContextBuilder {
                 [
                     "projectId": WorkDocumentKeys.storedId(for: task.projectId),
                     "assignedOperativeIds": (task.assignedOperativeIds + [task.assignedOperativeId].compactMap { $0 })
-                        .map { Booking.storedOperativeId(for: $0) },
+                        .map { Booking.operativeMatchKey(for: $0) },
                     "assignedManagerIds": (task.assignedManagerIds + [task.assignedManagerId].compactMap { $0 }).map(\.uuidString),
                 ]
             },

@@ -507,12 +507,12 @@ struct ProjectDetailView: View {
     private var tileBadges: RulebookJobTileBadges {
         let jobId = project.id.uuidString
         let people: [[String: Any]] = userStore.organizationUsers.map(RulebookRosterLists.levelRow)
-            + operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email] as [String: Any] }
+            + operativeStore.allOperatives.map { ["id": Booking.operativeMatchKey(for: $0.id), "email": $0.email] as [String: Any] }
             + operativeStore.allManagers.map { ["id": $0.id.uuidString, "email": $0.email] as [String: Any] }
         let input: [String: Any] = [
             "jobId": jobId,
             "bookings": bookingStore.bookings.filter { $0.projectId == project.id }.map { booking -> [String: Any] in
-                ["projectId": jobId, "operativeId": Booking.storedOperativeId(for: booking.operativeId), "status": booking.status.rawValue]
+                ["projectId": jobId, "operativeId": Booking.operativeMatchKey(for: booking.operativeId), "status": booking.status.rawValue]
             },
             "managerSiteBookings": managerScheduleStore.managerSiteBookings.filter { $0.locationId == project.id }.map { booking -> [String: Any] in
                 ["userId": booking.userId, "locationId": jobId, "locationType": booking.locationType.rawValue]

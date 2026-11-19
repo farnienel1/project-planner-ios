@@ -277,7 +277,7 @@ enum StaffEmailIdentity {
         }
         for id in operativeIds.sorted(by: { $0.uuidString < $1.uuidString }) {
             place(
-                Booking.storedOperativeId(for: id),
+                Booking.operativeMatchKey(for: id),
                 legacy: {
                     let known = operatives.contains { $0.id == id } || AccountLabourBooking.account(forOperativeId: id, users: users) != nil
                     return (operativeBookingEmail(id, operatives: operatives, users: users), known)

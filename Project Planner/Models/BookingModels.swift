@@ -77,9 +77,17 @@ struct Booking: Identifiable, Codable, Hashable {
         self.updatedAt = updatedAt ?? Date()
     }
 
-    /// The `operativeId` written to Firestore: the stored text when known, else the person behind a
-    /// mapped id, else the UUID itself.
+    /// The booked person's id for matching and reading only (bookings to people, warnings, names): the stored text
+    /// when known, else `operativeMatchKey(for:)`. Never written: a save uses `writableOperativeId`.
     var storedOperativeId: String {
+        if let key = operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
+        return Self.operativeMatchKey(for: operativeId)
+    }
+
+    /// The `operativeId` a save writes to Firestore: the stored text when known, else the person behind a mapped id
+    /// (`storedOperativeId(for:)`). Nil when this phone cannot tell who the booking is for — every booking write
+    /// refuses then (`BookingPersonResolution`), so a booking never points at an id no person resolves to.
+    var writableOperativeId: String? {
         if let key = operativeKey?.trimmingCharacters(in: .whitespacesAndNewlines), !key.isEmpty { return key }
         return Self.storedOperativeId(for: operativeId)
     }
@@ -91,8 +99,19 @@ struct Booking: Identifiable, Codable, Hashable {
     }
 
     /// The stored id behind an in-app operative key (a Firebase Auth uid mapped by `internalOperativeId(for:)`).
-    nonisolated static func storedOperativeId(for internalId: UUID) -> String {
-        OperativeKeyRegistry.shared.rawKey(for: internalId) ?? internalId.uuidString
+    /// A UUID made here or read from Firestore (version 4) is its own id. Nil for an id `internalOperativeId(for:)`
+    /// derived from a stored id this phone no longer remembers: its `uuidString` is no one's id, and writing it
+    /// would leave a booking pointing at an id no person resolves to ("Unknown person" in Data health).
+    nonisolated static func storedOperativeId(for internalId: UUID) -> String? {
+        if let raw = OperativeKeyRegistry.shared.rawKey(for: internalId) { return raw }
+        if OperativeKeyRegistry.isDerived(internalId) { return nil }
+        return internalId.uuidString
+    }
+
+    /// `storedOperativeId(for:)` for matching and reading only (warnings, names, pickers, lookups): an unresolved
+    /// derived id reads as its `uuidString`, which matches no stored id. Never write it.
+    nonisolated static func operativeMatchKey(for internalId: UUID) -> String {
+        storedOperativeId(for: internalId) ?? internalId.uuidString
     }
 
     /// In-app UUID for a stored `operativeId`. A UUID is used as is. Any other id (a Firebase Auth uid)
@@ -112,7 +131,12 @@ struct Booking: Identifiable, Codable, Hashable {
 
     nonisolated static func internalOperativeId(for raw: String) -> UUID {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let uuid = UUID(uuidString: trimmed) { return uuid }
+        if let uuid = UUID(uuidString: trimmed) {
+            // A stored id that happens to be version-5 shaped is remembered, so `storedOperativeId(for:)` still
+            // writes it back as stored (it would otherwise read as an unremembered derived id).
+            if OperativeKeyRegistry.isDerived(uuid) { OperativeKeyRegistry.shared.remember(raw: trimmed, as: uuid) }
+            return uuid
+        }
         let derived = OperativeKeyRegistry.derivedUUID(for: trimmed)
         OperativeKeyRegistry.shared.remember(raw: trimmed, as: derived)
         return derived
@@ -134,6 +158,12 @@ nonisolated final class OperativeKeyRegistry: @unchecked Sendable {
     func rawKey(for id: UUID) -> String? {
         lock.lock(); defer { lock.unlock() }
         return rawById[id]
+    }
+
+    /// True for a UUID shaped like `derivedUUID(for:)` (version 5). `UUID()` and web's `crypto.randomUUID()` are
+    /// version 4, so a stored person id is never mistaken for one.
+    static func isDerived(_ id: UUID) -> Bool {
+        (id.uuid.6 & 0xF0) == 0x50 && (id.uuid.8 & 0xC0) == 0x80
     }
 
     /// Version-5-shaped UUID from SHA-256 of a fixed prefix and the id. Same input, same UUID, on every device.
