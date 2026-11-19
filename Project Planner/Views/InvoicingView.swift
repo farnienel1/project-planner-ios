@@ -4075,12 +4075,13 @@ private struct MyTimesheetView: View {
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
         let weekStart = week.start
-        let revision = draft.revision
+        // RULEBOOK 1.60.1: this signature (REV and instant, read from the signed draft) keys its notice.
+        let signature = TimesheetSignatureNotices.ownerSigned(draft)
         Task {
             await notificationService.notifyTimesheetSubmitted(
                 signedByUser: current,
                 weekStart: weekStart,
-                revision: revision
+                signature: signature
             )
         }
     }
@@ -7272,21 +7273,16 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 }
                 let counterSignSave = onCounterSignSave()
                 let signer = draft.managerSignedByName ?? "Line manager"
-                let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
-                let revision = draft.revision
+                // RULEBOOK 1.60.1: the counter-signature (REV and instant, read from the signed draft) keys the signed
+                // notice and the line-manager peer rows.
+                let counterSignature = TimesheetSignatureNotices.counterSigned(draft)
                 Task {
-                    await notificationService.notifyTimesheetSignedByManager(
-                        targetUserId: operative.id,
+                    await notificationService.notifyTimesheetCounterSigned(
+                        operative: operative,
                         signedByName: signer,
                         weekStart: week.start,
-                        revision: revision
-                    )
-                    // `lineManagerPeerRecipients(operative, signer, roster)` picks the other line managers.
-                    await notificationService.notifyLineManagerPeerAction(
-                        actorName: signer,
-                        actionSummary: "\(operativeName)'s timesheet (\(week.title))",
-                        subject: operative,
-                        actionVerb: "signed"
+                        weekTitle: week.title,
+                        signature: counterSignature
                     )
                 }
                 showingManagerSignSheet = false
