@@ -854,20 +854,106 @@ struct WarningsDetailView: View {
             }
             .padding(16)
 
-            Button { requestRemoveWarning(warning) } label: {
-                Text("Dismiss")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.secondary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
+            // RULEBOOK 1.60.0 (owner report 17 Nov): the same three ways in as web's card — Book labour on that person
+            // and day (listed there with the gap prefilled), Daily Overview on the day, and that person's annual leave.
+            VStack(spacing: 9) {
+                if !isClash, canBookLabourFromWarning, let warningDay = warning.occurrenceDate {
+                    Button {
+                        presentedFullScreen = .bookLabour(
+                            date: warningDay,
+                            focusedUserIds: [detail?.userId, detail?.operativeId, detail?.personKey].compactMap { $0 }
+                        )
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "calendar.badge.plus")
+                                .font(.body.weight(.semibold))
+                            Text("Book the \(detail?.workingLabel ?? "PM")")
+                                .font(.body.weight(.bold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 15)
+                        .background(WarningsUI.blue)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    }
+                    .accessibilityIdentifier("warnings.leaveCover.book")
+                    .buttonStyle(.plain)
+                }
+
+                HStack(spacing: 0) {
+                    Button {
+                        openDayDate = warning.occurrenceDate.map(IdentifiableDay.init)
+                    } label: {
+                        Text("Open daily overview")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(WarningsUI.blue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .accessibilityIdentifier("warnings.leaveCover.dailyOverview")
+                    .buttonStyle(.plain)
+
+                    Rectangle().fill(Color(.separator)).frame(width: 0.5).padding(.vertical, 8)
+
+                    Button {
+                        openAnnualLeave(for: detail)
+                    } label: {
+                        Text("Annual leave")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(WarningsUI.blue)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .accessibilityIdentifier("warnings.leaveCover.annualLeave")
+                    .buttonStyle(.plain)
+
+                    Rectangle().fill(Color(.separator)).frame(width: 0.5).padding(.vertical, 8)
+
+                    Button { requestRemoveWarning(warning) } label: {
+                        Text("Dismiss")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.secondary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                    }
+                    .accessibilityIdentifier("warnings.leaveCover.dismiss")
+                    .buttonStyle(.plain)
+                }
+                .background(PPColor.card)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color(.separator), lineWidth: 0.5)
+                )
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 14)
+            .padding(.top, 2)
             .padding(.bottom, 14)
             .background(WarningsUI.footerFill)
         }
         .background(PPColor.card)
         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
+    }
+
+    /// The person's annual leave page (Annual leave → Team → that person, as the `annualLeavePerson` notification
+    /// opens it); the viewer's own leave when the warning is about them (web `leaveWarningAnnualLeaveHref`).
+    private func openAnnualLeave(for detail: Warning.AnnualLeaveWarningDetails?) {
+        let personId = detail?.userId ?? detail?.operativeId ?? detail?.personKey
+        // The signed-in profile (`userStore.displayUser`, as this screen's resolution writes use).
+        let viewer = userStore.displayUser
+        let viewerIdList: [String] = [viewer?.id ?? ""]
+            + (viewer?.formerUserIds ?? []) + (viewer?.sameEmailUserIds ?? [])
+        let viewerIds = Set(viewerIdList.filter { !$0.isEmpty }.map { $0.lowercased() })
+        let isViewer = personId.map { viewerIds.contains($0.lowercased()) } ?? true
+        AnnualLeaveDeepLinkContext.pendingPersonUserId = isViewer ? nil : personId
+        dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            NotificationCenter.default.post(
+                name: NSNotification.Name("openHoliday"),
+                object: nil,
+                userInfo: ["showRequests": !isViewer]
+            )
+        }
     }
 
     private func formatMissingHours(_ hours: Double) -> String {
