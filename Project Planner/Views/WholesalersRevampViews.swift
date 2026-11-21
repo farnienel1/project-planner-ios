@@ -787,7 +787,7 @@ struct WholesalerSendHistoryView: View {
                     records: record.lines.map { line in
                         CanonicalBusinessEngine.CanonicalMaterialRecord(
                             name: line.name,
-                            brand: line.brand ?? "",
+                            brand: CanonicalBusinessEngine.materialBrandStored(line.brand),
                             productCode: line.productCode ?? "",
                             length: line.lengthDisplay ?? ""
                         )

@@ -29,6 +29,17 @@ enum UserTimesheetAccessRulebook {
         ]
     }
 
+    /// A roster member's role for `userTimesheetSubjects` / `exportedTimesheetHistorySubjects`. A person with no level
+    /// flag at all reads as manager level (RULEBOOK §11, 1.23.1: `rosterListKind`, the rulebook's `permissionLevelOf`),
+    /// so an admin sees their timesheets like any other manager's; before, they had no role and were left off User
+    /// Timesheets and the Exported list (web `timesheetMemberRole`, `w-timesheet-lookups`). Members only — the
+    /// viewer's own access is unchanged.
+    static func memberRolePayload(_ member: AppUser) -> [String: Any] {
+        var role = rolePayload(member)
+        if member.rosterListKind == .managers { role["isManager"] = true }
+        return role
+    }
+
     static func payload(viewer: AppUser, members: [AppUser]) -> [String: Any] {
         [
             "viewer": [
@@ -42,7 +53,7 @@ enum UserTimesheetAccessRulebook {
                     "id": member.id,
                     "email": member.email,
                     "isActive": member.isActive,
-                    "role": rolePayload(member),
+                    "role": memberRolePayload(member),
                     "assignedManagerUserIds": member.assignedManagerUserIds,
                     "assignedManagerUserId": member.assignedManagerUserId ?? NSNull(),
                     "hasNoLineManager": member.hasNoLineManager,

@@ -102,7 +102,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     id: "cat:\(item.id.uuidString)",
                     source: .catalogue,
                     name: item.name,
-                    brand: item.brand,
+                    brand: CanonicalBusinessEngine.materialBrandStored(item.brand),
                     productCode: item.productCode,
                     quantityModel: item.effectiveQuantityModel,
                     size: item.size,
@@ -120,7 +120,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     id: "recent:\(item.id.uuidString)",
                     source: .recent,
                     name: item.material,
-                    brand: item.brand ?? "Custom",
+                    brand: CanonicalBusinessEngine.materialBrandStored(item.brand), // RULEBOOK 1.58.0: never "Custom"
                     productCode: item.productCode,
                     quantityModel: item.effectiveQuantityModel,
                     size: item.size,
@@ -213,7 +213,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                     originalQuantity = opened
                     neededDate = existing.date
                     notes = existing.notes ?? ""
-                    customBrand = existing.brand ?? ""
+                    customBrand = CanonicalBusinessEngine.materialBrandStored(existing.brand)
                     customProductCode = existing.productCode ?? ""
                     sizeValue = existing.size ?? ""
                     let existingCategory = existing.category?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -326,7 +326,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                             .font(.system(size: 12))
                             .foregroundStyle(MaterialsOrderingTheme.success)
                     }
-                    Text(item.brand)
+                    Text(CanonicalBusinessEngine.materialBrandText(item.brand))
                         .font(.system(size: 11))
                         .foregroundStyle(MaterialsOrderingTheme.muted)
                     if let code = item.productCode {
@@ -569,7 +569,8 @@ struct MaterialsAddWithCatalogueSheet: View {
     private func autocompleteSubtitle(for suggestion: MaterialAutocompleteSuggestion) -> String {
         let model = suggestion.quantityModel
         var parts = [
-            suggestion.brand,
+            // RULEBOOK 1.58.0 §28: the brand slot reads "N/A" when there is none (`materialBrandText`).
+            CanonicalBusinessEngine.materialBrandText(suggestion.brand),
             suggestion.productCode ?? "—",
             CanonicalBusinessEngine.materialCatalogueUnitSummary(
                 orderUnit: model.orderUnit, contentAmount: model.contentAmount, contentMeasure: model.contentMeasure
@@ -640,6 +641,14 @@ struct MaterialsAddWithCatalogueSheet: View {
         quantityDraft = MaterialQuantityDraft(quantity: 1, model: suggestion.quantityModel)
     }
 
+    /// RULEBOOK 1.58.0 §28: the picked catalogue item's brand as saved (`materialBrandStored`), nil when it has none —
+    /// a catalogue item without a brand never puts a brand (or "Custom") on the job line.
+    private var selectedCatalogueBrand: String? {
+        guard let selectedCatalogue else { return nil }
+        let brand = CanonicalBusinessEngine.materialBrandStored(selectedCatalogue.brand)
+        return brand.isEmpty ? nil : brand
+    }
+
     private func save(force: Bool = false) async {
         let name = resolvedName
         let code = selectedCatalogue?.productCode
@@ -683,8 +692,8 @@ struct MaterialsAddWithCatalogueSheet: View {
             status: .draft,
             catalogueItemId: selectedCatalogue?.id,
             brand: shouldOverrideMatched
-                ? (trimmedCustomBrand.isEmpty ? selectedCatalogue?.brand : trimmedCustomBrand)
-                : (selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand)),
+                ? (trimmedCustomBrand.isEmpty ? selectedCatalogueBrand : trimmedCustomBrand)
+                : (selectedCatalogueBrand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand)),
             productCode: shouldOverrideMatched
                 ? (trimmedCustomCode.isEmpty ? selectedCatalogue?.productCode : trimmedCustomCode)
                 : (selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode)),
@@ -703,8 +712,8 @@ struct MaterialsAddWithCatalogueSheet: View {
         item.date = cal.startOfDay(for: neededDate)
         item.catalogueItemId = selectedCatalogue?.id
         item.brand = shouldOverrideMatched
-            ? (trimmedCustomBrand.isEmpty ? selectedCatalogue?.brand : trimmedCustomBrand)
-            : (selectedCatalogue?.brand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand))
+            ? (trimmedCustomBrand.isEmpty ? selectedCatalogueBrand : trimmedCustomBrand)
+            : (selectedCatalogueBrand ?? (trimmedCustomBrand.isEmpty ? nil : trimmedCustomBrand))
         item.productCode = shouldOverrideMatched
             ? (trimmedCustomCode.isEmpty ? selectedCatalogue?.productCode : trimmedCustomCode)
             : (selectedCatalogue?.productCode ?? (trimmedCustomCode.isEmpty ? nil : trimmedCustomCode))

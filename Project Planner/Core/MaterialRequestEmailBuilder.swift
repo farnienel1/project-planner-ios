@@ -61,7 +61,8 @@ enum MaterialRequestEmailBuilder {
                 // RULEBOOK 1.48.0: the quantity is `materialLineText` ("2no 50m drums"); the length is part of it.
                 let qty = item.quantityText
                 let details = [
-                    item.brand.map { "Brand: \($0)" },
+                    // RULEBOOK 1.58.0 §28: appended only when there is a brand (`materialBrandStored`), never "Custom".
+                    Optional(CanonicalBusinessEngine.materialBrandStored(item.brand)).flatMap { $0.isEmpty ? nil : "Brand: \($0)" },
                     item.productCode.map { "Code: \($0)" },
                     item.notes.map { "Details: \($0)" }
                 ]
@@ -266,9 +267,8 @@ enum MaterialRequestEmailBuilder {
             : ("#e6f0fc", "#185fa5")
         return materials.map { material in
             let name = escapeHTML(material.material)
-            let manufacturer = escapeHTML(material.brand?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-                ? material.brand!
-                : "—")
+            // RULEBOOK 1.58.0 §28: the Manufacturer slot reads "N/A" when there is no brand (`materialBrandText`), as web.
+            let manufacturer = escapeHTML(CanonicalBusinessEngine.materialBrandText(material.brand))
             let part = material.productCode?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let partHTML = part.isEmpty ? "" : " · Part: <span style=\"color:#475569;font-weight:600;\">\(escapeHTML(part))</span>"
             // RULEBOOK 1.48.0: no separate "Length:" — what is in one is part of the quantity text.

@@ -201,12 +201,12 @@ fileprivate func myScheduleClashMarkerMap(
     let viewer = userStore.currentUser
     var viewerIds: [String] = []
     if let viewer { viewerIds = [viewer.id] + viewer.formerUserIds + viewer.sameEmailUserIds }
-    viewerIds += operative.map { Booking.storedOperativeId(for: $0.operativeId) }
+    viewerIds += operative.map { Booking.operativeMatchKey(for: $0.operativeId) }
     var input: [String: Any] = [
         "operativeBookings": operative.map { b -> [String: Any] in
             [
                 "id": b.id.uuidString,
-                "operativeId": Booking.storedOperativeId(for: b.operativeId),
+                "operativeId": Booking.operativeMatchKey(for: b.operativeId),
                 "dayKey": dayKey(b.date),
                 "timeSlot": b.timeSlot.rawValue,
                 "workStartTime": b.workStartTime ?? NSNull(),
@@ -234,7 +234,7 @@ fileprivate func myScheduleClashMarkerMap(
             "accounts": users.map { user -> [String: Any] in
                 ["id": user.id, "email": user.email.lowercased(), "formerIds": user.formerUserIds, "aliasIds": user.sameEmailUserIds]
             },
-            "operatives": operativeStore.allOperatives.map { ["id": Booking.storedOperativeId(for: $0.id), "email": $0.email.lowercased()] },
+            "operatives": operativeStore.allOperatives.map { ["id": Booking.operativeMatchKey(for: $0.id), "email": $0.email.lowercased()] },
         ],
         "managerIds": RulebookRosterLists.clashManagerIds(users.map(RulebookRosterLists.levelRow)) ?? [],
         // The viewer's real scope: nil from `WarningScopeSupport` is everything for a loaded viewer; no viewer → no button.

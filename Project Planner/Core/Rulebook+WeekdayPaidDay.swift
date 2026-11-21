@@ -592,6 +592,30 @@ extension CanonicalBusinessEngine {
         return row["text"] as? String
     }
 
+    /// RULEBOOK 1.67.0 §8 (final review of web #378) `liveDayRateOvertimeText`: a LIVE day-rate overtime line in hours,
+    /// or nil for the older wording. The script checks that the text shows the line's own figures (its hours are the
+    /// line's paid hours × the multiplier, and `amount` is exactly what `payForHours` pays for them at that day rate and
+    /// divisor), so no Swift copy of that check is kept. `clockHours` / `breakHours` come from the line's multiplied
+    /// text when it has one (nil: the script uses the paid hours as clock hours).
+    nonisolated static func liveDayRateOvertimeText(
+        paidHours: Double, clockHours: Double?, breakHours: Double?, multiplier: Double,
+        dayRate: Double, dayRateHours: Double, amount: Double, currencyCode: String? = nil
+    ) -> String? {
+        let line: [String: Any] = [
+            "paidHours": paidHours,
+            "clockHours": RulebookJSON.orNull(clockHours),
+            "breakHours": RulebookJSON.orNull(breakHours),
+            "multiplier": multiplier,
+            "dayRate": dayRate,
+            "dayRateHours": dayRateHours,
+            "amount": amount,
+        ]
+        guard JSONSerialization.isValidJSONObject(line),
+              let row = callJSON("liveDayRateOvertimeText", arguments: [line, ["currency": currencyCode ?? OrganizationRulebookContext.currencyCode]]) as? [String: Any]
+        else { return nil }
+        return row["text"] as? String
+    }
+
     /// RULEBOOK 1.61.0 §8 `dayRateHourlyEquivalent`: the hourly rate shown for a day rate on one part — the day rate ÷
     /// the divisor rounded to pennies (display only; pay never uses it). Nil when the script refuses it.
     nonisolated static func dayRateHourlyEquivalent(dayRate: Double, dayRateHours: Double) -> Double? {
