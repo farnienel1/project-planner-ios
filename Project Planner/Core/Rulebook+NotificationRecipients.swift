@@ -107,7 +107,8 @@ extension CanonicalBusinessEngine {
         periodStartDayKey: String,
         timeZone: String,
         recipientId: String? = nil,
-        revision: Int? = nil
+        revision: Int? = nil,
+        signedAt: Date? = nil
     ) -> String? {
         var input: [String: Any] = [
             "type": type,
@@ -119,7 +120,30 @@ extension CanonicalBusinessEngine {
         // RULEBOOK 1.55.0: a revision (REV N) shares its period start with the original, so its notices get their
         // own key (`…|rev{N}`); nil / 0 is the original (key unchanged).
         if let revision { input["revision"] = revision }
+        // RULEBOOK 1.60.1: the signature instant (`…|sig{ms}`), so a re-sign of the same pay run is its own row and
+        // push instead of hitting the first signature's row. Nil: the key is unchanged.
+        if let signedAt { input["signedAtMs"] = (signedAt.timeIntervalSince1970 * 1000).rounded(.down) }
         return callJSON("timesheetNotificationDedupeKey", arguments: [input]) as? String
+    }
+
+    /// RULEBOOK 1.60.1 `lineManagerPeerNoticeKey`: the `line_manager_peer_update` de-dupe key
+    /// (`lmPeer|{actor}|{summary}|{peer}|{verb}`, plus `|sig{ms}` with a counter-sign instant; unchanged without one).
+    /// Nil when the script did not answer or the peer id is missing.
+    nonisolated static func lineManagerPeerNoticeKey(
+        actorName: String,
+        actionSummary: String,
+        peerId: String,
+        actionVerb: String,
+        signedAt: Date? = nil
+    ) -> String? {
+        var input: [String: Any] = [
+            "actorName": actorName,
+            "actionSummary": actionSummary,
+            "peerId": peerId,
+            "actionVerb": actionVerb,
+        ]
+        if let signedAt { input["signedAtMs"] = (signedAt.timeIntervalSince1970 * 1000).rounded(.down) }
+        return callJSON("lineManagerPeerNoticeKey", arguments: [input]) as? String
     }
 
     /// `inboxNotificationVisibleToUser(row, ids)`: the row's `userId` is one of the person's ids. Ownerless rows

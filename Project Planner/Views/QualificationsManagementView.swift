@@ -223,7 +223,8 @@ struct QualificationsManagementView: View {
         if let created = await userStore.ensureOperativeProfileForAppUser(user, operativeStore: operativeStore) {
             myOperative = created
         } else {
-            myProfileError = "Could not create a linked profile for your qualifications. Check your account email and try again."
+            myProfileError = userStore.operativeProfileLinkError
+                ?? "Could not create a linked profile for your qualifications. Check your account email and try again."
         }
     }
 

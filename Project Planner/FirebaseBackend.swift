@@ -4386,7 +4386,11 @@ class FirebaseBackend: ObservableObject {
         }
         
         do {
-            try await db.collection("organizations").document(organizationId).collection("operatives").document(Booking.storedOperativeId(for: operativeId)).delete()
+            guard let documentId = Booking.storedOperativeId(for: operativeId) else {
+                print("🔥🔥🔥 DEBUG: Not deleting operative \(operativeId): its stored id is not known on this phone")
+                return
+            }
+            try await db.collection("organizations").document(organizationId).collection("operatives").document(documentId).delete()
             print("🔥🔥🔥 DEBUG: Successfully deleted operative \(operativeId) from Firebase")
         } catch {
             print("🔥🔥🔥 DEBUG: Error deleting operative from Firebase: \(error)")
@@ -4517,6 +4521,78 @@ class FirebaseBackend: ObservableObject {
     /// RULEBOOK 1.34.0 §11 (review fix): the ghost markers the signed-in person never writes on their own users
     /// document (the rules refuse it). Only `ghostCreateWrites` / `ghostUpgradeWrites` (another person's document) do.
     nonisolated static let ownProfileForbiddenFields = ["ghost", "inviteEmailHint"]
+
+    /// Mass-assignment audit 17 Nov: the keys a person may write when their OWN users document is created from this
+    /// device and they are not the open organisation's creator — identity and acceptance only. Role, privilege flags,
+    /// `permissions`, `passwordSet`, `isActive`, pay, employment type, line manager, `organizationId` and alias ids
+    /// are never self-written (RULEBOOK §16: a person never sets their own privileges, pay or line manager).
+    nonisolated static let ownProfileCreateAllowedFields: Set<String> = [
+        "email", "firstName", "surname", "lastName", "name", "displayName", "mobileNumber",
+        "profilePhotoURL", "createdAt", "policyAccepted", "policyAcceptedAt", "legalPackVersion",
+    ]
+
+    /// The fields of a new `users/{id}` document this device may write (`saveUser` create branch):
+    /// - the signed-in person's own document: everything (but the ghost markers) only for the open organisation's
+    ///   creator re-creating their own Super Admin profile; anyone else only `ownProfileCreateAllowedFields`;
+    /// - someone else's document (an invite placeholder): `isSuperAdmin` is never sent on a placeholder
+    ///   (`passwordSet` false) or when it is false (RULEBOOK 1.34.0 note: an operatives manager's create carrying it
+    ///   is refused / crashed the emulator); the rest as built (the rules check the writer).
+    /// Delete sentinels are dropped: a create has nothing to delete.
+    nonisolated static func userCreatePayload(
+        _ payload: [String: Any],
+        userId: String,
+        signedInUid: String?,
+        isOrganizationCreator: Bool,
+        passwordSet: Bool
+    ) -> [String: Any] {
+        let own = signedInUid != nil && userId == signedInUid
+        return payload.filter { key, value in
+            if value is FieldValue { return false }
+            if own {
+                if isOrganizationCreator { return !ownProfileForbiddenFields.contains(key) }
+                return ownProfileCreateAllowedFields.contains(key)
+            }
+            if key == "isSuperAdmin" { return passwordSet && (value as? Bool) == true }
+            return true
+        }
+    }
+
+    /// The signed-in account is the creator of the open organisation, and the profile being written is for it.
+    /// Mass-assignment review of #263: whether `uid` is an admin of `organizationId`, read for THAT organisation
+    /// (`organizationLevelFor`: their users document when it names this organisation, else their membership here, else
+    /// the `members` role; the creator is the Super Admin) — never a home company's flags. Nil when a document could
+    /// not be read or the script did not answer; callers then refuse (fail closed).
+    func inviterIsAdmin(uid: String, organizationId: String) async -> Bool? {
+        let userRef = db.collection("users").document(uid)
+        let membershipRef = userRef.collection("orgMemberships").document(organizationId)
+        let orgRef = db.collection("organizations").document(organizationId)
+        do {
+            let org = try await orgRef.getDocument()
+            let user = try await userRef.getDocument()
+            let membership = try await membershipRef.getDocument()
+            guard org.exists else { return nil }
+            let orgData = org.data() ?? [:]
+            let membersRole = (orgData["members"] as? [String: Any])?[uid] as? String
+            guard let level = CanonicalBusinessEngine.organizationLevelFor(
+                organizationId: organizationId,
+                userId: uid,
+                user: user.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membership: membership.data().map { CanonicalBusinessEngine.peopleDocumentJSON($0) },
+                membersRole: membersRole,
+                creatorUserId: orgData["creatorUserId"] as? String
+            ) else { return nil }
+            return level.level == .admin
+        } catch {
+            NSLog("INVITER_LEVEL_UNREAD org=%@ — %@", organizationId, String(describing: error))
+            return nil
+        }
+    }
+
+    func isOpenOrganizationCreator(uid: String?, organizationId: String) -> Bool {
+        guard let uid, let org = currentOrganization else { return false }
+        guard organizationIdsMatch(org.firestoreDocumentId, organizationId) else { return false }
+        return UserStore.mayRecreateOwnProfileAsSuperAdmin(uid: uid, organizationId: org.firestoreDocumentId, organizationCreatorUserId: org.creatorUserId)
+    }
 
     static func parseAppUserDocument(
         userId: String,
@@ -5232,69 +5308,6 @@ class FirebaseBackend: ObservableObject {
         return rank
     }
     
-    // MARK: - Simplified User Management (Placeholder)
-    
-    
-    func createOrganization(
-        id: String,
-        name: String,
-        adminUserId: String,
-        officeAddressLine1: String? = nil,
-        officeCity: String? = nil,
-        officePostcode: String? = nil,
-        countryCode: String,
-        defaultLatitude: Double? = nil,
-        defaultLongitude: Double? = nil
-    ) async throws {
-        guard let nameFields = CanonicalBusinessEngine.organizationNameToFirestore(name),
-              let writtenName = nameFields["name"] as? String,
-              !writtenName.isEmpty else {
-            throw NSError(
-                domain: "FirebaseBackend",
-                code: 0,
-                userInfo: [NSLocalizedDescriptionKey: "Organisation name is required"]
-            )
-        }
-        var payload: [String: Any] = nameFields
-        payload["id"] = id
-        payload["adminUserId"] = adminUserId
-        payload["creatorUserId"] = adminUserId
-        payload["countryCode"] = countryCode.uppercased()
-        payload["createdAt"] = Timestamp(date: Date())
-        payload["updatedAt"] = Timestamp(date: Date())
-        if let officeAddressLine1, !officeAddressLine1.isEmpty {
-            payload["officeAddressLine1"] = officeAddressLine1
-        }
-        if let officeCity, !officeCity.isEmpty {
-            payload["officeCity"] = officeCity
-        }
-        if let officePostcode, !officePostcode.isEmpty {
-            payload["officePostcode"] = officePostcode
-        }
-        if let defaultLatitude {
-            payload["defaultLatitude"] = defaultLatitude
-        }
-        if let defaultLongitude {
-            payload["defaultLongitude"] = defaultLongitude
-        }
-        // RULEBOOK 1.20.0 §4.3: a new company's first working hours are a derived policy
-        // (`withDerivedWeekdayPaidHours`: `paidHoursDerived: true`, `standardPaidHours` = finish − start − unpaid break).
-        // RULEBOOK 1.49.0 §4.3: from `newOrganizationPayrollPolicy()` (Saturday and Sunday on "Same as Monday–Friday").
-        let startPolicy = CanonicalBusinessEngine.newOrganizationPayrollPolicy() ?? .default
-        payload["payrollTimePolicy"] = (CanonicalBusinessEngine.withDerivedWeekdayPaidHours(startPolicy) ?? startPolicy).asFirestoreDictionary()
-        payload["invoicing"] = Self.invoicingFirestoreMap(OrganizationInvoicingSettings.default)
-        payload["annualLeaveDefaults"] = [
-            "daysPerYear": OrganizationAnnualLeaveDefaults.default.daysPerYear,
-            "startMonth": OrganizationAnnualLeaveDefaults.default.startMonth,
-            "endMonth": OrganizationAnnualLeaveDefaults.default.endMonth,
-            "carriesOver": OrganizationAnnualLeaveDefaults.default.carriesOver,
-        ]
-        payload["warningDetection"] = Self.warningDetectionFirestoreMap(OrgWarningDetectionSettings.default)
-        try await db.collection("organizations").document(id).setData(payload, merge: true)
-        let organizationId = id
-        Task { await self.seedStarterQualificationLibraryIfEmpty(organizationId: organizationId) }
-    }
-
     /// Admin: update company-wide warning detection settings (`organizations/{orgId}.warningDetection`).
     func updateOrganizationWarningDetectionSettings(_ settings: OrgWarningDetectionSettings) async throws {
         guard let orgId = currentOrganization?.firestoreDocumentId else {
@@ -6160,9 +6173,13 @@ class FirebaseBackend: ObservableObject {
         } else {
             let snapshot = try await ref.getDocument(source: .server)
             guard snapshot.exists, let stored = snapshot.data() else {
-                let create = payload.filter {
-                    !($0.value is FieldValue) && !(user.id == uid && Self.ownProfileForbiddenFields.contains($0.key))
-                }
+                let create = Self.userCreatePayload(
+                    payload,
+                    userId: user.id,
+                    signedInUid: uid,
+                    isOrganizationCreator: isOpenOrganizationCreator(uid: uid, organizationId: user.organizationId),
+                    passwordSet: user.passwordSet
+                )
                 // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: with `privatePay` on the new
                 // users document carries no pay; the pay goes to `payProfiles/{uid}` once the document exists.
                 let privatePay = SecuritySwitchContext.privatePay
@@ -6495,7 +6512,8 @@ class FirebaseBackend: ObservableObject {
         carriesOver: Bool,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        writeYearAllowance: Bool = false
+        writeYearAllowance: Bool = false,
+        fields: Set<String>? = nil
     ) async throws {
         var payload: [String: Any] = [
             "annualLeaveDaysPerYear": AnnualLeavePolicy.clampDaysPerYear(daysPerYear),
@@ -6504,10 +6522,18 @@ class FirebaseBackend: ObservableObject {
             "annualLeaveCarriesOver": carriesOver,
             "updatedAt": Timestamp(date: Date()),
         ]
+        // Review of #258: only the figures the editor changed (rulebook §1; `fields` nil = all four, as before).
+        if let fields {
+            for key in ["annualLeaveDaysPerYear", "annualLeaveYearStartMonth", "annualLeaveYearEndMonth", "annualLeaveCarriesOver"]
+            where !fields.contains(key) {
+                payload.removeValue(forKey: key)
+            }
+        }
         if writeYearAllowance, let yearAllowance, let yearAllowanceKey, !yearAllowanceKey.isEmpty {
             payload["annualLeaveYearAllowance"] = yearAllowance
             payload["annualLeaveYearAllowanceKey"] = yearAllowanceKey
         }
+        guard payload.keys.contains(where: { $0 != "updatedAt" }) else { return }
         try await db.collection("users").document(userId).updateData(payload)
     }
 
@@ -6849,23 +6875,6 @@ class FirebaseBackend: ObservableObject {
         return mapped
     }
     
-    // Helper method to update only user permissions (for fixing admin status)
-    /// Never persists isSuperAdmin for operatives – prevents elevation from ever being saved.
-    func updateUserPermissions(userId: String, isSuperAdmin: Bool, adminAccess: Bool, role: UserRole) async throws {
-        var isSuperAdminToWrite = isSuperAdmin
-        if isSuperAdminToWrite {
-            let doc = try? await db.collection("users").document(userId).getDocument()
-            if let data = doc?.data(), data["operativeMode"] as? Bool == true {
-                isSuperAdminToWrite = false
-            }
-        }
-        try await db.collection("users").document(userId).updateData([
-            "isSuperAdmin": isSuperAdminToWrite,
-            "adminAccess": adminAccess,
-            "role": role.rawValue
-        ])
-    }
-
     // Placeholder cleanup no longer needed - placeholders are no longer created
     
     func verifyOrganizationStructure() async {
@@ -7391,7 +7400,7 @@ class FirebaseBackend: ObservableObject {
     
     // MARK: - User Invitation
     
-    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool? = nil) async throws {
+    func createUserInvitation(email: String, organizationId: String, invitedBy: String, firstName: String, surname: String, mobileNumber: String?, permissions: UserPermissions, employmentType: EmploymentType = .selfEmployed, assignedManagerUserId: String? = nil, assignedManagerUserIds: [String]? = nil, hasNoLineManager: Bool = false, invitedOperativeDayRate: Double? = nil, invitedManagerDayRate: Double? = nil, invitedTradeTypePreset: String? = nil, invitedTradeTypeCustom: String? = nil, annualLeaveDaysPerYear: Double? = nil, annualLeaveYearStartMonth: Int? = nil, annualLeaveYearEndMonth: Int? = nil, annualLeaveCarriesOver: Bool? = nil, annualLeaveEnabled: Bool? = nil, annualLeaveYearAllowance: Double? = nil, annualLeaveYearAllowanceKey: String? = nil, timesheetsEnabled: Bool? = nil, vatNumber: String? = nil, utrNumber: String? = nil, inviterIsAdmin: Bool) async throws {
         print("🔥🔥🔥 DEBUG: createUserInvitation called with email: \(email), organizationId: \(organizationId), invitedBy: \(invitedBy)")
         // RULEBOOK 1.23.1 §11 (`CanonicalBusinessEngine` `userMissingLevel`): Add User never writes a profile or an
         // invitation without a user level (admin, manager or operative).
@@ -7746,8 +7755,7 @@ class FirebaseBackend: ObservableObject {
                     "dailyOverview": newUser.permissions.dailyOverview,
                     "subContractors": newUser.permissions.subContractors,
                     "siteAudit": newUser.permissions.siteAudit,
-                    "wholesalersOrderHistory": newUser.permissions.wholesalersOrderHistory,
-                    "isSuperAdmin": newUser.isSuperAdmin
+                    "wholesalersOrderHistory": newUser.permissions.wholesalersOrderHistory
                 ]
                 if let mobileNumber = newUser.mobileNumber {
                     userData["mobileNumber"] = mobileNumber
@@ -7948,6 +7956,11 @@ class FirebaseBackend: ObservableObject {
         session: BookingWriteSession? = nil
     ) async throws {
         print("🔥🔥🔥 DEBUG: saveBooking called with organizationId: \(organizationId), bookingId: \(booking.id.uuidString)")
+        // Never a booking under an id no person resolves to (`BookingPersonResolution`): a create always writes the
+        // person, an edit only when it changes them.
+        if booking.writableOperativeId == nil, changedFields == nil || changedFields?.contains("operativeId") == true {
+            throw UnresolvedBookingPersonError()
+        }
         // 1.33.1 review item 1: once per save with `session`.
         let orgId = try await resolveWritableOrganizationId(preferred: organizationId, session: session)
         let ref = db.collection("organizations").document(orgId).collection("bookings").document(booking.documentKey)
@@ -8031,6 +8044,7 @@ class FirebaseBackend: ObservableObject {
         let documentKey: String
         var data: [String: Any]
         if let labour {
+            guard labour.writableOperativeId != nil else { throw UnresolvedBookingPersonError() }
             collection = "bookings"
             documentKey = labour.documentKey
             data = BookingWritePatch.labourValues(labour, deletesClearedFields: false)
@@ -9134,7 +9148,8 @@ class FirebaseBackend: ObservableObject {
         guard let fields = CanonicalBusinessEngine.payRateHistoryWriteFields(
             userId: uid,
             // The stored operative id (a non-UUID or lower-case id keeps its stored form), never a re-cased UUID.
-            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            // An id this phone cannot resolve is left out (never a derived id no one goes by).
+            operativeId: operativeId.flatMap { Booking.storedOperativeId(for: $0) },
             rate: dayRate,
             payBasis: payBasis,
             effective: effectiveAt
@@ -10104,11 +10119,10 @@ extension FirebaseBackend {
         }
         guard existing == nil else { return }
 
-        let inferredBrand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines)
         let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
         let catalogItem = MaterialCatalogItem(
             name: trimmedName,
-            brand: (inferredBrand?.isEmpty == false) ? inferredBrand! : "Custom",
+            brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
             productCode: material.productCode,
             defaultUnit: material.unit,
             size: material.size,
@@ -10140,10 +10154,9 @@ extension FirebaseBackend {
             let key = materialCatalogueNameKey(name: normalizedName)
             guard !knownKeys.contains(key) else { continue }
             let creatorName = currentUser?.displayName ?? currentUser?.email ?? material.addedBy
-            let brand = material.brand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let entry = MaterialCatalogItem(
                 name: normalizedName,
-                brand: brand.isEmpty ? "Custom" : brand,
+                brand: CanonicalBusinessEngine.materialBrandStored(material.brand), // RULEBOOK 1.58.0: none is ''
                 productCode: material.productCode,
                 defaultUnit: material.unit,
                 size: material.size,
@@ -10843,7 +10856,7 @@ extension FirebaseBackend {
                 .getDocuments()
         }
         // RULEBOOK 1.8.0 §1: `parseMaterialCatalogueDocument` (document id in stored case, `sizeOrLength` / `packSize`
-        // read as the length, missing brand "Custom"). No write on read.
+        // read as the length, a missing or "Custom" brand '' — RULEBOOK 1.58.0). No write on read.
         let loaded = snapshot.documents.compactMap { Self.materialCatalogItem(documentId: $0.documentID, data: $0.data()) }
         return loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -11709,40 +11722,91 @@ extension FirebaseBackend {
         return out
     }
 
-    /// RULEBOOK 1.31.0 §8: exported sheets an older build stored without `userId` (web's exported-history fast path,
-    /// `exportedAt != null`). Each row carries `__documentId` and `__subjectId`, the subject read from the document id
-    /// (`timesheetDocumentSubjectId`). Rows that do carry `userId` are left to `listTimesheetStates`.
-    /// Memoised per organisation for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s), so
-    /// reopening the Exported list does not repeat the organisation-wide read.
-    func listExportedTimesheetsWithoutUserId(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
+    /// `w-timesheet-lookups` (web `loadExportedTimesheetHistory` fast path): every exported timesheet of the
+    /// organisation (`exportedAt != null`, timesheet documents only). Each row carries `__documentId` and `__subjectId` —
+    /// its stored `userId`, else the id its document id names (`timesheetDocumentSubjectId`). Memoised per organisation
+    /// for `exportedHistoryMemoSeconds` (web's `EXPORTED_HISTORY_TTL_MS`, 20 s). Throws when the rules refuse the read
+    /// (for example a manager while `privatePay` is on); the caller then reads person by person.
+    func listExportedTimesheets(organizationId: String, now: Date = Date()) async throws -> [[String: Any]] {
         let key = normalizedOrganizationId(organizationId)
-        if let hit = Self.exportedWithoutUserIdMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
+        if let hit = Self.exportedTimesheetsMemo[key], now.timeIntervalSince(hit.at) < Self.exportedHistoryMemoSeconds {
             return hit.rows
         }
-        let rows = try await readExportedTimesheetsWithoutUserId(organizationId: organizationId)
-        Self.exportedWithoutUserIdMemo[key] = (now, rows)
-        return rows
-    }
-
-    static let exportedHistoryMemoSeconds: TimeInterval = 20
-    private static var exportedWithoutUserIdMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
-
-    private func readExportedTimesheetsWithoutUserId(organizationId: String) async throws -> [[String: Any]] {
         let snapshot = try await db.collection("organizations")
             .document(organizationId)
             .collection("settings")
             .whereField("exportedAt", isNotEqualTo: NSNull())
             .getDocuments()
-        return snapshot.documents.compactMap { doc -> [String: Any]? in
+        let rows = snapshot.documents.compactMap { doc -> [String: Any]? in
+            guard doc.documentID.hasPrefix("timesheet_") else { return nil }
             var row = doc.data()
-            let stored = (row["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard stored.isEmpty,
-                  let subject = CanonicalBusinessEngine.timesheetDocumentSubjectId(doc.documentID),
-                  !subject.isEmpty else { return nil }
+            let subject = PersonTimesheetLookup.documentOwnerId(documentId: doc.documentID, data: row)
+            guard !subject.isEmpty else { return nil }
             row["__documentId"] = doc.documentID
             row["__subjectId"] = subject
             return row
         }
+        Self.exportedTimesheetsMemo[key] = (now, rows)
+        return rows
+    }
+
+    static let exportedHistoryMemoSeconds: TimeInterval = 20
+    /// The end of a Firestore document-id prefix range: U+F8FF, the highest code point used in ids.
+    static let documentIdPrefixEnd = "\u{F8FF}"
+    private static var exportedTimesheetsMemo: [String: (at: Date, rows: [[String: Any]])] = [:]
+
+    /// `w-timesheet-lookups` (guardrail 1, web `listPersonTimesheetStates`): one person's timesheet rows under every id
+    /// they go by. `ids[0]` is their own id (`userId ==`, the query the 1.43.0 rules allow everyone for themselves);
+    /// the other ids (`personIdSet`: former invite ids, a second users document on the same email) are asked with
+    /// `userId in` in chunks of `PersonTimesheetLookup.idChunk`, and every id's document-id prefix `timesheet_{id}_`
+    /// finds sheets stored without `userId`. A query the rules refuse (an operative asking about their own former id)
+    /// is skipped and logged, never at the cost of the rows already read. Rows carry `__documentId` and `__subjectId`
+    /// (the id they are filed under); versions collapse as `listTimesheetStates`; newest `weekStart` first.
+    func listPersonTimesheetStates(
+        organizationId: String,
+        ids: [String],
+        limit: Int = 400,
+        versions: TimesheetListVersions = .latest,
+        /// Review of #259 (N1): the rules refuse the document-id query to an operative — not asked for them.
+        includeDocumentPrefix: Bool = true
+    ) async -> [[String: Any]] {
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        let documents: (Query) async throws -> [PersonTimesheetLookup.Document] = { query in
+            try await query.getDocuments().documents.map { (documentId: $0.documentID, data: $0.data()) }
+        }
+        var byDocumentPrefix: ((String) async throws -> [PersonTimesheetLookup.Document])?
+        if includeDocumentPrefix {
+            byDocumentPrefix = { id in
+                let prefix = "timesheet_\(id)_"
+                return try await documents(settings
+                    .whereField(FieldPath.documentID(), isGreaterThanOrEqualTo: prefix)
+                    .whereField(FieldPath.documentID(), isLessThan: prefix + Self.documentIdPrefixEnd))
+            }
+        }
+        let mine = await PersonTimesheetLookup.gather(
+            ids: ids,
+            byUserIds: { chunk in
+                if chunk.count == 1 { return try await documents(settings.whereField("userId", isEqualTo: chunk[0])) }
+                return try await documents(settings.whereField("userId", in: chunk))
+            },
+            byDocumentPrefix: byDocumentPrefix,
+            warn: { NSLog("TIMESHEET_PERSON_QUERY_SKIPPED org=%@ %@", organizationId, $0) }
+        )
+        let rows = Self.collapseTimesheetVersions(mine, versions: versions).map { row -> [String: Any] in
+            var row = row
+            let documentId = (row["__documentId"] as? String) ?? ""
+            row["__subjectId"] = PersonTimesheetLookup.documentOwnerId(
+                documentId: documentId,
+                data: row.filter { !$0.key.hasPrefix("__") }
+            )
+            return row
+        }
+        let sorted = rows.sorted { lhs, rhs in
+            let left = (lhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            let right = (rhs["weekStart"] as? Timestamp)?.dateValue() ?? .distantPast
+            return left > right
+        }
+        return Array(sorted.prefix(max(1, limit)))
     }
 
     private func hsCollectionName(for project: Project) -> String {

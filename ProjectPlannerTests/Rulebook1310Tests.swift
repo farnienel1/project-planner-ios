@@ -379,7 +379,7 @@ final class Rulebook1310Tests: XCTestCase {
     func testAnAccountWithNoCatalogueRowIsBookedUnderItsUsersId() {
         let account = user("op-uid-1310", role: .operative, operative: true, email: "solo@example.test", employmentType: .paye)
         let row = AccountLabourBooking.operative(for: account)
-        XCTAssertEqual(Booking.storedOperativeId(for: row.id), "op-uid-1310", "the booking's operativeId is the users id")
+        XCTAssertEqual(Booking.operativeMatchKey(for: row.id), "op-uid-1310", "the booking's operativeId is the users id")
         XCTAssertEqual(row.documentId, "op-uid-1310")
         XCTAssertEqual(AccountLabourBooking.account(forOperativeId: row.id, users: [account])?.id, "op-uid-1310")
 
