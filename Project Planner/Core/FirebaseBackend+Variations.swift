@@ -214,7 +214,8 @@ extension FirebaseBackend {
                 if let data = snapshot?.data() {
                     tracker = VariationCodec.tracker(from: data, parentId: parentId)
                 } else {
-                    tracker = .disabled(parentId: parentId, parentType: parentType)
+                    // RULEBOOK 1.63.0: no tracker document reads as on (`parseVariationTrackerDocument`).
+                    tracker = VariationCodec.tracker(from: [:], parentId: parentId, parentType: parentType)
                 }
                 Task { @MainActor in
                     onChange(tracker)
@@ -577,6 +578,9 @@ extension FirebaseBackend {
             } catch {
                 lastError = error
                 print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
+                // 17 Nov bug: a stall (no answer from File storage) is not a refusal — trying the second path would
+                // only wait another minute. Stop and show why it stalled.
+                if (error as NSError).domain == Self.variationUploadStallDomain { throw error }
             }
         }
         throw lastError ?? NSError(
@@ -599,10 +603,80 @@ extension FirebaseBackend {
         let metadata = StorageMetadata()
         metadata.contentType = contentType
         let watch = VariationUploadWatch()
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+        do {
+            _ = try await putWatched(storageRef: storageRef, data: data, metadata: metadata, watch: watch)
+        } catch {
+            guard watch.timedOut else { throw error }
+            // Review of #261: past the 5-minute overall limit the upload was still moving, so it is not a stall.
+            if watch.timedOutOverall {
+                throw NSError(
+                    domain: Self.variationUploadStallDomain,
+                    code: 408,
+                    userInfo: [NSLocalizedDescriptionKey: "The evidence upload took more than 5 minutes, so it was cancelled and nothing was saved. Check the connection, or add a smaller file."]
+                )
+            }
+            // A refusal by the Storage rules comes back at once as an error; a stall means File storage never answered
+            // (the SDK keeps retrying). Ask Storage one quick question about the same path to say which (17 Nov).
+            throw NSError(
+                domain: Self.variationUploadStallDomain,
+                code: 408,
+                userInfo: [NSLocalizedDescriptionKey: await Self.variationUploadStallReason(storageRef: storageRef, sentBytes: watch.sentBytes)]
+            )
+        }
+        return try await variationEvidenceDownloadURL(storageRef: storageRef, path: path)
+    }
+
+    static let variationUploadStallDomain = "VariationUploadStall"
+
+    /// Why an evidence upload stalled: refused (storage/unauthorized), no answer at all, or stopped mid-file.
+    static func variationUploadStallReason(storageRef: StorageReference, sentBytes: Int64) async -> String {
+        let probe = await variationStallProbe(storageRef: storageRef)
+        if let probe = probe as NSError? {
+            if probe.domain == StorageErrorDomain,
+               let code = StorageErrorCode(rawValue: probe.code),
+               code == .unauthorized || code == .unauthenticated {
+                return "File storage refused this upload: your account may not add evidence to this job. Ask an admin to check your access."
+            }
+            let notFound = probe.domain == StorageErrorDomain && StorageErrorCode(rawValue: probe.code) == .objectNotFound
+            if !notFound {
+                return "File storage did not answer for a minute, so the upload was cancelled and nothing was saved. Check the internet connection and add the file again."
+            }
+        }
+        return sentBytes > 0
+            ? "The file stopped sending for a minute, so the upload was cancelled and nothing was saved. Check the connection and add the file again."
+            : "File storage is reachable, but this upload got no answer for a minute, so it was cancelled and nothing was saved. Add the file again; if it happens again, tell support (upload never started)."
+    }
+
+    /// The first of: File storage's answer to one metadata read of the same path, or 10 seconds. Review of #261: a
+    /// task group waited for the read itself, which the SDK keeps retrying (up to two minutes) and cannot be cancelled,
+    /// so the message could take three minutes; this resumes once, on whichever comes first, and never waits again.
+    nonisolated private static func variationStallProbe(storageRef: StorageReference) async -> Error? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Error?, Never>) in
+            let once = VariationResumeOnce()
+            storageRef.getMetadata { _, error in
+                if once.claim() { continuation.resume(returning: error) }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                if once.claim() { continuation.resume(returning: NSError(domain: "VariationUploadStall", code: -1)) }
+            }
+        }
+    }
+
+    private func putWatched(
+        storageRef: StorageReference,
+        data: Data,
+        metadata: StorageMetadata,
+        watch: VariationUploadWatch
+    ) async throws -> StorageMetadata {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
             let task = storageRef.putData(data, metadata: metadata) { metadata, error in
                 guard watch.finish() else { return }
-                if watch.timedOut {
+                // Review of #261 (as web #388): a finished upload always wins. When the watchdog gave up but the file
+                // still finished (its cancel came too late), it is returned and linked — never reported as a timeout
+                // with the file left in Storage unlinked.
+                if error == nil, let metadata {
+                    continuation.resume(returning: metadata)
+                } else if watch.timedOut {
                     continuation.resume(throwing: NSError(
                         domain: "FirebaseBackend",
                         code: 408,
@@ -610,13 +684,13 @@ extension FirebaseBackend {
                     ))
                 } else if let error {
                     continuation.resume(throwing: error)
-                } else if let metadata {
-                    continuation.resume(returning: metadata)
                 } else {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
                 }
             }
-            task.observe(.progress) { _ in watch.touch() }
+            task.observe(.progress) { snapshot in
+                watch.touch(sentBytes: snapshot.progress?.completedUnitCount ?? 0)
+            }
             Task {
                 while !watch.isFinished {
                     try? await Task.sleep(nanoseconds: 2_000_000_000)
@@ -627,6 +701,9 @@ extension FirebaseBackend {
                 }
             }
         }
+    }
+
+    private func variationEvidenceDownloadURL(storageRef: StorageReference, path: String) async throws -> (storagePath: String, downloadURL: String) {
         var lastError: Error?
         for attempt in 0..<3 {
             do {
@@ -829,6 +906,7 @@ nonisolated final class VariationUploadWatch: @unchecked Sendable {
     private var lastProgress = Date()
     private var finished = false
     private var didTimeOut = false
+    private var overall = false
 
     /// Read under the lock (review of #235).
     var timedOut: Bool {
@@ -836,8 +914,22 @@ nonisolated final class VariationUploadWatch: @unchecked Sendable {
         return didTimeOut
     }
 
-    func touch() {
-        lock.lock(); lastProgress = Date(); lock.unlock()
+    /// True when it gave up on the overall limit (`variationUploadTotalSeconds`) rather than on a stall.
+    var timedOutOverall: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return overall
+    }
+
+    private var sent: Int64 = 0
+
+    /// Bytes the SDK reported as sent (for the stall reason).
+    var sentBytes: Int64 {
+        lock.lock(); defer { lock.unlock() }
+        return sent
+    }
+
+    func touch(sentBytes: Int64 = 0) {
+        lock.lock(); lastProgress = Date(); sent = max(sent, sentBytes); lock.unlock()
     }
 
     /// True the first time only (the upload's completion runs once).
@@ -857,11 +949,27 @@ nonisolated final class VariationUploadWatch: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         guard !finished else { return false }
         let now = Date()
-        if now.timeIntervalSince(lastProgress) > stallSeconds || now.timeIntervalSince(started) > totalSeconds {
+        let stalled = now.timeIntervalSince(lastProgress) > stallSeconds
+        let tooLong = now.timeIntervalSince(started) > totalSeconds
+        if stalled || tooLong {
             didTimeOut = true
+            overall = tooLong && !stalled
             return true
         }
         return false
+    }
+}
+
+/// Resumes a continuation once, whichever callback comes first.
+nonisolated final class VariationResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if claimed { return false }
+        claimed = true
+        return true
     }
 }
 

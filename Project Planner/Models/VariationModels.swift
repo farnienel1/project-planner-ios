@@ -522,13 +522,15 @@ nonisolated enum VariationCodec {
     }
 
     /// RULEBOOK 1.8.0: `variationTrackers/{parentId}` through `parseVariationTrackerDocument`.
-    static func tracker(from data: [String: Any], parentId: String) -> VariationTracker {
+    /// RULEBOOK 1.63.0: a job with no tracker document (`data` empty) reads as on — the rulebook reader decides; the
+    /// job's own parent type is kept for it.
+    static func tracker(from data: [String: Any], parentId: String, parentType: VariationParentType = .project) -> VariationTracker {
         guard let row = CanonicalBusinessEngine.parseVariationTrackerDocument(parentId: parentId, data: data) else {
-            return .disabled(parentId: parentId, parentType: .project)
+            return .disabled(parentId: parentId, parentType: parentType)
         }
         return VariationTracker(
             parentId: row.text("parentId").isEmpty ? parentId : row.text("parentId"),
-            parentType: VariationParentType(rawValue: row.text("parentType")) ?? .project,
+            parentType: data["parentType"] == nil ? parentType : (VariationParentType(rawValue: row.text("parentType")) ?? .project),
             enabled: row.bool("enabled"),
             enabledAt: row.date("enabledAtMs"),
             enabledByUid: row.optionalText("enabledByUid"),
