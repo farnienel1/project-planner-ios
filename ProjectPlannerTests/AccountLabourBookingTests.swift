@@ -41,7 +41,7 @@ final class AccountLabourBookingTests: XCTestCase {
         XCTAssertEqual(counted, ["solo-uid-142"])
 
         let id = try XCTUnwrap(AccountLabourBooking.bookingOperativeId(for: user, operatives: []))
-        XCTAssertEqual(Booking.storedOperativeId(for: id), "solo-uid-142", "the booking's operativeId is the users id, as web stores it")
+        XCTAssertEqual(Booking.operativeMatchKey(for: id), "solo-uid-142", "the booking's operativeId is the users id, as web stores it")
         let row = try XCTUnwrap(AccountLabourBooking.bookingOperative(for: user, operatives: []))
         XCTAssertEqual(row.id, id)
         XCTAssertEqual(row.documentId, "solo-uid-142")
@@ -52,7 +52,7 @@ final class AccountLabourBookingTests: XCTestCase {
         let user = account("solo-uid-142b", email: "solo142b@example.test")
         let someoneElse = catalogueRow(email: "other142b@example.test")
         let id = try XCTUnwrap(AccountLabourBooking.bookingOperativeId(for: user, operatives: [someoneElse]))
-        XCTAssertEqual(Booking.storedOperativeId(for: id), "solo-uid-142b")
+        XCTAssertEqual(Booking.operativeMatchKey(for: id), "solo-uid-142b")
         XCTAssertNotEqual(id, someoneElse.id)
     }
 
@@ -73,7 +73,7 @@ final class AccountLabourBookingTests: XCTestCase {
             accountBookingOperative: AccountLabourBooking.bookingOperative(for: user, operatives: [])
         )
         let operative = try XCTUnwrap(candidate.bookingOperative, "no \"No operative profile is linked\" for this person")
-        XCTAssertEqual(Booking.storedOperativeId(for: operative.id), "bl-uid-142")
+        XCTAssertEqual(Booking.operativeMatchKey(for: operative.id), "bl-uid-142")
     }
 
     func testBookLabourKeepsTheCatalogueRowWhenThereIsOne() {
@@ -123,7 +123,7 @@ final class AccountLabourBookingTests: XCTestCase {
     func testSchedulingListsTheAccountUnderItsUsersId() {
         let user = account("sched-uid-142", email: "sched142@example.test")
         let rows = ScheduleBookablePersonBuilder.operativesForScheduling(operatives: [], users: [user])
-        XCTAssertEqual(rows.map { Booking.storedOperativeId(for: $0.id) }, ["sched-uid-142"])
+        XCTAssertEqual(rows.map { Booking.operativeMatchKey(for: $0.id) }, ["sched-uid-142"])
     }
 
     func testQuickAddSavesTheAccountAsAnOperativeBookingUnderItsUsersId() throws {

@@ -274,10 +274,9 @@ struct PayrunSnapshotView: View {
             var out = sheet
             // RULEBOOK 1.55.0 (J4): `changed` and `exported` too — an exported sheet whose bookings changed has a
             // revision due ("Revision due" in the cell).
-            var bookingsChange = change.bucketArgument
-            bookingsChange["changed"] = change.changed
-            bookingsChange["exported"] = change.exported
-            out["bookingsChange"] = bookingsChange
+            // RULEBOOK 1.57.0: `snapshotGapOnly` and `lateExtrasWaiting` too — `payrunSnapshotRows` keeps a gap-only
+            // sheet's signed state (`signedTimesheetChangeForReports`), as web `payrunSnapshotData`.
+            out["bookingsChange"] = change.reportArgument
             return out
         }
         rows = CanonicalBusinessEngine.payrunSnapshotRows(

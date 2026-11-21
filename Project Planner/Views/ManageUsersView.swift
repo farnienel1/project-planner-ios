@@ -1166,12 +1166,6 @@ struct ManageUserRowView: View {
     private func sendSignUpEmail() {
         isSendingSignUpEmail = true
         rowEmailFeedback = nil
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old link is marked used.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            isSendingSignUpEmail = false
-            rowEmailFeedback = "❌ \(refusal)"
-            return
-        }
 
         Task {
             let db = Firestore.firestore()
@@ -1182,6 +1176,10 @@ struct ManageUserRowView: View {
                 // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
                 // home company), so `sendEmail` finds it in the organisation it is sent from.
                 let openOrgId = try userStore.requireOpenOrganizationId()
+                // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+                // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+                // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+                let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
@@ -1218,7 +1216,7 @@ struct ManageUserRowView: View {
                     // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                     // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                     try RulebookRosterLists.requireInviteLevel(invitationData)
-                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(
@@ -1621,6 +1619,8 @@ struct EditUserView: View {
     @State private var employmentStartDateDraft: String
     @State private var annualLeaveEnabledDraft: Bool
     @State private var remainingLeaveText = ""
+    /// The allowance figures the editor was opened with; the save writes only what changed against them (review of #258).
+    @State private var leaveEntitlementSeed: AnnualLeaveEntitlementDraft
     @State private var baselineRemainingText = ""
     /// RULEBOOK 1.40.0 §4.4: this person's manual adjustments, for the remaining figure shown (read only).
     @StateObject private var leaveAdjustmentsModel = AnnualLeaveAdjustmentsModel()
@@ -1659,6 +1659,7 @@ struct EditUserView: View {
         self._annualLeaveStartMonth = State(initialValue: user.annualLeaveYearStartMonth)
         self._annualLeaveEndMonth = State(initialValue: user.annualLeaveYearEndMonth)
         self._annualLeaveCarriesOver = State(initialValue: user.annualLeaveCarriesOver)
+        self._leaveEntitlementSeed = State(initialValue: AnnualLeaveEntitlementDraft.seeded(from: user, formatDays: EditUserView.formatAnnualLeaveDaysText))
         self._employmentStartDateDraft = State(initialValue: user.employmentStartDate ?? "")
         self._annualLeaveEnabledDraft = State(initialValue: user.annualLeaveEnabled)
         self._employmentTypeDraft = State(initialValue: user.employmentType)
@@ -1875,10 +1876,19 @@ struct EditUserView: View {
         return permissions.manager || user.role == .manager || displayedUser.role == .manager
     }
 
+    /// 17 Nov (owner bug): the annual leave allowance shows for every level, the Super Admin included (web
+    /// `editUserAnnualLeaveSection`); only the Super Admin edits their own (`canEditTargetUserPermissions`).
+    /// Known duplication: web decides the same in `lib/staff/editUserSections.ts`; change both together.
     private var shouldShowAnnualLeaveAccessToggle: Bool {
-        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
-        return permissions.operativeMode || user.role == .operative || permissions.manager || permissions.adminAccess
+        return draftHasUserLevel
+    }
+
+    /// The draft has a user level (`userMissingLevel` false over its level flags, through `CanonicalBusinessEngine`),
+    /// or the operative role, or it is the Super Admin's profile. Every level shows the allowance (web
+    /// `editUserAnnualLeaveSection`).
+    private var draftHasUserLevel: Bool {
+        isViewingSuperAdminProfile || user.role == .operative || !RulebookRosterLists.inviteHasNoLevel(permissions)
     }
 
     private var annualLeaveAccessDirty: Bool {
@@ -1919,10 +1929,10 @@ struct EditUserView: View {
     }
 
     private var shouldShowAnnualLeaveEntitlementSection: Bool {
-        if isViewingSuperAdminProfile { return false }
         guard userStore.canEditTargetUserPermissions(displayedUser) else { return false }
         guard annualLeaveEnabledDraft else { return false }
-        return permissions.operativeMode || user.role == .operative || permissions.manager
+        // Every level, as web (17 Nov owner bug: admins and the Super Admin had no allowance fields on iPhone).
+        return draftHasUserLevel
     }
 
     /// The remaining figure as the rulebook gives it, or nil until the pay record and the adjustments have loaded
@@ -1973,14 +1983,21 @@ struct EditUserView: View {
         return AnnualLeavePolicy.clampDaysPerYear(d)
     }
 
+    /// The allowance draft as on screen.
+    private var leaveEntitlementDraft: AnnualLeaveEntitlementDraft {
+        AnnualLeaveEntitlementDraft(
+            daysText: annualLeaveDaysText,
+            startMonth: annualLeaveStartMonth,
+            endMonth: annualLeaveEndMonth,
+            carriesOver: annualLeaveCarriesOver
+        )
+    }
+
+    /// Changed against the figures the editor was opened with — never against the roster row as re-read, so a row
+    /// re-parsed once the organisation's leave defaults arrive, or a stored 0, is not a change (review of #258).
     private var annualLeaveEntitlementDirty: Bool {
         guard shouldShowAnnualLeaveEntitlementSection else { return false }
-        let s = userStore.rosterRow(for: user.id) ?? user
-        guard let p = parsedAnnualLeaveDaysForSave() else { return true }
-        return abs(p - s.annualLeaveDaysPerYear) > 0.0001
-            || annualLeaveStartMonth != s.annualLeaveYearStartMonth
-            || annualLeaveEndMonth != s.annualLeaveYearEndMonth
-            || annualLeaveCarriesOver != s.annualLeaveCarriesOver
+        return !leaveEntitlementDraft.editedFields(since: leaveEntitlementSeed).isEmpty
             || remainingLeaveText != baselineRemainingText
     }
 
@@ -2717,6 +2734,7 @@ struct EditUserView: View {
         annualLeaveStartMonth = u.annualLeaveYearStartMonth
         annualLeaveEndMonth = u.annualLeaveYearEndMonth
         annualLeaveCarriesOver = u.annualLeaveCarriesOver
+        leaveEntitlementSeed = AnnualLeaveEntitlementDraft.seeded(from: u, formatDays: EditUserView.formatAnnualLeaveDaysText)
         annualLeaveEnabledDraft = u.annualLeaveEnabled
         let remaining = EditUserView.formatAnnualLeaveDaysText(currentRemainingDays(for: u))
         remainingLeaveText = remaining
@@ -3800,7 +3818,8 @@ struct EditUserView: View {
                 if op != nil {
                     showingQualificationsEditor = true
                 } else {
-                    saveErrorMessage = "Could not create a linked operative profile for qualifications. Check email and try again."
+                    saveErrorMessage = userStore.operativeProfileLinkError
+                        ?? "Could not create a linked operative profile for qualifications. Check email and try again."
                 }
             }
         }
@@ -4610,7 +4629,12 @@ struct EditUserView: View {
 
         var annualLeaveSuccess = true
         if canEditPermissionsMatrix && annualLeaveEntitlementDirty {
-            guard let days = parsedAnnualLeaveDaysForSave() else {
+            let editedLeaveFields = leaveEntitlementDraft.editedFields(since: leaveEntitlementSeed)
+            // A days figure nobody changed is not checked or written (a stored 0 never blocks Save).
+            let typedDays = editedLeaveFields.contains(AnnualLeaveEntitlementDraft.daysField)
+                ? parsedAnnualLeaveDaysForSave()
+                : subjectUser.annualLeaveDaysPerYear
+            guard let days = typedDays else {
                 await MainActor.run {
                     isUpdating = false
                     saveErrorMessage = "Enter a valid annual leave allowance (a positive number of days)."
@@ -4665,8 +4689,10 @@ struct EditUserView: View {
                 carriesOver: annualLeaveCarriesOver,
                 yearAllowance: yearAllowance,
                 yearAllowanceKey: yearAllowanceKey,
-                writeYearAllowance: writeRemaining
+                writeYearAllowance: writeRemaining,
+                fields: AnnualLeaveEntitlementDraft.fieldsToWrite(edited: editedLeaveFields, user: subjectUser)
             )
+            if annualLeaveSuccess { leaveEntitlementSeed = leaveEntitlementDraft }
         }
 
         var billingSuccess = true
@@ -4783,12 +4809,6 @@ struct EditUserView: View {
     }
     
     private func createNewInvitation() async {
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before anything is written.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            resendEmailMessage = "❌ \(refusal)"
-            isResendingEmail = false
-            return
-        }
         let db = Firestore.firestore()
         do {
             // A brand new invitation, created FIRST; only then are the earlier links closed, skipping the new one
@@ -4797,6 +4817,10 @@ struct EditUserView: View {
             // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
             // home company), so `sendEmail` finds it in the organisation it is sent from.
             let openOrgId = try userStore.requireOpenOrganizationId()
+            // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+            // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+            // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+            let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
             let resend = try await InvitationDocument.resend(create: {
                 // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                 let sender = try InvitationDocument.signedInSenderField()
@@ -4833,7 +4857,7 @@ struct EditUserView: View {
                 // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                 // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                 try RulebookRosterLists.requireInviteLevel(invitationData)
-                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                 return invitationId
             }, closeEarlier: { newInvitationId in
                 await InvitationDocument.closeEarlierInvitations(
@@ -4874,14 +4898,6 @@ struct EditUserView: View {
             isSendingSignUpEmail = true
         }
         signUpEmailMessage = nil
-        // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly`: refused here, before the old links are marked used.
-        if let refusal = InvitationDocument.resendRefusal(subject: user, inviter: userStore.currentUser) {
-            isSendingSignUpEmail = false
-            isResendingEmail = false
-            signUpEmailMessage = "❌ \(refusal)"
-            resendEmailMessage = "❌ \(refusal)"
-            return
-        }
 
         Task {
             let db = Firestore.firestore()
@@ -4892,6 +4908,10 @@ struct EditUserView: View {
                 // AGENTS rule 2: the invitation is for the open organisation (never `user.organizationId`, the person's
                 // home company), so `sendEmail` finds it in the organisation it is sent from.
                 let openOrgId = try userStore.requireOpenOrganizationId()
+                // RULEBOOK 1.12.0 §11 `invitationIsOperativeOnly` (mass-assignment review of #263): the invitation actually
+                // written is checked (`checkedCreateFields`) against the inviter's level in THIS organisation
+                // (`organizationLevelFor`); when that level cannot be read nothing is written and the old link keeps working.
+                let inviterIsAdmin = try await userStore.requireInviterIsAdmin(organizationId: openOrgId)
                 let resend = try await InvitationDocument.resend(create: {
                     // RULEBOOK 1.31.1 §16 `invitationSentByCaller`: the sign-in email (else uid), never blank.
                     let sender = try InvitationDocument.signedInSenderField()
@@ -4928,7 +4948,7 @@ struct EditUserView: View {
                     // RULEBOOK 1.9.0 §11: created once with `invitationCreateFields`.
                     // RULEBOOK 1.23.1 §11 `CanonicalBusinessEngine` `userMissingLevel`: never an invite without a user level.
                     try RulebookRosterLists.requireInviteLevel(invitationData)
-                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.createFields(from: invitationData))
+                    try await db.collection("invitations").document(invitationId).setData(InvitationDocument.checkedCreateFields(from: invitationData, inviterIsAdmin: inviterIsAdmin))
                     return invitationId
                 }, closeEarlier: { newInvitationId in
                     await InvitationDocument.closeEarlierInvitations(

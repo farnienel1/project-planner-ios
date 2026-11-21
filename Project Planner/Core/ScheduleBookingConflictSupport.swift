@@ -77,7 +77,7 @@ enum ScheduleBookablePersonBuilder {
         )
 
         func append(operative: Operative, user: AppUser?, role: String) {
-            let key = GhostRulebook.dedupeKey(id: Booking.storedOperativeId(for: operative.id), email: operative.email)
+            let key = GhostRulebook.dedupeKey(id: Booking.operativeMatchKey(for: operative.id), email: operative.email)
             guard !key.isEmpty, seenKeys.insert(key).inserted else { return }
             let bookingIds = (user.map { labourBookingIds(for: $0, operatives: sourceOperatives) } ?? []).union([operative.id])
             rows.append(
@@ -98,7 +98,7 @@ enum ScheduleBookablePersonBuilder {
         for op in activeOps.sorted(by: { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }) {
             let email = op.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
             let user = users.first { emailKey($0.email) == email && !email.isEmpty }
-                ?? users.first { $0.id == Booking.storedOperativeId(for: op.id) }
+                ?? users.first { $0.id == Booking.operativeMatchKey(for: op.id) }
             let role: String = {
                 guard let user else { return "Operative" }
                 if user.permissions.adminAccess || user.isSuperAdmin { return "Admin" }
@@ -236,9 +236,9 @@ enum ScheduleBookingConflictEngine {
         holidays: [HolidayBooking],
         policy: OrgPayrollTimePolicy
     ) -> [ScheduleConflictRow] {
-        let stored = Booking.storedOperativeId(for: person.operativeId)
+        let stored = Booking.operativeMatchKey(for: person.operativeId)
         let others = person.bookingIds
-            .map { Booking.storedOperativeId(for: $0) }
+            .map { Booking.operativeMatchKey(for: $0) }
             .filter { $0 != stored }
             .sorted()
         let leavePerson = BookingLeaveConflictInputs.Person(
