@@ -1069,6 +1069,10 @@ class FirebaseBackend: ObservableObject {
         // offered again when they sign back in.
         let signedOutUserId = auth.currentUser?.uid
         let keepDrafts = reason != .userRequested
+        if reason == .userRequested {
+            // Still signed in: stop audits uploading and delete the photos they already uploaded (as web).
+            await SiteAuditOfflineStore.shared.stopUploadsAndDiscardPhotosForChosenSignOut(firebaseBackend: self)
+        }
         await SignOutSequence.run(
             cleanup: { [weak self] in
                 guard let self, let target else { return }
@@ -3160,7 +3164,9 @@ class FirebaseBackend: ObservableObject {
     }
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
-    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String) async throws -> String {
+    /// `createdAtMs` / `index`: the queued copy's created time and the item's place in the audit — the photo's object
+    /// name (`siteAuditPhotoObjectPath`, final review of #389 / #262) is unique per item and the same on every retry.
+    func uploadSiteAuditImage(_ image: UIImage, auditId: UUID, organizationId: String, createdAtMs: Int64, index: Int) async throws -> String {
         guard let userId = currentUser?.uid else {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
@@ -3174,7 +3180,17 @@ class FirebaseBackend: ObservableObject {
             encodeFailedMessage: "Failed to process image",
             oversizedMessage: "Site audit photo is too large. It must be 10 MB or smaller."
         )
-        let imagePath = "organizations/\(organizationId)/siteAudits/\(auditId.uuidString)/images/\(prepared.objectName)"
+        guard let imagePath = CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+            kind: "project",
+            organizationId: organizationId,
+            userId: userId,
+            auditId: auditId.uuidString,
+            createdAtMs: createdAtMs,
+            index: index,
+            fileExtension: "jpg"
+        ) else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This photo has no valid place to upload to."])
+        }
         let imageData = prepared.data
         let storageRef = storage.reference().child(imagePath)
         let metadata = StorageMetadata()
@@ -3182,9 +3198,24 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
         )
+        // Owner bug 17 Nov (site audit stuck on "Uploading photo 1 of 6"): the Storage SDK retries a dropped
+        // connection silently for up to 10 minutes, holding up every queued audit behind this photo. The same watch
+        // as variation evidence cancels the task after `siteAuditUploadStallSeconds` without progress or
+        // `siteAuditUploadTotalSeconds` in all; the audit stays queued (`SiteAuditOfflineStore`) and the next pass
+        // retries it, keeping every photo already uploaded.
+        let watch = VariationUploadWatch()
+        let stopGeneration = SiteAuditUploadStop.shared.current
+        do {
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
+            let task = storageRef.putData(imageData, metadata: metadata) { metadata, error in
+                guard watch.finish() else { return }
+                if watch.timedOut {
+                    continuation.resume(throwing: NSError(
+                        domain: "FirebaseBackend",
+                        code: 408,
+                        userInfo: [NSLocalizedDescriptionKey: "A photo upload stopped and was cancelled. It will be tried again automatically."]
+                    ))
+                } else if let error = error {
                     continuation.resume(throwing: error)
                 } else if let metadata = metadata {
                     continuation.resume(returning: metadata)
@@ -3192,11 +3223,61 @@ class FirebaseBackend: ObservableObject {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
                 }
             }
+            task.observe(.progress) { _ in watch.touch() }
+            Task {
+                while !watch.isFinished {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if watch.shouldGiveUp(stallSeconds: Self.siteAuditUploadStallSeconds, totalSeconds: Self.siteAuditUploadTotalSeconds)
+                        || SiteAuditUploadStop.shared.stopped(since: stopGeneration) {
+                        task.cancel()
+                        break
+                    }
+                }
+            }
+        }
+        } catch {
+            // A retry refused because this item's object is already there (an earlier attempt finished on the server,
+            // past the §24 overwrite window): that photo counts as uploaded instead of being refused for ever.
+            if let existing = await Self.existingDownloadURLAfterRefusal(error, storageRef: storageRef) { return existing }
+            throw error
         }
         // RULEBOOK §1 / §24: only a download URL is stored, never a Storage bucket address (web shows https links
         // only): retry, else fail the upload visibly.
         return try await downloadURLOrRemoveUpload(storageRef, path: imagePath, organizationId: organizationId, userId: userId, logTag: "SiteAudit")
     }
+
+    /// Whether `organizations/{org}/siteAudits/{id}` exists on the server; nil when that cannot be read (offline).
+    func siteAuditDocumentExistsOnServer(id: UUID, organizationId: String) async -> Bool? {
+        do {
+            let snapshot = try await db.collection("organizations").document(organizationId)
+                .collection("siteAudits").document(id.uuidString).getDocument(source: .server)
+            return snapshot.exists
+        } catch {
+            return nil
+        }
+    }
+
+    /// Deletes uploaded site audit photos by their download URLs. The Storage rules allow it only to the uploader
+    /// inside the §24 undo window; a refused or failed delete keeps the file (logged).
+    func deleteUploadedSiteAuditPhotos(_ urls: [String]) async {
+        for url in urls {
+            do {
+                try await storage.reference(forURL: url).delete()
+            } catch {
+                print("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// The download URL of the object at `storageRef` when `error` is a Storage refusal and the object exists, else nil.
+    static func existingDownloadURLAfterRefusal(_ error: Error, storageRef: StorageReference) async -> String? {
+        let nsError = error as NSError
+        guard nsError.domain == StorageErrorDomain, nsError.code == StorageErrorCode.unauthorized.rawValue else { return nil }
+        return try? await storageRef.downloadURL().absoluteString
+    }
+
+    static let siteAuditUploadStallSeconds: TimeInterval = 60
+    static let siteAuditUploadTotalSeconds: TimeInterval = 180
 
     /// Profile photo for a user (managed from Manage Users). Overwrites prior object at this path.
     func uploadUserProfilePhoto(_ image: UIImage, userId: String, organizationId: String) async throws -> String {

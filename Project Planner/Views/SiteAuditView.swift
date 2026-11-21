@@ -1443,6 +1443,14 @@ struct SiteAuditCreateFlowView: View {
             errorMessage = "Connect to the internet to update this audit."
             return
         }
+        // RULEBOOK 1.68.0 §29: the audit's title is limited for a new edit only; a stored longer one passes.
+        if let limit = CanonicalBusinessEngine.siteAuditFieldLimitError(
+            ["customTitle": customTitle],
+            stored: existingAudit.map { ["customTitle": $0.customTitle] }
+        ) {
+            errorMessage = limit
+            return
+        }
 
         isSubmitting = true
         submitStatusMessage = "Preparing PDF…"
@@ -1493,6 +1501,7 @@ struct SiteAuditCreateFlowView: View {
         let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
         let logoURL = firebaseBackend.currentOrganization?.companyLogoURL
 
+        let jobForPDF = SiteAuditPDFBuilder.job(for: project)
         Task {
             let cachedOrgId = firebaseBackend.currentOrganization?.firestoreDocumentId
             var orgId = cachedOrgId
@@ -1507,15 +1516,14 @@ struct SiteAuditCreateFlowView: View {
             }
 
             let pdfTask = Task {
-                let logo = await SiteAuditLogoLoader.logo(urlString: logoURL)
+                let logo = await CompanyLogoLoader.logo(urlString: logoURL)
                 return await SiteAuditPDFBuilder.makePDFAsync(
                     audit: audit,
                     localItems: drafts,
                     organizationName: orgName,
                     organizationAbbreviation: orgAbbrev,
                     logoImage: logo,
-                    clientName: project.client.name,
-                    siteAddress: project.siteAddress
+                    job: jobForPDF
                 )
             }
             do {
@@ -1842,6 +1850,9 @@ struct SiteAuditProjectPickerView: View {
 struct SiteAuditAddItemView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var draft: SiteAuditDraftItem
+    /// The item as it was opened (RULEBOOK 1.68.0 §29): a field left as stored passes whatever its length,
+    /// so text saved before the limits is never cut or refused (guardrail 3); only new edits are limited.
+    private let storedItem: SiteAuditDraftItem
     @State private var showingCamera = false
     @State private var showingLibrary = false
     /// Multi-add load failures from the flow behind this sheet (an alert there would not show over the sheet).
@@ -1858,6 +1869,7 @@ struct SiteAuditAddItemView: View {
         onSubmit: @escaping (SiteAuditDraftItem) -> Void
     ) {
         self._draft = State(initialValue: item)
+        self.storedItem = item
         self._failedPhotoLoads = failedPhotoLoads
         self.arrivedImage = arrivedImage
         self.onSubmit = onSubmit
@@ -1869,7 +1881,43 @@ struct SiteAuditAddItemView: View {
     }
 
     private var canSave: Bool {
-        draft.image != nil && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        draft.image != nil && !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && limitError == nil
+    }
+
+    /// `siteAuditFieldLimitError` (RULEBOOK 1.68.0 §29): nil when every edited field is within its limit.
+    private var limitError: String? {
+        CanonicalBusinessEngine.siteAuditFieldLimitError(
+            ["title": draft.title, "location": draft.location, "assignee": draft.assignee,
+             "comments": draft.comments, "annotations": draft.annotations],
+            stored: ["title": storedItem.title, "location": storedItem.location, "assignee": storedItem.assignee,
+                     "comments": storedItem.comments, "annotations": storedItem.annotations]
+        )
+    }
+
+    private func storedText(_ field: String) -> String {
+        switch field {
+        case "title": return storedItem.title
+        case "location": return storedItem.location
+        case "assignee": return storedItem.assignee
+        case "comments": return storedItem.comments
+        default: return storedItem.annotations
+        }
+    }
+
+    private func fieldLabel(_ field: String, fallback: String) -> String {
+        CanonicalBusinessEngine.siteAuditFieldLabel(field) ?? fallback
+    }
+
+    /// The live "34 / 120" counter under a field (`siteAuditFieldCounter`); red when the edit is over the limit.
+    @ViewBuilder
+    private func fieldCounter(_ field: String, _ value: String) -> some View {
+        if let counter = CanonicalBusinessEngine.siteAuditFieldCounter(field: field, value: value, stored: storedText(field)) {
+            Text(counter.label)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(counter.blocksSave ? SiteAuditColors.danger : SiteAuditColors.textSecondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityLabel("\(counter.label) characters")
+        }
     }
 
     var body: some View {
@@ -1887,28 +1935,31 @@ struct SiteAuditAddItemView: View {
                     SiteAuditSectionLabel(title: "Details")
                     SiteAuditCard {
                         VStack(spacing: 0) {
-                            fieldBlock("Title", required: true) {
+                            fieldBlock(fieldLabel("title", fallback: "Title"), required: true) {
                                 TextField("Front courtyard", text: $draft.title)
                                     .accessibilityIdentifier("siteAuditAddItem.frontCourtyard")
                                     .font(.body)
                                     .siteAuditClearButton($draft.title, label: "Clear title", identifier: "siteAuditAddItem.clearTitle")
+                                fieldCounter("title", draft.title)
                             }
                             divider
-                            fieldBlock("Comments", required: false) {
-                                TextField("Notes…", text: $draft.comments, axis: .vertical)
+                            fieldBlock(fieldLabel("comments", fallback: "Comments"), required: false) {
+                                TextField("Comments", text: $draft.comments, axis: .vertical)
                                     .accessibilityIdentifier("siteAuditAddItem.notes")
                                     .lineLimit(3...6)
                                     .font(.body)
                                     .siteAuditClearButton($draft.comments, label: "Clear comments", identifier: "siteAuditAddItem.clearComments", alignment: .top)
+                                fieldCounter("comments", draft.comments)
                             }
                             divider
                             assigneeRow
                             divider
-                            fieldBlock("Location tag", required: false) {
+                            fieldBlock(fieldLabel("location", fallback: "Location"), required: false) {
                                 TextField("e.g. Front entrance courtyard", text: $draft.location)
                                     .accessibilityIdentifier("siteAuditAddItem.eGFrontEntranceCourtyard")
                                     .font(.body)
-                                    .siteAuditClearButton($draft.location, label: "Clear location tag", identifier: "siteAuditAddItem.clearLocation")
+                                    .siteAuditClearButton($draft.location, label: "Clear location", identifier: "siteAuditAddItem.clearLocation")
+                                fieldCounter("location", draft.location)
                             }
                             divider
                             annotationsRow
@@ -1929,6 +1980,7 @@ struct SiteAuditAddItemView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     SiteAuditToolbarPill(title: "Save", filled: true, disabled: !canSave, onNavy: true) {
+                        guard limitError == nil else { return }
                         onSubmit(draft)
                         dismiss()
                     }
@@ -1977,13 +2029,14 @@ struct SiteAuditAddItemView: View {
         HStack(spacing: 13) {
             SiteAuditRowIconChip(systemName: "person.fill", tint: SiteAuditColors.pink, background: SiteAuditColors.pinkTint, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Assignee")
+                Text(fieldLabel("assignee", fallback: "Assignee"))
                     .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
                 TextField("Name", text: $draft.assignee)
                     .accessibilityIdentifier("siteAuditAddItem.name")
                     .font(.body)
                     .siteAuditClearButton($draft.assignee, label: "Clear assignee", identifier: "siteAuditAddItem.clearAssignee")
+                fieldCounter("assignee", draft.assignee)
             }
         }
         .padding(.vertical, 11)
@@ -1993,14 +2046,15 @@ struct SiteAuditAddItemView: View {
         HStack(spacing: 13) {
             SiteAuditRowIconChip(systemName: "pencil.tip", tint: SiteAuditColors.warn, background: SiteAuditColors.warnTint, size: PPMetrics.menuIcon)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Annotations")
+                Text(fieldLabel("annotations", fallback: "Annotations"))
                     .font(.footnote)
                     .foregroundStyle(SiteAuditColors.textSecondary)
-                TextField("Notes on photo", text: $draft.annotations)
+                TextField("Annotations", text: $draft.annotations, axis: .vertical)
                     .accessibilityIdentifier("siteAuditAddItem.notesOnPhoto")
                     .font(.body)
                     .foregroundStyle(SiteAuditColors.primary)
                     .siteAuditClearButton($draft.annotations, label: "Clear annotations", identifier: "siteAuditAddItem.clearAnnotations")
+                fieldCounter("annotations", draft.annotations)
             }
         }
         .padding(.vertical, 11)
@@ -2345,25 +2399,20 @@ struct SiteAuditDetailView: View {
         let audit = displayAudit
         let orgName = firebaseBackend.currentOrganization?.name
         let orgAbbrev = firebaseBackend.currentOrganization?.documentAbbreviation
-        let client = clientProject?.client.name
-        let address = clientProject?.siteAddress
+        let job = SiteAuditPDFBuilder.job(for: clientProject)
         let generated = await SiteAuditPDFBuilder.makePDFAsync(
             audit: audit,
             localItems: drafts,
             organizationName: orgName,
             organizationAbbreviation: orgAbbrev,
             logoImage: logo,
-            clientName: client,
-            siteAddress: address
+            job: job
         )
         await MainActor.run { pdfURL = generated }
     }
 
     private func loadLogo() async -> UIImage? {
-        guard let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
-              let url = CanonicalBusinessEngine.safeExternalURL(logoURL),
-              let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
-        return UIImage(data: data)
+        await CompanyLogoLoader.logo(urlString: firebaseBackend.currentOrganization?.companyLogoURL)
     }
 }
 

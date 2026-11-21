@@ -252,14 +252,37 @@ extension FirebaseBackend {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: data, declaredContentType: contentType
         )
+        // Owner bug 17 Nov (a site audit stuck on "Uploading photo 1 of 6"): the Storage SDK retries a dropped
+        // connection silently for up to 10 minutes. The variation-evidence watch cancels the task after
+        // `siteAuditUploadStallSeconds` WITHOUT PROGRESS only — no total limit (review of #262: a slow but moving
+        // 10 MB claim file must never be cut off) — so the screen shows a real error and the person can try again.
+        let watch = VariationUploadWatch()
         let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(data, metadata: metadata) { metadata, error in
-                if let error {
+            let task = storageRef.putData(data, metadata: metadata) { metadata, error in
+                guard watch.finish() else { return }
+                if watch.timedOut {
+                    continuation.resume(throwing: PayeClaimRefused(
+                        message: "A photo upload stopped and was cancelled. Check your connection and try again."
+                    ))
+                } else if let error {
                     continuation.resume(throwing: error)
                 } else if let metadata {
                     continuation.resume(returning: metadata)
                 } else {
                     continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                }
+            }
+            task.observe(.progress) { _ in watch.touch() }
+            Task {
+                while !watch.isFinished {
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if watch.shouldGiveUp(
+                        stallSeconds: FirebaseBackend.siteAuditUploadStallSeconds,
+                        totalSeconds: .infinity
+                    ) {
+                        task.cancel()
+                        break
+                    }
                 }
             }
         }
@@ -538,13 +561,17 @@ extension FirebaseBackend {
     }
 
     /// Uploads one personal audit photo (JPEG) into the owner's folder (`personalSiteAuditImagePath`); returns its path.
-    func uploadPersonalSiteAuditPhoto(auditId: String, jpegData: Data) async throws -> String {
+    /// `createdAtMs` / `index`: the audit's submit time and the photo's place (`siteAuditPhotoObjectPath`, final review
+    /// of #389 / #262), so no two photos of one audit ever share a name.
+    func uploadPersonalSiteAuditPhoto(auditId: String, jpegData: Data, createdAtMs: Int64, index: Int) async throws -> String {
         guard let orgId = payeClaimsOrganizationId, let uid = payeClaimsUid,
-              let path = CanonicalBusinessEngine.personalSiteAuditImagePath(
+              let path = CanonicalBusinessEngine.siteAuditPhotoObjectPath(
+                kind: "personal",
                 organizationId: orgId,
-                ownerUserId: uid,
+                userId: uid,
                 auditId: auditId,
-                unixMs: StorageUploadPolicy.unixMillisecondsNow(),
+                createdAtMs: createdAtMs,
+                index: index,
                 fileExtension: "jpg"
               ) else {
             throw PayeClaimRefused(message: "You must be signed in to upload photos.")

@@ -176,6 +176,29 @@ final class CrossPlatformContractTests: XCTestCase {
     }
 
     /// 1.11.0: every booking sample carries `jobCollection`, and iOS labour and subcontractor builders pass it.
+    /// Review of #262: the iPhone's site audit writer (`FirebaseBackend.siteAuditPayload`) writes back exactly the item
+    /// fields of the iOS sample it reads — nothing dropped or renamed, `imageCapturedAt` kept.
+    func testSiteAuditWriterRoundTripsTheIOSSample() throws {
+        let contract = try loadContract()
+        let sample = try XCTUnwrap(samples(contract, collection: "siteAudits", platform: "ios").first)
+        let docId = try XCTUnwrap(sample["docId"] as? String)
+        let data = try XCTUnwrap(firestoreData(sample["data"] ?? [:]) as? [String: Any])
+        let audit = try XCTUnwrap(FirebaseBackend.siteAudit(documentId: docId, data: data))
+        let payload = try FirebaseBackend.siteAuditPayload(audit, organizationId: "ORG-1", storedItems: data["items"])
+        let stored = try XCTUnwrap(data["items"] as? [[String: Any]])
+        let written = try XCTUnwrap(payload["items"] as? [[String: Any]])
+        XCTAssertEqual(written.count, stored.count)
+        for (row, out) in zip(stored, written) {
+            for key in ["id", "title", "location", "assignee", "comments", "imageURL"] where row[key] is String {
+                XCTAssertEqual(out[key] as? String, row[key] as? String, "item \(key)")
+            }
+            if let annotations = row["annotations"] as? String { XCTAssertEqual(out["annotations"] as? String, annotations) }
+            if row["imageCapturedAt"] is Timestamp { XCTAssertTrue(out["imageCapturedAt"] is Timestamp, "imageCapturedAt kept") }
+        }
+        XCTAssertEqual(payload["customTitle"] as? String, data["customTitle"] as? String)
+        XCTAssertEqual(payload["type"] as? String, data["type"] as? String)
+    }
+
     func testBookingSamplesCarryJobCollection() throws {
         let contract = try loadContract()
         for id in ["bookings", "subcontractorBookings"] {

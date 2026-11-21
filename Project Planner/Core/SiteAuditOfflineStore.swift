@@ -9,6 +9,28 @@ import Foundation
 import UIKit
 import Combine
 
+/// A chosen sign-out stops site audit uploads still running (final review of #389 / #262, as web): it moves the
+/// generation on; a sync pass and an upload watch started under an older generation stop at their next check.
+final class SiteAuditUploadStop: @unchecked Sendable {
+    static let shared = SiteAuditUploadStop()
+    private let lock = NSLock()
+    private var generation = 0
+
+    var current: Int {
+        lock.lock(); defer { lock.unlock() }
+        return generation
+    }
+
+    func stop() {
+        lock.lock(); generation += 1; lock.unlock()
+    }
+
+    func stopped(since start: Int) -> Bool { current != start }
+}
+
+/// A sync pass stopped by a chosen sign-out.
+struct SiteAuditUploadsStopped: Error {}
+
 struct PendingSiteAuditRecord: Codable, Identifiable {
     let id: UUID
     let organizationId: String
@@ -224,6 +246,42 @@ final class SiteAuditOfflineStore: ObservableObject {
         persistIndex()
     }
 
+    /// The uploaded photo URLs a chosen sign-out deletes: every photo a queued audit already uploaded, except for an
+    /// audit whose document is saved (its photos are in use) or whose state could not be checked (kept for recovery).
+    nonisolated static func photoURLsToDeleteOnChosenSignOut(
+        _ records: [PendingSiteAuditRecord],
+        savedOrUnknownAuditIds: Set<UUID>
+    ) -> [String] {
+        records
+            .filter { !savedOrUnknownAuditIds.contains($0.audit.id) }
+            .flatMap { record in record.audit.items.compactMap { item in
+                guard let url = item.imageURL, !url.isEmpty else { return nil }
+                return url
+            } }
+    }
+
+    /// A sign-out the person chose (final review of #389 / #262, as web): stops audits still uploading, waits for the
+    /// pass to stop (bounded), then deletes the photos they already uploaded as Discard does — the security rules
+    /// allow it only inside the uploader's §24 undo window, and never for an audit already saved. Runs while still
+    /// signed in; `clearAll` then removes the queue. A forced sign-out never comes here.
+    func stopUploadsAndDiscardPhotosForChosenSignOut(firebaseBackend: FirebaseBackend, waitSeconds: TimeInterval = 10) async {
+        guard !pending.isEmpty else { return }
+        SiteAuditUploadStop.shared.stop()
+        let deadline = Date().addingTimeInterval(waitSeconds)
+        while !claimedAuditIds.isEmpty, Date() < deadline {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+        }
+        let records = pending
+        var keep: Set<UUID> = []
+        for record in records where record.audit.items.contains(where: { !($0.imageURL ?? "").isEmpty }) {
+            if await firebaseBackend.siteAuditDocumentExistsOnServer(id: record.audit.id, organizationId: record.organizationId) != false {
+                keep.insert(record.audit.id)
+            }
+        }
+        let urls = Self.photoURLsToDeleteOnChosenSignOut(records, savedOrUnknownAuditIds: keep)
+        await firebaseBackend.deleteUploadedSiteAuditPhotos(urls)
+    }
+
     /// Sign-out: every queued audit and its photos are removed, so the next account on this phone never uploads
     /// (or sees) them (security audit M6).
     func clearAll() {
@@ -251,21 +309,28 @@ final class SiteAuditOfflineStore: ObservableObject {
     func syncPending(firebaseBackend: FirebaseBackend, countsAsAttempt: Bool = true) async {
         guard !pending.isEmpty else { return }
         let queue = pending.map(\.id)
+        let stopGeneration = SiteAuditUploadStop.shared.current
         for recordId in queue {
+            if SiteAuditUploadStop.shared.stopped(since: stopGeneration) { return }
             // The record as it is now (photo URLs saved by an earlier pass included), not a stale copy.
             guard let record = pending.first(where: { $0.id == recordId }), claimAuditForSync(id: recordId) else { continue }
             defer { releaseAuditClaim(id: recordId) }
             do {
                 var items: [SiteAuditItem] = []
-                for item in record.audit.items {
+                for (index, item) in record.audit.items.enumerated() {
+                    if SiteAuditUploadStop.shared.stopped(since: stopGeneration) { throw SiteAuditUploadsStopped() }
                     var remoteURL = item.imageURL
                     if remoteURL == nil,
                        let fileName = record.localImageNames[item.id.uuidString],
                        let image = UIImage(contentsOfFile: pendingFolderURL(for: record.id).appendingPathComponent(fileName).path) {
+                        // The queued copy's own created time plus the item's place: unique per photo, stable on retry
+                        // (a re-queued copy has a new created time, so it never reuses an older copy's names).
                         remoteURL = try await firebaseBackend.uploadSiteAuditImage(
                             image,
                             auditId: record.audit.id,
-                            organizationId: record.organizationId
+                            organizationId: record.organizationId,
+                            createdAtMs: Int64((record.createdAt.timeIntervalSince1970 * 1000).rounded(.down)),
+                            index: index
                         )
                         if let remoteURL {
                             recordUploadedPhoto(auditId: record.id, revision: record.revision, itemId: item.id, url: remoteURL)
@@ -285,6 +350,7 @@ final class SiteAuditOfflineStore: ObservableObject {
                 }
                 var audit = record.audit
                 audit.items = items
+                if SiteAuditUploadStop.shared.stopped(since: stopGeneration) { throw SiteAuditUploadsStopped() }
                 try await firebaseBackend.saveSiteAudit(audit, organizationId: record.organizationId)
                 // A copy queued while this pass ran (an edit) stays queued for the next pass.
                 if !enqueuingAuditIds.contains(record.id), Self.shouldRemoveAfterSync(
