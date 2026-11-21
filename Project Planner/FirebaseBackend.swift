@@ -11612,6 +11612,87 @@ extension FirebaseBackend {
         return Array(sorted.prefix(max(1, limit)))
     }
 
+    /// RULEBOOK 1.66.0 §8 (web `loadTimesheetQueueSheets`): every stored timesheet of `userIds`, however old, grouped by the
+    /// stored `userId` — one `userId in` query per 10 ids instead of one query per person. A chunk the rules refuse is asked
+    /// id by id and only the refused ids are skipped (web review of #368 S1); any other failure throws. Each group is the
+    /// latest version of each pay run (`collapseTimesheetVersions`), as `listTimesheetStates` gives one person.
+    func listTimesheetStates(organizationId: String, userIds: [String]) async throws -> [String: [[String: Any]]] {
+        var seen = Set<String>()
+        let ids = userIds.filter { !$0.isEmpty && seen.insert($0).inserted }
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        var documents: [(documentId: String, data: [String: Any])] = []
+        var start = 0
+        while start < ids.count {
+            let chunk = Array(ids[start..<min(start + 10, ids.count)])
+            start += 10
+            do {
+                let snapshot = try await settings.whereField("userId", in: chunk).getDocuments()
+                documents += snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) }
+            } catch {
+                let nsError = error as NSError
+                guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 else { throw error }
+                // Only a per-id permission refusal is skipped (an unreadable alias id); any other failure throws, so
+                // the list shows its load error instead of an incomplete queue (web `queryIdsSkippingRefused`).
+                for id in chunk {
+                    do {
+                        let snapshot = try await settings.whereField("userId", isEqualTo: id).getDocuments()
+                        documents += snapshot.documents.map { (documentId: $0.documentID, data: $0.data()) }
+                    } catch {
+                        let single = error as NSError
+                        guard single.domain == "FIRFirestoreErrorDomain" && single.code == 7 else { throw error }
+                    }
+                }
+            }
+        }
+        var byUser: [String: [(documentId: String, data: [String: Any])]] = [:]
+        for document in documents {
+            guard let userId = document.data["userId"] as? String, !userId.isEmpty else { continue }
+            byUser[userId, default: []].append(document)
+        }
+        return byUser.mapValues { Self.collapseTimesheetVersions($0, versions: .latest) }
+    }
+
+    /// RULEBOOK 1.66.0 §8 (web `loadRecentRunTimesheetsForIds`, admins): the timesheets of `startDayKeys` (the last six
+    /// pay runs) read by `weekStartKey`, kept when their `userId` — or, with none, the id in the document id — is one of
+    /// `userIds` without case, so a sheet stored under another spelling of an id (or with no `userId`) stays listed.
+    /// Grouped by the spelling in `userIds` that matched (the id the queue caches it under), each group the latest
+    /// version of each pay run. A key the rules refuse is skipped; any other failure throws.
+    func listRecentRunTimesheetStates(
+        organizationId: String,
+        userIds: [String],
+        startDayKeys: [String]
+    ) async throws -> [String: [[String: Any]]] {
+        var wanted: [String: String] = [:]
+        for id in userIds where !id.isEmpty && wanted[id.lowercased()] == nil { wanted[id.lowercased()] = id }
+        var keySeen = Set<String>()
+        let keys = startDayKeys.filter { !$0.isEmpty && keySeen.insert($0).inserted }
+        guard !keys.isEmpty, !wanted.isEmpty else { return [:] }
+        let settings = db.collection("organizations").document(organizationId).collection("settings")
+        var byUser: [String: [(documentId: String, data: [String: Any])]] = [:]
+        var documentSeen = Set<String>()
+        for key in keys {
+            let snapshot: QuerySnapshot
+            do {
+                snapshot = try await settings.whereField("weekStartKey", isEqualTo: key).getDocuments()
+            } catch {
+                let nsError = error as NSError
+                guard nsError.domain == "FIRFirestoreErrorDomain" && nsError.code == 7 else { throw error }
+                continue
+            }
+            for document in snapshot.documents where document.documentID.hasPrefix("timesheet_") {
+                guard documentSeen.insert(document.documentID).inserted else { continue }
+                let data = document.data()
+                let storedUserId = (data["userId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let stored = storedUserId.isEmpty
+                    ? (CanonicalBusinessEngine.timesheetDocumentSubjectId(document.documentID) ?? "")
+                    : storedUserId
+                guard !stored.isEmpty, let asked = wanted[stored.lowercased()] else { continue }
+                byUser[asked, default: []].append((documentId: document.documentID, data: data))
+            }
+        }
+        return byUser.mapValues { Self.collapseTimesheetVersions($0, versions: .latest) }
+    }
+
     /// RULEBOOK 1.55.0 §8 (web `collapseVersionRows`): one row per pay run of each original — its latest version
     /// (`timesheetLatestVersion`, the script's choice; owner decision J4: lists and reports alike), or every version for `all`.
     /// Settings documents that are not timesheets pass through. Each row carries `__documentId` (and, on a revision,

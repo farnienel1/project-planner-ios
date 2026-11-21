@@ -20,6 +20,9 @@ struct InvoicingView: View {
     @EnvironmentObject var notificationService: NotificationService
     @Environment(\.dismiss) private var dismiss
     @State private var landingVersion = 0
+    /// RULEBOOK 1.66.0 §8 (web User Timesheets load error): the every-age sheet load failed; the counts are from this
+    /// device's cache until a reload works.
+    @State private var landingQueueLoadError: String?
     @State private var pendingReviewUserId: String?
     @State private var pendingReviewWeek: WeekRange?
     @State private var didConsumeDeepLink = false
@@ -398,8 +401,11 @@ struct InvoicingView: View {
         let _ = landingVersion
         let reviewUsers = managerReviewUsersIncludingPending()
         let openWeek = pendingReviewWeek ?? WeekRange.current(settings: settings)
-        let awaiting = landingAwaitingTimesheetCount(users: reviewUsers)
-        let signed = reviewUsers.filter {
+        let queueCounts = landingQueueCounts(users: reviewUsers)
+        let awaiting = queueCounts.awaiting
+        // RULEBOOK 1.66.0 §8: Signed off counts every signed, unexported sheet however old (`userTimesheetQueue`, the
+        // count web's hub shows). The script did not answer: the current pay run only, as before.
+        let signed = queueCounts.signed ?? reviewUsers.filter {
             let draft = TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start)
             // RULEBOOK 1.47.0 §8: a sheet reopened by a booking change is not signed off (`timesheetListBucket` with it).
             return TimesheetApprovalPolicy.listBucket(draft: draft, user: $0, period: openWeek) == "signed"
@@ -409,6 +415,12 @@ struct InvoicingView: View {
         }.count
 
         VStack(alignment: .leading, spacing: 14) {
+            if let landingQueueLoadError {
+                Label(landingQueueLoadError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("timesheets.landing.loadError")
+            }
             PPGroupedCard {
                 if canShowMyTimesheets {
                     NavigationLink {
@@ -573,7 +585,21 @@ struct InvoicingView: View {
         return users
     }
 
+    /// RULEBOOK 1.66.0 §8 (owner decision 17 Nov): every stored sheet awaiting sign-off or signed off, however old — one
+    /// per person per pay run, PAYE runs left out (`userTimesheetQueue`, the rule web's hub tile counts with). `signed` is
+    /// nil when the script did not answer (the caller then counts the current pay run, as before).
+    private func landingQueueCounts(users: [AppUser]) -> (awaiting: Int, signed: Int?) {
+        if let viewer = userStore.displayUser,
+           let rows = UserTimesheetQueueRulebook.rows(
+               viewer: viewer, roster: userStore.organizationUsers, subjects: users, settings: settings
+           ) {
+            return (rows.filter { $0.bucket == "awaiting" }.count, rows.filter { $0.bucket == "signed" }.count)
+        }
+        return (landingAwaitingTimesheetCount(users: users), nil)
+    }
+
     private func landingAwaitingTimesheetCount(users: [AppUser]) -> Int {
+        // The script did not answer: the count this device used before 1.66.0.
         var seen = Set<String>()
         for user in users {
             let documentStarts = TimesheetDraftStore.discoverStoredWeekStarts(userId: user.id)
@@ -608,24 +634,27 @@ struct InvoicingView: View {
                 )
             }
         }
-        let listIds: Set<String>
-        if isAdminViewer && ids.count > 25 {
-            listIds = pendingReviewUserId.map { Set([$0]) } ?? []
-        } else {
-            listIds = ids
+        // RULEBOOK 1.66.0 §8: every stored sheet of the people listed, under every id they go by, however old — one
+        // `userId in` query per 10 ids (before 1.66.0 one query per person, skipped for an admin with over 25 people).
+        let listUsers = await MainActor.run { () -> [AppUser] in
+            var users = managerReviewUsersIncludingPending()
+            if let me = userStore.displayUser, !users.contains(where: { $0.id == me.id }) { users.append(me) }
+            return users
         }
-        for userId in listIds {
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: userId,
-                limit: 200
-            ) {
-                for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: userId, organizationId: orgId)
-                }
-            }
+        let landingRoster = await MainActor.run { userStore.organizationUsers }
+        var loadError: String?
+        do {
+            try await UserTimesheetQueueRulebook.refreshFromCloud(
+                users: listUsers, roster: landingRoster, firebaseBackend: firebaseBackend, organizationId: orgId,
+                recentRunSettings: isAdminViewer ? settings : nil
+            )
+        } catch {
+            loadError = UserTimesheetQueueRulebook.loadFailedMessage
         }
-        await MainActor.run { landingVersion += 1 }
+        await MainActor.run {
+            landingQueueLoadError = loadError
+            landingVersion += 1
+        }
     }
 
     private func captureTimesheetDeepLink() {
@@ -4401,6 +4430,9 @@ private struct ManagerTimesheetRow: Identifiable, Hashable {
     let id: String
     let user: AppUser
     let week: WeekRange
+    /// RULEBOOK 1.66.0 §8: the id the sheet is stored under when it is not the person's own (a former invite id, a second
+    /// users document on their email). Nil: the person's own id.
+    var sheetUserId: String? = nil
 }
 
 /// Internal (1.33.0) so the Payrun Snapshot can open a person's timesheet for a pay run.
@@ -4439,6 +4471,10 @@ struct OperativeTimesheetsView: View {
     @State private var exportedSort = "dateNewest"
     @State private var exportedRunKey = "all"
     @State private var awaitingRows: [ManagerTimesheetRow] = []
+    /// RULEBOOK 1.66.0 §8: Signed off — every signed, unexported sheet however old (`userTimesheetQueue`, as web).
+    @State private var signedRows: [ManagerTimesheetRow] = []
+    /// RULEBOOK 1.66.0 §8 (web User Timesheets): the every-age sheet load failed — shown, never an empty list.
+    @State private var queueLoadError: String?
     @State private var autoOpenReview: TimesheetAutoOpenTarget?
     @State private var didAutoOpenReview = false
     /// Scope the list was last built and fetched for. Nil until the first appear.
@@ -4496,20 +4532,12 @@ struct OperativeTimesheetsView: View {
         return users.sorted(by: { $0.fullName < $1.fullName })
     }
 
-    private var filteredReports: [AppUser] {
-        let _ = refreshVersion
-        return directReports.filter { user in
+    /// The fallback when the script does not answer: the people whose sheet for this screen's pay run is signed off.
+    private var filteredSignedReportsForCurrentRun: [AppUser] {
+        directReports.filter { user in
             let draft = TimesheetDraftStore.load(userId: user.id, weekStart: week.start)
             // RULEBOOK 1.47.0 §8: the bucket follows the sheet's booking change.
-            let bucket = TimesheetApprovalPolicy.listBucket(draft: draft, user: user, period: week)
-            switch selectedTab {
-            case .awaiting:
-                return bucket == "awaiting"
-            case .signedOff:
-                return bucket == "signed"
-            case .exported:
-                return bucket == "exported"
-            }
+            return TimesheetApprovalPolicy.listBucket(draft: draft, user: user, period: week) == "signed"
         }
     }
 
@@ -4531,6 +4559,12 @@ struct OperativeTimesheetsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
+                if let queueLoadError, selectedTab != .exported {
+                    Label(queueLoadError, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .accessibilityIdentifier("timesheets.queueLoadError")
+                }
                 if let exportMessage {
                     Text(exportMessage)
                         .font(.caption)
@@ -4695,9 +4729,13 @@ struct OperativeTimesheetsView: View {
                     }
                     }
                     } else {
-                    ForEach(filteredReports, id: \.id) { operative in
+                    // RULEBOOK 1.66.0 §8 (owner decision 17 Nov): Signed off lists every signed, unexported sheet, however
+                    // old, one row per person per pay run (`userTimesheetQueue`, the rows web lists).
+                    ForEach(signedRows) { row in
+                        let operative = live(row.user)
+                        let draft = TimesheetDraftStore.load(userId: row.sheetUserId ?? operative.id, weekStart: row.week.start)
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: operative, settings: settings, week: week)
+                            OperativeTimesheetReviewView(operative: operative, settings: settings, week: row.week)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -4712,9 +4750,8 @@ struct OperativeTimesheetsView: View {
                                     Text(operative.fullName.isEmpty ? operative.email : operative.fullName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundStyle(.primary)
-                                    let draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
-                                    let summary = operativeSummary(for: operative, draft: draft, week: week)
-                                    Text(summary.map { "\(week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? week.title)
+                                    let summary = operativeSummary(for: operative, draft: draft, week: row.week)
+                                    Text(summary.map { "\(row.week.title) · Hrs \(formatHours($0.hours)) · OT \(formatHours($0.overtimeHours)) · PW \(OrgMoney.format($0.priceWork)) · Exp \(OrgMoney.format($0.expenses))" } ?? row.week.title)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     if isAdminViewer {
@@ -4724,11 +4761,7 @@ struct OperativeTimesheetsView: View {
                                     }
                                 }
                                 Spacer()
-                                statusPill(
-                                    for: TimesheetDraftStore.load(userId: operative.id, weekStart: week.start),
-                                    user: operative,
-                                    period: week
-                                )
+                                statusPill(for: draft, user: operative, period: row.week)
                                 Image(systemName: "chevron.right")
                                     .font(.footnote.weight(.semibold))
                                     .foregroundStyle(.tertiary)
@@ -4737,9 +4770,9 @@ struct OperativeTimesheetsView: View {
                             .padding(.vertical, 11)
                             .contentShape(Rectangle())
                         }
-                        .accessibilityIdentifier("timesheets.row.\(operative.id).hrsOTPWExp")
+                        .accessibilityIdentifier("timesheets.row.\(row.id).hrsOTPWExp")
                         .buttonStyle(PPMenuRowButtonStyle())
-                        if operative.id != filteredReports.last?.id {
+                        if row.id != signedRows.last?.id {
                             Divider().padding(.leading, 66)
                         }
                     }
@@ -4748,7 +4781,7 @@ struct OperativeTimesheetsView: View {
                 .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
                 .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
-                if selectedTab == .signedOff && !filteredReports.isEmpty {
+                if selectedTab == .signedOff && !signedRows.isEmpty {
                     // Admins only: managers cannot see other people's tax identifiers.
                     if userStore.canViewSensitiveProfile(of: "") {
                         SensitiveExportToggle(isOn: $includeTaxIdsInExport, accessibilityToken: "signedTimesheetsExport")
@@ -4759,7 +4792,7 @@ struct OperativeTimesheetsView: View {
                         Task { await exportSignedTimesheets() }
                     } label: {
                         Label(
-                            isExporting ? "Sending timesheets…" : "Email and export \(filteredReports.count) timesheets",
+                            isExporting ? "Sending timesheets…" : "Email and export \(signedRows.count) timesheets",
                             systemImage: "envelope.fill"
                         )
                             .font(.body.weight(.semibold))
@@ -5076,17 +5109,20 @@ struct OperativeTimesheetsView: View {
                     organizationId: orgId
                 )
             }
-            if let rows = try? await firebaseBackend.listTimesheetStates(
-                organizationId: orgId,
-                userId: user.id,
-                limit: 200
-            ) {
-                for row in rows {
-                    _ = TimesheetDraftStore.ingestCloudRow(row, userId: user.id, organizationId: orgId)
-                }
-            }
+        }
+        // RULEBOOK 1.66.0 §8: every stored sheet of these people, under every id they go by (`personIdSet`), however old.
+        let roster = userStore.organizationUsers
+        var loadError: String?
+        do {
+            try await UserTimesheetQueueRulebook.refreshFromCloud(
+                users: users, roster: roster, firebaseBackend: firebaseBackend, organizationId: orgId,
+                recentRunSettings: isAdminViewer ? settings : nil
+            )
+        } catch {
+            loadError = UserTimesheetQueueRulebook.loadFailedMessage
         }
         await MainActor.run {
+            queueLoadError = loadError
             rebuildAwaitingRows()
             refreshVersion += 1
         }
@@ -5094,6 +5130,35 @@ struct OperativeTimesheetsView: View {
 
     private func rebuildAwaitingRows() {
         let _ = refreshVersion
+        // RULEBOOK 1.66.0 §8 (owner decision 17 Nov): every stored sheet awaiting sign-off or signed off, however old, one
+        // row per person per pay run, PAYE runs left out — `userTimesheetQueue`, the rule web's User Timesheets list uses.
+        if let viewer = userStore.displayUser,
+           let queue = UserTimesheetQueueRulebook.rows(
+               viewer: viewer, roster: userStore.organizationUsers, subjects: managerScopeUsers, settings: settings
+           ) {
+            let roster = userStore.organizationUsers + (extraReviewUser.map { [$0] } ?? [])
+            func managerRows(_ bucket: String) -> [ManagerTimesheetRow] {
+                queue.filter { $0.bucket == bucket }.compactMap { row -> ManagerTimesheetRow? in
+                    guard let user = roster.first(where: { $0.id == row.personId }) else { return nil }
+                    let storedEnd = TimesheetDraftStore.storedPeriodEnd(userId: row.sheetUserId, weekStart: row.weekStart)
+                    let period = TimesheetPayrollPolicy.periodMatchingStoredStart(row.weekStart, storedEnd: storedEnd, settings: settings)
+                    return ManagerTimesheetRow(
+                        id: "\(user.id)|\(Int(period.start.timeIntervalSince1970))",
+                        user: user,
+                        week: period,
+                        sheetUserId: row.sheetUserId == user.id ? nil : row.sheetUserId
+                    )
+                }
+            }
+            awaitingRows = managerRows("awaiting")
+            signedRows = managerRows("signed")
+            return
+        }
+        // The script did not answer: Signed off is the current pay run only, as before 1.66.0.
+        signedRows = filteredSignedReportsForCurrentRun.map { user in
+            ManagerTimesheetRow(id: "\(user.id)|\(Int(week.start.timeIntervalSince1970))", user: user, week: week)
+        }
+        // The script did not answer: the list this device built before 1.66.0.
         var rows: [ManagerTimesheetRow] = []
         var seen = Set<String>()
         for user in managerScopeUsers {
@@ -5168,18 +5233,21 @@ struct OperativeTimesheetsView: View {
         let orgName = firebaseBackend.currentOrganization?.name ?? "Organization"
         let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
         let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
-        let targets = filteredReports
+        // RULEBOOK 1.66.0 §8: every row Signed off lists — signed, unexported sheets of any age, each with its own pay
+        // run. The bookings must be loaded from the earliest of those runs (the gate below).
+        let targets = signedRows
+        let exportStart = targets.map(\.week.start).min() ?? week.start
         // RULEBOOK 1.43.0 §8 (review r318): an export waits for the same server-confirmed bookings gate as sign-off.
         PayInputsLoad.ensurePeriodBookings(
             firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-            from: week.start, retryFailed: true
+            from: exportStart, retryFailed: true
         )
         if let blocked = PayInputsLoad.blockMessage(
             state: payInputsState,
             organization: firebaseBackend.currentOrganization,
             bookings: PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-                from: week.start
+                from: exportStart
             ),
             scope: .othersPay
         ) {
@@ -5195,7 +5263,7 @@ struct OperativeTimesheetsView: View {
         func gateReady() -> Bool {
             PayInputsLoad.periodBookings(
                 firebaseBackend: firebaseBackend, bookingStore: bookingStore, managerScheduleStore: managerScheduleStore,
-                from: week.start
+                from: exportStart
             ).loaded && operativeStore.finishedLoadOrganizationId == exportOrgId && !operativeStore.isLoading
         }
         func name(_ user: AppUser) -> String { user.fullName.isEmpty ? user.email : user.fullName }
@@ -5203,7 +5271,7 @@ struct OperativeTimesheetsView: View {
         // Review r318 (web `runTimesheetExport`). 1. Prepare every sheet — fresh read, snapshot built (an empty frozen one
         // rebuilt) BEFORE `exportedAt` — checking the gate before each person. Nothing is written here, so a gate that
         // closes stops the export with nobody stamped. A sheet exported elsewhere, or not signed in its fresh copy, is left.
-        var prepared: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var prepared: [(operative: AppUser, draft: TimesheetDraft, week: WeekRange, sheetUserId: String)] = []
         var skippedElsewhere: [String] = []
         /// RULEBOOK 1.47.0 §8: sheets left out because their bookings changed since they were signed.
         var skippedChanged: [String] = []
@@ -5213,7 +5281,11 @@ struct OperativeTimesheetsView: View {
         var skippedLateExtras: [String] = []
         for target in targets {
             // RULEBOOK §8 (review of #240): the person as the roster holds them now, pay laid over.
-            let op = live(target)
+            let op = live(target.user)
+            // RULEBOOK 1.66.0 §8: this row's own pay run, and the id its sheet is stored under (the person's own id, or a
+            // former / same-email id the queue found it under).
+            let week = target.week
+            let sheetUserId = target.sheetUserId ?? op.id
             guard gateReady() else {
                 exportMessage = TimesheetDraftStore.exportStoppedMessage
                 return
@@ -5229,7 +5301,7 @@ struct OperativeTimesheetsView: View {
                 continue
             }
             let fresh = await TimesheetDraftStore.refreshFromCloudReporting(
-                userId: op.id,
+                userId: sheetUserId,
                 weekStart: week.start,
                 firebaseBackend: firebaseBackend,
                 organizationId: exportOrgId
@@ -5297,7 +5369,7 @@ struct OperativeTimesheetsView: View {
                 return
             }
             guard TimesheetDraftStore.applyExport(to: &d, at: Date()) else { continue }
-            prepared.append((operative: op, draft: d))
+            prepared.append((operative: op, draft: d, week: week, sheetUserId: sheetUserId))
         }
         // The gate once more after the last read, still before anything is written.
         if !prepared.isEmpty && !gateReady() {
@@ -5306,7 +5378,7 @@ struct OperativeTimesheetsView: View {
         }
 
         // 2. Stamp the prepared sheets exported, one by one; a failure stops the rest (those already stamped are kept).
-        var stamped: [(operative: AppUser, draft: TimesheetDraft)] = []
+        var stamped: [(operative: AppUser, draft: TimesheetDraft, week: WeekRange)] = []
         var stampError: String?
         for row in prepared {
             // RULEBOOK 1.54.0 (third review of #337, web `stampTimesheetExport`): only the export fields — the signed
@@ -5318,8 +5390,8 @@ struct OperativeTimesheetsView: View {
             do {
                 result = try await firebaseBackend.stampTimesheetExport(
                     organizationId: exportOrgId,
-                    userId: row.operative.id,
-                    weekStart: week.start,
+                    userId: row.sheetUserId,
+                    weekStart: row.week.start,
                     weeklyReportOverride: snapshot,
                     exportedAt: exportedAt,
                     // RULEBOOK 1.55.0 §8 (review of #243 M1): the version this snapshot was prepared from, only.
@@ -5331,9 +5403,9 @@ struct OperativeTimesheetsView: View {
             }
             switch result {
             case "stamped":
-                TimesheetDraftStore.save(row.draft, userId: row.operative.id, weekStart: week.start, weekEnd: week.end)
-                TimesheetDraftStore.rememberLoadedCopy(row.draft, userId: row.operative.id, weekStart: week.start)
-                stamped.append(row)
+                TimesheetDraftStore.save(row.draft, userId: row.sheetUserId, weekStart: row.week.start, weekEnd: row.week.end)
+                TimesheetDraftStore.rememberLoadedCopy(row.draft, userId: row.sheetUserId, weekStart: row.week.start)
+                stamped.append((operative: row.operative, draft: row.draft, week: row.week))
             case "late-extras-waiting":
                 skippedLateExtras.append(name(row.operative))
             case "already-exported", "superseded":
@@ -5358,24 +5430,35 @@ struct OperativeTimesheetsView: View {
                     taxIdsByUserId[row.operative.id] = ids
                 }
             }
-            delivery = await TimesheetExportHelper.deliver(
-                stamped: stamped,
-                week: week,
-                bookingStore: bookingStore,
-                managerScheduleStore: managerScheduleStore,
-                operativeStore: operativeStore,
-                projectStore: projectStore,
-                dayRateHistory: dayRateHistoryCollection,
-                payrollPolicy: policy,
-                organization: firebaseBackend.currentOrganization,
-                organizationName: orgName,
-                scheduleOptions: scheduleOptions,
-                organizationUsers: userStore.organizationUsers,
-                recipientEmail: recipientEmail,
-                recipientName: name(exporter),
-                firebaseBackend: firebaseBackend,
-                taxIdsByUserId: taxIdsByUserId
-            )
+            // RULEBOOK 1.66.0 §8: one delivery (PDFs, backup and one email) per pay run, oldest first — the export
+            // pipeline is built around one pay run.
+            // Grouped by the pay run's start and end, so two runs that share a start day never share an email.
+            let byRun = Dictionary(grouping: stamped, by: { "\(Int64($0.week.start.timeIntervalSince1970))|\(Int64($0.week.end.timeIntervalSince1970))" })
+            for runKey in byRun.keys.sorted() {
+                guard let rows = byRun[runKey], let runWeek = rows.first?.week else { continue }
+                let part = await TimesheetExportHelper.deliver(
+                    stamped: rows.map { (operative: $0.operative, draft: $0.draft) },
+                    week: runWeek,
+                    bookingStore: bookingStore,
+                    managerScheduleStore: managerScheduleStore,
+                    operativeStore: operativeStore,
+                    projectStore: projectStore,
+                    dayRateHistory: dayRateHistoryCollection,
+                    payrollPolicy: policy,
+                    organization: firebaseBackend.currentOrganization,
+                    organizationName: orgName,
+                    scheduleOptions: scheduleOptions,
+                    organizationUsers: userStore.organizationUsers,
+                    recipientEmail: recipientEmail,
+                    recipientName: name(exporter),
+                    firebaseBackend: firebaseBackend,
+                    taxIdsByUserId: taxIdsByUserId
+                )
+                delivery.sentCount += part.sentCount
+                delivery.notSent += part.notSent
+                delivery.backupSkipped += part.backupSkipped
+                if delivery.emailProblem == nil { delivery.emailProblem = part.emailProblem }
+            }
             refreshVersion += 1
             rebuildAwaitingRows()
             await loadExportedHistory()

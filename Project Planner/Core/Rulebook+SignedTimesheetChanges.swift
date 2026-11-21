@@ -737,9 +737,24 @@ final class SignedTimesheetChangeContext {
     /// The My Timesheets entry: whether any of the person's own signed, unexported sheets of the last six pay runs waits
     /// for them to sign again. Bookings are asked for only from the earliest of those runs.
     private func hubPeriods(settings: OrganizationInvoicingSettings) -> [WeekRange] {
-        var periods = [TimesheetPayrollPolicy.payPeriodContaining(settings: settings)]
-        periods.append(contentsOf: TimesheetPayrollPolicy.previousPayPeriods(count: Self.hubScanRuns - 1, settings: settings))
-        return periods
+        UserTimesheetQueueRulebook.recentPayRuns(settings: settings)
+    }
+
+    /// RULEBOOK 1.66.0 §8 (web `TimesheetsScreen` / hub `coversPeriod`): the change User Timesheets reads for a sheet.
+    /// The booking-change window is the last six pay runs, the same on the landing cards and the lists as on web: a run
+    /// in it gets `change(draft:user:period:)`; an older run gets its waiting late extras alone, its bookings read as not
+    /// changed. Export does not use this: it checks every sheet it stamps in full.
+    func queueChange(
+        draft: TimesheetDraft,
+        user: AppUser,
+        period: WeekRange,
+        settings: OrganizationInvoicingSettings
+    ) -> RulebookSignedTimesheetChange? {
+        guard let windowStart = hubPeriods(settings: settings).map(\.start).min(), period.start >= windowStart else {
+            guard SignedTimesheetChanges.isSigned(draft) else { return nil }
+            return CanonicalBusinessEngine.timesheetChangesWithLateExtras(bookingChange: nil, late: TimesheetLateExtrasSupport.summary(draft))
+        }
+        return change(draft: draft, user: user, period: period)
     }
 
     /// Asks for the bookings from the earliest of the last six pay runs (not the whole archive), when any of the
