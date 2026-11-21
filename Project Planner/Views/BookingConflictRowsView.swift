@@ -433,7 +433,7 @@ enum BookingLeaveConflictItems {
     /// The person behind a week-grid row or picker: books under the first operative id (stored), else the first
     /// users id; every other id is one leave may be stored under.
     static func person(operativeIds: [UUID], userIds: [String], email: String? = nil) -> BookingLeaveConflictInputs.Person {
-        let storedOperativeIds = operativeIds.map { Booking.storedOperativeId(for: $0) }
+        let storedOperativeIds = operativeIds.map { Booking.operativeMatchKey(for: $0) }
         let id = storedOperativeIds.first ?? userIds.first ?? ""
         return BookingLeaveConflictInputs.Person(
             id: id,

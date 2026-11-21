@@ -23,8 +23,6 @@ enum BookingWritePatch {
     /// `deletesClearedFields`, else left out (a create has nothing to delete).
     static func labourValues(_ booking: Booking, deletesClearedFields: Bool) -> [String: Any] {
         var data: [String: Any] = [
-            // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody.
-            "operativeId": booking.storedOperativeId,
             // The job id as stored (RULEBOOK 1.7.0 §1); a lower-case or non-UUID job id is never re-spelt.
             "projectId": booking.storedProjectId,
             "date": Timestamp(date: booking.date),
@@ -34,6 +32,9 @@ enum BookingWritePatch {
             "status": booking.status.rawValue,
             "isBreakRemoved": booking.isBreakRemoved
         ]
+        // A Firebase Auth uid stays a uid (web #189). Writing the in-app UUID would book nobody, so an id this phone
+        // cannot resolve is left out; every save refuses that booking first (`BookingPersonResolution`).
+        if let operativeId = booking.writableOperativeId { data["operativeId"] = operativeId }
         func optional(_ key: String, _ value: Any?) {
             if let value {
                 data[key] = value
@@ -150,4 +151,22 @@ enum BookingWritePatch {
         guard let code = firestoreErrorCode(error) else { return false }
         return CanonicalBusinessEngine.bookingReplayRefusedIsFinal(errorCode: code, isCreate: isCreate)
     }
+}
+
+/// A labour booking may be saved only when this phone can say who it is for (`Booking.writableOperativeId`). An id
+/// `Booking.internalOperativeId(for:)` derived from a stored id the phone no longer remembers is no one's id: writing it
+/// would leave the booking under an "Unknown person" (Data health → Bookings not linked to a person). The save is
+/// refused before anything is written or queued; nothing guesses a person.
+enum BookingPersonResolution {
+    static let unresolvedMessage = "This booking could not be saved: the app could not tell who it is for. Close the screen, let the people list load, and try again."
+
+    /// The refusal for `rows`, or nil when every booking names a person this phone can write.
+    static func refusal(_ rows: [Booking]) -> String? {
+        rows.contains { $0.writableOperativeId == nil } ? unresolvedMessage : nil
+    }
+}
+
+/// Thrown by a booking write whose person cannot be resolved (`BookingPersonResolution`). Nothing was written.
+struct UnresolvedBookingPersonError: LocalizedError {
+    var errorDescription: String? { BookingPersonResolution.unresolvedMessage }
 }

@@ -135,7 +135,7 @@ enum MaterialCatalogCSV {
             return MaterialCatalogCSVRow(
                 catalogueId: id.isEmpty ? nil : UUID(uuidString: id),
                 name: row.name,
-                brand: row.brand.isEmpty ? "Custom" : row.brand,
+                brand: CanonicalBusinessEngine.materialBrandStored(row.brand), // RULEBOOK 1.58.0: no brand is ''
                 productCode: row.productCode.isEmpty ? nil : row.productCode,
                 defaultUnit: legacyUnit,
                 orderUnit: row.orderUnit,

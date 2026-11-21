@@ -131,7 +131,7 @@ enum ScheduleWeekGrid {
             guard person.role == .unknown else { return person }
             NSLog(
                 "SCHEDULE_BOOKING_PERSON_UNRESOLVED operativeIds=%@ userIds=%@",
-                person.operativeIds.map { Booking.storedOperativeId(for: $0) }.joined(separator: ","),
+                person.operativeIds.map { Booking.operativeMatchKey(for: $0) }.joined(separator: ","),
                 person.userIds.joined(separator: ",")
             )
             return person
@@ -384,7 +384,7 @@ enum ScheduleWeekGrid {
         operatives: [Operative],
         users: [AppUser]
     ) -> String {
-        let storedId = bucket.operativeIds.first.map { Booking.storedOperativeId(for: $0) } ?? bucket.userIds.first ?? bucket.key
+        let storedId = bucket.operativeIds.first.map { Booking.operativeMatchKey(for: $0) } ?? bucket.userIds.first ?? bucket.key
         let input = bookingPersonInput(operatives: operatives, users: users)
         if let row = CanonicalBusinessEngine.scheduleRowPerson(storedId, input), let label = row.label, !label.isEmpty {
             return label
@@ -528,7 +528,7 @@ enum AccountLabourBooking {
     /// The account a labour booking's `operativeId` names when it is a users id, else nil. Callers look for an
     /// Operatives-list row first. A users id that is itself a UUID (an invite placeholder) is matched too, without case.
     static func account(forOperativeId id: UUID, users: [AppUser]) -> AppUser? {
-        let stored = Booking.storedOperativeId(for: id)
+        let stored = Booking.operativeMatchKey(for: id)
         return users.first {
             $0.id.caseInsensitiveCompare(stored) == .orderedSame
                 || $0.sameEmailUserIds.contains { $0.caseInsensitiveCompare(stored) == .orderedSame }

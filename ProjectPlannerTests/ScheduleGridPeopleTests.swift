@@ -153,7 +153,7 @@ final class ScheduleGridPeopleTests: XCTestCase {
 
         XCTAssertEqual(rows.count, 1, "an id that names nobody keeps its row")
         XCTAssertEqual(rows.first?.role, .unknown)
-        let hint = String(Booking.storedOperativeId(for: stray).prefix(8)).uppercased()
+        let hint = String(Booking.operativeMatchKey(for: stray).prefix(8)).uppercased()
         XCTAssertEqual(rows.first?.name, "Unknown person · \(hint)")
         XCTAssertNil(rows.first.flatMap { ScheduleWeekGrid.saveTarget(for: $0, jobType: .catA) }, "no Quick Add")
     }
