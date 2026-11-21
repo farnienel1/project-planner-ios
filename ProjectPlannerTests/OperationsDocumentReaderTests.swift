@@ -94,7 +94,7 @@ final class OperationsDocumentReaderTests: XCTestCase {
         XCTAssertEqual(loaded.write.first?.id, "c1", "ids match without case and keep the stored spelling")
 
         let item = try XCTUnwrap(FirebaseBackend.materialCatalogItem(documentId: "c1", data: ["name": "A"]))
-        XCTAssertEqual(item.brand, "Custom")
+        XCTAssertEqual(item.brand, "", "RULEBOOK 1.58.0: a missing brand reads as none (shown \"N/A\")")
         XCTAssertEqual(item.category, "Other")
     }
 

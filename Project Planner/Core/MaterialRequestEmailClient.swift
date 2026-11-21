@@ -120,7 +120,8 @@ enum MaterialRequestEmailPayload {
                 // function never reads the line as an older build's edit.
                 "unit": (quantityFields["unit"] as? String) ?? item.unit.rawValue,
             ]
-            if let brand = trimmed(item.brand) { line["brand"] = brand }
+            // RULEBOOK 1.58.0 §28: no brand (blank or the legacy "Custom") is sent as none.
+            if let brand = trimmed(CanonicalBusinessEngine.materialBrandStored(item.brand)) { line["brand"] = brand }
             if let productCode = trimmed(item.productCode) { line["productCode"] = productCode }
             if let notes = trimmed(item.notes) { line["notes"] = notes }
             // Kept for an older `sendEmail` function; 1.48.0 renders `materialLineText` from the three fields below.

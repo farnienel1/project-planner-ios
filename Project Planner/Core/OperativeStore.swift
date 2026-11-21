@@ -44,6 +44,10 @@ class OperativeStore: ObservableObject {
     private(set) var finishedLoadOrganizationId: String?
     @Published var errorMessage: String?
     @Published var isOffline: Bool = false
+    /// The organisation whose `operatives` listener has had a server snapshot (never a cache one) since it was opened.
+    /// Until then this phone's list may be a partial cache copy, so "no row on this email" proves nothing and no row
+    /// is created from it (`UserStore.ensureOperativeProfileForAppUser`).
+    private(set) var operativesServerSnapshotOrganizationId: String?
     
     private(set) var firebaseBackend: FirebaseBackend?
     private var smartCache: SmartCacheService?
@@ -258,6 +262,9 @@ class OperativeStore: ObservableObject {
     /// cache snapshot never empties it. The warnings scan and qualification reminders run again on a change.
     func startLiveUpdates(organizationId: String) {
         guard let firebaseBackend else { return }
+        if operativesServerSnapshotOrganizationId != organizationId {
+            operativesServerSnapshotOrganizationId = nil
+        }
         firebaseBackend.listenOrganizationQuery(
             key: "operatives",
             organizationId: organizationId,
@@ -265,6 +272,7 @@ class OperativeStore: ObservableObject {
             query: { $0.collection("operatives") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
+            if !fromCache { self.markOperativesServerSnapshot(organizationId: organizationId) }
             let incoming = FirebaseBackend.operatives(fromDocuments: rows)
             guard let next = LiveSnapshotMerge.apply(
                 existing: self.operatives,
@@ -320,7 +328,21 @@ class OperativeStore: ObservableObject {
         }
     }
 
+    /// The `operatives` listener answered from the server for `organizationId` (see
+    /// `operativesServerSnapshotOrganizationId`).
+    func markOperativesServerSnapshot(organizationId: String) {
+        operativesServerSnapshotOrganizationId = organizationId
+    }
+
+    /// True once the open organisation's `operatives` list has come from the server (not only this phone's cache).
+    var operativesConfirmedByServer: Bool {
+        guard let confirmed = operativesServerSnapshotOrganizationId,
+              let open = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return false }
+        return confirmed == open
+    }
+
     func discardInMemoryForOrganizationSwitch() {
+        operativesServerSnapshotOrganizationId = nil
         loadGeneration += 1
         pendingReloadAfterCurrentLoad = false
         isLoading = false
@@ -556,14 +578,53 @@ class OperativeStore: ObservableObject {
 
     // MARK: - Operative Operations
     
-    func addOperative(_ operative: Operative) async {
+    /// Why `addOperative` added nothing, shown to the person (`errorMessage` carries the same text).
+    static func addOperativeFailedMessage(_ error: Error) -> String {
+        "Could not add this operative: \(error.localizedDescription) Nothing was saved."
+    }
+
+    /// Creates a new `operatives` row. The row joins this phone's list (and its cache), and so can be booked, only
+    /// once the server has confirmed the create: a failed or refused save leaves nothing behind, so no booking can
+    /// point at a row id that was never stored. Adding people is online only (RULEBOOK §2 `OFFLINE_ACTIONS`,
+    /// `users.invites`): offline it is refused with `OFFLINE_ONLINE_ONLY_MESSAGE`, never queued.
+    /// `isOnline` / `persist` are for tests; by default the device's connection and the Firestore create.
+    /// Returns true only when the row was created.
+    @discardableResult
+    func addOperative(
+        _ operative: Operative,
+        isOnline: Bool? = nil,
+        persist: ((Operative) async -> Result<Void, Error>)? = nil
+    ) async -> Bool {
         print("🔥🔥🔥 DEBUG: ========== ADD OPERATIVE START ==========")
         print("🔥🔥🔥 DEBUG: addOperative called with operative: \(operative.name)")
         print("🔥🔥🔥 DEBUG: Operative ID: \(operative.id.uuidString)")
-        
-        operatives.append(operative)
+        errorMessage = nil
+
+        guard OfflinePolicy.isEnabled(.userInvites, isOnline: isOnline ?? deviceOnline) else {
+            let message = OfflinePolicy.onlineOnlyMessage
+            errorMessage = message.isEmpty ? "Connect to the internet to change this" : message
+            print("🔥🔥🔥 DEBUG: addOperative refused offline — nothing added")
+            return false
+        }
+
         // A new row: created whole. Nothing else on the roster is written.
-        _ = await saveSingleOperativeWithRetry(operative, previous: nil, mode: .create, description: "adding operative \(operative.name)")
+        let result: Result<Void, Error>
+        if let persist {
+            result = await persist(operative)
+        } else {
+            result = await saveSingleOperativeWithRetry(operative, previous: nil, mode: .create, description: "adding operative \(operative.name)")
+        }
+        if case .failure(let error) = result {
+            // Nothing bookable stays on this phone: not in memory, not in the cache.
+            operatives.removeAll { $0.id == operative.id }
+            smartCache?.cacheOperatives(operatives)
+            errorMessage = Self.addOperativeFailedMessage(error)
+            print("🔥🔥🔥 DEBUG: addOperative failed — nothing added: \(error.localizedDescription)")
+            return false
+        }
+        if !operatives.contains(where: { $0.id == operative.id }) {
+            operatives.append(operative)
+        }
         smartCache?.cacheOperatives(operatives)
         
         // Send password setup email to operative
@@ -593,6 +654,7 @@ class OperativeStore: ObservableObject {
         }
         NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
         print("🔥🔥🔥 DEBUG: ========== ADD OPERATIVE END ==========")
+        return true
     }
     
     /// Qualification save already wrote Firestore. Keep this operative in memory without a second full rewrite.
@@ -845,6 +907,7 @@ class OperativeStore: ObservableObject {
     }
 
     private func clearAllData() async {
+        operativesServerSnapshotOrganizationId = nil
         operatives.removeAll()
         managers.removeAll()
         organizationSkills.removeAll()
