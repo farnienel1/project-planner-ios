@@ -32,6 +32,8 @@ struct TimesheetPayrollLineItem: Identifiable, Hashable {
     var bookingOvertimeHours: Double? = nil
     var otMultiplier: Double? = nil
     var otClockHours: Double? = nil
+    /// RULEBOOK 1.61.0 (display only, never stored): an overtime line's own day rate, before the multiplier.
+    var otBaseDayRate: Double? = nil
     /// RULEBOOK 1.43.0 (display only, never stored): the booking's own clock times and break toggle. `details` now shows
     /// only this line's part (`payrollLineClockRanges`), so Edit hours reads the whole booking from these (web
     /// `bookingStartTime` / `bookingEndTime` / `bookingBreakRemoved`).
@@ -276,6 +278,7 @@ enum TimesheetPayrollCollector {
                         bookingId: lineBookingId,
                         otMultiplier: otMultiplier,
                         otClockHours: multiplied?.clockHours ?? otHours,
+                        otBaseDayRate: resolved.basis == .dayRate ? resolved.dayRate : nil,
                         bookingStartTime: hasClockTimes ? bookingStart : nil,
                         bookingEndTime: hasClockTimes ? bookingEnd : nil,
                         bookingBreakRemoved: hasClockTimes ? probe.isBreakRemoved : nil,

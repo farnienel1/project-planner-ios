@@ -534,6 +534,105 @@ extension CanonicalBusinessEngine {
         if text.hasSuffix(".") { text.removeLast() }
         return "\(text)h"
     }
+
+    /// RULEBOOK 1.61.0 §8 (owner decision 17 Nov) `dayRateOvertimeCalcText`: a day-rate overtime line reads in hours —
+    /// "6h × 1.5 = 9h · 9h × £26.47/h (rounded) = £238.24 (£225.00/day ÷ 8.5h)" — never a multiplied day rate. `dayRate`
+    /// is the person's day rate (not multiplied), `dayRateHours` the line's divisor, `pay` the line's amount, already
+    /// priced (shown, never re-worked out). The script does no arithmetic of its own in the text (its hours come from
+    /// `multipliedHoursParts`, its hourly rate from `dayRateHourlyEquivalent`). Nil when the script cannot show it in
+    /// hours (the caller keeps its older text).
+    nonisolated static func dayRateOvertimeCalc(
+        clockHours: Double, multiplier: Double, breakHours: Double,
+        dayRate: Double, dayRateHours: Double, pay: Double, currencyCode: String? = nil
+    ) -> RulebookDayRateOvertimeText? {
+        let input: [String: Any] = [
+            "clockHours": clockHours, "multiplier": multiplier, "breakHours": breakHours,
+            "dayRate": dayRate, "dayRateHours": dayRateHours, "pay": pay,
+            "currency": currencyCode ?? OrganizationRulebookContext.currencyCode,
+        ]
+        guard JSONSerialization.isValidJSONObject(input),
+              let row = callJSON("dayRateOvertimeCalcText", arguments: [input]) as? [String: Any],
+              let text = row["text"] as? String,
+              let paidHours = (row["paidHours"] as? NSNumber)?.doubleValue,
+              let shownPay = (row["pay"] as? NSNumber)?.doubleValue,
+              let hourlyRate = (row["hourlyRate"] as? NSNumber)?.doubleValue else { return nil }
+        return RulebookDayRateOvertimeText(text: text, paidHours: paidHours, pay: shownPay, hourlyRate: hourlyRate)
+    }
+
+    /// `dayRateOvertimeCalc(...)?.text`.
+    nonisolated static func dayRateOvertimeCalcText(
+        clockHours: Double, multiplier: Double, breakHours: Double,
+        dayRate: Double, dayRateHours: Double, pay: Double, currencyCode: String? = nil
+    ) -> String? {
+        dayRateOvertimeCalc(
+            clockHours: clockHours, multiplier: multiplier, breakHours: breakHours,
+            dayRate: dayRate, dayRateHours: dayRateHours, pay: pay, currencyCode: currencyCode
+        )?.text
+    }
+
+    /// RULEBOOK 1.61.0 §8 (review of #378, S1) `signedDayRateOvertimeText`: a SIGNED day-rate overtime line in hours,
+    /// only from the day rate and divisor stored on it at signing and only when `amount` is exactly what they pay; nil
+    /// (the older wording) for a line signed before 1.61.0, an edited or declined line, or any other line. Never a rate
+    /// worked out from the signed amount.
+    nonisolated static func signedDayRateOvertimeText(line: TimesheetWeeklyReportLabourLine, amount: Double, currencyCode: String? = nil) -> String? {
+        let input: [String: Any] = [
+            "isOvertime": line.isOvertime,
+            "payBasis": RulebookJSON.orNull(line.payBasis),
+            "decision": line.decision.rawValue,
+            "paidHours": line.paidHours,
+            "amount": amount,
+            "otMultiplier": RulebookJSON.orNull(line.otMultiplier),
+            "otBaseDayRate": RulebookJSON.orNull(line.otBaseDayRate),
+            "otDayRateHours": RulebookJSON.orNull(line.otDayRateHours),
+            "details": line.details,
+        ]
+        guard JSONSerialization.isValidJSONObject(input),
+              let row = callJSON("signedDayRateOvertimeText", arguments: [input, ["currency": currencyCode ?? OrganizationRulebookContext.currencyCode]]) as? [String: Any]
+        else { return nil }
+        return row["text"] as? String
+    }
+
+    /// RULEBOOK 1.67.0 §8 (final review of web #378) `liveDayRateOvertimeText`: a LIVE day-rate overtime line in hours,
+    /// or nil for the older wording. The script checks that the text shows the line's own figures (its hours are the
+    /// line's paid hours × the multiplier, and `amount` is exactly what `payForHours` pays for them at that day rate and
+    /// divisor), so no Swift copy of that check is kept. `clockHours` / `breakHours` come from the line's multiplied
+    /// text when it has one (nil: the script uses the paid hours as clock hours).
+    nonisolated static func liveDayRateOvertimeText(
+        paidHours: Double, clockHours: Double?, breakHours: Double?, multiplier: Double,
+        dayRate: Double, dayRateHours: Double, amount: Double, currencyCode: String? = nil
+    ) -> String? {
+        let line: [String: Any] = [
+            "paidHours": paidHours,
+            "clockHours": RulebookJSON.orNull(clockHours),
+            "breakHours": RulebookJSON.orNull(breakHours),
+            "multiplier": multiplier,
+            "dayRate": dayRate,
+            "dayRateHours": dayRateHours,
+            "amount": amount,
+        ]
+        guard JSONSerialization.isValidJSONObject(line),
+              let row = callJSON("liveDayRateOvertimeText", arguments: [line, ["currency": currencyCode ?? OrganizationRulebookContext.currencyCode]]) as? [String: Any]
+        else { return nil }
+        return row["text"] as? String
+    }
+
+    /// RULEBOOK 1.61.0 §8 `dayRateHourlyEquivalent`: the hourly rate shown for a day rate on one part — the day rate ÷
+    /// the divisor rounded to pennies (display only; pay never uses it). Nil when the script refuses it.
+    nonisolated static func dayRateHourlyEquivalent(dayRate: Double, dayRateHours: Double) -> Double? {
+        guard let row = callJSON("dayRateHourlyEquivalent", arguments: [dayRate, dayRateHours]) as? [String: Any] else { return nil }
+        return (row["hourlyRate"] as? NSNumber)?.doubleValue
+    }
+}
+
+/// RULEBOOK 1.61.0 §8: the hours wording of a day-rate overtime line and the figures it shows.
+nonisolated struct RulebookDayRateOvertimeText: Hashable, Sendable {
+    let text: String
+    /// The hours the text shows the line paying (clock × N − break).
+    let paidHours: Double
+    /// The amount the text shows (the line's amount in pennies).
+    let pay: Double
+    /// The hourly rate shown (`dayRateHourlyEquivalent`).
+    let hourlyRate: Double
 }
 
 /// A memoised `payrollMultipliedHours` answer, including "no hours at a multiplier".
