@@ -22,15 +22,26 @@ final class VariationStore: ObservableObject {
     init(parentId: String, parentType: VariationParentType) {
         self.parentId = parentId
         self.parentType = parentType
-        self.tracker = .disabled(parentId: parentId, parentType: parentType)
+        // RULEBOOK 1.63.0: until the tracker document loads, a job reads as having none — on by default.
+        self.tracker = VariationCodec.tracker(from: [:], parentId: parentId, parentType: parentType)
     }
 
     var visibleVariations: [Variation] {
         let live = variations.filter { !$0.isDeleted }
         if tracker.enabled {
+            // RULEBOOK 1.63.0 `variationTrackerOrder` (sequence, VO number, id): the tracker's own order.
+            let rows: [[String: Any]] = live.map { ["id": $0.id, "voNumber": $0.voNumber, "sequence": $0.sequence] }
+            if let order = CanonicalBusinessEngine.variationTrackerOrder(rows: rows) {
+                var rank: [String: Int] = [:]
+                for (index, id) in order.enumerated() { rank[id.lowercased()] = index }
+                return live.sorted { (rank[$0.id.lowercased()] ?? Int.max) < (rank[$1.id.lowercased()] ?? Int.max) }
+            }
+            // Only when the script does not answer: the same order (sequence, then VO number, then id).
             return live.sorted {
                 if $0.sequence != $1.sequence { return $0.sequence < $1.sequence }
-                return $0.createdAt > $1.createdAt
+                let byNumber = $0.voNumber.localizedStandardCompare($1.voNumber)
+                if byNumber != .orderedSame { return byNumber == .orderedAscending }
+                return $0.id.lowercased() < $1.id.lowercased()
             }
         }
         return live.sorted { $0.createdAt > $1.createdAt }
