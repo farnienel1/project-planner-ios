@@ -584,11 +584,12 @@ struct OperativeCustomHoursSheet: View {
     private let dayBreakMinutes: Int
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): shown before saving hours that cover the unpaid break.
     @State private var breakWarningMessage: String?
-    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for `noteDays` at the times on screen; empty on weekdays. Worked
-    /// out when the times change, never per redraw.
-    @State private var weekendBreakdownLines: [RulebookBreakdownSection] = []
-    /// RULEBOOK 1.39.0 `bookingHoursExplanation` for a weekday selection (the weekend rows carry their own).
-    @State private var weekdayExplanationSections: [RulebookBreakdownSection] = []
+    /// The selection holds a Saturday or Sunday (`isWeekendDayKey`): the figures then stay out of the navy header, as
+    /// before 1.62.0. Worked out when the times change, never per redraw.
+    @State private var selectionHasWeekend = false
+    /// RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays` for `noteDays` at the times on screen ("How the hours add up").
+    /// Worked out when the times, break or rate change, never per redraw.
+    @State private var hoursBreakdown: RulebookHoursBreakdown?
     /// Which time tile has its wheel open (none until a tile is tapped).
     @State private var expandedTimeField: TimeField? = nil
     @State private var showingRateSheet = false
@@ -863,7 +864,7 @@ struct OperativeCustomHoursSheet: View {
     /// The breakdown figures move into the navy header ("AT A GLANCE" + stat row) when there is one breakdown for the
     /// day on screen. A weekend selection keeps its per-day rows (`weekendBookingBreakdown`) in the sheet instead.
     private var showsGlance: Bool {
-        showsBreakdown && weekendBreakdownLines.isEmpty && endMinutes > startMinutes
+        showsBreakdown && !selectionHasWeekend && endMinutes > startMinutes
     }
 
     /// "· break included" in THE DAY card: the old footer "The break is included within this booking." (same condition).
@@ -1168,11 +1169,9 @@ struct OperativeCustomHoursSheet: View {
                control.show || otRate != nil || createRateControl != nil {
                 overtimeRateCard(control)
             }
-            if showsBreakdown && !weekendBreakdownLines.isEmpty {
-                weekendBreakdownCard
-            }
-            if showsBreakdown && weekendBreakdownLines.isEmpty && !weekdayExplanationSections.isEmpty {
-                weekdayExplanationCard
+            if showsBreakdown, let hoursBreakdown {
+                // RULEBOOK 1.62.0: Normal hours / Overtime / Total paid hours, the same text as web.
+                HoursBreakdownCardView(breakdown: hoursBreakdown)
             }
             if let amountPreview {
                 HStack {
@@ -1627,17 +1626,16 @@ struct OperativeCustomHoursSheet: View {
         "\(startText)|\(endText)|\(breakIncluded)|\(otRate.map { String($0) } ?? "org")"
     }
 
-    /// RULEBOOK 1.18.0 §4.3 `weekendBookingBreakdown`: per-day rows for a selection with a Saturday or Sunday (not when
-    /// the times are not a valid same-day window). RULEBOOK 1.43.0 §25: the rows and the weekday explanation price the
-    /// booking's own overtime rate on screen (`resolvedOtMultiplierOverride`; nil = the organisation's), so the preview is
-    /// what the booking is paid and no "shown at the organisation rate" note is needed.
+    /// RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: "How the hours add up" for every booked day (not when the times
+    /// are not a valid same-day window). RULEBOOK 1.43.0 §25: priced at the booking's own overtime rate on screen
+    /// (`resolvedOtMultiplierOverride`; nil = the organisation's), so the card is what the booking is paid.
     private func refreshWeekendBreakdown() {
+        selectionHasWeekend = noteDays.contains { CanonicalBusinessEngine.isWeekendDayKey(CanonicalBusinessEngine.bookingDayKey($0)) }
         guard endMinutes > startMinutes else {
-            weekendBreakdownLines = []
-            weekdayExplanationSections = []
+            hoursBreakdown = nil
             return
         }
-        weekdayExplanationSections = CanonicalBusinessEngine.weekdayExplanationSections(
+        hoursBreakdown = CanonicalBusinessEngine.hoursBreakdown(
             on: noteDays,
             start: startText,
             end: endText,
@@ -1645,30 +1643,6 @@ struct OperativeCustomHoursSheet: View {
             fallbackPolicy: policy,
             otMultiplierOverride: resolvedOtMultiplierOverride
         )
-        weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
-            CanonicalBusinessEngine.weekendBookingBreakdown(
-                on: noteDays,
-                start: startText,
-                end: endText,
-                isBreakRemoved: !breakIncluded,
-                fallbackPolicy: policy,
-                otMultiplierOverride: resolvedOtMultiplierOverride
-            )
-        )
-    }
-
-    /// RULEBOOK 1.39.0: the weekday rule and the steps behind the hours (`bookingHoursExplanation`, 1.43.0: at the
-    /// booking's own rate).
-    private var weekdayExplanationCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            WeekendBookingBreakdownView(sections: weekdayExplanationSections, title: "How the hours add up")
-        }
-    }
-
-    private var weekendBreakdownCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            WeekendBookingBreakdownView(sections: weekendBreakdownLines, title: "Breakdown")
-        }
     }
 
     private func validateAndSave(breakWarningConfirmed: Bool = false) {

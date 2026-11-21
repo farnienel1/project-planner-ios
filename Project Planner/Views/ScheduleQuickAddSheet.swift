@@ -220,12 +220,6 @@ struct ScheduleQuickAddSheet: View {
             workEndTime: range.end
         )
         let paid = probe.paidBookedHours(policy: policy)
-        let detail = BookingEditHoursBreakdown.compute(
-            booking: probe,
-            policy: policy,
-            day: day,
-            breakIncluded: true
-        )
         let total = existingPaidHours + paid
         // RULEBOOK 1.39.0 `bookingShortfall` (review 11 Nov): how much of the day's working time the existing bookings
         // and this one leave unbooked, by coverage (lunch window excluded) — never paid hours; none on a day paid every
@@ -233,40 +227,22 @@ struct ScheduleQuickAddSheet: View {
         let shortfall = CanonicalBusinessEngine.bookingShortfall(
             on: day, bookings: existingCoverageRows + [CanonicalBusinessEngine.shortfallRow(probe)], fallbackPolicy: policy
         )
-        // RULEBOOK 1.39.0 `bookingHoursExplanation`: the weekday rule and the steps behind the figures.
-        let weekdaySections = CanonicalBusinessEngine.weekdayExplanationSections(
-            on: [day], start: range.start, end: range.end, isBreakRemoved: false, fallbackPolicy: policy
-        )
-        // RULEBOOK 1.18.0 `weekendBookingBreakdown`: a Saturday or Sunday shows the day as the pay rule prices it in
-        // place of the standard / overtime lines (memoised by input in the wrapper). Saved with the break kept.
-        // 1.39.0: each row with the words that explain it (`collapsedBreakdownSections`).
-        let weekendLines = CanonicalBusinessEngine.collapsedBreakdownSections(
-            CanonicalBusinessEngine.weekendBookingBreakdown(
-                on: [day],
-                start: range.start,
-                end: range.end,
-                isBreakRemoved: false,
-                fallbackPolicy: policy
-            )
+        // RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: Normal hours / Overtime / Total paid hours for this slot and
+        // its times (saved with the break kept), the same text as web. Replaces the 1.18.0 per-day rows and the 1.39.0
+        // explanation.
+        let hoursBreakdown = CanonicalBusinessEngine.hoursBreakdown(
+            on: [day],
+            timeSlot: timeSlot.rawValue,
+            start: range.start,
+            end: range.end,
+            isBreakRemoved: false,
+            fallbackPolicy: policy
         )
         return VStack(alignment: .leading, spacing: 6) {
             sectionLabel("Hours breakdown")
             VStack(alignment: .leading, spacing: 4) {
-                if weekendLines.isEmpty {
-                    breakdownLine("Standard rate", value: "\(ScheduleCoverageFormat.hours(detail.standardRateHours))h · 1×", color: ProjectWorksRevampColors.blue)
-                    if detail.overtimeHours > 0.05 {
-                        breakdownLine(
-                            "Overtime",
-                            value: detail.overtimeText,
-                            color: ProjectWorksRevampColors.upcomingAmber
-                        )
-                    }
-                    if detail.showsBreakLine {
-                        breakdownLine("Break", value: "−\(ScheduleCoverageFormat.hours(detail.breakDeductionHours))h", color: ProjectWorksRevampColors.requiredPillFg)
-                    }
-                    BookingBreakdownSectionsView(sections: weekdaySections)
-                } else {
-                    BookingBreakdownSectionsView(sections: weekendLines)
+                if let hoursBreakdown {
+                    HoursBreakdownCardView(breakdown: hoursBreakdown)
                 }
                 breakdownLine("Existing booked", value: "\(ScheduleCoverageFormat.hours(existingPaidHours))h", color: ProjectWorksRevampColors.muted)
                 breakdownLine("New booking", value: "\(ScheduleCoverageFormat.hours(paid))h", color: ProjectWorksRevampColors.activeGreen)

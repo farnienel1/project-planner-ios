@@ -580,9 +580,9 @@ fileprivate struct ManagerCustomHoursSheet: View {
     @State private var errorMessage: String?
     /// `customHoursBreakWarning` (RULEBOOK 1.13.0 §8): the confirm step before saving hours over the unpaid break.
     @State private var breakWarningMessage: String?
-    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for the request's days, worked out when the times change.
-    /// RULEBOOK 1.18.0 weekend rows, or (1.39.0) the weekday explanation — each with the words behind its figure.
-    @State private var weekendBreakdownLines: [RulebookBreakdownSection] = []
+    /// Worked out when the times, break or rate change, never per redraw.
+    /// RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: "How the hours add up" (Normal / Overtime / Total paid hours).
+    @State private var hoursBreakdown: RulebookHoursBreakdown?
     /// RULEBOOK 1.19.0 `unpaidBreakAppliesOnDay`: the "No break" toggle only when a booked day takes an unpaid break off.
     private let breakApplies: Bool
 
@@ -631,7 +631,9 @@ fileprivate struct ManagerCustomHoursSheet: View {
                     if !context.days.isEmpty {
                         WeekendBookingNoteView(days: context.days, policy: policy)
                     }
-                    WeekendBookingBreakdownView(sections: weekendBreakdownLines)
+                    if let hoursBreakdown {
+                        HoursBreakdownCardView(breakdown: hoursBreakdown)
+                    }
                     // RULEBOOK 1.32.0 §25: pre-filled with the first booked day's organisation rate
                     // (`overtimeRateCreateControl`); each day is stored against its own rate on save.
                     BookingCreateOvertimeRateField(day: context.days.first ?? Date(), rate: $overtimeRate)
@@ -651,17 +653,13 @@ fileprivate struct ManagerCustomHoursSheet: View {
                 let start = startText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let end = endText.trimmingCharacters(in: .whitespacesAndNewlines)
                 // RULEBOOK 1.43.0 §25: priced at the rate on screen (nil = the organisation's).
-                weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
-                    CanonicalBusinessEngine.weekendBookingBreakdown(
-                        on: context.days,
-                        start: start,
-                        end: end,
-                        isBreakRemoved: breakRemoved,
-                        fallbackPolicy: policy,
-                        otMultiplierOverride: overtimeRate
-                    )
-                ) + CanonicalBusinessEngine.weekdayExplanationSections(
-                    on: context.days, start: start, end: end, isBreakRemoved: breakRemoved, fallbackPolicy: policy,
+                // RULEBOOK 1.62.0: one card per group of days that read the same.
+                hoursBreakdown = CanonicalBusinessEngine.hoursBreakdown(
+                    on: context.days,
+                    start: start,
+                    end: end,
+                    isBreakRemoved: breakRemoved,
+                    fallbackPolicy: policy,
                     otMultiplierOverride: overtimeRate
                 )
             }
@@ -2490,9 +2488,9 @@ fileprivate struct ManagerSelfBookingEntryView: View {
     @State private var startTime: Date
     @State private var endTime: Date
     @State private var errorMessage: String?
-    /// RULEBOOK 1.18.0 `weekendBookingBreakdown` lines for this day, worked out when the times change.
-    /// RULEBOOK 1.18.0 weekend rows, or (1.39.0) the weekday explanation — each with the words behind its figure.
-    @State private var weekendBreakdownLines: [RulebookBreakdownSection] = []
+    /// Worked out when the times or rate change, never per redraw.
+    /// RULEBOOK 1.62.0 §4.3 `bookingHoursBreakdownDays`: "How the hours add up" (Normal / Overtime / Total paid hours).
+    @State private var hoursBreakdown: RulebookHoursBreakdown?
 
     init(
         day: Date,
@@ -2544,8 +2542,8 @@ fileprivate struct ManagerSelfBookingEntryView: View {
                     }
                 }
                 WeekendBookingNoteView(day: day, policy: policy)
-                if selectedSlot == .customHours {
-                    WeekendBookingBreakdownView(sections: weekendBreakdownLines)
+                if selectedSlot == .customHours, let hoursBreakdown {
+                    HoursBreakdownCardView(breakdown: hoursBreakdown)
                 }
 
                 VStack(spacing: 10) {
@@ -2621,17 +2619,12 @@ fileprivate struct ManagerSelfBookingEntryView: View {
         .onChange(of: "\(hhmm(startTime))|\(hhmm(endTime))|\(overtimeRate.map { String($0) } ?? "org")", initial: true) { _, _ in
             // Saved with the break kept (`breakRemoved: false`), as the booking flow writes it. RULEBOOK 1.43.0 §25:
             // priced at the rate on screen (nil = the organisation's).
-            weekendBreakdownLines = CanonicalBusinessEngine.collapsedBreakdownSections(
-                CanonicalBusinessEngine.weekendBookingBreakdown(
-                    on: [day],
-                    start: hhmm(startTime),
-                    end: hhmm(endTime),
-                    isBreakRemoved: false,
-                    fallbackPolicy: policy,
-                    otMultiplierOverride: overtimeRate
-                )
-            ) + CanonicalBusinessEngine.weekdayExplanationSections(
-                on: [day], start: hhmm(startTime), end: hhmm(endTime), isBreakRemoved: false, fallbackPolicy: policy,
+            hoursBreakdown = CanonicalBusinessEngine.hoursBreakdown(
+                on: [day],
+                start: hhmm(startTime),
+                end: hhmm(endTime),
+                isBreakRemoved: false,
+                fallbackPolicy: policy,
                 otMultiplierOverride: overtimeRate
             )
         }
