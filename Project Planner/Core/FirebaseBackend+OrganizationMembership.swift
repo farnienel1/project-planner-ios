@@ -257,45 +257,6 @@ extension FirebaseBackend {
         return out
     }
 
-    /// Restores the destination membership onto `users/{uid}` and copies `accountActive`
-    /// onto `isActive` (missing `accountActive` means active). Returns that flag.
-    @discardableResult
-    func applyDestinationMembershipOntoUser(
-        userId: String,
-        organizationId: String,
-        roleInOrg: String,
-        userEmail: String
-    ) async throws -> Bool {
-        let orgId = normalizedOrganizationId(organizationId)
-        let userDocRef = db.collection("users").document(userId)
-        let membershipSnap = try await orgMembershipsCollection(userId: userId).document(orgId).getDocument(source: .server)
-        let accountActive = firestoreAccountActive(from: membershipSnap.data())
-
-        if membershipSnap.exists, var dest = membershipSnap.data() {
-            dest.removeValue(forKey: "accountActive")
-            dest["organizationId"] = orgId
-            dest["role"] = roleInOrg
-            dest["isActive"] = accountActive
-            dest["updatedAt"] = Timestamp(date: Date())
-            if dest["email"] == nil {
-                dest["email"] = userEmail
-            }
-            try await userDocRef.setData(dest, merge: true)
-        } else {
-            try await userDocRef.setData(
-                [
-                    "email": userEmail,
-                    "organizationId": orgId,
-                    "role": roleInOrg,
-                    "isActive": accountActive,
-                    "updatedAt": Timestamp(date: Date())
-                ],
-                merge: true
-            )
-        }
-        return accountActive
-    }
-
     @MainActor
     func switchActiveOrganization(to organizationId: String) async throws {
         guard let userId = currentUser?.uid,

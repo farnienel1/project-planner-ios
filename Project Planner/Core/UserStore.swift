@@ -354,14 +354,30 @@ class UserStore: ObservableObject {
         }
     }
 
-    /// Ensures an `operatives` roster row exists for this app user (matched by email) so qualifications can attach.
+    /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).
+    /// The person's own row is matched by their ids and email only (`operativeRow(for:in:)`, `bookingIdsForAccount`),
+    /// never by name. A missing row is created only by staff (never from an operative-level account) and only once the
+    /// `operatives` list has come from the server — a cache copy without the row proves nothing and created duplicates
+    /// with random ids. The create is confirmed by the server before the row is used (`OperativeStore.addOperative`).
+    /// Nil when nothing may be created or the create failed; `operativeProfileLinkError` then says why.
     func ensureOperativeProfileForAppUser(_ user: AppUser, operativeStore: OperativeStore) async -> Operative? {
-        let emailNorm = user.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !emailNorm.isEmpty else { return nil }
-        if let existing = operativeStore.allOperatives.first(where: {
-            $0.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) == emailNorm
-        }) {
-            return existing
+        operativeProfileLinkError = nil
+        let rows = operativeStore.allOperatives
+        let decision = OperativeProfileLinkPolicy.decide(
+            subject: user,
+            actorLevel: currentUser?.permissionLevel,
+            operatives: rows,
+            bookingIds: OperativeProfileLinkPolicy.bookingIds(for: user, operatives: rows),
+            listConfirmedByServer: operativeStore.operativesConfirmedByServer
+        )
+        switch decision {
+        case .existing(let id):
+            return rows.first { $0.id == id }
+        case .refuseListNotLoaded, .refuseNotStaff, .refuseCannotMatch:
+            operativeProfileLinkError = OperativeProfileLinkPolicy.message(for: decision)
+            return nil
+        case .create:
+            break
         }
         let first = user.firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             ? (String(user.email.split(separator: "@").first ?? "User"))
@@ -378,9 +394,15 @@ class UserStore: ObservableObject {
             tradeTypePreset: user.tradeTypePreset,
             tradeTypeCustom: user.tradeTypeCustom
         )
-        await operativeStore.addOperative(op)
+        guard await operativeStore.addOperative(op) else {
+            operativeProfileLinkError = operativeStore.errorMessage ?? OperativeProfileLinkPolicy.cannotMatchMessage
+            return nil
+        }
         return operativeStore.allOperatives.first(where: { $0.id == op.id }) ?? op
     }
+
+    /// Why the last `ensureOperativeProfileForAppUser` returned nil (shown by the screen that asked).
+    @Published var operativeProfileLinkError: String?
     
     /// Effective user for UI and permission helpers (respects role testing).
     /// RULEBOOK §8: built from `currentUserWithPay` (the signed-in person's own pay profile laid over while `privatePay`
@@ -471,6 +493,27 @@ class UserStore: ObservableObject {
         return u
     }
     
+    /// Mass-assignment audit 17 Nov: a confirmed-missing `users/{uid}` is re-created (as the Super Admin) only for the
+    /// organisation's creator.
+    /// The rulebook decides (`isOrganizationSuperAdmin`, review of #263): with no profile there is no stored flag, so
+    /// only the creator matches. A blank uid, a blank creator, or no answer from the script never matches.
+    nonisolated static func mayRecreateOwnProfileAsSuperAdmin(uid: String, organizationId: String, organizationCreatorUserId: String?) -> Bool {
+        let creator = (organizationCreatorUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let me = uid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !creator.isEmpty, !me.isEmpty else { return false }
+        return CanonicalBusinessEngine.isOrganizationSuperAdmin(
+            viewerId: me,
+            viewerIsSuperAdmin: false,
+            viewerOrganizationId: nil,
+            organizationId: organizationId,
+            creatorUserId: creator
+        ) == true
+    }
+
+    /// Shown when the signed-in person's profile is missing from the open organisation and they are not its creator.
+    static let missingOwnProfileMessage =
+        "Your profile was not found in this organisation. Ask an admin to add you again."
+
     // MARK: - User Management
     
     func loadCurrentUser() async {
@@ -509,7 +552,14 @@ class UserStore: ObservableObject {
                         userData = existing
                     case .unconfirmed, .permissionDenied:
                         print("🔥🔥🔥 DEBUG: Not creating a user document — the server did not confirm users/\(firebaseUser.uid) is missing")
-                    case .confirmedMissing:
+                    case .confirmedMissing where Self.mayRecreateOwnProfileAsSuperAdmin(
+                        uid: firebaseUser.uid,
+                        organizationId: organization.firestoreDocumentId,
+                        organizationCreatorUserId: organization.creatorUserId
+                    ):
+                        // Mass-assignment audit 17 Nov: only the organisation's creator re-creates their own missing
+                        // profile, and only as its Super Admin (RULEBOOK §16: a self-created profile is super admin
+                        // only for the creator). Anyone else never writes their own privileged profile.
                         let superAdminPermissions = UserPermissions(
                             adminAccess: true,
                             operatives: true,
@@ -535,6 +585,11 @@ class UserStore: ObservableObject {
                             policyAcceptedAt: nil
                         )
                         try await firebaseBackend.saveUser(userData!)
+                    case .confirmedMissing:
+                        // Not the creator: no profile is written from this device (the security rules would refuse a
+                        // privileged self-create, and a plain one would hide the real problem). An admin re-adds them.
+                        print("🔥🔥🔥 DEBUG: Not creating users/\(firebaseUser.uid) — only the organisation's creator re-creates their own profile")
+                        errorMessage = Self.missingOwnProfileMessage
                     }
                 }
 
@@ -1929,6 +1984,18 @@ class UserStore: ObservableObject {
         return false
     }
     
+    /// 17 Nov (owner bug, Super Admin never PAYE): may the signed-in person save `target`'s employment type and annual
+    /// leave allowance from Edit user? Being the Super Admin (or the organisation creator) is never a reason to refuse
+    /// (rulebook §4.4, §8); only the Super Admin edits their own profile (`canEditTargetUserPermissions`). Everyone else
+    /// is not decided here: `canChangePersonPay` (employment type) and the leave saves' own admin / operatives-manager
+    /// checks follow, and the security rules have the last word. Used by `updateUserEmploymentType`,
+    /// `updateUserAnnualLeaveEntitlement` and `updateUserAnnualLeaveEnabled`.
+    func mayChangeEmploymentAndLeaveFields(of target: AppUser) -> Bool {
+        guard currentUser != nil else { return false }
+        if isProtectedSuperAdmin(target) { return canEditTargetUserPermissions(target) }
+        return true
+    }
+
     /// The signed-in person and `target` are one person (their id or a folded same-email id).
     private func isSamePerson(_ acting: AppUser, _ target: AppUser) -> Bool {
         let ids = Set(([acting.id] + acting.sameEmailUserIds).map { $0.lowercased() })
@@ -2128,78 +2195,21 @@ class UserStore: ObservableObject {
             return false
         }
         
-        // CRITICAL: Before creating a user, ensure the current user has admin permissions
-        // Check the ACTUAL Firebase document (not just in-memory object) and fix if needed
         guard let currentUserId = firebaseBackend.currentUser?.uid else {
-            print("🔥🔥🔥 DEBUG: ⚠️ No current user ID available")
             errorMessage = "Unable to identify current user. Please sign in again."
             return false
         }
-        
-        // Whether the inviter is an admin, from their stored document; nil when it could not be read (the rules decide).
-        var inviterIsAdmin: Bool?
-        // Load the actual user document from Firebase to check permissions
-        if let firebaseUserData = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            print("🔥🔥🔥 DEBUG: Current user (inviter) Firebase document data:")
-            print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-            print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-            print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            
-            // Check if user has admin permissions in Firebase
-            let hasAdmin = firebaseUserData.isSuperAdmin || firebaseUserData.permissions.adminAccess || firebaseUserData.role == .admin
-            inviterIsAdmin = hasAdmin
-            let canInviteOperativesAsManager =
-                !hasAdmin &&
-                !firebaseUserData.permissions.operativeMode &&
-                firebaseUserData.permissions.manager &&
-                firebaseUserData.permissions.operatives
-
-            if !hasAdmin && !canInviteOperativesAsManager {
-                print("🔥🔥🔥 DEBUG: ⚠️ Current user does NOT have admin permissions in Firebase!")
-                errorMessage = "You do not have admin permissions. Please contact an administrator."
-                return false
-            }
-
-            // Managers with Operative Management can ONLY invite operatives
-            if canInviteOperativesAsManager {
-                guard permissions.operativeMode else {
-                    errorMessage = "Managers can only add operatives."
-                    return false
-                }
-            }
-
-            if hasAdmin {
-                print("🔥🔥🔥 DEBUG: ✅ Current user HAS admin permissions in Firebase")
-                print("🔥🔥🔥 DEBUG: - isSuperAdmin: \(firebaseUserData.isSuperAdmin)")
-                print("🔥🔥🔥 DEBUG: - adminAccess: \(firebaseUserData.permissions.adminAccess)")
-                print("🔥🔥🔥 DEBUG: - role: \(firebaseUserData.role.rawValue)")
-            } else {
-                print("🔥🔥🔥 DEBUG: ✅ Current user can invite operatives as manager")
-            }
-        } else {
-            print("🔥🔥🔥 DEBUG: ⚠️ Current user document does not exist in Firebase!")
-            errorMessage = "Your user document does not exist. Please sign out and sign back in."
+        // Mass-assignment review of #263 (nit 4): one check, the inviter's level in THIS organisation
+        // (`organizationLevelFor`) — never the home company's flags. A non-admin may invite only an operative; the
+        // invitation written is checked again (`InvitationDocument.requireAllowed`) and by the security rules.
+        guard let inviterIsAdmin = await firebaseBackend.inviterIsAdmin(uid: currentUserId, organizationId: organizationId) else {
+            errorMessage = "Couldn't check your permissions. Try again."
             return false
         }
-        
-        // Double-check: admins must still be admins; managers inviting operatives skip this admin-only gate.
-        print("🔥🔥🔥 DEBUG: Final verification - checking user document one more time...")
-        if let finalCheck = try? await firebaseBackend.getUserData(userId: currentUserId) {
-            let hasAdmin = finalCheck.isSuperAdmin || finalCheck.permissions.adminAccess || finalCheck.role == .admin
-            let managerInvitingOperative =
-                !hasAdmin &&
-                !finalCheck.permissions.operativeMode &&
-                finalCheck.permissions.manager &&
-                finalCheck.permissions.operatives &&
-                permissions.operativeMode
-            print("🔥🔥🔥 DEBUG: Final check - hasAdmin: \(hasAdmin), managerInvitingOperative: \(managerInvitingOperative)")
-            if !hasAdmin && !managerInvitingOperative {
-                print("🔥🔥🔥 DEBUG: ⚠️ WARNING: User still doesn't have admin permissions after fix attempt!")
-                errorMessage = "Your user document does not have admin permissions. Please ensure isSuperAdmin=true, adminAccess=true, or role='admin' in Firebase Console. User ID: \(currentUserId)"
-                return false
-            }
+        if !inviterIsAdmin && !permissions.operativeMode {
+            errorMessage = "Managers can only add operatives."
+            return false
         }
-        
         print("🔥🔥🔥 DEBUG: Calling createUserInvitation with organizationId: \(organizationId), invitedBy: \(invitedBy)")
         print("🔥🔥🔥 DEBUG: Current user ID for rules check: \(currentUserId)")
         
@@ -3194,14 +3204,13 @@ class UserStore: ObservableObject {
         carriesOver: Bool,
         yearAllowance: Double? = nil,
         yearAllowanceKey: String? = nil,
-        writeYearAllowance: Bool = false
+        writeYearAllowance: Bool = false,
+        fields: Set<String>? = nil
     ) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
         let clampedDays = AnnualLeavePolicy.clampDaysPerYear(daysPerYear)
         let sm = AnnualLeavePolicy.clampMonth(startMonth)
         let em = AnnualLeavePolicy.clampMonth(endMonth)
@@ -3228,7 +3237,8 @@ class UserStore: ObservableObject {
                 carriesOver: carriesOver,
                 yearAllowance: yearAllowance,
                 yearAllowanceKey: yearAllowanceKey,
-                writeYearAllowance: writeYearAllowance
+                writeYearAllowance: writeYearAllowance,
+                fields: fields
             )
             organizationUsers[index] = updated
             if var cu = currentUser, cu.id == userId {
@@ -3274,11 +3284,8 @@ class UserStore: ObservableObject {
     func updateUserAnnualLeaveEnabled(userId: String, enabled: Bool) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let index = rosterIndex(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         var updated = organizationUsers[index]
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
 
         updated.annualLeaveEnabled = enabled
 
@@ -3304,14 +3311,11 @@ class UserStore: ObservableObject {
     func updateUserEmploymentType(userId: String, employmentType: EmploymentType, effectiveAt: Date? = nil) async -> Bool {
         guard let firebaseBackend = firebaseBackend else { return false }
         guard let storedRow = rosterRow(for: userId) else { return false }
-        if isOrganizationCreator(userId: userId) { return false }
         // RULEBOOK 1.26.1 §8 `CanonicalBusinessEngine.payEditorStartingValues`: the previous employment type is the
         // pay editor's record (the pay profile while `privatePay` is on; the users document as stored while it is off).
         var updated = await payEditorRecord(for: storedRow)
         guard let index = rosterIndex(for: userId) else { return false }
-        if updated.isSuperAdmin || isOrganizationCreator(userId: updated.id) {
-            return false
-        }
+        guard mayChangeEmploymentAndLeaveFields(of: updated) else { return false }
         // RULEBOOK §8: employment type is pay, so it follows `canChangePersonPay`.
         guard canChangePay(of: updated) else {
             errorMessage = Self.payChangeRefusedMessage
@@ -3576,7 +3580,7 @@ class UserStore: ObservableObject {
         }
         guard let result = CanonicalBusinessEngine.payRateChangeWrites(
             userId: user.id,
-            operativeId: operativeId.map { Booking.storedOperativeId(for: $0) },
+            operativeId: operativeId.flatMap { Booking.storedOperativeId(for: $0) },
             previous: (previous.amount, previous.basis == "hourly" ? "hourly" : "day"),
             next: (nextAmount, nextBasis == "hourly" ? "hourly" : "day"),
             historyRowIds: historyIds,
@@ -3886,6 +3890,15 @@ class UserStore: ObservableObject {
              
              /// The organisation open on this device — every invitation Manage Users writes is for it (AGENTS rule 2;
              /// never `user.organizationId`, the person's home company). Throws when none is open.
+             /// Mass-assignment review of #263: whether the signed-in user is an admin of `organizationId`, read for that
+             /// organisation (`FirebaseBackend.inviterIsAdmin`). Throws when it cannot be read: no invitation is written then.
+             func requireInviterIsAdmin(organizationId: String) async throws -> Bool {
+                 guard let firebaseBackend, let uid = firebaseBackend.currentUser?.uid,
+                       let isAdmin = await firebaseBackend.inviterIsAdmin(uid: uid, organizationId: organizationId)
+                 else { throw InvitationCheckUnavailableError() }
+                 return isAdmin
+             }
+
              func requireOpenOrganizationId() throws -> String {
                  let id = firebaseBackend?.currentOrganization?.firestoreDocumentId.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                  guard !id.isEmpty else {

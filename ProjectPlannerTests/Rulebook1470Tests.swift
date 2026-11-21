@@ -31,7 +31,7 @@ final class Rulebook1470Tests: XCTestCase {
 
     private var day: Date { OrganizationRulebookContext.date(fromDayKey: dayKey)! }
 
-    private var personId: String { Booking.storedOperativeId(for: operativeUUID) }
+    private var personId: String { Booking.operativeMatchKey(for: operativeUUID) }
 
     private func booking(
         id: UUID? = nil,

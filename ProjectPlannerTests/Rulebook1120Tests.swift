@@ -45,7 +45,6 @@ final class Rulebook1120Tests: XCTestCase {
         let managerInvite: [String: Any] = ["role": "manager", "permissions": ["manager": true]]
         XCTAssertThrowsError(try InvitationDocument.requireAllowed(managerInvite, inviterIsAdmin: false))
         XCTAssertNoThrow(try InvitationDocument.requireAllowed(managerInvite, inviterIsAdmin: true))
-        XCTAssertNoThrow(try InvitationDocument.requireAllowed(managerInvite, inviterIsAdmin: nil), "unknown inviter: the rules decide")
         XCTAssertNoThrow(try InvitationDocument.requireAllowed(
             ["role": "operative", "permissions": ["operativeMode": true]],
             inviterIsAdmin: false

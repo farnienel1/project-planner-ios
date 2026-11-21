@@ -328,7 +328,7 @@ struct MaterialCatalogueRootView: View {
                 Text(item.name)
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.primary)
-                Text(item.brand)
+                Text(CanonicalBusinessEngine.materialBrandText(item.brand)) // RULEBOOK 1.58.0: "N/A" when none
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 6) {
@@ -538,7 +538,7 @@ private struct MaterialCatalogueEditorSheet: View {
                 Task { await store.load() }
                 if case .edit(let item) = mode {
                     name = item.name
-                    brand = item.brand
+                    brand = CanonicalBusinessEngine.materialBrandStored(item.brand)
                     productCode = item.productCode ?? ""
                     let opened = MaterialQuantityDraft(quantity: 1, model: item.effectiveQuantityModel)
                     quantityDraft = opened
@@ -609,7 +609,7 @@ private struct MaterialCatalogueEditorSheet: View {
         let item = MaterialCatalogItem(
             id: existingId,
             name: trimmedName,
-            brand: trimmedBrand.isEmpty ? "Custom" : trimmedBrand,
+            brand: CanonicalBusinessEngine.materialBrandStored(trimmedBrand), // RULEBOOK 1.58.0: blank saves ''
             productCode: code.isEmpty ? nil : code,
             // The old fields are written by `materialCatalogueItemFields` from the order unit; kept as stored here.
             defaultUnit: editedItem?.defaultUnit ?? .number,
@@ -733,7 +733,7 @@ private struct MaterialCatalogueDetailView: View {
                         Text(item.name)
                             .font(.system(.title3, design: .rounded))
                             .fontWeight(.bold)
-                        Text(item.brand)
+                        Text(CanonicalBusinessEngine.materialBrandText(item.brand))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                         if let code = item.productCode {
