@@ -1152,18 +1152,27 @@ struct WarningsDetailView: View {
         let removedBy = userStore.currentUser?.fullName
             ?? userStore.currentUser?.email
             ?? "An admin"
+        // The admins' notice goes once every dismissal write has answered and at least one was accepted, never
+        // before (a refused or failed write sends nothing).
+        let service = notificationService
+        let gate = WarningDismissNoticeGate {
+            Task { await service.notifyWarningRemoved(warning: warning, removedBy: removedBy) }
+        }
         var dismissedAny = false
         for item in warningsToDismiss(warning) {
-            if warningsService.dismissWarning(item) { dismissedAny = true }
+            gate.begin()
+            if warningsService.dismissWarning(item, completion: { gate.finish(succeeded: $0) }) {
+                dismissedAny = true
+            } else {
+                gate.cancelOne()
+            }
         }
+        gate.sealed()
         // Feedback guide §4, owner decisions 6 and 11: on this phone's own update, `allWarningsClear` once this
         // person's Warnings list is empty.
         Feedback.play(dismissedAny
             ? FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)
             : .actionRefused)
-        Task {
-            await notificationService.notifyWarningRemoved(warning: warning, removedBy: removedBy)
-        }
     }
 
     /// A grouped unbooked card lists every person on that day, so dismiss clears each of those rows.
@@ -1598,4 +1607,45 @@ private enum WarningsFullScreenCover: Identifiable {
         taskStore: ProjectTaskStore()
     )
     .environmentObject(SmartCacheService())
+}
+
+/// Sends the "warning dismissed" notice once, after every dismissal write of one action has answered and at least
+/// one succeeded.
+@MainActor
+private final class WarningDismissNoticeGate {
+    private var pending = 0
+    private var succeeded = false
+    private var isSealed = false
+    private var fired = false
+    private let onSuccess: @MainActor () -> Void
+
+    init(onSuccess: @escaping @MainActor () -> Void) {
+        self.onSuccess = onSuccess
+    }
+
+    func begin() { pending += 1 }
+
+    /// The write was refused before it started, so no completion will come.
+    func cancelOne() {
+        pending -= 1
+        fireIfDone()
+    }
+
+    func finish(succeeded: Bool) {
+        pending -= 1
+        if succeeded { self.succeeded = true }
+        fireIfDone()
+    }
+
+    /// Every write has been started; from here the last answer decides.
+    func sealed() {
+        isSealed = true
+        fireIfDone()
+    }
+
+    private func fireIfDone() {
+        guard isSealed, pending == 0, succeeded, !fired else { return }
+        fired = true
+        onSuccess()
+    }
 }

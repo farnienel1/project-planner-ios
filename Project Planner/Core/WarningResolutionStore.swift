@@ -367,14 +367,82 @@ final class WarningResolutionStore: ObservableObject {
         return commitClashApproval(warning, organizationId: organizationId, uid: uid)
     }
 
+    /// Dismiss one non-cluster row: `warningResolutions/{resolutionKey}` with status dismissed. `completion` gets
+    /// true once Firestore accepted the write, false when it failed or could not be sent. Not called when this
+    /// returns false.
     @discardableResult
-    func dismiss(_ resolutionKey: String) -> Bool {
+    func dismiss(_ resolutionKey: String, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
         guard canWrite else { return false }
         dismissedResolutionKeys.insert(resolutionKey)
         persistDismissed()
         invalidateDecisions()
-        writeResolution(resolutionKey, status: "dismissed")
+        writeResolution(resolutionKey, status: "dismissed", completion: completion)
         return true
+    }
+
+    /// Dismiss a warning (RULEBOOK §5). An operative clash cluster is hidden only once every overlapping pair is
+    /// resolved (`isClashGroupApproved` over `resolvedWarningKeys`), so dismissing it writes the group key and every
+    /// pair's `clashResolutionKey` (the keys `clashApprovalWrites` writes on approve), each with
+    /// `warningResolutionWriteFields` status `dismissed`, in one batch — web #380. A dismissal never writes
+    /// `acceptedBookingClashes` or `approved`. Every other row writes its own key. `completion` gets true once
+    /// Firestore accepted the write; it is not called when this returns false.
+    @discardableResult
+    func dismiss(_ warning: Warning, completion: (@MainActor @Sendable (Bool) -> Void)? = nil) -> Bool {
+        guard canWrite else { return false }
+        let keys = Self.dismissResolutionKeys(warning)
+        guard keys.count > 1 else { return dismiss(warning.resolutionKey, completion: completion) }
+        dismissedResolutionKeys.formUnion(keys)
+        guard let organizationId, let uid = Auth.auth().currentUser?.uid else {
+            persistDismissed()
+            invalidateDecisions()
+            if let completion { Task { @MainActor in completion(false) } }
+            return true
+        }
+        let org = Firestore.firestore().collection("organizations").document(organizationId)
+        let batch = Firestore.firestore().batch()
+        var documentIds = Set<String>()
+        for key in keys {
+            guard let write = CanonicalBusinessEngine.warningResolutionWriteFields(
+                resolutionKey: key,
+                status: "dismissed",
+                resolvedByUserId: uid
+            ), documentIds.insert(write.documentId).inserted else { continue }
+            var fields = WriteMetadata.stamped(write.fields, userId: uid)
+            fields["resolvedAt"] = Timestamp(date: Date())
+            batch.setData(fields, forDocument: org.collection("warningResolutions").document(write.documentId))
+        }
+        dismissedResolutionKeys.formUnion(documentIds)
+        persistDismissed()
+        invalidateDecisions()
+        guard !documentIds.isEmpty else {
+            if let completion { Task { @MainActor in completion(false) } }
+            return true
+        }
+        batch.commit { error in
+            if let error {
+                print("🔥🔥🔥 DEBUG: clash dismiss write failed: \(error.localizedDescription)")
+            }
+            let succeeded = error == nil
+            Task { @MainActor in completion?(succeeded) }
+        }
+        return true
+    }
+
+    /// The `warningResolutions` keys a dismissal writes: the row's own key and, for an operative clash cluster,
+    /// every overlapping pair's `clashResolutionKey` from `operativeClashGroups` (an older cache without it asks
+    /// `clashResolutionKey` for the pair). Each key once, without case. A two-booking clash is its own pair, so
+    /// it stays one key.
+    nonisolated static func dismissResolutionKeys(_ warning: Warning) -> [String] {
+        var keys = [warning.resolutionKey]
+        guard let clash = warning.operativeClash else { return keys }
+        for pair in clash.approvalPairs {
+            let key = pair.clashResolutionKey
+                ?? CanonicalBusinessEngine.clashResolutionKey(bookingAId: pair.bookingAId, bookingBId: pair.bookingBId)
+            guard let key, !key.isEmpty,
+                  !keys.contains(where: { $0.caseInsensitiveCompare(key) == .orderedSame }) else { continue }
+            keys.append(key)
+        }
+        return keys
     }
 
     /// Un-approve a clash: deletes `warningResolutions/{clashResolutionKey}`, `acceptedBookingClashes/{clashPairKey}`
@@ -514,14 +582,22 @@ final class WarningResolutionStore: ObservableObject {
     }
 
     /// `warningResolutionWriteFields` → `warningResolutions/{resolutionKey}`.
-    private func writeResolution(_ resolutionKey: String, status: String, onSuccess: (@MainActor @Sendable () -> Void)? = nil) {
+    private func writeResolution(
+        _ resolutionKey: String,
+        status: String,
+        onSuccess: (@MainActor @Sendable () -> Void)? = nil,
+        completion: (@MainActor @Sendable (Bool) -> Void)? = nil
+    ) {
         guard let organizationId,
               let uid = Auth.auth().currentUser?.uid,
               let write = CanonicalBusinessEngine.warningResolutionWriteFields(
                 resolutionKey: resolutionKey,
                 status: status,
                 resolvedByUserId: uid
-              ) else { return }
+              ) else {
+            if let completion { Task { @MainActor in completion(false) } }
+            return
+        }
         var fields = WriteMetadata.stamped(write.fields, userId: uid)
         fields["resolvedAt"] = Timestamp(date: Date())
         Firestore.firestore().collection("organizations").document(organizationId)
@@ -529,9 +605,13 @@ final class WarningResolutionStore: ObservableObject {
             .setData(fields) { error in
                 if let error {
                     print("🔥🔥🔥 DEBUG: warningResolutions write failed: \(error.localizedDescription)")
+                    Task { @MainActor in completion?(false) }
                     return
                 }
-                Task { @MainActor in onSuccess?() }
+                Task { @MainActor in
+                    onSuccess?()
+                    completion?(true)
+                }
             }
     }
 

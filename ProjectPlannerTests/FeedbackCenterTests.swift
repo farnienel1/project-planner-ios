@@ -530,7 +530,7 @@ final class FeedbackCenterTests: XCTestCase {
         ("Views/OperativeAnnualLeaveViews.swift", "successMessage = \"Annual leave booked.\"", "pendingSync: holidayStore.isPendingSync(booking), success: .leaveBooked", 300),
         // warnings
         ("Views/WarningsDetailView.swift", "if !warningsService.approveWarning(warning) {", "FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)", 400),
-        ("Views/WarningsDetailView.swift", "if warningsService.dismissWarning(item) { dismissedAny = true }", "FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)", 400),
+        ("Views/WarningsDetailView.swift", "dismissedAny = true", "FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)", 600),
         // timesheets
         ("Views/InvoicingView.swift", "let signSave = saveDraft(rebuildSnapshot: rebuild)", "playTimesheetFeedback(signSave, success: .timesheetSigned)", 80),
         ("Views/InvoicingView.swift", "let counterSignSave = onCounterSignSave()", "Feedback.play(FeedbackDecision.event(refusal: message, success: .timesheetSigned))", 2_000),
