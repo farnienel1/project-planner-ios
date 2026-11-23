@@ -62,6 +62,13 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @State private var selectedTab = 0
+    /// Bumped when a tab is chosen again while it is open and its screen does not pop itself (`resetNavigationForTab`
+    /// is handled only by Projects, Small works, Operatives and Managers): part of `mainTabContent`'s `.id`, so the
+    /// tab's NavigationStack is rebuilt at its root. Owner bug 23 Nov: More → Settings while on Payment runs &
+    /// timesheets stayed on Payment runs.
+    @State private var tabRootGeneration = 0
+    /// The tab to rebuild at its root once the person agrees to discard an open settings screen's unsaved draft.
+    @State private var tabAwaitingDiscard: Int?
     @State private var showMoreMenuSheet = false
     @State private var showingMenuSignOutConfirmation = false
     @State private var previousTab: Int? = nil
@@ -240,6 +247,23 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showingMenuSignOutConfirmation = true
                 }
+            }
+            .alert(
+                "Discard unsaved changes?",
+                isPresented: Binding(
+                    get: { tabAwaitingDiscard != nil },
+                    set: { if !$0 { tabAwaitingDiscard = nil } }
+                )
+            ) {
+                Button("Keep editing", role: .cancel) { tabAwaitingDiscard = nil }
+                    .accessibilityIdentifier("mainTab.discard.keep")
+                Button("Discard", role: .destructive) {
+                    tabAwaitingDiscard = nil
+                    rebuildOpenTabAtRoot()
+                }
+                .accessibilityIdentifier("mainTab.discard.confirm")
+            } message: {
+                Text("You have changes that have not been saved. Leave this page and discard them?")
             }
             .signOutConfirmation(
                 isPresented: $showingMenuSignOutConfirmation,
@@ -669,7 +693,7 @@ struct ContentView: View {
                 NavigationStack { HomeView() }
             }
         }
-        .id("main-tab-\(selectedTab)")
+        .id("main-tab-\(selectedTab)-\(tabRootGeneration)")
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ProjectWorksRevampColors.canvas)
         // Avoid `.id(tabViewIdentity)` here: when the profile loads, permissions change and rebuilding the entire
@@ -965,7 +989,18 @@ extension ContentView {
         let tag = isValidTabTag(tag) ? tag : 0
         // Prevent infinite loops - don't process if already on this tab (unless it's home)
         if selectedTab == tag && tag != 0 {
-            // Already on this tab, just reset navigation if needed
+            // Already on this tab: show its main page. A tab whose screen does not pop itself is rebuilt at its root.
+            if Self.tabRebuildsAtRootWhenReselected(tag) {
+                if SettingsUnsavedDrafts.any {
+                    // Never throw an unsaved settings draft away silently: ask first (the screen's own guard).
+                    tabAwaitingDiscard = tag
+                } else {
+                    rebuildOpenTabAtRoot()
+                }
+            }
+            if showMoreMenuSheet {
+                showMoreMenuSheet = false
+            }
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: NSNotification.Name("resetNavigationForTab"),
@@ -1003,6 +1038,21 @@ extension ContentView {
         }
     }
     
+    private func rebuildOpenTabAtRoot() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            tabRootGeneration &+= 1
+        }
+    }
+
+    /// Tabs whose screen does not handle `resetNavigationForTab` itself: choosing them again rebuilds them at their
+    /// root (Settings, Help, Wholesalers, Annual leave, Subcontractors). Home (0) is not a navigation stack; Projects,
+    /// Small works, Operatives and Managers pop themselves.
+    static func tabRebuildsAtRootWhenReselected(_ tag: Int) -> Bool {
+        [5, 6, 7, 8, 9].contains(tag)
+    }
+
     func goBack() {
         if let previousTab = previousTab {
             selectTab(previousTab)

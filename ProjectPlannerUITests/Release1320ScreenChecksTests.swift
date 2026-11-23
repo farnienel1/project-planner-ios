@@ -106,6 +106,69 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         shot("A4 admin payday picked, not saved")
     }
 
+    // MARK: Owner bug 23 Nov — PAYE payday "reverts to Not set"; More → Settings stays on Payment runs
+
+    /// Picks `day` from the PAYE payday menu (Payment runs & timesheets is open).
+    private func pickPayday(_ label: String) {
+        scrollTo("payePayday.picker", timeout: 10)
+        element("payePayday.picker").tap()
+        // Early days are always on screen in the 31-day menu (a swipe would close it).
+        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 3), "the payday menu did not offer '\(label)'")
+        if item.exists { item.tap() }
+    }
+
+    private func assertPaydayShows(_ text: String, _ message: String) {
+        let picker = element("payePayday.picker")
+        let shows = NSPredicate(format: "label CONTAINS %@", text)
+        expectation(for: shows, evaluatedWith: picker)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(picker.label.contains(text), "\(message): the payday shows '\(picker.label)'")
+    }
+
+    /// From the Settings banner: the pick stays (it read "Not set" again in the owner's report) and can be dropped.
+    func test_A04b_adminPaydayPickStaysFromBanner() {
+        start("admin")
+        openPaymentRunsFromBanner()
+        pickPayday("Day 3")
+        assertPaydayShows("Day 3", "A4b banner path")
+        shot("A4b payday picked from the banner path")
+        // A pick can be dropped before saving.
+        element("payePayday.picker").tap()
+        let drop = element("payePayday.dropPick")
+        XCTAssertTrue(drop.waitForExistence(timeout: 3), "A4b: no way to drop the pick")
+        if drop.exists { drop.tap() }
+        assertPaydayShows("Not set", "A4b dropped pick")
+    }
+
+    /// From Settings → Organisation Settings Hub → Payment runs & timesheets: the pick stays.
+    func test_A04c_adminPaydayPickStaysFromHub() {
+        start("admin")
+        openSettings(role: "admin")
+        scrollTo("settings.building2Fill2", timeout: 10)
+        element("settings.building2Fill2").tap()
+        scrollTo("organisationSettingsHub.docTextFill", timeout: 10)
+        element("organisationSettingsHub.docTextFill").tap()
+        pickPayday("Day 2")
+        assertPaydayShows("Day 2", "A4c hub path")
+        let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Press Save")).firstMatch
+        XCTAssertTrue(note.waitForExistence(timeout: 3), "A4c: no 'Press Save…' line after picking a day")
+        shot("A4c payday picked from the hub path")
+    }
+
+    /// More → Settings while Payment runs & timesheets is open shows the Settings main page.
+    func test_A04d_moreSettingsFromPaymentRunsOpensSettingsMain() {
+        start("admin")
+        openPaymentRunsFromBanner()
+        XCTAssertTrue(element("payePayday.picker").waitForExistence(timeout: 10), "A4d: Payment runs did not open")
+        openMenuRow(title: "Settings")
+        XCTAssertTrue(element("settings.building2Fill2").waitForExistence(timeout: 8)
+            || element("settings.rulesVersion").waitForExistence(timeout: 2),
+            "A4d: More → Settings did not show the Settings main page")
+        XCTAssertFalse(element("payePayday.picker").exists, "A4d: still on Payment runs & timesheets")
+        shot("A4d More → Settings shows the Settings main page")
+    }
+
     func test_A05_adminOvertimeHubShowsPaydayBanner() {
         start("admin")
         openMenuRow(title: "Timesheets")

@@ -50,6 +50,9 @@ struct SettingsView: View {
     @State private var isTestingDelete = false
     @State private var isSeedingPlayground = false
     @State private var playgroundSeedMessage: String?
+    /// Payment runs & timesheets opened from the PAYE payday banner. Presented from the stable Settings page, not
+    /// from the banner's own link: the banner goes once a payday is saved, and a removed link pops its screen.
+    @State private var showingPaymentRunsFromBanner = false
     private var canConfigureMaterialCutOffNotifications: Bool {
         guard let user = userStore.currentUser else { return false }
         if user.permissions.operativeMode { return false }
@@ -128,6 +131,10 @@ struct SettingsView: View {
         }
         .navigationBarBackButtonHidden(true)
         .ppNavyNavigationBar()
+        .navigationDestination(isPresented: $showingPaymentRunsFromBanner) {
+            OrganisationInvoicingSettingsView()
+                .environmentObject(firebaseBackend)
+        }
         .signOutConfirmation(
             isPresented: $showingSignOutAlert,
             firebaseBackend: firebaseBackend,
@@ -404,9 +411,8 @@ struct SettingsView: View {
             loaded: firebaseBackend.currentOrganization != nil,
             viewerIsAdmin: true
         ) {
-            NavigationLink {
-                OrganisationInvoicingSettingsView()
-                    .environmentObject(firebaseBackend)
+            Button {
+                showingPaymentRunsFromBanner = true
             } label: {
                 PayePaydayBannerText(text: banner)
             }
