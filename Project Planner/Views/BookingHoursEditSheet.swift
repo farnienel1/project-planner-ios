@@ -559,6 +559,15 @@ struct OperativeCustomHoursSheet: View {
     /// prices (`revisedPayrollLineAmounts`). The sheet then refuses only what `revisedPayrollLineTimesError` refuses
     /// (blank or equal times). Off for every booking flow, which keep their own rule. Set with `withAmountPreview`.
     var allowsOvernight: Bool = false
+    /// Owner 23 Nov ("Full day can't be chosen when editing a booking"): the slot the edited booking stores. Set with
+    /// `withSlotChoice`; the sheet then shows the slots `CanonicalBusinessEngine.slotOffered` allows on the day (Full day
+    /// and Custom Monday–Friday, Custom on Saturday and Sunday, a stored AM / PM keeps its own) and saves a named slot
+    /// through `onSaveNamedSlot`. Nil (every create flow, timesheet Edit hours): no slot chips, as before.
+    var editingStoredSlot: TimeSlot? = nil
+    /// Save with a named slot chosen (Full day, or the stored AM / PM): the slot, `isBreakRemoved` and the rate.
+    var onSaveNamedSlot: ((_ slot: TimeSlot, _ isBreakRemoved: Bool, _ otMultiplier: Double?) -> Void)? = nil
+    /// The slot chip picked on screen; nil until one is tapped (the stored slot then shows).
+    @State private var pickedSlot: TimeSlot? = nil
 
     @State private var startHour: Int
     @State private var startMinute: Int
@@ -936,6 +945,15 @@ struct OperativeCustomHoursSheet: View {
         .onChange(of: rateFiguresInput, initial: true) { _, _ in
             refreshRateFigures()
         }
+        .onChange(of: "\(startText)|\(endText)") { _, _ in
+            syncSlotWithTimes()
+        }
+        .onAppear {
+            // A stored Full day / AM / PM opens on its own window (display only; Save unchanged keeps it as stored).
+            if pickedSlot == nil, onSaveNamedSlot != nil, let stored = storedNamedSlot {
+                selectSlot(stored)
+            }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
@@ -1158,6 +1176,7 @@ struct OperativeCustomHoursSheet: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             PPSheetSectionTitle("Hours")
+            slotChoiceCard
             hoursCard
             if showsBreakControls && breakApplies {
                 breakToggleCard
@@ -1201,6 +1220,122 @@ struct OperativeCustomHoursSheet: View {
         copy.amountPreview = preview
         copy.allowsOvernight = allowsOvernight
         return copy
+    }
+
+    /// Edit booking: offer the booking's slot choices (owner 23 Nov). `stored` is the booking's own slot; a named slot
+    /// saved through `onSaveNamedSlot`, custom hours through the usual `onSave`.
+    func withSlotChoice(
+        stored: TimeSlot,
+        onSaveNamedSlot: @escaping (_ slot: TimeSlot, _ isBreakRemoved: Bool, _ otMultiplier: Double?) -> Void
+    ) -> Self {
+        var copy = self
+        copy.editingStoredSlot = stored
+        copy.onSaveNamedSlot = onSaveNamedSlot
+        return copy
+    }
+
+    /// The stored slot when it is a named slot (Full day, AM, PM); nil for custom hours.
+    private var storedNamedSlot: TimeSlot? {
+        guard let stored = editingStoredSlot else { return nil }
+        switch CanonicalBusinessEngine.rulebookSlot(stored.rawValue) {
+        case .fullDay: return .fullDay
+        case .am: return .morning
+        case .pm: return .afternoon
+        default: return nil
+        }
+    }
+
+    /// The slot on screen: the chip picked, else the stored named slot, else custom hours.
+    private var currentSlot: TimeSlot {
+        pickedSlot ?? storedNamedSlot ?? .customHours
+    }
+
+    /// AM | PM | Full day | Custom, as the scheduling wizard: `slotOffered` on the booking day (a stored slot always
+    /// shows). Empty when the sheet offers no slot choice, or only Custom would show.
+    private var slotChoiceItems: [PPSegmentItem<TimeSlot>] {
+        guard onSaveNamedSlot != nil, let stored = editingStoredSlot else { return [] }
+        let offered = RulebookBookingSlot.allCases.filter {
+            CanonicalBusinessEngine.slotOffered($0, on: rulebookDay, storedTimeSlot: stored.rawValue)
+        }
+        var items: [PPSegmentItem<TimeSlot>] = []
+        if offered.contains(.am) {
+            items.append(PPSegmentItem(id: .morning, title: "AM", accessibilityIdentifier: "operativeCustomHours.slot.am"))
+        }
+        if offered.contains(.pm) {
+            items.append(PPSegmentItem(id: .afternoon, title: "PM", accessibilityIdentifier: "operativeCustomHours.slot.pm"))
+        }
+        if offered.contains(.fullDay) {
+            items.append(PPSegmentItem(id: .fullDay, title: "Full day", accessibilityIdentifier: "operativeCustomHours.slot.fullDay"))
+        }
+        guard !items.isEmpty else { return [] }
+        items.append(PPSegmentItem(id: .customHours, title: "Custom", accessibilityIdentifier: "operativeCustomHours.slot.custom"))
+        return items
+    }
+
+    /// The wheel times a named slot shows (display only): the booking's own stored clock times when it is the stored
+    /// slot and has them; else the slot's window from the rulebook (`halfDayWindows`: the AM / PM half, the standard
+    /// day for Full day); else the day's default opening times.
+    private func namedSlotTimes(_ slot: TimeSlot) -> (start: String, end: String) {
+        if slot == storedNamedSlot, let ic = initialChoice,
+           let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty,
+           let e = ic.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines), !e.isEmpty,
+           ic.timeSlot == slot {
+            return Self.openingTimes(policy: policy, referenceDay: rulebookDay, initialChoice: ic)
+        }
+        if let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) {
+            let window: CanonicalMinuteInterval
+            switch slot {
+            case .morning: window = windows.am
+            case .afternoon: window = windows.pm
+            default: window = windows.day
+            }
+            let start = BookingHMTimePickerSupport.clampToQuarterHour(
+                ManagerScheduleInterval.formatMinutes(window.start), fallbackHour: 8, fallbackMinute: 0)
+            let end = BookingHMTimePickerSupport.clampToQuarterHour(
+                ManagerScheduleInterval.formatMinutes(window.end), fallbackHour: 16, fallbackMinute: 30)
+            return (
+                BookingHMTimePickerSupport.format(hour: start.hour, minute: start.minute),
+                BookingHMTimePickerSupport.format(hour: end.hour, minute: end.minute)
+            )
+        }
+        return Self.openingTimes(policy: policy, referenceDay: rulebookDay, initialChoice: .legacy(slot))
+    }
+
+    private func selectSlot(_ slot: TimeSlot) {
+        pickedSlot = slot
+        guard slot != .customHours else { return }
+        let times = namedSlotTimes(slot)
+        let start = BookingHMTimePickerSupport.clampToQuarterHour(times.start, fallbackHour: 8, fallbackMinute: 0)
+        let end = BookingHMTimePickerSupport.clampToQuarterHour(times.end, fallbackHour: 16, fallbackMinute: 30)
+        startHour = start.hour
+        startMinute = start.minute
+        endHour = end.hour
+        endMinute = end.minute
+        lastValidStartHour = start.hour
+        lastValidStartMinute = start.minute
+        lastValidEndHour = end.hour
+        lastValidEndMinute = end.minute
+    }
+
+    /// Changing the times on the wheels away from a named slot's times makes the booking custom hours.
+    private func syncSlotWithTimes() {
+        guard onSaveNamedSlot != nil, currentSlot != .customHours else { return }
+        let times = namedSlotTimes(currentSlot)
+        if times.start != startText || times.end != endText {
+            pickedSlot = .customHours
+        }
+    }
+
+    @ViewBuilder
+    private var slotChoiceCard: some View {
+        let items = slotChoiceItems
+        if !items.isEmpty {
+            PPSegmentedPills(
+                items: items,
+                isSelected: { $0 == currentSlot },
+                onSelect: { selectSlot($0) }
+            )
+        }
     }
 
     /// The rulebook's refusal for these times when the sheet allows overnight (`revisedPayrollLineTimesError`), else nil.
@@ -1647,6 +1782,24 @@ struct OperativeCustomHoursSheet: View {
 
     private func validateAndSave(breakWarningConfirmed: Bool = false) {
         errorMessage = nil
+        // Owner 23 Nov: a named slot (Full day, or the stored AM / PM) saves as that slot — never as custom hours, and
+        // without the custom-hours break warning (a named slot is paid by its slot).
+        if let onSaveNamedSlot, currentSlot != .customHours {
+            guard let otOut = validatedOtMultiplier() else { return }
+            // RULEBOOK §4.3: a named AM / PM never takes the unpaid break, so a newly chosen AM / PM writes false; a
+            // FULL DAY keeps the sheet's own break setting. The stored slot saved again keeps its stored value when
+            // the sheet shows no break controls, so an unchanged save writes nothing for the field.
+            let storedBreakRemoved = initialChoice?.isBreakRemoved ?? false
+            let breakRemoved: Bool
+            switch currentSlot {
+            case .fullDay:
+                breakRemoved = showsBreakControls ? !breakIncluded : storedBreakRemoved
+            default:
+                breakRemoved = currentSlot == storedNamedSlot ? storedBreakRemoved : false
+            }
+            onSaveNamedSlot(currentSlot, breakRemoved, otOut)
+            return
+        }
         if allowsOvernight {
             // RULEBOOK 1.46.0: a finish before the start is overnight; only blank or equal times are refused.
             if let message = overnightTimesError(start: startText, end: endText) {
@@ -1672,16 +1825,20 @@ struct OperativeCustomHoursSheet: View {
             Feedback.play(.warningShown)
             return
         }
-        var otOut: Double? = nil
-        if allowsOtMultiplierOverride {
-            // RULEBOOK 1.29.0 §25 `overtimeMultiplierValidationError`: 1–3 in 0.25 steps, or the organisation's (nil).
-            if otRate != initialOtRate, let message = CanonicalBusinessEngine.overtimeMultiplierValidationError(otRate) {
-                errorMessage = message
-                return
-            }
-            otOut = otRate
-        }
+        guard let otOut = validatedOtMultiplier() else { return }
         onSave(startText, endText, !breakIncluded, otOut)
+    }
+
+    /// The overtime rate Save hands back (`.some(nil)` = the organisation's); nil when the rate is refused, with
+    /// `errorMessage` set.
+    private func validatedOtMultiplier() -> Double?? {
+        guard allowsOtMultiplierOverride else { return .some(nil) }
+        // RULEBOOK 1.29.0 §25 `overtimeMultiplierValidationError`: 1–3 in 0.25 steps, or the organisation's (nil).
+        if otRate != initialOtRate, let message = CanonicalBusinessEngine.overtimeMultiplierValidationError(otRate) {
+            errorMessage = message
+            return nil
+        }
+        return .some(otRate)
     }
 }
 
@@ -2126,6 +2283,81 @@ enum ScheduleBookingEditSave {
         updated.isBreakRemoved = isBreakRemoved
         updated.updatedAt = now
         return updated
+    }
+
+    /// Owner 23 Nov: a named slot (Full day, or the stored AM / PM) chosen on Edit booking. The stored slot keeps its
+    /// stored times (Save unchanged changes nothing); another named slot is written as the scheduling wizard writes it,
+    /// the slot with no clock times (`OperativeDayBookingChoice.legacy`).
+    static func labourNamedSlot(
+        _ booking: Booking,
+        slot: TimeSlot,
+        isBreakRemoved: Bool,
+        otMultiplierOverride: Double?,
+        now: Date = Date()
+    ) -> Booking {
+        var updated = booking
+        if booking.timeSlot != slot {
+            updated.timeSlot = slot
+            updated.workStartTime = nil
+            updated.workEndTime = nil
+        }
+        updated.isBreakRemoved = isBreakRemoved
+        updated.otMultiplierOverride = otMultiplierOverride
+        updated.updatedAt = now
+        return updated
+    }
+
+    /// `labourNamedSlot` for a manager schedule booking (`ManagerTimeSlot`).
+    static func managerSiteNamedSlot(
+        _ booking: ManagerSiteBooking,
+        slot: TimeSlot,
+        isBreakRemoved: Bool,
+        now: Date = Date()
+    ) -> ManagerSiteBooking {
+        var updated = booking
+        let managerSlot = managerTimeSlot(slot)
+        if booking.timeSlot != managerSlot {
+            updated.timeSlot = managerSlot
+            updated.workStartTime = nil
+            updated.workEndTime = nil
+        }
+        updated.isBreakRemoved = isBreakRemoved
+        updated.updatedAt = now
+        return updated
+    }
+
+    /// The times Edit booking opened on, for a stored slot the sheet shows no chip for (Evening, Overtime, unknown — and
+    /// every named slot when the rulebook script does not answer, `rulebookSlot` nil): passed as `openedTimes` so an
+    /// unchanged save keeps the booking exactly as stored (the 1.33.1 guard). Nil for custom hours and, while the script
+    /// answers, for Full day / AM / PM, which save through the slot chips (`withSlotChoice`).
+    static func openedTimesForChiplessSlot(
+        storedTimeSlot: String,
+        policy: OrgPayrollTimePolicy,
+        referenceDay: Date,
+        initialChoice: OperativeDayBookingChoice?
+    ) -> (start: String, end: String)? {
+        guard CanonicalBusinessEngine.rulebookSlot(storedTimeSlot) == nil else { return nil }
+        return OperativeCustomHoursSheet.openingTimes(policy: policy, referenceDay: referenceDay, initialChoice: initialChoice)
+    }
+
+    /// The manager schedule slot for a labour slot (custom hours for anything not named).
+    static func managerTimeSlot(_ slot: TimeSlot) -> ManagerTimeSlot {
+        switch slot {
+        case .morning: return .morning
+        case .afternoon: return .afternoon
+        case .fullDay: return .fullDay
+        default: return .customHours
+        }
+    }
+
+    /// The labour slot a manager schedule slot reads as, for the Edit booking slot chips.
+    static func labourTimeSlot(_ slot: ManagerTimeSlot) -> TimeSlot {
+        switch slot {
+        case .morning: return .morning
+        case .afternoon: return .afternoon
+        case .fullDay: return .fullDay
+        case .customHours: return .customHours
+        }
     }
 }
 

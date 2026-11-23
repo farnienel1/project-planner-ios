@@ -571,10 +571,65 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertEqual(moved.timeSlot, .customHours)
     }
 
-    func testProjectDetailPassesTheOpenedTimesToTheSave() throws {
+    /// Owner 23 Nov: Edit booking shows Full day / Custom; a named slot saves through `withSlotChoice` (Save unchanged
+    /// keeps it), so the custom-hours save no longer needs the opened times.
+    func testProjectDetailAndDailyOverviewOfferTheSlotChoice() throws {
+        let detail = try source("Views/ProjectDetailView.swift")
+        XCTAssertTrue(detail.contains(".withSlotChoice(stored: booking.timeSlot)"))
+        XCTAssertTrue(detail.contains("ScheduleBookingEditSave.labourNamedSlot("))
+        XCTAssertTrue(detail.contains("ScheduleBookingEditSave.managerSiteNamedSlot("))
+        let overview = try source("Views/DailyOverviewView.swift")
+        XCTAssertTrue(overview.contains(".withSlotChoice(stored: booking.timeSlot)"))
+        XCTAssertTrue(overview.contains("namedSlot: slot"))
+    }
+
+    /// Owner 23 Nov: Full day chosen on Edit booking is written as the wizard writes it (no clock times); the stored
+    /// slot saved again changes nothing.
+    func testNamedSlotSaveWritesFullDayAndKeepsAnUnchangedSlot() throws {
+        let monday = try day("2026-11-02")
+        let custom = LogicFixtures.booking(on: monday, slot: .customHours, start: "07:30", end: "12:00")
+        let fullDay = ScheduleBookingEditSave.labourNamedSlot(custom, slot: .fullDay, isBreakRemoved: custom.isBreakRemoved, otMultiplierOverride: custom.otMultiplierOverride)
+        XCTAssertEqual(fullDay.timeSlot, .fullDay)
+        XCTAssertNil(fullDay.workStartTime)
+        XCTAssertNil(fullDay.workEndTime)
+        let stored = LogicFixtures.booking(on: monday, slot: .fullDay, start: nil, end: nil)
+        let unchanged = ScheduleBookingEditSave.labourNamedSlot(stored, slot: .fullDay, isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: stored.otMultiplierOverride)
+        XCTAssertEqual(BookingWritePatch.changedLabourFields(from: stored, to: unchanged), [])
+        // Review of ios-fixes-23nov: a stored Full day with "No unpaid break" saved unchanged keeps it (the sheet hands
+        // back its own break setting for FULL DAY, opened from the booking), so nothing is written for the field.
+        let storedNoBreak = LogicFixtures.booking(on: monday, slot: .fullDay, start: nil, end: nil, breakRemoved: true)
+        XCTAssertTrue(OperativeCustomHoursSheet.initialBreakIncluded(initialChoice: OperativeDayBookingChoice(from: storedNoBreak), showsBreakControls: true) == false)
+        let unchangedNoBreak = ScheduleBookingEditSave.labourNamedSlot(storedNoBreak, slot: .fullDay, isBreakRemoved: true, otMultiplierOverride: storedNoBreak.otMultiplierOverride)
+        XCTAssertTrue(unchangedNoBreak.isBreakRemoved)
+        XCTAssertEqual(BookingWritePatch.changedLabourFields(from: storedNoBreak, to: unchangedNoBreak), [])
+        let manager = ManagerSiteBooking(userId: "TEST-manager", date: monday, timeSlot: .customHours, locationType: .project, locationId: UUID(), workStartTime: "07:30", workEndTime: "12:00")
+        let managerFullDay = ScheduleBookingEditSave.managerSiteNamedSlot(manager, slot: .fullDay, isBreakRemoved: manager.isBreakRemoved)
+        XCTAssertEqual(managerFullDay.timeSlot, .fullDay)
+        XCTAssertNil(managerFullDay.workStartTime)
+    }
+
+    /// Review of ios-fixes-23nov: a stored Evening / Overtime slot has no chip, so its unchanged save goes through the
+    /// custom-hours path; it must stay exactly as stored (nothing written), never become CUSTOM_HOURS.
+    func testChiplessSlotSavedUnchangedStaysAsStored() throws {
+        let monday = try day("2026-11-02")
+        let policy = OrgPayrollTimePolicy.default
+        for slot in [TimeSlot.evening, .overtime] {
+            let stored = LogicFixtures.booking(on: monday, slot: slot)
+            let choice = OperativeDayBookingChoice(from: stored)
+            let opened = try XCTUnwrap(ScheduleBookingEditSave.openedTimesForChiplessSlot(
+                storedTimeSlot: stored.timeSlot.rawValue, policy: policy, referenceDay: monday, initialChoice: choice
+            ))
+            let saved = ScheduleBookingEditSave.labour(stored, start: opened.start, end: opened.end, isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: stored.otMultiplierOverride, openedTimes: opened)
+            XCTAssertEqual(saved.timeSlot, slot)
+            XCTAssertEqual(BookingWritePatch.changedLabourFields(from: stored, to: saved), [])
+        }
+        // Full day / AM / PM / custom save through the slot chips, so no opened times.
+        XCTAssertNil(ScheduleBookingEditSave.openedTimesForChiplessSlot(storedTimeSlot: TimeSlot.fullDay.rawValue, policy: policy, referenceDay: monday, initialChoice: nil))
+        XCTAssertNil(ScheduleBookingEditSave.openedTimesForChiplessSlot(storedTimeSlot: TimeSlot.customHours.rawValue, policy: policy, referenceDay: monday, initialChoice: nil))
         let detail = try source("Views/ProjectDetailView.swift")
         XCTAssertTrue(detail.contains("openedTimes: labourOpened"))
-        XCTAssertTrue(detail.contains("openedTimes: managerOpened"))
+        let overview = try source("Views/DailyOverviewView.swift")
+        XCTAssertTrue(overview.contains("openedTimes: labourOpened"))
     }
 
     // MARK: 1.33.1 final review (items 1–5)
@@ -672,8 +727,9 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let detail = try source("Views/ProjectDetailView.swift")
         XCTAssertFalse(detail.contains("Task { await bookingStore.updateBooking(updated) }"))
         XCTAssertFalse(detail.contains("Task { await managerScheduleStore.saveBooking(updated) }"))
-        XCTAssertTrue(detail.contains("bookingStore.updateBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
-        XCTAssertTrue(detail.contains("managerScheduleStore.saveBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
+        let flatDetail = detail.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        XCTAssertTrue(flatDetail.contains("bookingStore.updateBookingReportingProblem( updated, organizationId: savingOrganizationId"))
+        XCTAssertTrue(flatDetail.contains("managerScheduleStore.saveBookingReportingProblem( updated, organizationId: savingOrganizationId"))
         XCTAssertEqual(detail.components(separatedBy: "queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))").count - 1, 2)
 
         let saved = try XCTUnwrap(ScheduleBookingSaveAlert.forEdit(.saved))

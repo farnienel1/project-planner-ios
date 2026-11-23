@@ -124,7 +124,8 @@ final class Rulebook1160Tests: XCTestCase {
         ])
         XCTAssertEqual(
             CanonicalBusinessEngine.pushPayloadKeys,
-            ["notificationId", "type", "relatedId", "dayKey", "catalogue", "userId", "organizationId"]
+            ["notificationId", "type", "relatedId", "dayKey", "catalogue", "userId", "organizationId",
+             "deepLinkUserId", "deepLinkWeekStartMs"]  // 1.70.0
         )
         // An in-app tap's `pp_` keys read as the same fields.
         let info = NotificationDeepLink.userInfo(type: .bookingCreated, relatedIdText: "J1", organizationId: "ORG-2")
