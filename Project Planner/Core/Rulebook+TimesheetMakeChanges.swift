@@ -30,7 +30,7 @@ extension CanonicalBusinessEngine {
     nonisolated static var timesheetMakeChangesActiveNote: String {
         makeChangesText(
             "TIMESHEET_MAKE_CHANGES_ACTIVE_NOTE",
-            fallback: "Making changes: use ⚙ to change a booking or ✕ to remove it. The timesheet stays signed off until you change something; then sign it off again."
+            fallback: "Making changes: use ⚙ to change a booking, price work or expense, or ✕ to remove it. The timesheet stays signed off until you change something; then sign it off again."
         )
     }
 

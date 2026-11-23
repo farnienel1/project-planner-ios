@@ -105,15 +105,104 @@ final class Rulebook1760Tests: XCTestCase {
         ))
     }
 
-    /// Re-check of #427: a signed copy with no labour line (price work / expenses only) gets neither the button nor the
-    /// old-sheet line.
+    /// Re-check of #427: a signed copy with nothing signed to change gets neither the button nor the old-sheet line;
+    /// owner answer 23 Nov (b): one with signed price work or expenses (no labour line) gets the button.
     func testSignedCopyWithoutLabourLinesGetsNoOldSheetLine() {
-        var extrasOnly = counterSigned()
-        extrasOnly["weeklyReportOverride"] = ["lines": [[String: Any]]()]
-        XCTAssertNil(action(extrasOnly))
+        var empty = counterSigned()
+        empty["weeklyReportOverride"] = ["lines": [[String: Any]]()]
+        XCTAssertNil(action(empty))
         XCTAssertEqual(
-            CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(sheet: extrasOnly, viewerIsReviewer: true, viewerIsSubject: false, selfSigned: false, reopened: false),
+            CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(sheet: empty, viewerIsReviewer: true, viewerIsSubject: false, selfSigned: false, reopened: false),
             ""
         )
+        var extrasOnly = counterSigned()
+        extrasOnly["weeklyReportOverride"] = ["lines": [[String: Any]](), "expenses": [["id": "ex1", "amount": 40]]]
+        XCTAssertEqual(action(extrasOnly), .reopenReview)
+    }
+
+    // MARK: Owner answer 23 Nov (b): Make changes on the signed price work and expenses
+
+    private func signedWithEntries(reviews: [String: Any]? = nil, expenseAmount: Double = 40, priceWorkAmount: Double = 300) -> [String: Any] {
+        var sheet = counterSigned()
+        sheet["priceWorkEntries"] = [["id": "pw1", "title": "Fit doors", "amount": 300, "jobNumber": "J1", "startDate": "2026-11-18"]]
+        sheet["expenseEntries"] = [["id": "ex1", "title": "Parking", "amount": 40, "jobNumber": "J1", "date": "2026-11-18"]]
+        sheet["weeklyReportOverride"] = [
+            "lines": [["id": "op-B1", "bookingId": "B1", "bookingFingerprint": "fp-B1", "amount": 250]],
+            "priceWork": [["id": "pw1", "title": "Fit doors", "amount": priceWorkAmount, "decision": "approved"]],
+            "expenses": [["id": "ex1", "title": "Parking", "amount": expenseAmount, "decision": "approved"]],
+        ]
+        if let reviews { sheet["extraEntryReviews"] = reviews }
+        return sheet
+    }
+
+    private func changes(_ sheet: [String: Any]) -> RulebookSignedTimesheetChange? {
+        let summary = CanonicalBusinessEngine.timesheetLateExtrasSummary(sheet: sheet, entryFingerprints: [:], exportedAtStored: false)
+        return CanonicalBusinessEngine.timesheetChangesWithLateExtras(bookingChange: nil, late: summary)
+    }
+
+    private func total(_ sheet: [String: Any]) -> Double {
+        let rows = CanonicalBusinessEngine.callJSON(
+            "timesheetInvoiceRows",
+            arguments: [["sheet": sheet, "payrollLines": [Any](), "extrasMode": "decided"]]
+        ) as? [[String: Any]] ?? []
+        return rows.reduce(0) { $0 + ((($1["amount"]) as? NSNumber)?.doubleValue ?? 0) }
+    }
+
+    private var afterSignOffMs: Double { managerSigned.timeIntervalSince1970 * 1000 + 60_000 }
+
+    func testRemovingASignedExpenseWaitsForTheLineManagerAndBlocksExport() {
+        let signed = signedWithEntries()
+        XCTAssertEqual(total(signed), 590, accuracy: 0.001)
+        XCTAssertNil(changes(signed))
+        let removed = signedWithEntries(reviews: [
+            "ex1": ["decision": "declined", "reviewedAmount": 40, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs],
+        ])
+        let change = changes(removed)
+        XCTAssertEqual(change?.reopened, true)
+        XCTAssertEqual(change?.waitingFor, "lineManager")
+        XCTAssertNil(change?.message)
+        XCTAssertEqual(change?.signedEntriesChanged, true)
+        XCTAssertEqual(change?.signedEntriesOnly, true)
+        XCTAssertEqual(change?.lateExtrasOnly, false)
+        let actions = CanonicalBusinessEngine.signedTimesheetActions(change)
+        XCTAssertFalse(actions.mayExport)
+        XCTAssertFalse(actions.mayGenerateInvoice)
+        XCTAssertFalse(actions.personMaySignAgain)
+        // Signed off again: the signed copy holds the expense at 0 and the total goes down.
+        var resigned = signedWithEntries(reviews: [
+            "ex1": ["decision": "declined", "reviewedAmount": 40, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs],
+        ], expenseAmount: 0)
+        resigned["managerSignedAt"] = afterSignOffMs + 60_000
+        XCTAssertNil(changes(resigned))
+        XCTAssertEqual(total(resigned), 550, accuracy: 0.001)
+    }
+
+    func testEditingASignedPriceWorkAmountWaitsTheSameWay() {
+        let edited = signedWithEntries(reviews: [
+            "pw1": ["decision": "edited", "revisedAmount": 250, "reviewedAmount": 300, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs],
+        ])
+        XCTAssertEqual(changes(edited)?.waitingFor, "lineManager")
+        XCTAssertFalse(CanonicalBusinessEngine.signedTimesheetActions(changes(edited)).mayExport)
+        var resigned = signedWithEntries(reviews: [
+            "pw1": ["decision": "edited", "revisedAmount": 250, "reviewedAmount": 300, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs],
+        ], priceWorkAmount: 250)
+        resigned["managerSignedAt"] = afterSignOffMs + 60_000
+        XCTAssertNil(changes(resigned))
+        XCTAssertEqual(total(resigned), 540, accuracy: 0.001)
+    }
+
+    /// The signed copy keeps its signed price work and expense rows on every save except a signing.
+    func testSignedMoneyRowsAreKeptUnlessSigningOff() {
+        func line(_ id: String, _ amount: Double, late: Bool = false) -> TimesheetWeeklyReportMoneyLine {
+            TimesheetWeeklyReportMoneyLine(
+                id: id, title: id, details: "", jobNumber: "", date: Date(), amount: amount, decision: .approved,
+                lateExtra: late ? true : nil, entryFingerprint: nil
+            )
+        }
+        let stored = [line("ex1", 40), line("l1", 5, late: true)]
+        let fresh = [line("ex1", 0), line("l1", 7, late: true)]
+        let kept = TimesheetWeeklyReportOverrideBuilder.signedMoneyRows(stored, fresh: fresh, refresh: false)
+        XCTAssertEqual(kept.map(\.amount), [40, 7])
+        XCTAssertEqual(TimesheetWeeklyReportOverrideBuilder.signedMoneyRows(stored, fresh: fresh, refresh: true).map(\.amount), [0, 7])
     }
 }

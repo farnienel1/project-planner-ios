@@ -3409,7 +3409,8 @@ private struct MyTimesheetView: View {
                 if let currentUser = userStore.displayUser,
                    TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
                    // RULEBOOK 1.54.0: late extras alone never undo the counter-signature.
-                   bookingChange?.reopened != true || bookingChange?.lateExtrasOnly == true,
+                   bookingChange?.reopened != true || bookingChange?.lateExtrasOnly == true
+                       || bookingChange?.signedEntriesOnly == true,
                    let managerSignedAt = draft.managerSignedAt {
                     VStack(spacing: 8) {
                         if let base64 = draft.managerSignatureImageBase64,
@@ -3816,7 +3817,9 @@ private struct MyTimesheetView: View {
         }
         if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
             // RULEBOOK 1.54.0 §8: no invoice while late extras wait for the line manager (`timesheetChangesWithLateExtras`).
-            let message = bookingChange?.lateExtrasOnly == true
+            let message = bookingChange?.signedEntriesOnly == true
+                ? "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+                : bookingChange?.lateExtrasOnly == true
                 ? CanonicalBusinessEngine.timesheetLateExtraWaitingLabel
                 : CanonicalBusinessEngine.signedTimesheetChangedMessage
             await MainActor.run { invoiceErrorMessage = message }
@@ -4368,7 +4371,10 @@ private struct MyTimesheetView: View {
                 snapshotInputsReady: payInputsBlockMessage == nil,
                 // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).rebuildSnapshot`: a reopened sheet's re-signature
                 // builds the snapshot fresh from the live bookings.
-                rebuildSnapshot: rebuildSnapshot && payInputsBlockMessage == nil
+                rebuildSnapshot: rebuildSnapshot && payInputsBlockMessage == nil,
+                // RULEBOOK 1.76.0: the owner writes the snapshot only on a self-signed sheet, whose own signature signs it
+                // off — its price work and expenses are taken afresh, as before 1.76.0.
+                refreshSignedMoney: true
             )
             if let refusal {
                 saveErrorMessage = refusal
@@ -6328,9 +6334,18 @@ private struct OperativeTimesheetReviewView: View {
                     if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
                     return row
                 },
+                // Owner answer 23 Nov (b): a copy with signed price work or expenses (not late extras) can be changed.
+                "priceWork": copy.priceWork.map { ["id": $0.id, "lateExtra": $0.lateExtra == true] },
+                "expenses": copy.expenses.map { ["id": $0.id, "lateExtra": $0.lateExtra == true] },
             ]
         }
         return sheet
+    }
+
+    /// RULEBOOK 1.76.0 (owner answer 23 Nov, b): while making changes (before the first change reopens the review), the
+    /// signed price work and expenses get ✕ / ⚙ — no ✓.
+    private var signedEntryChangesOpen: Bool {
+        viewerIsReviewer && !canManagerReview && makingChanges
     }
 
     /// Review of #427 (finding 1): a signed-off sheet whose signed copy cannot tell a changed booking gets this line in
@@ -6512,7 +6527,9 @@ private struct OperativeTimesheetReviewView: View {
                 userStore: userStore,
                 notificationService: notificationService,
                 onSaveDraft: { saveDraft() },
-                onCounterSignSave: { saveDraft() },
+                // RULEBOOK 1.76.0 (owner answer 23 Nov, b): the counter-signature takes the signed price work and
+                // expenses afresh from the decided entries; no other save does.
+                onCounterSignSave: { saveDraft(refreshSignedMoney: true) },
                 counterSignAllowed: counterSignAllowedNow,
                 firebaseBackend: firebaseBackend,
                 isOnline: smartCache.isOnline,
@@ -6667,7 +6684,9 @@ private struct OperativeTimesheetReviewView: View {
                         amount: entry.amount,
                         decision: entry.managerDecision,
                         revisedAmount: entry.managerRevisedAmount,
-                        canReview: canManagerReview,
+                        // RULEBOOK 1.76.0 (owner answer 23 Nov, b): while making changes, ✕ / ⚙ (no ✓) on signed expenses.
+                        canReview: canManagerReview || signedEntryChangesOpen,
+                        canApprove: canManagerReview,
                         onApprove: { updateExpenseDecision(at: index, decision: .approved) },
                         onDecline: { updateExpenseDecision(at: index, decision: .declined) },
                         onEdit: { editingExpenseId = entry.id }
@@ -6698,7 +6717,8 @@ private struct OperativeTimesheetReviewView: View {
                         amount: row.amount,
                         decision: row.managerDecision,
                         revisedAmount: row.managerRevisedAmount,
-                        canReview: canManagerReview,
+                        canReview: canManagerReview || signedEntryChangesOpen,
+                        canApprove: canManagerReview,
                         onApprove: { updatePriceWorkDecision(at: index, decision: .approved) },
                         onDecline: { updatePriceWorkDecision(at: index, decision: .declined) },
                         onEdit: { editingPriceWorkId = row.id }
@@ -7093,7 +7113,8 @@ private struct OperativeTimesheetReviewView: View {
         ensurePeriodBookings()
         guard counterSignAllowedNow() else { return }
         let actions = CanonicalBusinessEngine.signedTimesheetActions(bookingChange)
-        rebuildSnapshotOnSave = actions.rebuildSnapshot
+        // RULEBOOK 1.76.0: signed price work or expenses changed alone never rebuild the labour (web `bookingsReopened`).
+        rebuildSnapshotOnSave = actions.rebuildSnapshot && bookingChange?.bookingsChanged != false
         // RULEBOOK 1.43.0 §8 (review r318): tapping re-checks the period's bookings (reloads them when no server answer
         // covers the period), so a stuck "Loading bookings…" recovers.
         ensurePeriodBookings()
@@ -7412,6 +7433,7 @@ private struct OperativeTimesheetReviewView: View {
         decision: TimesheetManagerDecision,
         revisedAmount: Double?,
         canReview: Bool,
+        canApprove: Bool = true,
         onApprove: @escaping () -> Void,
         onDecline: @escaping () -> Void,
         onEdit: @escaping () -> Void
@@ -7468,6 +7490,7 @@ private struct OperativeTimesheetReviewView: View {
                 TimesheetManagerReviewActionBar(
                     decision: decision,
                     canEdit: true,
+                    canApprove: canApprove,
                     onApprove: onApprove,
                     onDecline: onDecline,
                     onEdit: onEdit
@@ -7513,7 +7536,7 @@ private struct OperativeTimesheetReviewView: View {
     /// Returns the cloud save's task (started here, as before) so the counter-signature can play its feedback once the
     /// save has answered (guide §4). Nil when nothing was sent.
     @discardableResult
-    private func saveDraft() -> Task<String?, Never>? {
+    private func saveDraft(refreshSignedMoney: Bool = false) -> Task<String?, Never>? {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
@@ -7567,7 +7590,9 @@ private struct OperativeTimesheetReviewView: View {
             // RULEBOOK 1.43.0 §8: an empty frozen snapshot is rebuilt only from loaded bookings and pay inputs.
             snapshotInputsReady: payInputsBlockMessage == nil,
             // RULEBOOK 1.47.0 §8 `rebuildSnapshot`: only on the save after a counter-signature of a reopened sheet.
-            rebuildSnapshot: rebuildSnapshotOnSave && payInputsBlockMessage == nil
+            rebuildSnapshot: rebuildSnapshotOnSave && payInputsBlockMessage == nil,
+            // RULEBOOK 1.76.0: only the counter-signature refreshes the signed price work and expense rows.
+            refreshSignedMoney: refreshSignedMoney
         )
         if let refusal {
             saveErrorMessage = refusal
@@ -7968,6 +7993,9 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     Feedback.play(.actionRefused)
                     return
                 }
+                // RULEBOOK 1.76.0 (owner answer 23 Nov, b): signed price work or expenses changed in Make changes also
+                // count as "changed and signed off" (read before the new counter-signature replaces the old one).
+                let signedEntriesChanged = TimesheetLateExtrasSupport.summary(draft)?.signedEntriesChanged == true
                 guard TimesheetDraftStore.applySignOff(
                     to: &draft,
                     role: "manager",
@@ -7988,7 +8016,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 // signature (`timesheetSheetChangedByReviewer` on the sheet as counter-signed).
                 let changedByReviewer = CanonicalBusinessEngine.timesheetSheetChangedByReviewer(
                     SignedTimesheetChangeInputs.sheet(draft, keys: [:])
-                )
+                ) || signedEntriesChanged
                 Task {
                     await notificationService.notifyTimesheetCounterSigned(
                         operative: operative,
