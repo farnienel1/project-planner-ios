@@ -6207,6 +6207,9 @@ private struct OperativeTimesheetReviewView: View {
         )
     }
     @State private var editingPayrollLineId: String?
+    /// RULEBOOK 1.76.0 §8 (A1): the reviewer pressed "Make changes" on a signed-off sheet (nothing is written until they
+    /// change a booking).
+    @State private var makingChanges = false
     /// RULEBOOK 1.72.0 §8: the message after a reviewer's ⚙ / ✕ changed or refused a booking.
     @State private var reviewBookingNotice: String?
     /// RULEBOOK 1.72.0 §8: the ✕ waiting for its confirm (`timesheetReviewDeleteBookingWarning` / the overtime trim).
@@ -6269,6 +6272,34 @@ private struct OperativeTimesheetReviewView: View {
                 || (bookingChange?.waitingForLineManager == true && bookingChange?.lateExtrasOnly != true))
             && TimesheetApprovalPolicy.operativeHasSigned(draft)
             && !TimesheetApprovalPolicy.isExported(draft)
+    }
+
+    /// RULEBOOK 1.76.0 §8 (owner decisions 23 Nov, A1 / B1) `timesheetMakeChangesAction`: what the reviewer's "Make
+    /// changes" button does on this sheet — reopen the review (signed off, not exported) or create the next revision
+    /// (exported). Nil: no button.
+    private var makeChangesAction: RulebookTimesheetMakeChangesAction? {
+        guard viewerIsReviewer else { return nil }
+        // Wait for the booking-change check on a signed sheet (a reopened sheet is already in review).
+        if !TimesheetApprovalPolicy.isExported(draft), !bookingCheckReady { return nil }
+        return CanonicalBusinessEngine.timesheetMakeChangesAction(
+            sheet: TimesheetDraftStore.statusPayload(for: draft),
+            viewerIsReviewer: true,
+            viewerIsSubject: false,
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
+            reopened: bookingChange?.reopened == true,
+            revisionAllowed: reviewerMayCreateRevision
+        )
+    }
+
+    /// RULEBOOK 1.76.0 §8: ⚙ / ✕ (no ✓) on the labour lines — A1 after "Make changes" until the first booking change
+    /// reopens the review, B1 on an open revision the person has not signed yet
+    /// (`timesheetRevisionReviewerMayEditBookings`).
+    private var reviewerBookingEditsOpen: Bool {
+        guard viewerIsReviewer, !canManagerReview else { return false }
+        if makingChanges, makeChangesAction == .reopenReview { return true }
+        var sheet = TimesheetDraftStore.statusPayload(for: draft)
+        if let revision = draft.revision, revision > 0 { sheet["revision"] = revision }
+        return CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(sheet: sheet, viewerIsReviewer: true, viewerIsSubject: false)
     }
 
     /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingChanges` for the subject's sheet (nil until the pay run's bookings
@@ -6853,8 +6884,9 @@ private struct OperativeTimesheetReviewView: View {
         }
         if reviewerMayCreateRevision {
             VStack(alignment: .leading, spacing: 6) {
+                // RULEBOOK 1.76.0 §8 (B1): the reviewer's "Create revision" is "Make changes".
                 Button(action: createRevisionForPerson) {
-                    Label(isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetCreateRevisionLabel, systemImage: "doc.badge.plus")
+                    Label(isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetMakeChangesLabel, systemImage: "doc.badge.plus")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
                         .foregroundStyle(.white)
@@ -6865,10 +6897,17 @@ private struct OperativeTimesheetReviewView: View {
                 .buttonStyle(.plain)
                 .disabled(isCreatingRevision)
                 .onlineOnly(isOnline: smartCache.isOnline)
-                Text(CanonicalBusinessEngine.timesheetCreateRevisionHelp)
+                Text(CanonicalBusinessEngine.timesheetMakeChangesHelp(.createRevision))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+        if reviewerBookingEditsOpen, makeChangesAction != .reopenReview {
+            // RULEBOOK 1.76.0 §8 (B1): the reviewer may change an open revision's bookings before the person signs it.
+            Text(CanonicalBusinessEngine.timesheetRevisionReviewerEditNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("operativeTimesheetReview.revisionReviewerEditNote")
         }
         if !earlierVersions.isEmpty {
             TimesheetEarlierVersionsList(versions: earlierVersions)
@@ -6910,6 +6949,34 @@ private struct OperativeTimesheetReviewView: View {
                      : "Signed off. Once exported it never changes; a later correction is made as a revision.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if makeChangesAction == .reopenReview {
+                    // RULEBOOK 1.76.0 §8 (A1): reopen the review on this screen; nothing is written until a booking
+                    // is changed (then the sheet waits for the line manager to sign it off again).
+                    if makingChanges {
+                        Text(CanonicalBusinessEngine.timesheetMakeChangesActiveNote)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        Button(CanonicalBusinessEngine.timesheetMakeChangesCancelLabel) { makingChanges = false }
+                            .frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("operativeTimesheetReview.stopMakingChanges")
+                    } else {
+                        Button(action: { makingChanges = true }) {
+                            Label(CanonicalBusinessEngine.timesheetMakeChangesLabel, systemImage: "pencil")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .foregroundStyle(.white)
+                                .background(Color.blue)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+                        .accessibilityIdentifier("operativeTimesheetReview.makeChanges")
+                        .buttonStyle(.plain)
+                        .disabled(payInputsBlockMessage != nil)
+                        .onlineOnly(isOnline: smartCache.isOnline)
+                        Text(CanonicalBusinessEngine.timesheetMakeChangesHelp(.reopenReview))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         } else if viewerIsReviewer,
                   TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
@@ -7131,11 +7198,12 @@ private struct OperativeTimesheetReviewView: View {
                 isPayeDay: row.isPayeDay,
                 isLeave: false
             )
-            if canManagerReview, actions.approve {
+            if canManagerReview || reviewerBookingEditsOpen, actions.approve {
                 TimesheetManagerReviewActionBar(
                     decision: review?.decision ?? .approved,
                     canEdit: actions.editBooking,
                     canDecline: actions.removeBooking,
+                    canApprove: canManagerReview,
                     onApprove: {
                         draft.payrollLineReviews[row.id] = TimesheetPayrollLineReview(decision: .approved, revisedAmount: nil)
                         saveDraft()
