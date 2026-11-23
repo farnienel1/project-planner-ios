@@ -7980,8 +7980,6 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     return
                 }
                 let counterSignSave = onCounterSignSave()
-                // Review of #427 (finding 2): signed off again — Make changes starts closed.
-                makingChangesFor = nil
                 let signer = draft.managerSignedByName ?? "Line manager"
                 // RULEBOOK 1.60.1: the counter-signature (REV and instant, read from the signed draft) keys the signed
                 // notice and the line-manager peer rows.

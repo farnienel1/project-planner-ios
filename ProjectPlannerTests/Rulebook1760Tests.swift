@@ -104,4 +104,16 @@ final class Rulebook1760Tests: XCTestCase {
             sheet: ["revisionOf": "timesheet_OP1_1795392000"], viewerIsReviewer: true, viewerIsSubject: false
         ))
     }
+
+    /// Re-check of #427: a signed copy with no labour line (price work / expenses only) gets neither the button nor the
+    /// old-sheet line.
+    func testSignedCopyWithoutLabourLinesGetsNoOldSheetLine() {
+        var extrasOnly = counterSigned()
+        extrasOnly["weeklyReportOverride"] = ["lines": [[String: Any]]()]
+        XCTAssertNil(action(extrasOnly))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(sheet: extrasOnly, viewerIsReviewer: true, viewerIsSubject: false, selfSigned: false, reopened: false),
+            ""
+        )
+    }
 }
