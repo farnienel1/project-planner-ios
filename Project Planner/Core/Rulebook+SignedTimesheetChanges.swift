@@ -139,6 +139,9 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
             "waitingFor": RulebookJSON.orNull(waitingFor),
             "snapshotGapOnly": snapshotGapOnly,
             "lateExtrasWaiting": lateExtrasWaiting,
+            // RULEBOOK 1.77.0 (point 6): the report says "Awaiting re-sign — showing last signed figures" when only
+            // late extras or signed price work / expenses wait (`timesheetReportKeepsSignedFigures`).
+            "bookingsChanged": bookingsChanged,
         ]
     }
 
