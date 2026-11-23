@@ -1,9 +1,10 @@
 import XCTest
 @testable import Project_Planner
 
-/// Owner issues 17 Nov #17–#19 (user profile summary on iOS): a person's qualifications are read from every
-/// `operatives` row of that person (`taskPersonKeys`, guardrail 1), each with its stored expiry (the
-/// `qualificationExpiryDates` map, else the assignment's `endDate`) and a safe certificate link. Display only.
+/// Owner issues 17 Nov #17–#19 and 23 Nov gap 1 (RULEBOOK 1.73.0 §5): a person's qualifications are read from every
+/// `operatives` row of that person (`operativeRowsForPerson`, guardrail 1) through `personQualifications`, each with
+/// its expiry (`qualificationExpiryDate` over the `qualificationExpiryDates` map; the assignment's `endDate` is never
+/// an expiry) and a safe certificate link. Display only.
 @MainActor
 final class PersonQualificationsTests: XCTestCase {
     private let day: TimeInterval = 86_400
@@ -52,8 +53,7 @@ final class PersonQualificationsTests: XCTestCase {
         let rows = try XCTUnwrap(PersonQualifications.operativeRows(
             for: ada,
             users: [ada, pat],
-            operatives: [onEmail, linked, other],
-            managers: []
+            operatives: [onEmail, linked, other]
         ))
         XCTAssertEqual(Set(rows.map(\.documentId)), ["op-ada", "op-ada-old"])
     }
@@ -66,8 +66,7 @@ final class PersonQualificationsTests: XCTestCase {
         let rows = try XCTUnwrap(PersonQualifications.operativeRows(
             for: ghost,
             users: [ghost],
-            operatives: [kept, duplicate],
-            managers: []
+            operatives: [kept, duplicate]
         ))
         XCTAssertEqual(Set(rows.map(\.documentId)), ["row-a", "row-b"])
     }
@@ -77,45 +76,68 @@ final class PersonQualificationsTests: XCTestCase {
         let rows = try XCTUnwrap(PersonQualifications.rows(
             for: admin,
             users: [admin],
-            operatives: [operative("op-pat", email: "pat@site.com", qualifications: [Qualification(id: "Q1", name: "CSCS")])],
-            managers: []
+            operatives: [operative("op-pat", email: "pat@site.com", qualifications: [Qualification(id: "Q1", name: "CSCS")])]
         ))
         XCTAssertTrue(rows.isEmpty)
     }
 
-    // MARK: Expiry (#19)
-
-    func testTheExpiryMapIsReadUnderTheIdInAnyCaseThenTheAssignmentEndDate() {
-        let date = Date(timeIntervalSince1970: 1_900_000_000)
-        let fromMap = Qualification(id: "q-abc", name: "SSSTS", hasEndDate: false)
-        XCTAssertEqual(PersonQualifications.expiryDate(qualification: fromMap, expiryDates: ["Q-ABC": date]), date)
-        XCTAssertEqual(PersonQualifications.expiryDate(qualification: fromMap, expiryDates: ["q-abc": date]), date)
-        let fromRow = Qualification(id: "q-row", name: "IPAF", hasEndDate: true, endDate: date)
-        XCTAssertEqual(PersonQualifications.expiryDate(qualification: fromRow, expiryDates: [:]), date)
-        let none = Qualification(id: "q-none", name: "First aid", hasEndDate: false, endDate: nil)
-        XCTAssertNil(PersonQualifications.expiryDate(qualification: none, expiryDates: [:]))
+    func testAPlaceholderRowIsNeverThePersons() throws {
+        // RULEBOOK 1.73.0 `isPlaceholderOperativeRow`: the starter rows older builds wrote are never a person.
+        let ada = user("u-ada", email: "ada@site.com")
+        var placeholder = operative("op-placeholder", email: "ada@site.com")
+        placeholder.firstName = "Placeholder"
+        let real = operative("op-ada", email: "ada@site.com")
+        let rows = try XCTUnwrap(PersonQualifications.operativeRows(
+            for: ada,
+            users: [ada],
+            operatives: [placeholder, real]
+        ))
+        XCTAssertEqual(rows.map(\.documentId), ["op-ada"])
     }
 
-    func testADateInTheMapIsNeverShownAsNoExpiry() {
+    // MARK: Expiry (#19, RULEBOOK 1.73.0 `qualificationExpiryDate`)
+
+    func testTheExpiryMapIsReadUnderTheIdInAnyCaseAndTheAssignmentEndDateIsNeverAnExpiry() throws {
+        let date = Date(timeIntervalSince1970: 1_900_000_000)
+        XCTAssertEqual(PersonQualifications.expiryDate(qualificationId: "q-abc", expiryDates: ["Q-ABC": date]), date)
+        XCTAssertEqual(PersonQualifications.expiryDate(qualificationId: "q-abc", expiryDates: ["q-abc": date]), date)
+        XCTAssertNil(PersonQualifications.expiryDate(qualificationId: "q-none", expiryDates: [:]))
+        // An assignment row's own `endDate` is not an expiry (web read it before 1.73.0; iOS did too).
+        let fromRow = Qualification(id: "q-row", name: "IPAF", hasEndDate: true, endDate: date)
+        let rows = try XCTUnwrap(PersonQualifications.rows(
+            fromOwnRows: [operative("op", email: "a@b.com", qualifications: [fromRow])]
+        ))
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertNil(rows.first?.expiry)
+    }
+
+    func testDatesReachTheScriptAsMillisecondsNotSeconds() {
+        // A date in seconds would read as January 1970 (hand-off v1.73.0).
+        let date = Date(timeIntervalSince1970: 1_900_000_000)
+        let read = PersonQualifications.expiryDate(qualificationId: "Q1", expiryDates: ["Q1": date])
+        XCTAssertEqual(read?.timeIntervalSince1970 ?? 0, 1_900_000_000, accuracy: 0.001)
+    }
+
+    func testADateInTheMapIsNeverShownAsNoExpiry() throws {
         // Web read only `hasEndDate && endDate` and showed "No expiry" for a date kept in the map.
         let reference = Date(timeIntervalSince1970: 1_800_000_000)
         let expiry = reference.addingTimeInterval(400 * day)
         let q = Qualification(id: "Q1", name: "CSCS", hasEndDate: false)
-        let rows = PersonQualifications.rows(
+        let rows = try XCTUnwrap(PersonQualifications.rows(
             fromOwnRows: [operative("op", email: "a@b.com", qualifications: [q], expiry: ["Q1": expiry])],
             reference: reference
-        )
+        ))
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.expiry, expiry)
         XCTAssertTrue(PersonQualifications.expiryText(rows[0]).hasPrefix("Expires "))
         XCTAssertEqual(rows.first?.tone, PersonQualificationRow.Tone.none)
     }
 
-    func testAnExpiredQualificationIsMarkedExpiredByTheWarningsRule() {
+    func testAnExpiredQualificationIsMarkedExpiredByTheWarningsRule() throws {
         let reference = Date(timeIntervalSince1970: 1_800_000_000)
         let q = Qualification(id: "Q1", name: "CSCS")
         let soonQ = Qualification(id: "Q2", name: "IPAF")
-        let rows = PersonQualifications.rows(
+        let rows = try XCTUnwrap(PersonQualifications.rows(
             fromOwnRows: [operative(
                 "op",
                 email: "a@b.com",
@@ -123,36 +145,41 @@ final class PersonQualificationsTests: XCTestCase {
                 expiry: ["Q1": reference.addingTimeInterval(-10 * day), "Q2": reference.addingTimeInterval(10 * day)]
             )],
             reference: reference
-        )
+        ))
         let byId = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
         XCTAssertEqual(byId["Q1"]?.tone, .expired)
         XCTAssertTrue(PersonQualifications.expiryText(byId["Q1"]!).hasPrefix("Expired "))
         XCTAssertEqual(byId["Q2"]?.tone, .expiringSoon)
     }
 
-    func testNoExpiryReadsNoExpiry() {
-        let rows = PersonQualifications.rows(
+    func testNoExpiryReadsNoExpiry() throws {
+        let rows = try XCTUnwrap(PersonQualifications.rows(
             fromOwnRows: [operative("op", email: "a@b.com", qualifications: [Qualification(id: "Q1", name: "CSCS")])]
-        )
+        ))
         XCTAssertEqual(PersonQualifications.expiryText(rows[0]), "No expiry")
     }
 
-    func testTheEditorShowsDerivedExpiriesButNeverWritesThem() {
-        // Review of #269 item 2: derived expiries are display only; the stored map is the write map.
+    func testSettingAnExpiryRemovesEveryOtherSpellingOfTheId() {
+        // RULEBOOK 1.73.0 `withQualificationExpiry`: one spelling of the id is left; other ids are untouched.
         let date = Date(timeIntervalSince1970: 1_900_000_000)
-        let fromRow = Qualification(id: "Q-ROW", name: "IPAF", hasEndDate: true, endDate: date)
-        let otherCase = Qualification(id: "Q-CASE", name: "CSCS")
-        let stored = Qualification(id: "Q-STORED", name: "SMSTS")
-        let op = operative(
-            "op",
-            email: "a@b.com",
-            qualifications: [fromRow, otherCase, stored],
-            expiry: ["q-case": date, "Q-STORED": date]
+        let later = date.addingTimeInterval(30 * day)
+        let stored: [String: Date] = ["q-case": date, "Q-OTHER": date]
+        let set = PersonQualifications.settingExpiry(later, qualificationId: "Q-CASE", in: stored)
+        XCTAssertEqual(Set(set.keys), ["Q-CASE", "Q-OTHER"])
+        XCTAssertEqual(set["Q-CASE"], OrganizationRulebookContext.calendar.startOfDay(for: later))
+        XCTAssertEqual(set["Q-OTHER"], date)
+        let cleared = PersonQualifications.settingExpiry(nil, qualificationId: "Q-CASE", in: stored)
+        XCTAssertEqual(cleared, ["Q-OTHER": date])
+        // A save after clearing removes the stored other spelling (it was loaded and is no longer held).
+        let changes = OperativeQualificationPatch.changes(
+            baselineExpiry: stored,
+            editorExpiry: cleared,
+            selectedIds: ["Q-CASE", "Q-OTHER"],
+            baselineCertificates: [:],
+            editorCertificates: [:]
         )
-        let derived = PersonQualifications.derivedExpiryDates(for: op)
-        XCTAssertEqual(derived, ["Q-ROW": date, "Q-CASE": date])
-        // The stored map (what a save starts from) is untouched.
-        XCTAssertEqual(op.qualificationExpiryDates, ["q-case": date, "Q-STORED": date])
+        XCTAssertEqual(changes.removeExpiry, ["q-case"])
+        XCTAssertTrue(changes.setExpiry.isEmpty)
     }
 
     // MARK: A save changes only what the person changed (review of #269)
@@ -236,21 +263,21 @@ final class PersonQualificationsTests: XCTestCase {
 
     // MARK: Certificates (#18, #16)
 
-    func testACertificateIsOfferedOnlyAsAnHttpsLink() {
+    func testACertificateIsOfferedOnlyAsAnHttpsLink() throws {
         let q1 = Qualification(id: "Q1", name: "CSCS")
         let q2 = Qualification(id: "Q2", name: "IPAF")
-        let rows = PersonQualifications.rows(fromOwnRows: [operative(
+        let rows = try XCTUnwrap(PersonQualifications.rows(fromOwnRows: [operative(
             "op",
             email: "a@b.com",
             qualifications: [q1, q2],
             certificates: ["q1": "https://firebasestorage.googleapis.com/v0/b/x/o/cert.pdf", "Q2": "javascript:alert(1)"]
-        )])
+        )]))
         let byId = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
         XCTAssertEqual(byId["Q1"]?.certificateURL?.scheme, "https")
         XCTAssertNil(byId["Q2"]?.certificateURL)
     }
 
-    func testOneQualificationOnTwoRowsIsShownOnceTheCopyWithACertificateWins() {
+    func testOneQualificationOnTwoRowsIsShownOnceTheCopyWithACertificateWins() throws {
         let q = Qualification(id: "Q1", name: "CSCS")
         let withCert = operative(
             "op-b",
@@ -259,7 +286,7 @@ final class PersonQualificationsTests: XCTestCase {
             certificates: ["Q1": "https://example.com/new.pdf"]
         )
         let without = operative("op-a", email: "a@b.com", qualifications: [Qualification(id: "q1", name: "CSCS")])
-        let rows = PersonQualifications.rows(fromOwnRows: [without, withCert])
+        let rows = try XCTUnwrap(PersonQualifications.rows(fromOwnRows: [without, withCert]))
         XCTAssertEqual(rows.count, 1)
         XCTAssertEqual(rows.first?.operativeDocumentId, "op-b")
         XCTAssertEqual(rows.first?.certificateURL?.absoluteString, "https://example.com/new.pdf")

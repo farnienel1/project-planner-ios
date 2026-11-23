@@ -334,12 +334,15 @@ class NotificationService: ObservableObject {
         let myIds = myIdKeys
 
         if currentUser.permissions.operativeMode {
-            let email = Self.normalizedEmail(currentUser.email)
-            guard !email.isEmpty,
-                  let op = operativeStore.allOperatives.first(where: { Self.normalizedEmail($0.email) == email }) else {
-                return
+            // RULEBOOK 1.73.0 `operativeRowsForPerson`: every `operatives` row of the person (never one row by email).
+            let own = CanonicalBusinessEngine.operativeRowsForPerson(
+                person: currentUser,
+                operatives: operativeStore.allOperatives,
+                roster: orgUsers
+            ) ?? []
+            for op in own {
+                await scheduleQualificationExpiryReminders(for: op, audience: .operative)
             }
-            await scheduleQualificationExpiryReminders(for: op, audience: .operative)
             return
         }
 
@@ -372,8 +375,13 @@ class NotificationService: ObservableObject {
         let now = Date()
         let prefix = LocalNotificationService.qualificationExpiryIdentifierPrefix
 
-        for (qualId, expiryDate) in operative.qualificationExpiryDates {
-            let qualName = operative.qualifications.first(where: { $0.id == qualId })?.name ?? "Qualification"
+        // RULEBOOK 1.73.0 `assignedQualificationExpiries(row)`: assigned qualifications only, one per id without case,
+        // the expiry read by `qualificationExpiryDate`.
+        for item in operative.rulebookAssignedQualificationExpiries {
+            guard let qualId = item["qualificationId"] as? String,
+                  let iso = item["expiryIso"] as? String,
+                  let expiryDate = CanonicalBusinessEngine.date(fromIso: iso) else { continue }
+            let qualName = (item["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Qualification"
             let expiryStart = cal.startOfDay(for: expiryDate)
 
             let schedules: [(suffix: String, titleWindow: String, reminderDay: Date?)] = [

@@ -195,7 +195,7 @@ final class WarningsLogicTests: XCTestCase {
         ).filter { $0.type == .annualLeave }
         XCTAssertEqual(covered.count, 1)
         let row = try XCTUnwrap(covered.first)
-        XCTAssertEqual(row.title, "Half-day leave not covered")
+        XCTAssertEqual(row.title, "Half-day unbooked")
         XCTAssertEqual(row.severity, .medium)
         XCTAssertEqual(row.annualLeave?.kind, "leave_cover")
         XCTAssertEqual(row.annualLeave?.missingRanges, ["09:30–11:45"])

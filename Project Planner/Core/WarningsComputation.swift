@@ -250,23 +250,21 @@ enum WarningsComputation {
         let cal = CanonicalBusinessEngine.businessCalendar
 
         let operatives: [WarningsComputationSnapshot.OperativeSnapshot] = input.operatives.map { operative in
-            let qualificationNames: [String: String] = operative.qualifications.reduce(into: [:]) { acc, q in
-                acc[q.id] = q.name
-            }
-            var qualificationExpiries: [WarningsComputationSnapshot.OperativeSnapshot.QualificationExpirySnapshot] = []
-            qualificationExpiries.reserveCapacity(operative.qualificationExpiryDates.count)
-            for pair in operative.qualificationExpiryDates {
-                let qualificationId = pair.key
-                let expiryDate = pair.value
-                guard let qualificationName = qualificationNames[qualificationId] else { continue }
-                qualificationExpiries.append(
-                    WarningsComputationSnapshot.OperativeSnapshot.QualificationExpirySnapshot(
-                        qualificationId: qualificationId,
-                        qualificationName: qualificationName,
-                        expiryDate: expiryDate
+            // RULEBOOK 1.73.0 §5 `assignedQualificationExpiries(row)`: one per assigned qualification id without case,
+            // the expiry read by `qualificationExpiryDate` (another letter case found too; an assignment's `endDate`
+            // is never an expiry).
+            let qualificationExpiries: [WarningsComputationSnapshot.OperativeSnapshot.QualificationExpirySnapshot] =
+                operative.rulebookAssignedQualificationExpiries.compactMap { item in
+                    guard let id = item["qualificationId"] as? String,
+                          let name = item["name"] as? String,
+                          let iso = item["expiryIso"] as? String,
+                          let expiry = CanonicalBusinessEngine.date(fromIso: iso) else { return nil }
+                    return WarningsComputationSnapshot.OperativeSnapshot.QualificationExpirySnapshot(
+                        qualificationId: id,
+                        qualificationName: name,
+                        expiryDate: expiry
                     )
-                )
-            }
+                }
             let foldedName = operative.name.lowercased()
             let foldedEmail = operative.email.lowercased()
             return WarningsComputationSnapshot.OperativeSnapshot(

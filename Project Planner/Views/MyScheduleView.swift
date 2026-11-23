@@ -727,11 +727,12 @@ struct MyScheduleView: View {
     @EnvironmentObject private var smartCache: SmartCacheService
 
     private var isOperativeMode: Bool { userStore.isOperativeMode() }
-    /// Office / site attendance booking is only for organisation admins and managers — not operatives or basic users.
+    /// Office / site attendance booking is only for organisation admins and managers — not operatives. RULEBOOK §2
+    /// `canScheduleOperatives` through `CanonicalBusinessEngine` (`UserStore.canOpenJobScheduling`; owner 23 Nov gap 3):
+    /// a manager with no level flag (manager level, §11 1.23.1) gets it too; no own role check here.
     private var canBookManagerSiteAttendance: Bool {
         if isOperativeMode { return false }
-        guard let u = userStore.displayUser else { return false }
-        return userStore.hasAdminAccess() || u.permissions.manager
+        return userStore.canOpenJobScheduling()
     }
 
     var body: some View {

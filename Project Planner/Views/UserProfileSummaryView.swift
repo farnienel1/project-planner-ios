@@ -194,7 +194,7 @@ struct UserProfileSummaryView: View {
             for: person,
             users: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers
+            preferredRowId: operativeStore.operativeRow(for: person)?.documentId
         )
         VStack(alignment: .leading, spacing: 8) {
             ManageUserSectionTitle(text: "Qualifications")
