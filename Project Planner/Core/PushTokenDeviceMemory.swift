@@ -77,9 +77,11 @@ final class KeychainPushTokenStore: PushTokenMemoryStore {
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
+        // A miss just means no old token is replaced. No UserDefaults fallback: it is backed up and restored onto
+        // another phone, which would then remove the old phone's live token.
         guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data else {
-            return UserDefaults.standard.string(forKey: key)
+            return nil
         }
         return String(data: data, encoding: .utf8)
     }
@@ -90,15 +92,12 @@ final class KeychainPushTokenStore: PushTokenMemoryStore {
             kSecValueData as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        var status = SecItemUpdate(query(key) as CFDictionary, update as CFDictionary)
+        let status = SecItemUpdate(query(key) as CFDictionary, update as CFDictionary)
         if status == errSecItemNotFound {
             var add = query(key)
             add.merge(update) { _, new in new }
-            status = SecItemAdd(add as CFDictionary, nil)
-        }
-        // A Keychain that refuses (rare) falls back to UserDefaults: still survives a relaunch, not a reinstall.
-        if status != errSecSuccess {
-            UserDefaults.standard.set(value, forKey: key)
+            // A Keychain that refuses (rare) remembers nothing: the next write then replaces no old token.
+            _ = SecItemAdd(add as CFDictionary, nil)
         }
     }
 }

@@ -7091,9 +7091,6 @@ class FirebaseBackend: ObservableObject {
         // document — never a same-email copy, an invite placeholder (`isPushTokenPlaceholderUserId`) or another company's.
         guard let authUid = auth.currentUser?.uid, !authUid.isEmpty, authUid == userId else { return }
         let ref = db.collection("users").document(userId)
-        // A failed read is not an empty list. Replacing pushTokens then would delete tokens this client never received.
-        let snap = try await ref.getDocument(source: .server)
-        let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
         // The token this device wrote before for this account (FCM refresh, reinstall) is replaced, never kept beside
         // the new one: two live tokens for one phone delivered every push twice (owner report 23 Nov).
         let memory = PushTokenDeviceMemory.shared
@@ -7101,21 +7098,31 @@ class FirebaseBackend: ObservableObject {
             current: currentDeviceToken,
             previous: memory.lastWrittenToken(uid: userId)
         )
-        let next = LaunchStartupPolicy.nextStoredPushTokens(
-            existing: existing,
-            currentDeviceToken: currentDeviceToken,
-            // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
-            // What it does know is its own previous token, dropped here.
-            failedTokens: replaced
-        )
-        guard next != existing else {
-            memory.recordWritten(token: currentDeviceToken, uid: userId)
-            return
+        // A transaction (server read, then write): a token the push function pruned between the read and the write is
+        // never written back, and a failed read is never taken for an empty list.
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snap: DocumentSnapshot
+            do {
+                snap = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
+            let next = LaunchStartupPolicy.nextStoredPushTokens(
+                existing: existing,
+                currentDeviceToken: currentDeviceToken,
+                // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
+                // What it does know is its own previous token, dropped here.
+                failedTokens: replaced
+            )
+            guard next != existing else { return nil }
+            transaction.setData([
+                "pushTokens": next,
+                "pushTokenUpdatedAt": Timestamp(date: Date())
+            ], forDocument: ref, merge: true)
+            return nil
         }
-        try await ref.setData([
-            "pushTokens": next,
-            "pushTokenUpdatedAt": Timestamp(date: Date())
-        ], merge: true)
         memory.recordWritten(token: currentDeviceToken, uid: userId)
     }
 
