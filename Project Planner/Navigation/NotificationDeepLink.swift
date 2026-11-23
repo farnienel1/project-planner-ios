@@ -95,6 +95,9 @@ enum NotificationDeepLink {
             "catalogue": value(catalogueKey, "catalogue"),
             "userId": value(userIdKey, "userId", "targetUserId"),
             "organizationId": value(organizationIdKey, "organizationId"),
+            // RULEBOOK 1.70.0 `PUSH_PAYLOAD_KEYS`: the person the notice is about (the week is read by `weekStart(from:)`
+            // from `deepLinkWeekStartMs`).
+            "deepLinkUserId": value("deepLinkUserId"),
         ]
         return CanonicalBusinessEngine.pushPayloadFields(row)
     }
@@ -144,7 +147,7 @@ enum NotificationDeepLink {
         // push without `deepLinkUserId` (older server) never opens a person-specific screen on the recipient's own id —
         // see `deepLinkTarget`.
         let isPush = userInfo[typeKey] == nil
-        let explicitTarget = string(from: userInfo["deepLinkUserId"])
+        let explicitTarget = fields?["deepLinkUserId"] ?? string(from: userInfo["deepLinkUserId"])
         let rowTarget = isPush ? nil : (string(from: userInfo[userIdKey]) ?? fields.map { $0["userId"] } ?? nil)
         let pushRecipient = isPush ? (fields.map { $0["userId"] } ?? string(from: userInfo["userId"] ?? userInfo["targetUserId"])) : nil
         func resolve(_ target: String?) -> CanonicalBusinessEngine.CanonicalNotificationDestination? {

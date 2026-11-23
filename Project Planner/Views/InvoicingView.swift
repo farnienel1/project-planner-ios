@@ -2962,13 +2962,21 @@ private struct MyTimesheetView: View {
                                 Text(row.date.formatted(date: .abbreviated, time: .omitted))
                                     .font(.subheadline.weight(.bold))
                                     .strikethrough(removed)
-                                Text("\(row.jobNumber) \(row.projectName)")
+                                // RULEBOOK 1.70.0 `timesheetLineDisplay`: the line's title and its own times (display only).
+                                let display = CanonicalBusinessEngine.timesheetLineDisplay(
+                                    jobNumber: row.jobNumber,
+                                    projectName: row.projectName,
+                                    details: row.details,
+                                    date: row.date
+                                )
+                                Text(display?.title ?? "\(row.jobNumber) \(row.projectName)")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                                     .strikethrough(removed)
                                 // RULEBOOK 1.43.0 §8 `timesheetLineClockText`: the line's own clock times only (standard
                                 // or overtime part); the hours and any multiplied text are on the rate line below.
-                                if let clock = TimesheetPayrollCollector.lineClockLabel(row.details) {
+                                if let clock = (display?.times).flatMap({ $0.isEmpty ? nil : $0 })
+                                    ?? TimesheetPayrollCollector.lineClockLabel(row.details) {
                                     Text(clock)
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
@@ -2978,8 +2986,9 @@ private struct MyTimesheetView: View {
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
                                     .strikethrough(removed)
-                                if row.isOverlapping {
-                                    Text(CanonicalBusinessEngine.overlappingBookingNote)
+                                // The person's own sheet: `overlappingBookingNote(reviewing: false)`.
+                                if row.isOverlapping, let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: false) {
+                                    Text(note)
                                         .font(.caption.weight(.semibold))
                                         .foregroundStyle(PPColor.warningAmber)
                                 }
@@ -6802,17 +6811,25 @@ private struct OperativeTimesheetReviewView: View {
                 Text(row.date.formatted(date: .abbreviated, time: .omitted))
                     .font(.subheadline.weight(.semibold))
                     .strikethrough(removed)
-                Text("\(row.jobNumber) · \(row.projectName)")
+                // RULEBOOK 1.70.0 `timesheetLineDisplay`: the line's title and its own times (display only).
+                let display = CanonicalBusinessEngine.timesheetLineDisplay(
+                    jobNumber: row.jobNumber,
+                    projectName: row.projectName,
+                    details: row.details,
+                    date: row.date
+                )
+                Text(display?.title ?? "\(row.jobNumber) · \(row.projectName)")
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .strikethrough(removed)
-                Text(row.details)
+                Text(display?.times ?? row.details)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .strikethrough(removed)
-                if row.isOverlapping {
-                    // `overlappingBookingIds`: still paid; the line manager checks it.
-                    Text(CanonicalBusinessEngine.overlappingBookingNote)
+                // `overlappingBookingIds`: still paid. The reviewer (line manager or admin) reads
+                // `overlappingBookingNote(reviewing: true)` (RULEBOOK 1.70.0 §8).
+                if row.isOverlapping, let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: true) {
+                    Text(note)
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(PPColor.warningAmber)
                 }
