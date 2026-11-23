@@ -155,21 +155,83 @@ final class PersonQualificationsTests: XCTestCase {
         XCTAssertEqual(op.qualificationExpiryDates, ["q-case": date, "Q-STORED": date])
     }
 
-    func testKeysTheWriteNoLongerHasAreRemovedOnTheServer() {
-        // Review of #269 item 4: a cleared expiry and a superseded certificate link are field-path deletes.
-        let date = Date(timeIntervalSince1970: 1_900_000_000)
-        let write = CanonicalBusinessEngine.CanonicalOperativeQualificationMaps(
-            qualifications: [],
-            qualificationExpiryDates: ["Q1": CanonicalBusinessEngine.isoString(from: date)],
-            qualificationCertificateURLs: ["Q1": "https://example.com/new.pdf"]
+    // MARK: A save changes only what the person changed (review of #269)
+
+    private let loadedDay = Date(timeIntervalSince1970: 1_900_000_000)
+
+    func testAnExpiryUnderAnotherSpellingIsNeverDeletedWhenThePersonDidNotTouchIt() {
+        // The #19 case: "q-case" is the stored key for qualification "Q-CASE". A save of something else keeps it.
+        let loaded: [String: Date] = ["q-case": loadedDay, "Q-OTHER": loadedDay]
+        var editor = loaded
+        editor["Q-OTHER"] = loadedDay.addingTimeInterval(30 * day)
+        let changes = OperativeQualificationPatch.changes(
+            baselineExpiry: loaded,
+            editorExpiry: editor,
+            selectedIds: ["Q-CASE", "Q-OTHER"],
+            baselineCertificates: [:],
+            editorCertificates: [:]
         )
-        let removed = OperativeQualificationPatch.removedKeys(
-            storedExpiry: ["Q1": date, "Q2": date],
-            storedCertificates: ["q1": "https://example.com/old.pdf", "Q1": "https://example.com/older.pdf"],
-            write: write
+        XCTAssertTrue(changes.removeExpiry.isEmpty)
+        XCTAssertEqual(Array(changes.setExpiry.keys), ["Q-OTHER"])
+        XCTAssertEqual(changes.applied(expiry: loaded)["q-case"], loadedDay)
+    }
+
+    func testAnExpiryOrCertificateSavedOnAnotherDeviceAfterLoadIsKept() {
+        // This phone loaded nothing for Q2; another device then set its expiry and uploaded its certificate.
+        let loadedExpiry: [String: Date] = ["Q1": loadedDay]
+        let loadedCerts = ["Q1": "https://example.com/q1.pdf"]
+        let liveStoredExpiry: [String: Date] = ["Q1": loadedDay, "Q2": loadedDay]
+        let liveStoredCerts = ["Q1": "https://example.com/q1.pdf", "Q2": "https://example.com/other-device.pdf"]
+        // The person changed only Q1's expiry here.
+        let changes = OperativeQualificationPatch.changes(
+            baselineExpiry: loadedExpiry,
+            editorExpiry: ["Q1": loadedDay.addingTimeInterval(10 * day)],
+            selectedIds: ["Q1", "Q2"],
+            baselineCertificates: loadedCerts,
+            editorCertificates: loadedCerts
         )
-        XCTAssertEqual(removed.expiry, ["Q2"])
-        XCTAssertEqual(removed.certificates, ["q1"])
+        XCTAssertTrue(changes.removeExpiry.isEmpty)
+        XCTAssertTrue(changes.removeCertificates.isEmpty)
+        XCTAssertTrue(changes.setCertificates.isEmpty)
+        XCTAssertEqual(changes.applied(expiry: liveStoredExpiry)["Q2"], loadedDay)
+        XCTAssertEqual(changes.applied(certificates: liveStoredCerts)["Q2"], "https://example.com/other-device.pdf")
+    }
+
+    func testAnExpiryOrCertificateThePersonClearedIsRemoved() {
+        let loadedExpiry: [String: Date] = ["Q1": loadedDay, "Q2": loadedDay]
+        let loadedCerts = ["Q1": "https://example.com/q1.pdf"]
+        let changes = OperativeQualificationPatch.changes(
+            baselineExpiry: loadedExpiry,
+            editorExpiry: ["Q2": loadedDay],
+            selectedIds: ["Q1", "Q2"],
+            baselineCertificates: loadedCerts,
+            editorCertificates: [:]
+        )
+        XCTAssertEqual(changes.removeExpiry, ["Q1"])
+        XCTAssertTrue(changes.setExpiry.isEmpty, "an unchanged expiry is never re-saved")
+        XCTAssertEqual(changes.removeCertificates, ["Q1"])
+    }
+
+    func testARenewedCertificateRemovesOnlyOtherSpellingsOfItsId() {
+        let known = [
+            "q1": "https://example.com/old.pdf",
+            "Q2": "https://example.com/other.pdf",
+        ]
+        let changes = OperativeQualificationPatch.changes(
+            baselineExpiry: [:],
+            editorExpiry: [:],
+            selectedIds: [],
+            baselineCertificates: [:],
+            editorCertificates: [:],
+            uploaded: ["Q1": "https://example.com/new.pdf"],
+            knownCertificates: known
+        )
+        XCTAssertEqual(changes.setCertificates, ["Q1": "https://example.com/new.pdf"])
+        XCTAssertEqual(changes.removeCertificates, ["q1"])
+        XCTAssertEqual(
+            changes.applied(certificates: known),
+            ["Q1": "https://example.com/new.pdf", "Q2": "https://example.com/other.pdf"]
+        )
     }
 
     // MARK: Certificates (#18, #16)

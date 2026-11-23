@@ -677,8 +677,20 @@ struct OperativeQualificationsEditorView: View {
             from: assignment.qualifications,
             preferring: Array(selectedQualifications) + Array(stored.qualifications)
         )
-        let savedExpiry = OperativeQualificationPatch.expiryDates(from: assignment.qualificationExpiryDates)
-        var savedCertificates = assignment.qualificationCertificateURLs
+        // Review of #269: the maps change only by what the person changed in THIS editor (against what it loaded),
+        // never by a comparison with the live stored row — another device's newer expiry or certificate, and an
+        // expiry kept under another spelling of the id (#19), stay exactly as stored.
+        let selectedIds = Set(selectedQualifications.map(\.id))
+        let mapChanges = OperativeQualificationPatch.changes(
+            baselineExpiry: baselineExpiry,
+            editorExpiry: qualificationExpiryDates,
+            selectedIds: selectedIds,
+            baselineCertificates: baselineCerts,
+            editorCertificates: qualificationCertificateURLs
+        )
+        let savedExpiry = mapChanges.applied(expiry: stored.qualificationExpiryDates)
+        let savedCertificates = mapChanges.applied(certificates: stored.qualificationCertificateURLs)
+        let qualificationRows = assignment.qualifications
 
         var updatedOperative = stored
         updatedOperative.qualifications = Set(savedQualifications)
@@ -696,20 +708,12 @@ struct OperativeQualificationsEditorView: View {
         do {
             let backend = firebaseBackend
             let documentId = operative.documentId
-            // Item 4 (review of #269): keys the stored maps hold that this write no longer has are removed on the
-            // server (field-path deletes), so a cleared expiry or a superseded certificate link really goes.
-            let removed = OperativeQualificationPatch.removedKeys(
-                storedExpiry: stored.qualificationExpiryDates,
-                storedCertificates: stored.qualificationCertificateURLs,
-                write: assignment
-            )
             try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
                 try await backend.patchOperativeQualificationMaps(
                     operativeDocumentId: documentId,
                     organizationId: organizationId,
-                    write: assignment,
-                    removedExpiryKeys: removed.expiry,
-                    removedCertificateKeys: removed.certificates
+                    qualifications: qualificationRows,
+                    changes: mapChanges
                 )
             }
         } catch is BoundedWait.TimedOut {
@@ -758,50 +762,40 @@ struct OperativeQualificationsEditorView: View {
                 return false
             }
 
-            // Issue #16: a renewed certificate replaces the old link under every spelling of the qualification id
-            // (RULEBOOK `mergeQualificationCertificateUrls` with `removedIds`, then the new link), so View certificate
-            // shows the new file on both apps. The old file stays in Storage (each upload is a new object, §24).
-            guard let withoutRenewed = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
-                existing: savedCertificates,
-                uploaded: [:],
-                removedIds: Array(uploaded.keys)
-            ),
-            let mergedURLs = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
-                existing: withoutRenewed,
-                uploaded: uploaded
-            ) else {
-                errorMessage = "Could not save the certificate."
-                syncBaselineFromWorkingState()
-                return false
+            // Issue #16: a renewed certificate is set under its id and every OTHER spelling of that id is removed, so
+            // View certificate shows the new file on both apps. Nothing else in the maps is touched. The old file
+            // stays in Storage (each upload is a new object, §24).
+            let certificateChanges = OperativeQualificationPatch.changes(
+                baselineExpiry: [:],
+                editorExpiry: [:],
+                selectedIds: [],
+                baselineCertificates: [:],
+                editorCertificates: [:],
+                uploaded: uploaded,
+                knownCertificates: savedCertificates
+            )
+            let mergedURLs = certificateChanges.applied(certificates: savedCertificates)
+            func applyCertificates() {
+                updatedOperative.qualificationCertificateURLs = mergedURLs
+                updatedOperative.updatedAt = Date()
+                operativeStore.replaceOperativeInMemory(updatedOperative)
+                qualificationCertificateURLs = mergedURLs
             }
-            savedCertificates = mergedURLs
-            var withCertificates = assignment
-            withCertificates.qualificationCertificateURLs = mergedURLs
             do {
                 let backend = firebaseBackend
                 let documentId = operative.documentId
-                let certificateWrite = withCertificates
-                let removed = OperativeQualificationPatch.removedKeys(
-                    storedExpiry: savedExpiry,
-                    storedCertificates: assignment.qualificationCertificateURLs,
-                    write: certificateWrite
-                )
                 try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
                     try await backend.patchOperativeQualificationMaps(
                         operativeDocumentId: documentId,
                         organizationId: organizationId,
-                        write: certificateWrite,
-                        removedExpiryKeys: removed.expiry,
-                        removedCertificateKeys: removed.certificates
+                        qualifications: qualificationRows,
+                        changes: certificateChanges
                     )
                 }
             } catch is BoundedWait.TimedOut {
                 // The file is uploaded and the link is written on this phone; Firestore sends it when the server
                 // answers. Show the new certificate, keep the screen open and say so — never "Saving…" for ever.
-                updatedOperative.qualificationCertificateURLs = mergedURLs
-                updatedOperative.updatedAt = Date()
-                operativeStore.replaceOperativeInMemory(updatedOperative)
-                qualificationCertificateURLs = mergedURLs
+                applyCertificates()
                 certificateUploadTargets = [:]
                 syncBaselineFromWorkingState()
                 errorMessage = Self.waitingForServerMessage
@@ -811,10 +805,7 @@ struct OperativeQualificationsEditorView: View {
                 syncBaselineFromWorkingState()
                 return false
             }
-            updatedOperative.qualificationCertificateURLs = mergedURLs
-            updatedOperative.updatedAt = Date()
-            operativeStore.replaceOperativeInMemory(updatedOperative)
-            qualificationCertificateURLs = mergedURLs
+            applyCertificates()
         }
 
         certificateUploadTargets = [:]
