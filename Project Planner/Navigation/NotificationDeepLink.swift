@@ -95,6 +95,9 @@ enum NotificationDeepLink {
             "catalogue": value(catalogueKey, "catalogue"),
             "userId": value(userIdKey, "userId", "targetUserId"),
             "organizationId": value(organizationIdKey, "organizationId"),
+            // RULEBOOK 1.70.0 `PUSH_PAYLOAD_KEYS`: the person the notice is about (the week is read by `weekStart(from:)`
+            // from `deepLinkWeekStartMs`).
+            "deepLinkUserId": value("deepLinkUserId"),
         ]
         return CanonicalBusinessEngine.pushPayloadFields(row)
     }
@@ -139,20 +142,50 @@ enum NotificationDeepLink {
         let related = fields.map { $0["relatedId"] } ?? string(from: userInfo[relatedIdKey] ?? userInfo["relatedId"])
         let dayKey = fields.map { $0["dayKey"] } ?? string(from: userInfo[dayKeyKey] ?? userInfo["dayKey"])
         let catalogue = fields.map { $0["catalogue"] } ?? string(from: userInfo[catalogueKey] ?? userInfo["catalogue"])
-        let targetUserId = fields.map { $0["userId"] } ?? string(from: userInfo[userIdKey] ?? userInfo["targetUserId"])
-        guard let destination = CanonicalBusinessEngine.notificationDestination(
-            type: typeRaw,
-            relatedId: related,
-            dayKey: dayKey,
-            catalogue: catalogue,
-            role: role,
-            deepLinkUserId: targetUserId
-        ) else { return }
+        // The person the notice is about. An in-app row tap carries it as `pp_userId` (`deepLinkUserId ?? userId`,
+        // `userInfo(for:)`). A push carries `deepLinkUserId` from rulebook 1.70.0; its `userId` is the RECIPIENT, so a
+        // push without `deepLinkUserId` (older server) never opens a person-specific screen on the recipient's own id —
+        // see `deepLinkTarget`.
+        let isPush = userInfo[typeKey] == nil
+        let explicitTarget = fields?["deepLinkUserId"] ?? string(from: userInfo["deepLinkUserId"])
+        let rowTarget = isPush ? nil : (string(from: userInfo[userIdKey]) ?? fields.map { $0["userId"] } ?? nil)
+        let pushRecipient = isPush ? (fields.map { $0["userId"] } ?? string(from: userInfo["userId"] ?? userInfo["targetUserId"])) : nil
+        func resolve(_ target: String?) -> CanonicalBusinessEngine.CanonicalNotificationDestination? {
+            CanonicalBusinessEngine.notificationDestination(
+                type: typeRaw,
+                relatedId: related,
+                dayKey: dayKey,
+                catalogue: catalogue,
+                role: role,
+                deepLinkUserId: target
+            )
+        }
+        let destination: CanonicalBusinessEngine.CanonicalNotificationDestination
+        if let target = explicitTarget ?? rowTarget {
+            guard let found = resolve(target) else { return }
+            destination = found
+        } else {
+            guard let withRecipient = resolve(pushRecipient) else { return }
+            if personSpecificKinds.contains(withRecipient.kind) {
+                // A push from an older server: the recipient is not the person the screen is about (a line manager's
+                // "needs your signature" opened their own timesheet). Open the list instead of a person.
+                guard let withoutPerson = resolve(nil) else { return }
+                destination = withoutPerson
+            } else {
+                destination = withRecipient
+            }
+        }
 
         // The payload's `catalogue` names the job's collection when present. `userId` is the recipient, never the job.
         let jobCatalogue = (catalogue == "projects" || catalogue == "smallWorks") ? catalogue : nil
         open(destination, weekStart: weekStart(from: userInfo), jobCatalogue: jobCatalogue)
     }
+
+    /// Destinations that open ANOTHER person (a report's timesheet, their overtime, their annual leave). A push names
+    /// that person only through `deepLinkUserId`, never through `userId` (the recipient).
+    private static let personSpecificKinds: Set<String> = [
+        "timesheetTeamAwaiting", "timesheetTeamSigned", "overtimeUser", "annualLeavePerson",
+    ]
 
     private static func open(
         _ destination: CanonicalBusinessEngine.CanonicalNotificationDestination,
@@ -376,6 +409,24 @@ enum NotificationDeepLink {
         if let date = userInfo[weekStartKey] as? Date ?? userInfo["weekStart"] as? Date {
             return date
         }
+        // Rulebook 1.70.0 push payload (`PUSH_PAYLOAD_KEYS`): `deepLinkWeekStartMs`, epoch milliseconds as text (FCM
+        // data values are strings).
+        if let raw = userInfo["deepLinkWeekStartMs"] {
+            if let number = raw as? NSNumber { return Date(timeIntervalSince1970: number.doubleValue / 1000) }
+            if let text = string(from: raw), let ms = Double(text) { return Date(timeIntervalSince1970: ms / 1000) }
+        }
+        // Fallback: `deepLinkWeekStart` — epoch seconds or milliseconds, an ISO instant, or an organisation day key.
+        if let raw = userInfo["deepLinkWeekStart"] {
+            if let number = raw as? NSNumber { return epochDate(number.doubleValue) }
+            if let text = string(from: raw) {
+                if let value = Double(text) { return epochDate(value) }
+                if let date = ISO8601DateFormatter().date(from: text) { return date }
+                let fractional = ISO8601DateFormatter()
+                fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                if let date = fractional.date(from: text) { return date }
+                if let date = CanonicalBusinessEngine.date(fromDayKey: text) { return date }
+            }
+        }
         if let interval = userInfo[weekStartKey] as? TimeInterval ?? userInfo["weekStart"] as? TimeInterval {
             return Date(timeIntervalSince1970: interval)
         }
@@ -383,5 +434,10 @@ enum NotificationDeepLink {
             return Date(timeIntervalSince1970: number.doubleValue)
         }
         return nil
+    }
+
+    /// Epoch seconds, or milliseconds when the number is too large to be seconds.
+    private static func epochDate(_ value: Double) -> Date {
+        Date(timeIntervalSince1970: value > 100_000_000_000 ? value / 1000 : value)
     }
 }

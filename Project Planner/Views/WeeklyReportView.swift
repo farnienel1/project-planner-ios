@@ -71,6 +71,8 @@ struct WeeklyReportView: View {
     @State private var periodLowCount = 0
     @State private var periodSummaryReady = false
     @State private var timesheetFeed = WeeklyReportTimesheetFeed.empty
+    /// RULEBOOK 1.70.0 §7: `deletedPeople` records (`parseFormerPersonDocument`) for `weeklyReportLeaveRows`.
+    @State private var formerPeople: [[String: Any]] = []
 
     init(
         bookingStore: BookingStore,
@@ -899,6 +901,11 @@ struct WeeklyReportView: View {
             if logoImage == nil {
                 await loadOrganizationLogo()
             }
+            // RULEBOOK 1.70.0 §7: a deleted person's leave reads "Former: <name>"; a failed read is an empty list.
+            if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
+                let former = await firebaseBackend.loadFormerPeople(organizationId: orgId)
+                await MainActor.run { formerPeople = former }
+            }
             let feed = await WeeklyReportTimesheetFeed.load(
                 users: userStore.organizationUsers,
                 range: reportDateRange,
@@ -1043,7 +1050,8 @@ struct WeeklyReportView: View {
             people: WeeklyReportPayInputs.leavePeople(pay.built.people),
             startDayKey: OrganizationRulebookContext.dayKey(reportStartDay),
             endDayKey: OrganizationRulebookContext.dayKey(reportEndDay),
-            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys,
+            formerPeople: formerPeople
         ) ?? (rows: [], total: 0)
         sections.append(
             WeeklyReportExportBuilder.Section(

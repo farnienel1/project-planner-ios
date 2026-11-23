@@ -392,4 +392,42 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertNil(received.last?["isSmallWorks"], "userId is the recipient and never decides the job's collection")
         XCTAssertEqual(received.last?["projectId"] as? UUID, JobKeys.inAppId("TEST-JOB-2"))
     }
+
+    // MARK: 18. Push deep links name the person through `deepLinkUserId` (owner 23 Nov)
+
+    /// A "timesheet needs your signature" push opened the line manager's own timesheet: the push's `userId` is the
+    /// recipient. The person comes from `deepLinkUserId`; without it the push opens the list, never the recipient.
+    func testTimesheetSignOffPushOpensTheReportNotTheRecipient() {
+        let manager = levelUser(id: "manager-uid", role: .manager, permissions: UserPermissions(manager: true))
+        var received: [[String: Any]] = []
+        let token = NotificationCenter.default.addObserver(forName: .mainMenuOpenSurface, object: nil, queue: nil) { note in
+            received.append(note.userInfo as? [String: Any] ?? [:])
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        NotificationDeepLink.route(
+            userInfo: [
+                "type": "timesheet_pending_manager_signoff",
+                "userId": "manager-uid",
+                "deepLinkUserId": "report-uid",
+                "deepLinkWeekStartMs": "1763251200000",
+                "dayKey": "2026-11-16",
+            ],
+            user: manager
+        )
+        NotificationDeepLink.route(
+            userInfo: [
+                "type": "timesheet_pending_manager_signoff",
+                "userId": "manager-uid",
+                "dayKey": "2026-11-16",
+            ],
+            user: manager
+        )
+        XCTAssertEqual(received.count, 2)
+        XCTAssertEqual(received.first?["timesheetSurface"] as? String, "teamAwaiting")
+        XCTAssertEqual(received.first?["targetUserId"] as? String, "report-uid")
+        XCTAssertEqual(received.first?["weekStart"] as? Date, Date(timeIntervalSince1970: 1_763_251_200),
+                       "deepLinkWeekStartMs is epoch milliseconds (web 1.70.0 PUSH_PAYLOAD_KEYS)")
+        XCTAssertEqual(received.last?["timesheetSurface"] as? String, "teamAwaiting")
+        XCTAssertNil(received.last?["targetUserId"], "the push's userId is the recipient, never the report")
+    }
 }
