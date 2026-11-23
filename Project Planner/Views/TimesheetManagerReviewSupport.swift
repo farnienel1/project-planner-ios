@@ -196,9 +196,33 @@ enum TimesheetDraftAdjustments {
 
 // MARK: - Review action bar
 
+/// RULEBOOK 1.72.0 §8: a reviewer's ✕ waiting for its confirm — the booking delete (with its tombstone) or, on an
+/// overtime line, the trim to the standard part.
+struct TimesheetReviewRemoval: Identifiable {
+    enum Action {
+        case delete(RulebookTimesheetReviewBookingDelete)
+        case trim(collection: String, bookingId: String, set: [String: Any], remove: [String])
+    }
+
+    let id = UUID()
+    let warning: RulebookTimesheetReviewDeleteWarning
+    let action: Action
+
+    /// The confirm's text: what is changed, the rulebook's message, the overtime note, and (for a delete) the undo note.
+    var messageText: String {
+        var parts = [warning.summary, warning.message]
+        if let note = warning.overtimeNote { parts.append(note) }
+        if case .delete = action { parts.append(warning.undoNote) }
+        return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+}
+
 struct TimesheetManagerReviewActionBar: View {
     let decision: TimesheetManagerDecision
     let canEdit: Bool
+    /// RULEBOOK 1.72.0: ✕ on a labour line removes its booking, offered only when the line names one
+    /// (`timesheetLabourLineReviewActions`). Price work, expenses and late extras keep it.
+    var canDecline: Bool = true
     let onApprove: () -> Void
     let onDecline: () -> Void
     let onEdit: () -> Void
@@ -214,13 +238,15 @@ struct TimesheetManagerReviewActionBar: View {
                 inactive: selection == .declined,
                 action: onApprove
             )
-            reviewButton(
-                systemName: "xmark",
-                activeTint: .red,
-                selected: selection == .declined,
-                inactive: selection.isReviewApproved,
-                action: onDecline
-            )
+            if canDecline {
+                reviewButton(
+                    systemName: "xmark",
+                    activeTint: .red,
+                    selected: selection == .declined,
+                    inactive: selection.isReviewApproved,
+                    action: onDecline
+                )
+            }
             if canEdit {
                 Button(action: onEdit) {
                     Image(systemName: "gearshape.fill")
@@ -274,10 +300,74 @@ struct TimesheetManagerReviewActionBar: View {
 }
 
 enum TimesheetPayrollLineBookingLookup {
+    /// The booking UUID of a line id `op-{uuid}-normal` / `mgr-{uuid}-ot` (the collector's ids). The UUID itself holds
+    /// hyphens, so the prefix and the suffix are taken off rather than splitting on "-" (before 1.72.0 the split read
+    /// only the UUID's first group and never matched, so the editor fell back to the line's own times).
     static func bookingId(from lineId: String) -> UUID? {
-        let parts = lineId.split(separator: "-", omittingEmptySubsequences: false)
-        guard parts.count >= 3 else { return nil }
-        return UUID(uuidString: String(parts[1]))
+        var bare = lineId
+        for prefix in ["op-", "mgr-"] where bare.hasPrefix(prefix) { bare = String(bare.dropFirst(prefix.count)) }
+        for suffix in ["-normal", "-ot"] where bare.hasSuffix(suffix) { bare = String(bare.dropLast(suffix.count)) }
+        return UUID(uuidString: bare)
+    }
+
+    /// RULEBOOK 1.72.0: the collection of the booking a line comes from (the line's own, else `mgr-` = manager site).
+    static func reviewBookingCollection(_ row: TimesheetPayrollLineItem) -> String {
+        if let collection = row.bookingCollection, !collection.isEmpty { return collection }
+        return (row.bookingId ?? row.id).hasPrefix("mgr-") ? "managerSiteBookings" : "bookings"
+    }
+
+    /// RULEBOOK 1.72.0: the document ids to read the line's booking under, stored case first (`documentKey` from the
+    /// store), then the UUID upper and lower case. Empty when the line names no booking.
+    static func reviewBookingDocumentIds(
+        _ row: TimesheetPayrollLineItem,
+        bookings: [Booking],
+        managerBookings: [ManagerSiteBooking]
+    ) -> [String] {
+        guard let uuid = bookingId(from: row.bookingId ?? row.id) else { return [] }
+        var ids: [String] = []
+        if reviewBookingCollection(row) == "managerSiteBookings" {
+            if let stored = managerBookings.first(where: { $0.id == uuid }) { ids.append(stored.documentKey) }
+        } else if let stored = bookings.first(where: { $0.id == uuid }) {
+            ids.append(stored.documentKey)
+        }
+        ids.append(uuid.uuidString)
+        ids.append(uuid.uuidString.lowercased())
+        return ids
+    }
+
+    /// "Mon 23 Nov · J-1042 · Station Road · 07:00–16:00" for the review confirm (organisation-zone day; the title and
+    /// times from `timesheetLineDisplay`).
+    static func reviewLineDayAndTitle(_ row: TimesheetPayrollLineItem) -> String {
+        let display = CanonicalBusinessEngine.timesheetLineDisplay(
+            jobNumber: row.jobNumber,
+            projectName: row.projectName,
+            details: row.details,
+            date: row.date
+        )
+        return [reviewDayText(row.date), display?.title ?? "\(row.jobNumber) \(row.projectName)"]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    /// "Mon 23 Nov" in the organisation zone.
+    static func reviewDayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        formatter.dateFormat = "EEE d MMM"
+        return formatter.string(from: date)
+    }
+
+    static func reviewBookingSummary(_ row: TimesheetPayrollLineItem) -> String {
+        let display = CanonicalBusinessEngine.timesheetLineDisplay(
+            jobNumber: row.jobNumber,
+            projectName: row.projectName,
+            details: row.details,
+            date: row.date
+        )
+        let title = display?.title ?? "\(row.jobNumber) \(row.projectName)"
+        let times = display?.times ?? ""
+        return [reviewDayText(row.date), title, times].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
     static func initialChoice(
@@ -295,7 +385,8 @@ enum TimesheetPayrollLineBookingLookup {
                 workStartTime: booking.workStartTime,
                 workEndTime: booking.workEndTime,
                 isBreakRemoved: booking.isBreakRemoved,
-                otMultiplierOverride: nil
+                // RULEBOOK 1.72.0: the editor opens on the booking's own rate, so a rate nobody changed is never written.
+                otMultiplierOverride: booking.otMultiplierOverride
             )
         }
         // RULEBOOK 1.43.0: a line's details show only its own part (standard or overtime times), so the booking's whole
@@ -401,6 +492,10 @@ enum TimesheetPayrollLineBookingLookup {
     /// Nil (review of #233, fail closed) when a line's current review could not be checked by the rulebook: the edit is
     /// refused (`TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage`), never saved unchecked — a declined
     /// line would otherwise become approved, or the booking's other line be skipped.
+    ///
+    /// RULEBOOK 1.72.0 (decision A): the app no longer writes these reviews — ⚙ writes the booking
+    /// (`timesheetReviewBookingEditWrites`). Kept to build the stored shape older sheets hold, which are still read
+    /// exactly as before (guardrail 3), in the 1.46.0 tests.
     static func reviewsAfterEdit(
         _ edit: Edit,
         editedLineId: String,
@@ -433,6 +528,19 @@ enum TimesheetPayrollLineBookingLookup {
     }
 }
 
+/// What a reviewer's ⚙ saved, for the booking write (RULEBOOK 1.72.0 `timesheetReviewBookingEditWrites`).
+struct TimesheetReviewBookingEditInput {
+    let startTime: String
+    let endTime: String
+    /// The sheet's "No unpaid break" state (an overtime line shows no break controls: the caller keeps the stored one).
+    let breakRemoved: Bool
+    /// The rate box on save (nil = the organisation's rate) and what it showed when the editor opened.
+    let typedRate: Double?
+    let openedRate: Double?
+    /// The times the editor opened with (`slotWindow`): an unchanged Full day writes nothing.
+    let openingTimes: (start: String, end: String)
+}
+
 struct TimesheetPayrollLineEditHoursSheet: View {
     let row: TimesheetPayrollLineItem
     /// Every payroll line of the sheet (to find the booking's other line).
@@ -441,11 +549,13 @@ struct TimesheetPayrollLineEditHoursSheet: View {
     let initialChoice: OperativeDayBookingChoice?
     /// The person's employment fields (`CanonicalBusinessEngine.timesheetPerson`): a PAYE day pays 0.
     let employment: [String: Any]?
-    /// Returns a refusal message (nothing saved; the sheet stays open and shows it), or nil once saved.
-    let onSave: (TimesheetPayrollLineBookingLookup.Edit) -> String?
+    /// RULEBOOK 1.72.0 §8 (decision A): saves the edit to the BOOKING. Returns a refusal message (nothing saved; the
+    /// sheet stays open and shows it), or nil once saved.
+    let onSaveBooking: (TimesheetReviewBookingEditInput) async -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var refusal: String?
+    @State private var saving = false
 
     private func edit(_ start: String, _ end: String, _ breakRemoved: Bool, _ otMult: Double?) -> TimesheetPayrollLineBookingLookup.Edit {
         TimesheetPayrollLineBookingLookup.payrollLineEdit(
@@ -473,24 +583,43 @@ struct TimesheetPayrollLineEditHoursSheet: View {
             showsFooterNote: false,
             initialChoice: initialChoice,
             onSave: { start, end, breakRemoved, otMult in
+                guard !saving else { return }
+                // RULEBOOK 1.46.0: blank times or a start equal to the finish are never priced (the preview's rule).
                 let result = edit(start, end, breakRemoved, otMult)
-                // RULEBOOK 1.46.0: blank times or a start equal to the finish are never priced.
                 if let error = result.error ?? (result.amounts == nil ? CanonicalBusinessEngine.payrollLineEditTimesMessage : nil) {
                     refusal = error
                     return
                 }
-                // Review of #233: a review the rulebook could not check refuses the edit (fail closed).
-                if let message = onSave(result) {
-                    refusal = message
-                    return
+                let input = TimesheetReviewBookingEditInput(
+                    startTime: start,
+                    endTime: end,
+                    breakRemoved: breakRemoved,
+                    typedRate: otMult,
+                    openedRate: initialChoice?.otMultiplierOverride,
+                    openingTimes: OperativeCustomHoursSheet.openingTimes(
+                        policy: policy,
+                        referenceDay: row.date,
+                        initialChoice: initialChoice
+                    )
+                )
+                saving = true
+                Task { @MainActor in
+                    let message = await onSaveBooking(input)
+                    saving = false
+                    if let message {
+                        refusal = message
+                    } else {
+                        dismiss()
+                    }
                 }
-                dismiss()
             },
             onCancel: { dismiss() }
         )
         .withAmountPreview(allowsOvernight: true) { start, end, breakRemoved, otMult in
             edit(start, end, breakRemoved, otMult).amounts.map { OrgMoney.format($0.total) }
         }
+        // RULEBOOK 1.72.0 §8: "Save to booking" and `TIMESHEET_REVIEW_EDIT_BOOKING_NOTE`.
+        .withSaveToBooking(title: "Save to booking", note: CanonicalBusinessEngine.timesheetReviewEditBookingNote)
         .alert("Cannot save these hours", isPresented: Binding(get: { refusal != nil }, set: { if !$0 { refusal = nil } })) {
             Button("OK", role: .cancel) { refusal = nil }
         } message: {
@@ -558,8 +687,9 @@ struct TimesheetManagerAdjustmentSummaryCard: View {
             let detail: String? = review.decision == .edited
                 ? "\(OrgMoney.format(line.amount)) → \(OrgMoney.format(TimesheetDraftAdjustments.effectivePayrollAmount(line: line, draft: draft, managerHasSigned: true)))"
                 : nil
-            let day = line.date.formatted(date: .abbreviated, time: .omitted)
-            rows.append(("\(label): \(day) · \(line.jobNumber) \(line.projectName)", review.decision, detail))
+            // RULEBOOK 1.72.0 (issue 21): name the day (organisation zone) and the job (`timesheetLineDisplay` title),
+            // never the line id: "Day adjusted · Mon 23 Nov · J-1042 · Station Road".
+            rows.append(("\(label) · \(TimesheetPayrollLineBookingLookup.reviewLineDayAndTitle(line))", review.decision, detail))
         }
         return rows
     }

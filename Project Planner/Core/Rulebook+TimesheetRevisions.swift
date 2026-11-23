@@ -146,13 +146,13 @@ extension CanonicalBusinessEngine {
     }
 
     nonisolated static var timesheetCreateRevisionLabel: String {
-        revisionText("TIMESHEET_CREATE_REVISION_LABEL", fallback: "Create revision")
+        revisionText("TIMESHEET_CREATE_REVISION_LABEL", fallback: "Create revision to adjust this timesheet")
     }
 
     nonisolated static var timesheetCreateRevisionHelp: String {
         revisionText(
             "TIMESHEET_CREATE_REVISION_HELP",
-            fallback: "This timesheet is exported and cannot be changed. A revision is a new version built from the live bookings, price work and expenses for this pay run. The person signs it, then their line manager counter-signs it."
+            fallback: "This timesheet has already been exported. Please make changes to the user\u{2019}s schedule via projects or small works, which reflect the actual hours they have worked, then return here and click the create revision button. This will allow the user to sign their timesheet again with the changes made, for you as their line manager to approve."
         )
     }
 
