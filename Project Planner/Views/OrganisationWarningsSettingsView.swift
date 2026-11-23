@@ -881,12 +881,35 @@ private struct WarningExcludedUsersPickerView: View {
 
     @State private var searchText = ""
 
+    /// The people who can be excluded: the current people of the organisation, as the warnings read them —
+    /// `listedCurrentLabourPeople` (never an anonymised deleted profile) and `rosterSegment` Active (never a pending
+    /// invite or an inactive person; a ghost is Active). When the script does not answer, the active accounts.
     private var eligibleUsers: [AppUser] {
-        userStore.organizationUsers
-            .filter(\.isActive)
+        let users = userStore.organizationUsers
+        let current = CanonicalBusinessEngine.listedCurrentLabourPeople(users) ?? users
+        return current
+            .filter { user in
+                if let segment = GhostRulebook.segment(user) {
+                    return segment == UserRosterSegment.active.canonicalSegment
+                }
+                return user.isActive
+            }
             .sorted { lhs, rhs in
                 lhs.fullName.localizedCaseInsensitiveCompare(rhs.fullName) == .orderedAscending
             }
+    }
+
+    /// Stored excluded ids that match no current person (deleted, pending, inactive or unknown). Shown as "Removed
+    /// user" rows so the admin can untick them; nothing is written until Save.
+    private var removedSelectedIds: [String] {
+        let currentIds = Set(eligibleUsers.map(\.id))
+        return selectedUserIds.filter { !currentIds.contains($0) }
+    }
+
+    private func removedUserDetail(_ id: String) -> String {
+        guard let user = userStore.organizationUsers.first(where: { $0.id == id }) else { return id }
+        let name = user.fullName.isEmpty ? user.email : user.fullName
+        return name.isEmpty ? id : name
     }
 
     private var filteredUsers: [AppUser] {
@@ -900,6 +923,33 @@ private struct WarningExcludedUsersPickerView: View {
 
     var body: some View {
         List {
+            if !removedSelectedIds.isEmpty {
+                Section {
+                    ForEach(removedSelectedIds, id: \.self) { id in
+                        Button {
+                            toggle(id)
+                        } label: {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Removed user")
+                                        .foregroundStyle(.primary)
+                                    Text(removedUserDetail(id))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundStyle(ProjectWorksRevampColors.activeGreen)
+                            }
+                        }
+                        .accessibilityIdentifier("warningExcludedUsersPicker.removed.\(id)")
+                        .accessibilityLabel("Removed user, excluded. Tap to untick.")
+                        .buttonStyle(.plain)
+                    }
+                } footer: {
+                    Text("No longer a current user of this organisation. Untick to take them off the list.")
+                }
+            }
             if eligibleUsers.isEmpty {
                 Text("No active manager or admin users to exclude.")
                     .foregroundStyle(.secondary)

@@ -106,6 +106,8 @@ struct ProjectDetailView: View {
     @State private var quickAddRequest: QuickAddRequest?
     /// RULEBOOK 1.41.0 §21: a person-day tile with several bookings asks which one to open.
     @State private var schedulingDayChooser: SchedulingDayChooser?
+    /// The booking picked in the chooser, opened once the chooser sheet has closed.
+    @State private var schedulingDayPick: SchedulingDayChooser?
     /// RULEBOOK 1.16.0 `bookingLeaveConflicts`: annual leave on an edited booking's day is ticked or dropped first.
     @StateObject private var leaveGate = BookingConflictGate()
     @State private var showingEditProject = false
@@ -271,33 +273,6 @@ struct ProjectDetailView: View {
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
         .bookingConflictSheet(leaveGate)
-        .confirmationDialog(
-            schedulingDayChooser.map { "\($0.row.name) · \($0.day.dayLabel?.headline ?? "")" } ?? "",
-            isPresented: Binding(
-                get: { schedulingDayChooser != nil },
-                set: { if !$0 { schedulingDayChooser = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: schedulingDayChooser
-        ) { chooser in
-            ForEach(chooser.day.allBookings) { choice in
-                Button(choice.label) {
-                    let picked = SchedulingGridDayCell(
-                        id: chooser.day.id,
-                        date: chooser.day.date,
-                        kind: chooser.day.kind,
-                        operativeBooking: choice.operativeBooking,
-                        managerBooking: choice.managerBooking,
-                        subcontractorBooking: choice.subcontractorBooking
-                    )
-                    schedulingDayChooser = nil
-                    openSchedulingBooking(row: chooser.row, day: picked)
-                }
-            }
-            Button("Cancel", role: .cancel) { schedulingDayChooser = nil }
-        } message: { _ in
-            Text("Pick the booking to open.")
-        }
         .sheet(item: $quickAddRequest) { request in
             let policy = firebaseBackend.payrollPolicy(for: request.day)
             ScheduleQuickAddSheet(
@@ -772,6 +747,97 @@ struct ProjectDetailView: View {
             }
         }
         .background(PPColor.page.ignoresSafeArea())
+        // RULEBOOK 1.41.0 §21: a person-day tile with several bookings asks which one to open. Presented from this
+        // pushed screen (a dialog on the detail page root never showed while Scheduling was pushed on top). The pick
+        // opens once the chooser has closed, so its edit sheet is never presented over a closing sheet.
+        .sheet(item: $schedulingDayChooser, onDismiss: {
+            guard let pick = schedulingDayPick else { return }
+            schedulingDayPick = nil
+            openSchedulingBooking(row: pick.row, day: pick.day)
+        }) { chooser in
+            schedulingDayChooserSheet(chooser)
+        }
+        .onDisappear {
+            schedulingDayChooser = nil
+            schedulingDayPick = nil
+        }
+    }
+
+    /// The list of a person-day's bookings (times, place and hours); tapping one opens its editor.
+    private func schedulingDayChooserSheet(_ chooser: SchedulingDayChooser) -> some View {
+        NavigationStack {
+            List {
+                Section {
+                    ForEach(chooser.day.allBookings) { choice in
+                        Button {
+                            schedulingDayPick = SchedulingDayChooser(
+                                row: chooser.row,
+                                day: SchedulingGridDayCell(
+                                    id: chooser.day.id,
+                                    date: chooser.day.date,
+                                    kind: chooser.day.kind,
+                                    operativeBooking: choice.operativeBooking,
+                                    managerBooking: choice.managerBooking,
+                                    subcontractorBooking: choice.subcontractorBooking
+                                )
+                            )
+                            schedulingDayChooser = nil
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(choice.label)
+                                        .font(.body.weight(.semibold))
+                                        .foregroundStyle(.primary)
+                                    Text(schedulingChoicePlace(choice))
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 8)
+                                Image(systemName: "chevron.right")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("projectDetail.dayChooser.\(choice.id)")
+                    }
+                } header: {
+                    if let headline = chooser.day.dayLabel?.headline {
+                        Text(headline)
+                    }
+                } footer: {
+                    Text("Pick the booking to open.")
+                }
+            }
+            .navigationTitle(chooser.row.name)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        schedulingDayPick = nil
+                        schedulingDayChooser = nil
+                    }
+                }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 0) {
+                        Text(chooser.row.name).font(.headline)
+                        Text(chooser.day.date.formatted(Date.FormatStyle(date: .complete, time: .omitted, timeZone: OrganizationRulebookContext.timeZone)))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    /// Where a chooser booking is: this job for labour and job manager bookings, the firm's booking otherwise.
+    private func schedulingChoicePlace(_ choice: SchedulingGridBookingChoice) -> String {
+        let job = "\(project.jobNumber) \(project.siteName)"
+        if choice.operativeBooking != nil { return "Labour · \(job)" }
+        if choice.managerBooking != nil { return "Manager schedule · \(job)" }
+        return "Sub contractor · \(job)"
     }
 
     private func applyCatalogueDeepLinkFocus() {
@@ -1923,6 +1989,68 @@ struct ProjectDetailView: View {
             ? nil : OfflinePolicy.onlineOnlyMessage
     }
 
+    /// Edit booking (Scheduling) Save for a labour booking: leave is checked only when the slot or times change
+    /// (RULEBOOK 1.16.0 §5, §9), then the write runs once the sheet has closed.
+    private func saveScheduleLabourEdit(original booking: Booking, updated: Booking, personName: String) {
+        let timesChanged = updated.timeSlot != booking.timeSlot
+            || updated.workStartTime != booking.workStartTime
+            || updated.workEndTime != booking.workEndTime
+        let rows = timesChanged ? BookingLeaveConflictItems.items(
+            for: updated,
+            personName: personName,
+            holidays: holidayStore.bookings,
+            operatives: operativeStore.allOperatives,
+            users: userStore.organizationUsers,
+            policy: firebaseBackend.payrollPolicy(for: updated.date)
+        ) : []
+        // 1.33.1 review item 2: the organisation open when Save was pressed; the write goes there or not at
+        // all, and its own outcome is shown once the sheet has closed.
+        let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
+        afterBookingEditDismiss = {
+            leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                Task {
+                    let result = await bookingStore.updateBookingReportingProblem(
+                        updated,
+                        organizationId: savingOrganizationId,
+                        session: BookingWriteSession(organizationId: savingOrganizationId)
+                    )
+                    queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
+                    Feedback.play(result, success: .bookingEdited)
+                }
+            }
+        }
+        bookingEditTarget = nil
+    }
+
+    /// Edit booking (Scheduling) Save for a manager schedule booking, as `saveScheduleLabourEdit`.
+    private func saveScheduleManagerEdit(original booking: ManagerSiteBooking, updated: ManagerSiteBooking, personName: String) {
+        let timesChanged = updated.timeSlot != booking.timeSlot
+            || updated.workStartTime != booking.workStartTime
+            || updated.workEndTime != booking.workEndTime
+        let rows = timesChanged ? BookingLeaveConflictItems.items(
+            for: updated,
+            personName: personName,
+            holidays: holidayStore.bookings,
+            users: userStore.organizationUsers,
+            policy: firebaseBackend.payrollPolicy(for: updated.date)
+        ) : []
+        let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
+        afterBookingEditDismiss = {
+            leaveGate.runSingle(rows: rows, afterDismiss: true) {
+                Task {
+                    let result = await managerScheduleStore.saveBookingReportingProblem(
+                        updated,
+                        organizationId: savingOrganizationId,
+                        session: BookingWriteSession(organizationId: savingOrganizationId)
+                    )
+                    queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
+                    Feedback.play(result, success: .bookingEdited)
+                }
+            }
+        }
+        bookingEditTarget = nil
+    }
+
     @ViewBuilder
     private func projectDetailBookingEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
@@ -1931,12 +2059,6 @@ struct ProjectDetailView: View {
             // booking's stored break (`OperativeCustomHoursSheet.initialBreakIncluded`), so Save keeps it.
             let options = LabourBookingEditOptions.forOperative(isPaye: isPayeOperativeBooking(booking))
             let labourChoice = OperativeDayBookingChoice(from: booking)
-            // 1.33.1 review item 6: the times the sheet opens on, so Save with no change keeps a Full day a Full day.
-            let labourOpened = OperativeCustomHoursSheet.openingTimes(
-                policy: firebaseBackend.payrollPolicy(for: booking.date),
-                referenceDay: booking.date,
-                initialChoice: labourChoice
-            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -1953,56 +2075,34 @@ struct ProjectDetailView: View {
                 showsPayeNote: options.showsPayeNote,
                 showsInlineWheels: true,
                 initialChoice: labourChoice,
+                // Owner 23 Nov: with the slot chips, Save reaches here only for Custom (picked, or the times changed);
+                // a Full day saved unchanged goes through `withSlotChoice` below and keeps its slot.
                 onSave: { start, end, isBreakRemoved, otMult in
                     let updated = ScheduleBookingEditSave.labour(
                         booking,
                         start: start,
                         end: end,
                         isBreakRemoved: isBreakRemoved,
-                        otMultiplierOverride: otMult,
-                        openedTimes: labourOpened
+                        otMultiplierOverride: otMult
                     )
-                    // Leave is checked only when the slot or times change (RULEBOOK 1.16.0 §5, §9).
-                    let timesChanged = updated.timeSlot != booking.timeSlot
-                        || updated.workStartTime != booking.workStartTime
-                        || updated.workEndTime != booking.workEndTime
-                    let rows = timesChanged ? BookingLeaveConflictItems.items(
-                        for: updated,
-                        personName: personName,
-                        holidays: holidayStore.bookings,
-                        operatives: operativeStore.allOperatives,
-                        users: userStore.organizationUsers,
-                        policy: firebaseBackend.payrollPolicy(for: updated.date)
-                    ) : []
-                    // 1.33.1 review item 2: the organisation open when Save was pressed; the write goes there or not at
-                    // all, and its own outcome is shown once the sheet has closed.
-                    let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
-                    afterBookingEditDismiss = {
-                        leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                            Task {
-                                let result = await bookingStore.updateBookingReportingProblem(
-                                    updated,
-                                    organizationId: savingOrganizationId,
-                                    session: BookingWriteSession(organizationId: savingOrganizationId)
-                                )
-                                queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
-                                Feedback.play(result, success: .bookingEdited)
-                            }
-                        }
-                    }
-                    bookingEditTarget = nil
+                    saveScheduleLabourEdit(original: booking, updated: updated, personName: personName)
                 },
                 onCancel: { bookingEditTarget = nil },
                 onDelete: labourBookingDeleteAction(booking),
                 deleteDisabledReason: labourBookingDeleteDisabledReason
             )
+            // Owner 23 Nov: Full day / Custom (a stored AM / PM keeps its own) — `slotOffered` on the booking day.
+            .withSlotChoice(stored: booking.timeSlot) { slot, isBreakRemoved, otMult in
+                let updated = ScheduleBookingEditSave.labourNamedSlot(
+                    booking,
+                    slot: slot,
+                    isBreakRemoved: isBreakRemoved,
+                    otMultiplierOverride: otMult
+                )
+                saveScheduleLabourEdit(original: booking, updated: updated, personName: personName)
+            }
         case .manager(let booking, _, let personName):
             let managerChoice = booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date))
-            let managerOpened = OperativeCustomHoursSheet.openingTimes(
-                policy: firebaseBackend.payrollPolicy(for: booking.date),
-                referenceDay: booking.date,
-                initialChoice: managerChoice
-            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -2018,34 +2118,9 @@ struct ProjectDetailView: View {
                         booking,
                         start: start,
                         end: end,
-                        isBreakRemoved: isBreakRemoved,
-                        openedTimes: managerOpened
+                        isBreakRemoved: isBreakRemoved
                     )
-                    let timesChanged = updated.timeSlot != booking.timeSlot
-                        || updated.workStartTime != booking.workStartTime
-                        || updated.workEndTime != booking.workEndTime
-                    let rows = timesChanged ? BookingLeaveConflictItems.items(
-                        for: updated,
-                        personName: personName,
-                        holidays: holidayStore.bookings,
-                        users: userStore.organizationUsers,
-                        policy: firebaseBackend.payrollPolicy(for: updated.date)
-                    ) : []
-                    let savingOrganizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites()
-                    afterBookingEditDismiss = {
-                        leaveGate.runSingle(rows: rows, afterDismiss: true) {
-                            Task {
-                                let result = await managerScheduleStore.saveBookingReportingProblem(
-                                    updated,
-                                    organizationId: savingOrganizationId,
-                                    session: BookingWriteSession(organizationId: savingOrganizationId)
-                                )
-                                queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))
-                                Feedback.play(result, success: .bookingEdited)
-                            }
-                        }
-                    }
-                    bookingEditTarget = nil
+                    saveScheduleManagerEdit(original: booking, updated: updated, personName: personName)
                 },
                 onCancel: { bookingEditTarget = nil },
                 // RULEBOOK 1.33.0 §2 `bookingRemoveAction`: Delete only for the people who may delete it.
@@ -2057,6 +2132,14 @@ struct ProjectDetailView: View {
                     }
                 } : nil
             )
+            .withSlotChoice(stored: ScheduleBookingEditSave.labourTimeSlot(booking.timeSlot)) { slot, isBreakRemoved, _ in
+                let updated = ScheduleBookingEditSave.managerSiteNamedSlot(
+                    booking,
+                    slot: slot,
+                    isBreakRemoved: isBreakRemoved
+                )
+                saveScheduleManagerEdit(original: booking, updated: updated, personName: personName)
+            }
         case .subcontractor(let booking, _, _):
             SubcontractorBookingEditSheet(
                 booking: booking,

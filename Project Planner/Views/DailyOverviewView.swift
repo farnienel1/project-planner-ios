@@ -1413,6 +1413,19 @@ private extension DailyOverviewView {
                 onDelete: labourBookingDeleteAction(booking),
                 deleteDisabledReason: labourBookingDeleteDisabledReason
             )
+            // Owner 23 Nov: Full day / Custom (a stored AM / PM keeps its own) — `slotOffered` on the booking day.
+            .withSlotChoice(stored: booking.timeSlot) { slot, breakRemoved, otMult in
+                bookingEditTarget = nil
+                saveOperativeBookingEdit(
+                    booking: booking,
+                    start: booking.workStartTime ?? "",
+                    end: booking.workEndTime ?? "",
+                    breakRemoved: breakRemoved,
+                    otMultiplierOverride: otMult,
+                    rateShown: options.allowsOtMultiplierOverride,
+                    namedSlot: slot
+                )
+            }
         case .manager(let booking, let locationTitle, let personName):
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
@@ -1445,6 +1458,17 @@ private extension DailyOverviewView {
                     }
                 } : nil
             )
+            .withSlotChoice(stored: ScheduleBookingEditSave.labourTimeSlot(booking.timeSlot)) { slot, breakRemoved, otMult in
+                bookingEditTarget = nil
+                saveManagerBookingEdit(
+                    booking: booking,
+                    start: booking.workStartTime ?? "",
+                    end: booking.workEndTime ?? "",
+                    breakRemoved: breakRemoved,
+                    otMultiplierOverride: otMult,
+                    namedSlot: slot
+                )
+            }
         case .subcontractor(let booking, _, _):
             SubcontractorBookingEditSheet(
                 booking: booking,
@@ -1490,12 +1514,23 @@ private extension DailyOverviewView {
         end: String,
         breakRemoved: Bool,
         otMultiplierOverride: Double?,
-        rateShown: Bool = true
+        rateShown: Bool = true,
+        namedSlot: TimeSlot? = nil
     ) {
         var updated = booking
-        updated.timeSlot = .customHours
-        updated.workStartTime = start
-        updated.workEndTime = end
+        if let namedSlot {
+            // Owner 23 Nov: Full day (or the stored AM / PM) chosen on Edit booking — the stored slot keeps its stored
+            // times; another named slot is written as the scheduling wizard writes it (no clock times).
+            if booking.timeSlot != namedSlot {
+                updated.timeSlot = namedSlot
+                updated.workStartTime = nil
+                updated.workEndTime = nil
+            }
+        } else {
+            updated.timeSlot = .customHours
+            updated.workStartTime = start
+            updated.workEndTime = end
+        }
         updated.isBreakRemoved = breakRemoved
         // RULEBOOK 1.32.0 §25 (review fix r274) `overtimeMultiplierMoveFields`: the rate on screen is kept on every
         // save (a rate equal to the organisation's is removed, never stored); a rate not on screen keeps the stored one.
@@ -1535,12 +1570,18 @@ private extension DailyOverviewView {
         start: String,
         end: String,
         breakRemoved: Bool,
-        otMultiplierOverride: Double? = nil
+        otMultiplierOverride: Double? = nil,
+        namedSlot: TimeSlot? = nil
     ) {
         var updated = booking
-        updated.timeSlot = .customHours
-        updated.workStartTime = start
-        updated.workEndTime = end
+        if let namedSlot {
+            // Owner 23 Nov: as `saveOperativeBookingEdit` (`ScheduleBookingEditSave.managerSiteNamedSlot`).
+            updated = ScheduleBookingEditSave.managerSiteNamedSlot(booking, slot: namedSlot, isBreakRemoved: breakRemoved)
+        } else {
+            updated.timeSlot = .customHours
+            updated.workStartTime = start
+            updated.workEndTime = end
+        }
         updated.isBreakRemoved = breakRemoved
         // RULEBOOK 1.32.0 §25 (review fix r274) `overtimeMultiplierMoveFields`: the manager site booking's rate on
         // screen is kept on every save; a rate equal to the organisation's is removed, never stored.
