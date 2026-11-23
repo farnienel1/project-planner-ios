@@ -144,6 +144,12 @@ enum LineManagerRulebook {
         return CanonicalBusinessEngine.lineManagerOptions(person: row(draft))?.allowsNoLineManager ?? false
     }
 
+    /// `lineManagerSummary(person, roster).label` for a person as stored (read-only profile screens).
+    static func summary(for person: AppUser, roster users: [AppUser]) -> String {
+        CanonicalBusinessEngine.lineManagerSummaryLabel(person: row(person), roster: roster(users))
+            ?? (person.hasNoLineManager ? "No line manager" : "Not set")
+    }
+
     /// `lineManagerSummary(person, roster).label`: "No line manager", "Not set", one name, or "First +N more".
     static func summary(for person: AppUser, selectedIds: Set<String>, hasNoLineManager: Bool, roster users: [AppUser]) -> String {
         CanonicalBusinessEngine.lineManagerSummaryLabel(

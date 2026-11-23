@@ -323,12 +323,7 @@ struct UserProfileSummaryView: View {
         rows.append(DetailRow(
             icon: "person.2.fill",
             label: "Line manager",
-            value: LineManagerRulebook.summary(
-                for: person,
-                selectedIds: Set(person.lineManagerUserIds),
-                hasNoLineManager: person.hasNoLineManager,
-                roster: userStore.organizationUsers
-            )
+            value: LineManagerRulebook.summary(for: person, roster: userStore.organizationUsers)
         ))
         return rows
     }

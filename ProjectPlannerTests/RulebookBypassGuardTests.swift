@@ -87,7 +87,6 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/MaterialsSendListSheet.swift": 1,
             "Views/MaterialsView.swift": 1,
             "Views/OperativeAnnualLeaveViews.swift": 1,
-            "Views/OperativeQualificationsEditorView.swift": 4,
             "Views/OrganisationSettingsHubView.swift": 1,
             "Views/OrganisationWorkingHoursView.swift": 2,
             "Views/ProjectsView.swift": 1,
