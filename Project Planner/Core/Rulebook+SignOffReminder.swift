@@ -38,6 +38,11 @@ extension CanonicalBusinessEngine {
             ?? "Admins are also reminded about people with no line manager, and about any timesheet still not signed off 24 hours before payday."
     }
 
+    /// `TIMESHEET_SIGNOFF_REMINDER_NOTICE_TITLE` — "Timesheets waiting for your sign-off" (the local fallback's title).
+    nonisolated static var timesheetSignOffReminderNoticeTitle: String {
+        constant("TIMESHEET_SIGNOFF_REMINDER_NOTICE_TITLE", as: String.self) ?? "Timesheets waiting for your sign-off"
+    }
+
     /// `parseLineManagerReminderDays(stored)` — 1, 2 or 3 (missing or anything else reads as the default). Nil only when
     /// the script did not run.
     nonisolated static func parseLineManagerReminderDays(_ stored: Any?) -> Int? {

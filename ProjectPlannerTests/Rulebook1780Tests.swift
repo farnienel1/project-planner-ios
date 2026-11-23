@@ -42,6 +42,7 @@ final class Rulebook1780Tests: XCTestCase {
         XCTAssertEqual(CanonicalBusinessEngine.parseLineManagerReminderDays(3), 3)
         XCTAssertEqual(CanonicalBusinessEngine.parseLineManagerReminderDays(9), 2)
         XCTAssertEqual(CanonicalBusinessEngine.lineManagerReminderSummary(1), "Sent at 08:00, 1 day before payday.")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetSignOffReminderNoticeTitle, "Timesheets waiting for your sign-off")
         let fields = try XCTUnwrap(CanonicalBusinessEngine.lineManagerReminderWriteFields(
             storedInvoicing: ["lineManagerReminderDaysBeforePayday": 2], days: 3
         ))
