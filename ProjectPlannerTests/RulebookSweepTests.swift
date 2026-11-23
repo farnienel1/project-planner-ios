@@ -409,6 +409,7 @@ final class RulebookSweepTests: XCTestCase {
                 "type": "timesheet_pending_manager_signoff",
                 "userId": "manager-uid",
                 "deepLinkUserId": "report-uid",
+                "deepLinkWeekStartMs": "1763251200000",
                 "dayKey": "2026-11-16",
             ],
             user: manager
@@ -424,6 +425,8 @@ final class RulebookSweepTests: XCTestCase {
         XCTAssertEqual(received.count, 2)
         XCTAssertEqual(received.first?["timesheetSurface"] as? String, "teamAwaiting")
         XCTAssertEqual(received.first?["targetUserId"] as? String, "report-uid")
+        XCTAssertEqual(received.first?["weekStart"] as? Date, Date(timeIntervalSince1970: 1_763_251_200),
+                       "deepLinkWeekStartMs is epoch milliseconds (web 1.70.0 PUSH_PAYLOAD_KEYS)")
         XCTAssertEqual(received.last?["timesheetSurface"] as? String, "teamAwaiting")
         XCTAssertNil(received.last?["targetUserId"], "the push's userId is the recipient, never the report")
     }

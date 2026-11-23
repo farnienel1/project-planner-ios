@@ -601,6 +601,30 @@ final class Booking1331SaveFlowTests: XCTestCase {
         XCTAssertNil(managerFullDay.workStartTime)
     }
 
+    /// Review of ios-fixes-23nov: a stored Evening / Overtime slot has no chip, so its unchanged save goes through the
+    /// custom-hours path; it must stay exactly as stored (nothing written), never become CUSTOM_HOURS.
+    func testChiplessSlotSavedUnchangedStaysAsStored() throws {
+        let monday = try day("2026-11-02")
+        let policy = OrgPayrollTimePolicy.default
+        for slot in [TimeSlot.evening, .overtime] {
+            let stored = LogicFixtures.booking(on: monday, slot: slot)
+            let choice = OperativeDayBookingChoice(from: stored)
+            let opened = try XCTUnwrap(ScheduleBookingEditSave.openedTimesForChiplessSlot(
+                storedTimeSlot: stored.timeSlot.rawValue, policy: policy, referenceDay: monday, initialChoice: choice
+            ))
+            let saved = ScheduleBookingEditSave.labour(stored, start: opened.start, end: opened.end, isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: stored.otMultiplierOverride, openedTimes: opened)
+            XCTAssertEqual(saved.timeSlot, slot)
+            XCTAssertEqual(BookingWritePatch.changedLabourFields(from: stored, to: saved), [])
+        }
+        // Full day / AM / PM / custom save through the slot chips, so no opened times.
+        XCTAssertNil(ScheduleBookingEditSave.openedTimesForChiplessSlot(storedTimeSlot: TimeSlot.fullDay.rawValue, policy: policy, referenceDay: monday, initialChoice: nil))
+        XCTAssertNil(ScheduleBookingEditSave.openedTimesForChiplessSlot(storedTimeSlot: TimeSlot.customHours.rawValue, policy: policy, referenceDay: monday, initialChoice: nil))
+        let detail = try source("Views/ProjectDetailView.swift")
+        XCTAssertTrue(detail.contains("openedTimes: labourOpened"))
+        let overview = try source("Views/DailyOverviewView.swift")
+        XCTAssertTrue(overview.contains("openedTimes: labourOpened"))
+    }
+
     // MARK: 1.33.1 final review (items 1–5)
 
     /// Review item 1: one Confirm shares one "a wait timed out" state. The first wait is the full one; after any

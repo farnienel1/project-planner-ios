@@ -406,8 +406,13 @@ enum NotificationDeepLink {
         if let date = userInfo[weekStartKey] as? Date ?? userInfo["weekStart"] as? Date {
             return date
         }
-        // Rulebook 1.70.0 push payload: `deepLinkWeekStart` as text (FCM data values are strings) — epoch seconds or
-        // milliseconds, an ISO instant, or an organisation day key.
+        // Rulebook 1.70.0 push payload (`PUSH_PAYLOAD_KEYS`): `deepLinkWeekStartMs`, epoch milliseconds as text (FCM
+        // data values are strings).
+        if let raw = userInfo["deepLinkWeekStartMs"] {
+            if let number = raw as? NSNumber { return Date(timeIntervalSince1970: number.doubleValue / 1000) }
+            if let text = string(from: raw), let ms = Double(text) { return Date(timeIntervalSince1970: ms / 1000) }
+        }
+        // Fallback: `deepLinkWeekStart` — epoch seconds or milliseconds, an ISO instant, or an organisation day key.
         if let raw = userInfo["deepLinkWeekStart"] {
             if let number = raw as? NSNumber { return epochDate(number.doubleValue) }
             if let text = string(from: raw) {

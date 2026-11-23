@@ -1379,6 +1379,13 @@ private extension DailyOverviewView {
     func dailyOverviewEditSheet(for target: DailyOverviewEditTarget) -> some View {
         switch target {
         case .operative(let booking, let project, let personName):
+            // An Evening / Overtime (chip-less) slot saved with the times it opened on stays exactly as stored.
+            let labourOpened = ScheduleBookingEditSave.openedTimesForChiplessSlot(
+                storedTimeSlot: booking.timeSlot.rawValue,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
+                initialChoice: OperativeDayBookingChoice(from: booking)
+            )
             // Same options as Scheduling (`LabourBookingEditOptions`): every control for everyone, plus the PAYE line.
             let options = LabourBookingEditOptions.forOperative(
                 booking: booking,
@@ -1406,7 +1413,8 @@ private extension DailyOverviewView {
                         end: end,
                         breakRemoved: breakRemoved,
                         otMultiplierOverride: otMult,
-                        rateShown: options.allowsOtMultiplierOverride
+                        rateShown: options.allowsOtMultiplierOverride,
+                        openedTimes: labourOpened
                     )
                 },
                 onCancel: { bookingEditTarget = nil },
@@ -1515,10 +1523,18 @@ private extension DailyOverviewView {
         breakRemoved: Bool,
         otMultiplierOverride: Double?,
         rateShown: Bool = true,
-        namedSlot: TimeSlot? = nil
+        namedSlot: TimeSlot? = nil,
+        openedTimes: (start: String, end: String)? = nil
     ) {
         var updated = booking
-        if let namedSlot {
+        if namedSlot == nil, ScheduleBookingEditSave.keepsNamedSlot(
+            storedIsCustomHours: booking.timeSlot == .customHours,
+            start: start,
+            end: end,
+            openedTimes: openedTimes
+        ) {
+            // An unchanged chip-less slot (Evening / Overtime): keep its slot and stored times.
+        } else if let namedSlot {
             // Owner 23 Nov: Full day (or the stored AM / PM) chosen on Edit booking — the stored slot keeps its stored
             // times; another named slot is written as the scheduling wizard writes it (no clock times).
             if booking.timeSlot != namedSlot {

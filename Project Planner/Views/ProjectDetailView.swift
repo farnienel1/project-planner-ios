@@ -2059,6 +2059,13 @@ struct ProjectDetailView: View {
             // booking's stored break (`OperativeCustomHoursSheet.initialBreakIncluded`), so Save keeps it.
             let options = LabourBookingEditOptions.forOperative(isPaye: isPayeOperativeBooking(booking))
             let labourChoice = OperativeDayBookingChoice(from: booking)
+            // An Evening / Overtime (chip-less) slot saved with the times it opened on stays exactly as stored.
+            let labourOpened = ScheduleBookingEditSave.openedTimesForChiplessSlot(
+                storedTimeSlot: booking.timeSlot.rawValue,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
+                initialChoice: labourChoice
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -2083,7 +2090,8 @@ struct ProjectDetailView: View {
                         start: start,
                         end: end,
                         isBreakRemoved: isBreakRemoved,
-                        otMultiplierOverride: otMult
+                        otMultiplierOverride: otMult,
+                        openedTimes: labourOpened
                     )
                     saveScheduleLabourEdit(original: booking, updated: updated, personName: personName)
                 },

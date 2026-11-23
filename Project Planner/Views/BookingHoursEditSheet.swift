@@ -948,6 +948,12 @@ struct OperativeCustomHoursSheet: View {
         .onChange(of: "\(startText)|\(endText)") { _, _ in
             syncSlotWithTimes()
         }
+        .onAppear {
+            // A stored Full day / AM / PM opens on its own window (display only; Save unchanged keeps it as stored).
+            if pickedSlot == nil, onSaveNamedSlot != nil, let stored = storedNamedSlot {
+                selectSlot(stored)
+            }
+        }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
@@ -1266,11 +1272,33 @@ struct OperativeCustomHoursSheet: View {
         return items
     }
 
-    /// The wheel times a named slot shows: the times the sheet opened on for the stored slot (so Save unchanged keeps
-    /// it), else the day's default for that slot (the standard day for Full day).
+    /// The wheel times a named slot shows (display only): the booking's own stored clock times when it is the stored
+    /// slot and has them; else the slot's window from the rulebook (`halfDayWindows`: the AM / PM half, the standard
+    /// day for Full day); else the day's default opening times.
     private func namedSlotTimes(_ slot: TimeSlot) -> (start: String, end: String) {
-        let choice: OperativeDayBookingChoice? = slot == storedNamedSlot ? initialChoice : .legacy(slot)
-        return Self.openingTimes(policy: policy, referenceDay: rulebookDay, initialChoice: choice)
+        if slot == storedNamedSlot, let ic = initialChoice,
+           let s = ic.workStartTime?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty,
+           let e = ic.workEndTime?.trimmingCharacters(in: .whitespacesAndNewlines), !e.isEmpty,
+           ic.timeSlot == slot {
+            return Self.openingTimes(policy: policy, referenceDay: rulebookDay, initialChoice: ic)
+        }
+        if let windows = CanonicalBusinessEngine.halfDayWindows(CanonicalStandardDayInput(policy: policy)) {
+            let window: CanonicalMinuteInterval
+            switch slot {
+            case .morning: window = windows.am
+            case .afternoon: window = windows.pm
+            default: window = windows.day
+            }
+            let start = BookingHMTimePickerSupport.clampToQuarterHour(
+                ManagerScheduleInterval.formatMinutes(window.start), fallbackHour: 8, fallbackMinute: 0)
+            let end = BookingHMTimePickerSupport.clampToQuarterHour(
+                ManagerScheduleInterval.formatMinutes(window.end), fallbackHour: 16, fallbackMinute: 30)
+            return (
+                BookingHMTimePickerSupport.format(hour: start.hour, minute: start.minute),
+                BookingHMTimePickerSupport.format(hour: end.hour, minute: end.minute)
+            )
+        }
+        return Self.openingTimes(policy: policy, referenceDay: rulebookDay, initialChoice: .legacy(slot))
     }
 
     private func selectSlot(_ slot: TimeSlot) {
@@ -1758,7 +1786,8 @@ struct OperativeCustomHoursSheet: View {
         // without the custom-hours break warning (a named slot is paid by its slot).
         if let onSaveNamedSlot, currentSlot != .customHours {
             guard let otOut = validatedOtMultiplier() else { return }
-            onSaveNamedSlot(currentSlot, !breakIncluded, otOut)
+            // A named slot never takes the booking's "No unpaid break" (RULEBOOK §4.3): written false, as web does.
+            onSaveNamedSlot(currentSlot, false, otOut)
             return
         }
         if allowsOvernight {
@@ -2285,6 +2314,19 @@ enum ScheduleBookingEditSave {
         updated.isBreakRemoved = isBreakRemoved
         updated.updatedAt = now
         return updated
+    }
+
+    /// The times Edit booking opened on, for a stored slot the sheet shows no chip for (Evening, Overtime, unknown):
+    /// passed as `openedTimes` so an unchanged save keeps the booking exactly as stored. Nil for custom hours and for
+    /// Full day / AM / PM, which save through the slot chips (`withSlotChoice`).
+    static func openedTimesForChiplessSlot(
+        storedTimeSlot: String,
+        policy: OrgPayrollTimePolicy,
+        referenceDay: Date,
+        initialChoice: OperativeDayBookingChoice?
+    ) -> (start: String, end: String)? {
+        guard CanonicalBusinessEngine.rulebookSlot(storedTimeSlot) == nil else { return nil }
+        return OperativeCustomHoursSheet.openingTimes(policy: policy, referenceDay: referenceDay, initialChoice: initialChoice)
     }
 
     /// The manager schedule slot for a labour slot (custom hours for anything not named).
