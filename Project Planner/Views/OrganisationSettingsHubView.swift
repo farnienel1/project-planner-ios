@@ -297,18 +297,7 @@ struct OrganisationSettingsHubView: View {
     private var orgHeroCard: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .center, spacing: 14) {
-                Text(orgInitials)
-                    .font(.system(orgInitials.count >= 3 ? .headline : .title2, design: .rounded))
-                    .fontWeight(.bold)
-                    .minimumScaleFactor(0.7)
-                    .lineLimit(1)
-                    .foregroundStyle(.white)
-                    .frame(width: 60, height: 60)
-                    .background(PPFamily.plan.gradient, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 17, style: .continuous)
-                            .strokeBorder(PPColor.onNavyStroke, lineWidth: 1)
-                    )
+                orgLogoBadge
                 PPNavyPageTitle(
                     title: CanonicalBusinessEngine.displayOrganizationName(org?.name) ?? (org?.name ?? ""),
                     subtitle: "\(countryLabel) · Company"
@@ -340,7 +329,9 @@ struct OrganisationSettingsHubView: View {
                     .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                PPOnNavyPill(text: shortCreatedLabel)
+                if let shortCreatedLabel {
+                    PPOnNavyPill(text: shortCreatedLabel)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
@@ -360,9 +351,54 @@ struct OrganisationSettingsHubView: View {
         .ppNavyHeader()
     }
 
-    private var shortCreatedLabel: String {
-        let cal = Calendar.current
-        let c = org?.createdAt ?? Date()
+    /// Top-left of the header: the organisation's uploaded logo (`companyLogoURL`, the one on site audit and report
+    /// PDFs), loaded only through a `safeExternalUrl` (RULEBOOK 1.50.0 §24). No logo, a logo that cannot be shown as
+    /// an image (a PDF logo), or one still loading shows the company initials, as before. Display only.
+    @ViewBuilder
+    private var orgLogoBadge: some View {
+        let shape = RoundedRectangle(cornerRadius: 17, style: .continuous)
+        if let url = CanonicalBusinessEngine.safeExternalURL(org?.companyLogoURL) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .padding(6)
+                        .frame(width: 60, height: 60)
+                        .background(Color.white, in: shape)
+                        .overlay(shape.strokeBorder(PPColor.onNavyStroke, lineWidth: 1))
+                } else {
+                    orgInitialsBadge
+                }
+            }
+            .accessibilityLabel("Company logo")
+            .accessibilityIdentifier("organisationSettingsHub.logo")
+        } else {
+            orgInitialsBadge
+        }
+    }
+
+    private var orgInitialsBadge: some View {
+        Text(orgInitials)
+            .font(.system(orgInitials.count >= 3 ? .headline : .title2, design: .rounded))
+            .fontWeight(.bold)
+            .minimumScaleFactor(0.7)
+            .lineLimit(1)
+            .foregroundStyle(.white)
+            .frame(width: 60, height: 60)
+            .background(PPFamily.plan.gradient, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .strokeBorder(PPColor.onNavyStroke, lineWidth: 1)
+            )
+    }
+
+    /// "Since Oct '26" from the organisation's stored `createdAt` (`Organization.storedCreatedAt`, read with the
+    /// rulebook's `documentInstantMs`), in the organisation's time zone. Nil — no pill — when the document stores no
+    /// creation date. Before, the stored date was never read and the pill showed the month the app was opened.
+    private var shortCreatedLabel: String? {
+        guard let c = org?.storedCreatedAt else { return nil }
+        let cal = OrganizationRulebookContext.calendar
         let y = cal.component(.year, from: c)
         let m = cal.component(.month, from: c)
         let months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
