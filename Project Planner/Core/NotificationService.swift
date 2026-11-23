@@ -758,6 +758,51 @@ class NotificationService: ObservableObject {
         }
     }
 
+    /// RULEBOOK §13 `variation_renumbered` (web `applyVariationOrder`): one notice per recipient when the VO tracker's
+    /// order changes a number — `receivesJobNotification` with the job's managers, then `excludeActor`; `relatedId` is
+    /// the job id (`notificationRelatedIdFor`).
+    func notifyVariationRenumbered(
+        parentDocumentId: String,
+        parentName: String,
+        isSmallWorks: Bool,
+        actorName: String,
+        jobManagerIds: [UUID] = []
+    ) async {
+        guard let firebaseBackend = firebaseBackend,
+              let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        let users = userStore?.organizationUsers ?? []
+        let jobManagerUserIds = MaterialOrderRecipientsRulebook.recipientUserIds(
+            jobManagerIds: jobManagerIds.map(\.uuidString),
+            managers: operativeStore?.managers ?? [],
+            accounts: users,
+            adder: nil,
+            adderUserId: nil
+        ) ?? []
+        var candidates: [String] = []
+        for user in users where user.isActive {
+            if CanonicalBusinessEngine.receivesJobNotification(
+                userId: user.id,
+                role: UserStore.staffAccountRole(for: user),
+                assignedManagerUserIds: jobManagerUserIds
+            ) {
+                candidates.append(user.id)
+            }
+        }
+        let name = parentName.isEmpty ? "this job" : parentName
+        for userId in idsWithoutActor(candidates) {
+            let notification = AppNotification(
+                organizationId: organizationId,
+                type: .variationRenumbered,
+                title: "Variation numbers updated",
+                message: "Variation numbers updated on \(name) by \(actorName)",
+                userId: userId,
+                relatedKey: CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["variation_renumbered", parentDocumentId]) as? String,
+                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue
+            )
+            await saveNotification(notification)
+        }
+    }
+
     func notifyMaterialAdded(
         projectId: UUID,
         siteName: String,

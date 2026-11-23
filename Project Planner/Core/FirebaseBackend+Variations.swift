@@ -468,6 +468,263 @@ extension FirebaseBackend {
         return (answer as? NSNumber)?.boolValue ?? false
     }
 
+    // MARK: - VO tracker order (owner decision 23 Nov: drag on the iPhone, the same save as web)
+
+    /// RULEBOOK 1.52.0 / 1.63.0 §22, web `applyVariationOrder` (`lib/variations/variationStorage.ts`): saves a new
+    /// tracker order. The job's `variations` documents are read first and the save is refused
+    /// (`VARIATION_RENUMBER_STALE_MESSAGE`) when one appeared since the screen loaded `baseRows`. An Open variation that
+    /// still stores `voNumberLocked: true` (`variationStaleNumberLocks`) is unlocked first, each in its own small
+    /// transaction (the rules read the stored lock). Then, in one transaction, the tracker and every base row with a
+    /// `variations/{id}` document are read as stored; the save is refused when they changed
+    /// (`variationRenumberConflict`), when the order is locked or a pinned row would move (`variationRenumberPlan`
+    /// `refused`), or when a changed row has only its settings copies (`variationRenumberMissingRefusal`); otherwise
+    /// each changed row is written with `variationRenumberWriteFields` and the tracker version goes up
+    /// (`variationTrackerWriteFields` `renumbered`). Then the `settings/variationItem_{id}` copy and the settings log
+    /// entry of each written row get the same numbers; a copy that fails is returned in `copiesFailed`, never swallowed.
+    /// Online only (`UnlistedOfflineAction.renumberVariations`): the caller checks before calling.
+    func applyVariationOrder(
+        parentId: String,
+        parentType: VariationParentType,
+        order: [String],
+        baseRows: [Variation],
+        organizationId: String
+    ) async throws -> VariationOrderSaveOutcome {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else { throw VariationOrderSaveError.refused("Organization ID is missing.") }
+        let uid = currentUser?.uid ?? ""
+        let collection = variationsCollection(organizationId: orgId)
+        // A variation added since the screen loaded is not in `baseRows` (web: `readCollectionVariations`, a read
+        // that fails reads as none).
+        let currentDocs = (try? await collection.whereField("parentId", in: variationParentIdForms(parentId)).getDocuments())?.documents ?? []
+        let current = currentDocs.compactMap { VariationCodec.variation(from: $0.data(), documentId: $0.documentID) }
+        let baseIds = Set(baseRows.map { $0.id.lowercased() })
+        if current.contains(where: { !baseIds.contains($0.id.lowercased()) }) {
+            throw VariationOrderSaveError.changed(CanonicalBusinessEngine.variationRenumberStaleMessage)
+        }
+        guard let staleLocks = CanonicalBusinessEngine.variationStaleNumberLocks(rows: current.map(\.rulebookInput)) else {
+            throw CanonicalWriteUnavailableError(function: "variationStaleNumberLocks")
+        }
+        for id in staleLocks {
+            try await Self.runVariationStaleLockClear(db: db, ref: collection.document(id), variationId: id, userId: uid)
+        }
+        // Review of #273: each row is read by the document id the query returned (screen id → stored id without
+        // case), so a letter-case difference never reads a missing document (which the read rule refuses).
+        var collectionIds: [String: String] = [:]
+        for doc in currentDocs { collectionIds[doc.documentID.lowercased()] = doc.documentID }
+        let now = Timestamp(date: Date())
+        let answer = try await Self.runVariationOrderTransaction(
+            db: db,
+            trackerRef: variationTrackerDocument(organizationId: orgId, parentId: parentId),
+            collection: collection,
+            parentId: parentId,
+            order: order,
+            baseRows: baseRows,
+            collectionIds: collectionIds,
+            userId: uid,
+            now: now
+        )
+
+        var copiesFailed: [String] = []
+        for write in answer.writes {
+            let itemRef = variationItemDocument(organizationId: orgId, variationId: write.id)
+            do {
+                let item = try await itemRef.getDocument()
+                if let data = item.data() {
+                    let to = (write.set["voNumber"] as? String) ?? (data["voNumber"] as? String) ?? ""
+                    let sequence = (write.set["sequence"] as? Int)
+                        ?? (write.set["sequence"] as? NSNumber)?.intValue
+                        ?? (data["sequence"] as? NSNumber)?.intValue ?? 0
+                    guard let itemWrite = CanonicalBusinessEngine.variationRenumberWriteFields(stored: data, to: to, sequence: sequence, at: now, byUid: uid) else {
+                        throw CanonicalWriteUnavailableError(function: "variationRenumberWriteFields")
+                    }
+                    if var fields = itemWrite {
+                        fields["updatedByUid"] = uid
+                        try await itemRef.updateData(WriteMetadata.stamped(fields, userId: uid.isEmpty ? nil : uid))
+                    }
+                }
+            } catch {
+                copiesFailed.append(write.id)
+                print("⚠️ [Variations] a renumbered settings copy did not save: \(error.localizedDescription)")
+            }
+            do {
+                var merged = answer.stored[write.id] ?? [:]
+                for (key, value) in write.set { merged[key] = value }
+                guard var next = VariationCodec.variation(from: merged, documentId: write.id) else {
+                    throw CanonicalWriteUnavailableError(function: "parseVariationDocument")
+                }
+                if let base = baseRows.first(where: { $0.id.lowercased() == write.id.lowercased() }) {
+                    if !base.parentId.isEmpty { next.parentId = base.parentId }
+                    next.parentType = base.parentType
+                }
+                if next.parentId.isEmpty { next.parentId = parentId; next.parentType = parentType }
+                let map = try VariationCodec.firestoreMap(from: next)
+                try await saveVariationToSettingsFallback(next, map: map, changedKeys: nil, organizationId: orgId)
+            } catch {
+                if !copiesFailed.contains(write.id) { copiesFailed.append(write.id) }
+                print("⚠️ [Variations] a renumbered settings log entry did not save: \(error.localizedDescription)")
+            }
+        }
+        let changed = answer.planRows.filter(\.changed).map { (id: $0.id, from: $0.from, to: $0.to) }
+        return VariationOrderSaveOutcome(changed: changed, copiesFailed: copiesFailed)
+    }
+
+    /// RULEBOOK 1.52.0 §22 `variationTrackerWriteFields(stored, { kind: 'unlockOrder' })` (web `setTrackerOrderLock`
+    /// with `locked: false`): clears the tracker's stored order lock, one partial update read and written in a
+    /// transaction. Admins and the job's managers (the security rules decide); online only. Nothing when no tracker
+    /// document exists or it is not locked.
+    func unlockVariationTrackerOrder(parentId: String, organizationId: String) async throws {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !parentId.isEmpty else { return }
+        let uid = currentUser?.uid ?? ""
+        try await Self.runVariationTrackerUnlock(
+            db: db,
+            ref: variationTrackerDocument(organizationId: orgId, parentId: parentId),
+            userId: uid
+        )
+    }
+
+    nonisolated private static func runVariationTrackerUnlock(db: Firestore, ref: DocumentReference, userId: String) async throws {
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let stored = snapshot.data() else { return nil }
+            guard let write = CanonicalBusinessEngine.variationTrackerUnlockOrderFields(stored: stored) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationTrackerWriteFields") as NSError
+                return nil
+            }
+            guard let fields = write else { return nil }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: ref)
+            return nil
+        }
+    }
+
+    /// One stale number lock (1.63.0): re-read the variation and clear `voNumberLocked` only while it is still Open with
+    /// the lock set, so a variation submitted on another device meanwhile keeps its lock (review of web #388).
+    nonisolated private static func runVariationStaleLockClear(db: Firestore, ref: DocumentReference, variationId: String, userId: String) async throws {
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let data = snapshot.data(),
+                  let fresh = VariationCodec.variation(from: data, documentId: variationId) else { return nil }
+            guard let stale = CanonicalBusinessEngine.variationStaleNumberLocks(rows: [fresh.rulebookInput]) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationStaleNumberLocks") as NSError
+                return nil
+            }
+            guard !stale.isEmpty else { return nil }
+            var fields: [String: Any] = ["voNumberLocked": false]
+            if !userId.isEmpty { fields["updatedByUid"] = userId }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: ref)
+            return nil
+        }
+    }
+
+    /// The save's transaction (see `applyVariationOrder`). `nonisolated` so the block never runs on the main actor.
+    nonisolated private static func runVariationOrderTransaction(
+        db: Firestore,
+        trackerRef: DocumentReference,
+        collection: CollectionReference,
+        parentId: String,
+        order: [String],
+        baseRows: [Variation],
+        collectionIds: [String: String],
+        userId: String,
+        now: Timestamp
+    ) async throws -> VariationOrderTransactionAnswer {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            func fail(_ error: Error) -> Any? {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            let trackerSnap: DocumentSnapshot
+            do {
+                trackerSnap = try transaction.getDocument(trackerRef)
+            } catch {
+                return fail(error)
+            }
+            var stored: [String: [String: Any]] = [:]
+            var live: [Variation] = []
+            for row in baseRows {
+                guard let storedId = collectionIds[row.id.lowercased()] else {
+                    live.append(row)
+                    continue
+                }
+                let snap: DocumentSnapshot
+                do {
+                    snap = try transaction.getDocument(collection.document(storedId))
+                } catch {
+                    return fail(error)
+                }
+                // Keyed and parsed by the stored id, so the plan's changes write to that same document.
+                if let data = snap.data(), let parsed = VariationCodec.variation(from: data, documentId: storedId) {
+                    stored[storedId] = data
+                    live.append(parsed)
+                } else {
+                    live.append(row)
+                }
+            }
+            guard let conflict = CanonicalBusinessEngine.variationRenumberConflict(
+                base: baseRows.map(\.rulebookInput),
+                live: live.map(\.rulebookInput)
+            ) else {
+                return fail(CanonicalWriteUnavailableError(function: "variationRenumberConflict"))
+            }
+            if conflict { return fail(VariationOrderSaveError.changed(CanonicalBusinessEngine.variationRenumberStaleMessage)) }
+            let trackerData = trackerSnap.data()
+            let tracker = VariationCodec.tracker(from: trackerData ?? [:], parentId: parentId)
+            guard let plan = CanonicalBusinessEngine.variationRenumberPlanChanges(
+                rows: live.map(\.rulebookInput),
+                order: order,
+                prefix: tracker.prefix,
+                padding: tracker.padding,
+                orderLocked: tracker.orderLocked
+            ) else {
+                return fail(CanonicalWriteUnavailableError(function: "variationRenumberPlan"))
+            }
+            // A pinned row never moves; a locked order never changes (`VARIATION_PINNED_MESSAGE` /
+            // `VARIATION_ORDER_LOCKED_MESSAGE`).
+            if let refused = plan.refused, !refused.isEmpty { return fail(VariationOrderSaveError.refused(refused)) }
+            guard let missing = CanonicalBusinessEngine.variationRenumberMissingRefusal(changes: plan.changes, storedIds: Array(stored.keys)) else {
+                return fail(CanonicalWriteUnavailableError(function: "variationRenumberMissingRefusal"))
+            }
+            if let missing { return fail(VariationOrderSaveError.refused(missing)) }
+            var writes: [(id: String, set: [String: Any])] = []
+            for change in plan.changes {
+                guard let data = stored[change.id] else { continue }
+                guard let write = CanonicalBusinessEngine.variationRenumberWriteFields(
+                    stored: data, to: change.to, sequence: change.sequence, at: now, byUid: userId
+                ) else {
+                    return fail(CanonicalWriteUnavailableError(function: "variationRenumberWriteFields"))
+                }
+                guard let set = write else { continue }
+                var fields = set
+                if !userId.isEmpty { fields["updatedByUid"] = userId }
+                transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: collection.document(change.id))
+                writes.append((id: change.id, set: set))
+            }
+            if let trackerData {
+                guard let renumbered = CanonicalBusinessEngine.variationTrackerRenumberedFields(stored: trackerData) else {
+                    return fail(CanonicalWriteUnavailableError(function: "variationTrackerWriteFields"))
+                }
+                if let fields = renumbered { transaction.updateData(fields, forDocument: trackerRef) }
+            }
+            return VariationOrderTransactionAnswer(planRows: plan.rows, writes: writes, stored: stored)
+        }
+        guard let result = answer as? VariationOrderTransactionAnswer else {
+            throw CanonicalWriteUnavailableError(function: "variationRenumberPlan")
+        }
+        return result
+    }
+
     /// `settings/variationTrades` through `parseVariationTrades` (1.9.0). Picker suggestions: read when the picker
     /// opens (`LIVE_COLLECTIONS` `listen: false`).
     func loadCustomVariationTrades(organizationId: String) async -> [String] {
@@ -1078,4 +1335,34 @@ enum VariationEvidenceProcessor {
             oversizedMessage: CanonicalBusinessEngine.uploadRefusalMessage(kind: "variation_evidence", reason: "too_large")
         )
     }
+}
+
+/// `applyVariationOrder`'s answer: the plan rows that changed number (`from` → `to`) and the variations whose settings
+/// copy or log entry did not take the new number.
+nonisolated struct VariationOrderSaveOutcome: Sendable {
+    let changed: [(id: String, from: String, to: String)]
+    let copiesFailed: [String]
+}
+
+/// Why `applyVariationOrder` saved nothing: the variations changed since the screen loaded them
+/// (`VARIATION_RENUMBER_STALE_MESSAGE`), or the rulebook refused the order (a pinned row, the locked order, a row with
+/// only its settings copies).
+nonisolated enum VariationOrderSaveError: LocalizedError, Sendable {
+    case changed(String)
+    case refused(String)
+
+    var message: String {
+        switch self {
+        case .changed(let text), .refused(let text): return text
+        }
+    }
+
+    var errorDescription: String? { message }
+}
+
+/// What the save's transaction worked out (the plan, the rows written and their stored copies).
+nonisolated struct VariationOrderTransactionAnswer: @unchecked Sendable {
+    let planRows: [RulebookVariationPlanRow]
+    let writes: [(id: String, set: [String: Any])]
+    let stored: [String: [String: Any]]
 }

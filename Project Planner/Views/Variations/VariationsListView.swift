@@ -124,7 +124,11 @@ struct VariationsListView: View {
             if store.tracker.enabled {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     NavigationLink {
-                        VariationTrackerReadOnlyView(store: store, parentName: VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName))
+                        VariationTrackerView(
+                            store: store,
+                            parentName: VariationNumbering.parentName(jobNumber: project.jobNumber, siteName: project.siteName),
+                            project: project
+                        )
                     } label: {
                         Text("Tracker")
                             .fontWeight(.semibold)
