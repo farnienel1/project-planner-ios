@@ -137,17 +137,39 @@ final class PersonQualificationsTests: XCTestCase {
         XCTAssertEqual(PersonQualifications.expiryText(rows[0]), "No expiry")
     }
 
-    func testTheEditorStartsWithTheExpiryTheProfileShows() {
+    func testTheEditorShowsDerivedExpiriesButNeverWritesThem() {
+        // Review of #269 item 2: derived expiries are display only; the stored map is the write map.
         let date = Date(timeIntervalSince1970: 1_900_000_000)
         let fromRow = Qualification(id: "Q-ROW", name: "IPAF", hasEndDate: true, endDate: date)
         let otherCase = Qualification(id: "Q-CASE", name: "CSCS")
-        let op = operative("op", email: "a@b.com", qualifications: [fromRow, otherCase], expiry: ["q-case": date, "x": date])
-        let map = PersonQualifications.editorExpiryDates(for: op)
-        XCTAssertEqual(map["Q-ROW"], date)
-        XCTAssertEqual(map["Q-CASE"], date)
-        // Nothing stored is dropped.
-        XCTAssertEqual(map["q-case"], date)
-        XCTAssertEqual(map["x"], date)
+        let stored = Qualification(id: "Q-STORED", name: "SMSTS")
+        let op = operative(
+            "op",
+            email: "a@b.com",
+            qualifications: [fromRow, otherCase, stored],
+            expiry: ["q-case": date, "Q-STORED": date]
+        )
+        let derived = PersonQualifications.derivedExpiryDates(for: op)
+        XCTAssertEqual(derived, ["Q-ROW": date, "Q-CASE": date])
+        // The stored map (what a save starts from) is untouched.
+        XCTAssertEqual(op.qualificationExpiryDates, ["q-case": date, "Q-STORED": date])
+    }
+
+    func testKeysTheWriteNoLongerHasAreRemovedOnTheServer() {
+        // Review of #269 item 4: a cleared expiry and a superseded certificate link are field-path deletes.
+        let date = Date(timeIntervalSince1970: 1_900_000_000)
+        let write = CanonicalBusinessEngine.CanonicalOperativeQualificationMaps(
+            qualifications: [],
+            qualificationExpiryDates: ["Q1": CanonicalBusinessEngine.isoString(from: date)],
+            qualificationCertificateURLs: ["Q1": "https://example.com/new.pdf"]
+        )
+        let removed = OperativeQualificationPatch.removedKeys(
+            storedExpiry: ["Q1": date, "Q2": date],
+            storedCertificates: ["q1": "https://example.com/old.pdf", "Q1": "https://example.com/older.pdf"],
+            write: write
+        )
+        XCTAssertEqual(removed.expiry, ["Q2"])
+        XCTAssertEqual(removed.certificates, ["q1"])
     }
 
     // MARK: Certificates (#18, #16)
@@ -212,6 +234,26 @@ final class PersonQualificationsTests: XCTestCase {
         } catch {
             XCTFail("unexpected error \(error)")
         }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+    }
+
+    func testBoundedWaitStopsAtOnceWhenTheCallerIsCancelled() async {
+        let started = Date()
+        let waiter = Task { () -> Error? in
+            do {
+                _ = try await BoundedWait.run(seconds: 60) { () async throws -> String in
+                    await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+                    return "never"
+                }
+                return nil
+            } catch {
+                return error
+            }
+        }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        waiter.cancel()
+        let error = await waiter.value
+        XCTAssertTrue(error is CancellationError, "got \(String(describing: error))")
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 

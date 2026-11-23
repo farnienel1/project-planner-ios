@@ -53,6 +53,19 @@ enum OperativeQualificationPatch {
         )
     }
 
+    /// Keys the stored maps hold that `write` no longer has (an expiry the person cleared, a certificate link
+    /// superseded under another spelling of the id). They are removed on the server with field-path deletes
+    /// (`patchOperativeQualificationMaps`); a merge write never removes a map key. Only keys this phone has seen.
+    static func removedKeys(
+        storedExpiry: [String: Date],
+        storedCertificates: [String: String],
+        write: CanonicalBusinessEngine.CanonicalOperativeQualificationMaps
+    ) -> (expiry: [String], certificates: [String]) {
+        let expiry = storedExpiry.keys.filter { write.qualificationExpiryDates[$0] == nil }.sorted()
+        let certificates = storedCertificates.keys.filter { write.qualificationCertificateURLs[$0] == nil }.sorted()
+        return (expiry, certificates)
+    }
+
     static func qualifications(
         from rows: [CanonicalBusinessEngine.CanonicalAssignedQualificationRow],
         preferring existing: [Qualification]

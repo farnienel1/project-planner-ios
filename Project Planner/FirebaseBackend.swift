@@ -3675,7 +3675,9 @@ class FirebaseBackend: ObservableObject {
     func patchOperativeQualificationMaps(
         operativeDocumentId: String,
         organizationId: String,
-        write: CanonicalBusinessEngine.CanonicalOperativeQualificationMaps
+        write: CanonicalBusinessEngine.CanonicalOperativeQualificationMaps,
+        removedExpiryKeys: [String] = [],
+        removedCertificateKeys: [String] = []
     ) async throws {
         let orgId = try await ensureReadableOrganization(organizationId)
         let qualifications: [[String: Any]] = write.qualifications.map { row in
@@ -3696,13 +3698,28 @@ class FirebaseBackend: ObservableObject {
                 dates[entry.key] = Timestamp(date: date)
             }
         }
-        let payload: [String: Any] = [
+        // Review of #269 item 4: a field-path update, so each map entry is set on its own and a key this editor
+        // removed (a cleared expiry, a certificate link superseded under another spelling of the id) is deleted —
+        // `setData(merge: true)` merges nested maps and never removes a key. Keys this phone never saw are left
+        // alone (RULEBOOK §1 partial writes). The row exists (the editor opens a stored row), so an update is right.
+        var fields: [AnyHashable: Any] = [
             "qualifications": qualifications,
-            "qualificationExpiryDates": expiry,
-            "qualificationCertificateURLs": write.qualificationCertificateURLs,
             "updatedAt": Timestamp(date: Date()),
         ]
-        try await db.collection("organizations").document(orgId).collection("operatives").document(operativeDocumentId).setData(payload, merge: true)
+        for (key, value) in expiry {
+            fields[FieldPath(["qualificationExpiryDates", key])] = value
+        }
+        for key in removedExpiryKeys where expiry[key] == nil {
+            fields[FieldPath(["qualificationExpiryDates", key])] = FieldValue.delete()
+        }
+        for (key, value) in write.qualificationCertificateURLs {
+            fields[FieldPath(["qualificationCertificateURLs", key])] = value
+        }
+        for key in removedCertificateKeys where write.qualificationCertificateURLs[key] == nil {
+            fields[FieldPath(["qualificationCertificateURLs", key])] = FieldValue.delete()
+        }
+        try await db.collection("organizations").document(orgId).collection("operatives").document(operativeDocumentId)
+            .updateData(fields)
     }
     
     /// `documentId` is the stored operative document id (`Operative.documentId`, stored case), never the in-memory UUID.

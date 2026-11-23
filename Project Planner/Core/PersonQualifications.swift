@@ -77,6 +77,29 @@ enum PersonQualifications {
         value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
+    /// The last `taskPersonKeys` answer and the hash of exactly the fields it reads (review of #269: not one script
+    /// call per redraw; a roster or row change rebuilds it).
+    private static var keysCache: (hash: Int, keys: [String: String])?
+
+    static func personKeys(users: [AppUser], operatives: [Operative], managers: [Manager]) -> [String: String]? {
+        var hasher = Hasher()
+        for user in users {
+            hasher.combine(user.id); hasher.combine(user.email); hasher.combine(user.formerUserIds)
+            hasher.combine(user.sameEmailUserIds); hasher.combine(user.isGhost)
+        }
+        hasher.combine(-1)
+        for row in operatives { hasher.combine(row.documentId); hasher.combine(row.email); hasher.combine(row.linkedUserId) }
+        hasher.combine(-2)
+        for row in managers { hasher.combine(row.firestoreDocumentId); hasher.combine(row.email); hasher.combine(row.linkedUserId) }
+        let hash = hasher.finalize()
+        if let cached = keysCache, cached.hash == hash { return cached.keys }
+        let input = keyInput(users: users, operatives: operatives, managers: managers)
+        guard let answer = CanonicalBusinessEngine.callJSON("taskPersonKeys", arguments: [input]) as? [String: Any],
+              let keys = answer["keys"] as? [String: String] else { return nil }
+        keysCache = (hash, keys)
+        return keys
+    }
+
     /// The person's `operatives` rows: every row `taskPersonKeys` gives the same key as the person's users id (or any
     /// id they go by). Nil when the script did not answer — the caller shows nothing rather than a guess.
     static func operativeRows(
@@ -87,9 +110,7 @@ enum PersonQualifications {
     ) -> [Operative]? {
         var roster = users
         if !roster.contains(where: { idKey($0.id) == idKey(person.id) }) { roster.append(person) }
-        let input = keyInput(users: roster, operatives: operatives, managers: managers)
-        guard let answer = CanonicalBusinessEngine.callJSON("taskPersonKeys", arguments: [input]) as? [String: Any],
-              let keys = answer["keys"] as? [String: String] else { return nil }
+        guard let keys = personKeys(users: roster, operatives: operatives, managers: managers) else { return nil }
         let personIds = [person.id] + person.formerUserIds + person.sameEmailUserIds
         let personKeys = Set(personIds.compactMap { keys[idKey($0)] })
         guard !personKeys.isEmpty else { return [] }
@@ -119,16 +140,18 @@ enum PersonQualifications {
         return nil
     }
 
-    /// The editor's starting expiry map: the stored map, plus each assigned qualification's expiry under its own id
-    /// when the map holds it only in another case or only on the assignment row (`endDate`). Nothing is removed.
-    static func editorExpiryDates(for operative: Operative) -> [String: Date] {
-        var map = operative.qualificationExpiryDates
-        for qualification in operative.qualifications where map[qualification.id] == nil {
+    /// Display only (#19, review of #269 item 2): for each assigned qualification with no entry under its own id in
+    /// the stored map, the expiry `expiryDate` finds elsewhere (another spelling of the id, or the assignment's
+    /// `endDate`), keyed by the qualification id. The editor shows these but never writes them back unless the person
+    /// changes that expiry (RULEBOOK §1: never re-save what you didn't change).
+    static func derivedExpiryDates(for operative: Operative) -> [String: Date] {
+        var derived: [String: Date] = [:]
+        for qualification in operative.qualifications where operative.qualificationExpiryDates[qualification.id] == nil {
             if let date = expiryDate(of: qualification, on: operative) {
-                map[qualification.id] = date
+                derived[qualification.id] = date
             }
         }
-        return map
+        return derived
     }
 
     /// The certificate link for `qualificationId` (`qualificationCertificateUrl`, then `safeExternalUrl`).

@@ -21,6 +21,11 @@ import SwiftUI
 struct UserProfileSummaryView: View {
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var operativeStore: OperativeStore
+    @EnvironmentObject var bookingStore: BookingStore
+    @EnvironmentObject var holidayStore: HolidayStore
+    @EnvironmentObject var firebaseBackend: FirebaseBackend
+    @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject private var smartCache: SmartCacheService
     @Environment(\.dismiss) private var dismiss
 
     let user: AppUser
@@ -63,8 +68,18 @@ struct UserProfileSummaryView: View {
                     .tint(.white)
             }
         }
-        .navigationDestination(isPresented: $showingEditor) {
+        // Review of #269 item 1: Edit user owns its NavigationStack, so it is presented on its own (as the list sheets
+        // did before), never pushed inside this stack. Its Cancel / Save / Delete close it and come back here; after a
+        // delete this page says "User not found" (`seenInRoster`).
+        .sheet(isPresented: $showingEditor) {
             EditUserView(user: person ?? user, suppressAdminAccessToggle: suppressAdminAccessToggle)
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(smartCache)
         }
         .sheet(item: $certificateViewerURL) { item in
             InAppRemoteDocumentViewer(remoteURL: item.url, title: "Certificate")
@@ -133,7 +148,7 @@ struct UserProfileSummaryView: View {
                     .lineLimit(2)
                     .accessibilityIdentifier("userProfile.name")
                 HStack(spacing: 6) {
-                    ForEach(chips(for: person), id: \.self) { chip in
+                    ForEach(Array(chips(for: person).enumerated()), id: \.offset) { _, chip in
                         Text(chip)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(ManageUserProfilePalette.chipBlueFg)
@@ -291,10 +306,18 @@ struct UserProfileSummaryView: View {
         }
         rows.append(DetailRow(icon: "hammer.fill", label: "Trade", value: person.displayTradeType))
         if payVisible(person) {
-            let record = payRecord ?? person
-            rows.append(DetailRow(icon: "briefcase.fill", label: "Employment", value: record.employmentType.title))
-            if let rate = rateRow(record) {
-                rows.append(DetailRow(icon: "sterlingsign.circle.fill", label: rate.label, value: rate.value))
+            // Review of #269 item 5: while `privatePay` is on the users document may hold an old rate (or none), so
+            // nothing is shown until the pay record (`payEditorRecord`) has loaded for this person.
+            let record: AppUser? = SecuritySwitchContext.privatePay
+                ? payRecord.flatMap { $0.id == person.id ? $0 : nil }
+                : (payRecord ?? person)
+            if let record {
+                rows.append(DetailRow(icon: "briefcase.fill", label: "Employment", value: record.employmentType.title))
+                if let rate = rateRow(record) {
+                    rows.append(DetailRow(icon: "sterlingsign.circle.fill", label: rate.label, value: rate.value))
+                }
+            } else {
+                rows.append(DetailRow(icon: "briefcase.fill", label: "Employment and rate", value: "Loading…"))
             }
         }
         rows.append(DetailRow(
@@ -327,16 +350,15 @@ struct UserProfileSummaryView: View {
 
     private var payTaskKey: String {
         guard let person else { return "" }
-        return "\(person.id)|\(payVisible(person))|\(SecuritySwitchContext.privatePay)"
+        // Read again when Edit user closes, so a pay change made there shows here.
+        return "\(person.id)|\(payVisible(person))|\(SecuritySwitchContext.privatePay)|\(showingEditor)"
     }
 
     /// RULEBOOK 1.26.1 §8: the pay shown is the pay editor's record (`payEditorRecord`; the stored document while
     /// `privatePay` is off). Read only when the viewer may see it.
     private func loadPayRecord() async {
-        guard let person, payVisible(person) else {
-            payRecord = nil
-            return
-        }
+        payRecord = nil
+        guard let person, payVisible(person) else { return }
         payRecord = await userStore.payEditorRecord(for: person)
     }
 
@@ -351,7 +373,8 @@ struct UserProfileSummaryView: View {
         } else {
             chips.append(person.passwordSet ? "Verified" : "Pending")
         }
-        if let segment = GhostRulebook.segment(person), let tab = UserRosterSegment(canonicalSegment: segment) {
+        if let segment = GhostRulebook.segment(person), let tab = UserRosterSegment(canonicalSegment: segment),
+           !chips.contains(tab.title) {
             chips.append(tab.title)
         }
         return chips
