@@ -251,7 +251,7 @@ extension CanonicalBusinessEngine {
 
     // MARK: Annual leave reads (RULEBOOK 1.56.0 §9, §17, owner answers 17 Nov)
 
-    /// `OWN_LEAVE_IDS_PER_QUERY`: own ids per leave `or` query (14). Nil when the script did not answer.
+    /// `OWN_LEAVE_IDS_PER_QUERY`: own ids per leave `or` query (6 from 1.73.2: the rules' lookup budget). Nil when the script did not answer.
     nonisolated static var ownLeaveIdsPerQuery: Int? {
         constant("OWN_LEAVE_IDS_PER_QUERY", as: Int.self)
     }
