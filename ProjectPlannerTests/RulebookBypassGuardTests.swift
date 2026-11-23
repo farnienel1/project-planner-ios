@@ -131,7 +131,7 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Views/TasksDetailView.swift": 2,
         ],
         "emailEquality": [
-            "Core/NotificationService.swift": 4,
+            "Core/NotificationService.swift": 2,
             "Core/ProjectManagerPickerSupport.swift": 3,
             "Core/ScheduleBookingConflictSupport.swift": 3,
             "Core/StaffEmailIdentity.swift": 3,

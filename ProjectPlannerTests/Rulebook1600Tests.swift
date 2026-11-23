@@ -38,7 +38,7 @@ final class Rulebook1600Tests: XCTestCase {
         ])], organizationId: "org-test")
     }
 
-    // MARK: - Half-day leave not covered (Book labour, Daily Overview)
+    // MARK: - Half-day unbooked (Book labour, Daily Overview)
 
     func testHalfDayLeaveNotCoveredIsListedForTheDayWithTheGap() throws {
         let rows = WarningsComputation.leaveCoverRowsOnDay(

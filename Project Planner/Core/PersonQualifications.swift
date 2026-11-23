@@ -57,18 +57,23 @@ enum PersonQualifications {
 
     // MARK: Expiry (editor display)
 
-    /// The expiry the editor shows for `qualificationId` (`qualificationExpiryDate`); nil = no expiry.
-    static func expiryDate(qualificationId: String, expiryDates: [String: Date]) -> Date? {
-        CanonicalBusinessEngine.qualificationExpiryDate(dates: expiryDates, qualificationId: qualificationId)
+    /// The expiry the editor shows for `qualificationId` (`qualificationExpiryDate`). Nil = the script did not
+    /// answer (show "could not be loaded", never "No expiry"); `.date == nil` = no expiry.
+    static func expiryLookup(qualificationId: String, expiryDates: [String: Date]) -> RulebookOptionalDate? {
+        CanonicalBusinessEngine.qualificationExpiryLookup(dates: expiryDates, qualificationId: qualificationId)
     }
 
     /// The expiry map after the editor sets (or, with nil, clears) one qualification's date
-    /// (`withQualificationExpiry`: every other spelling of the id removed). When the script does not answer, the map
-    /// is returned unchanged.
-    static func settingExpiry(_ date: Date?, qualificationId: String, in dates: [String: Date]) -> [String: Date] {
+    /// (`withQualificationExpiry`: every other spelling of the id removed). Nil when the script did not answer — the
+    /// caller changes nothing and says so.
+    static func settingExpiry(_ date: Date?, qualificationId: String, in dates: [String: Date]) -> [String: Date]? {
         let day = date.map { OrganizationRulebookContext.calendar.startOfDay(for: $0) }
-        return CanonicalBusinessEngine.withQualificationExpiry(dates: dates, qualificationId: qualificationId, date: day) ?? dates
+        return CanonicalBusinessEngine.withQualificationExpiry(dates: dates, qualificationId: qualificationId, date: day)
     }
+
+    /// Shown in place of the expiry controls (and on a failed edit) when the script did not answer — the wording of
+    /// the profile summary (`UserProfileSummaryView`).
+    static let unavailableMessage = "Qualifications could not be loaded. Try again."
 
     // MARK: Rows for the profile
 

@@ -99,9 +99,13 @@ final class PersonQualificationsTests: XCTestCase {
 
     func testTheExpiryMapIsReadUnderTheIdInAnyCaseAndTheAssignmentEndDateIsNeverAnExpiry() throws {
         let date = Date(timeIntervalSince1970: 1_900_000_000)
-        XCTAssertEqual(PersonQualifications.expiryDate(qualificationId: "q-abc", expiryDates: ["Q-ABC": date]), date)
-        XCTAssertEqual(PersonQualifications.expiryDate(qualificationId: "q-abc", expiryDates: ["q-abc": date]), date)
-        XCTAssertNil(PersonQualifications.expiryDate(qualificationId: "q-none", expiryDates: [:]))
+        XCTAssertEqual(PersonQualifications.expiryLookup(qualificationId: "q-abc", expiryDates: ["Q-ABC": date])?.date, date)
+        XCTAssertEqual(PersonQualifications.expiryLookup(qualificationId: "q-abc", expiryDates: ["q-abc": date])?.date, date)
+        // No expiry is an answer (`.date == nil`), never "the rules did not answer" (nil).
+        let none = try XCTUnwrap(PersonQualifications.expiryLookup(qualificationId: "q-none", expiryDates: [:]))
+        XCTAssertNil(none.date)
+        let other = try XCTUnwrap(PersonQualifications.expiryLookup(qualificationId: "q-none", expiryDates: ["Q-X": date]))
+        XCTAssertNil(other.date)
         // An assignment row's own `endDate` is not an expiry (web read it before 1.73.0; iOS did too).
         let fromRow = Qualification(id: "q-row", name: "IPAF", hasEndDate: true, endDate: date)
         let rows = try XCTUnwrap(PersonQualifications.rows(
@@ -114,7 +118,7 @@ final class PersonQualificationsTests: XCTestCase {
     func testDatesReachTheScriptAsMillisecondsNotSeconds() {
         // A date in seconds would read as January 1970 (hand-off v1.73.0).
         let date = Date(timeIntervalSince1970: 1_900_000_000)
-        let read = PersonQualifications.expiryDate(qualificationId: "Q1", expiryDates: ["Q1": date])
+        let read = PersonQualifications.expiryLookup(qualificationId: "Q1", expiryDates: ["Q1": date])?.date
         XCTAssertEqual(read?.timeIntervalSince1970 ?? 0, 1_900_000_000, accuracy: 0.001)
     }
 
@@ -159,16 +163,16 @@ final class PersonQualificationsTests: XCTestCase {
         XCTAssertEqual(PersonQualifications.expiryText(rows[0]), "No expiry")
     }
 
-    func testSettingAnExpiryRemovesEveryOtherSpellingOfTheId() {
+    func testSettingAnExpiryRemovesEveryOtherSpellingOfTheId() throws {
         // RULEBOOK 1.73.0 `withQualificationExpiry`: one spelling of the id is left; other ids are untouched.
         let date = Date(timeIntervalSince1970: 1_900_000_000)
         let later = date.addingTimeInterval(30 * day)
         let stored: [String: Date] = ["q-case": date, "Q-OTHER": date]
-        let set = PersonQualifications.settingExpiry(later, qualificationId: "Q-CASE", in: stored)
+        let set = try XCTUnwrap(PersonQualifications.settingExpiry(later, qualificationId: "Q-CASE", in: stored))
         XCTAssertEqual(Set(set.keys), ["Q-CASE", "Q-OTHER"])
         XCTAssertEqual(set["Q-CASE"], OrganizationRulebookContext.calendar.startOfDay(for: later))
         XCTAssertEqual(set["Q-OTHER"], date)
-        let cleared = PersonQualifications.settingExpiry(nil, qualificationId: "Q-CASE", in: stored)
+        let cleared = try XCTUnwrap(PersonQualifications.settingExpiry(nil, qualificationId: "Q-CASE", in: stored))
         XCTAssertEqual(cleared, ["Q-OTHER": date])
         // A save after clearing removes the stored other spelling (it was loaded and is no longer held).
         let changes = OperativeQualificationPatch.changes(

@@ -208,7 +208,7 @@ struct UserProfileSummaryView: View {
                                 .padding(.vertical, 10)
                         }
                     } else {
-                        Text(rows == nil ? "Qualifications could not be loaded. Try again." : "No qualifications yet.")
+                        Text(rows == nil ? PersonQualifications.unavailableMessage : "No qualifications yet.")
                             .font(.system(size: 13))
                             .foregroundStyle(ManageUserProfilePalette.textSecondary)
                             .frame(maxWidth: .infinity, alignment: .leading)

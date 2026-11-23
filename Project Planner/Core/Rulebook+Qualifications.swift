@@ -35,16 +35,16 @@ extension CanonicalBusinessEngine {
 
     nonisolated private static let expiryDateMemo = RulebookAnswerMemo<String, RulebookOptionalDate>(limit: 512)
 
-    /// `qualificationExpiryDate(dates, qualificationId)`: the expiry of one qualification; nil = no expiry (or the
-    /// script did not answer).
-    nonisolated static func qualificationExpiryDate(dates: [String: Date], qualificationId: String) -> Date? {
-        guard !dates.isEmpty else { return nil }
+    /// `qualificationExpiryDate(dates, qualificationId)`: the expiry of one qualification. Nil = the script did not
+    /// answer (the caller must not read it as "no expiry"); `.date == nil` = no expiry.
+    nonisolated static func qualificationExpiryLookup(dates: [String: Date], qualificationId: String) -> RulebookOptionalDate? {
+        guard !dates.isEmpty else { return RulebookOptionalDate(date: nil) }
         let arguments: [Any] = [qualificationExpiryInput(dates), qualificationId]
         guard let key = rulebookMemoKey(arguments) else { return nil }
         return expiryDateMemo.value(for: key) {
             guard let answer = callJSON("qualificationExpiryDate", arguments: arguments) else { return nil }
             return RulebookOptionalDate(date: (answer as? String).flatMap { date(fromIso: $0) })
-        }?.date
+        }
     }
 
     /// `withQualificationExpiry(dates, qualificationId, date)`: the map after setting (or, with nil, clearing) one
@@ -184,14 +184,15 @@ extension CanonicalBusinessEngine {
 
 extension CanonicalBusinessEngine {
     /// `LEAVE_COVER_WARNING_TITLE` ("Half-day unbooked"): the half-day leave cover card's title on Warnings and Daily
-    /// Overview. Empty when the script did not answer (no Swift copy of the words).
+    /// Overview. When the script did not answer, a neutral "Annual leave" (the pattern of the other constants here:
+    /// a non-empty fallback; not a second copy of the rulebook's words).
     nonisolated static var leaveCoverWarningTitle: String {
-        constant("LEAVE_COVER_WARNING_TITLE", as: String.self) ?? ""
+        constant("LEAVE_COVER_WARNING_TITLE", as: String.self) ?? "Annual leave"
     }
 
     /// `LEAVE_CLASH_WARNING_TITLE` ("Booked during annual leave").
     nonisolated static var leaveClashWarningTitle: String {
-        constant("LEAVE_CLASH_WARNING_TITLE", as: String.self) ?? ""
+        constant("LEAVE_CLASH_WARNING_TITLE", as: String.self) ?? "Annual leave"
     }
 }
 
@@ -228,9 +229,9 @@ extension CanonicalBusinessEngine {
         }?.value
     }
 
-    /// `DAILY_OVERVIEW_STANDARD_HOURS_LABEL` ("Standard hrs").
+    /// `DAILY_OVERVIEW_STANDARD_HOURS_LABEL` ("Standard hrs"); a neutral "Hours" when the script did not answer.
     nonisolated static var dailyOverviewStandardHoursText: String {
-        constant("DAILY_OVERVIEW_STANDARD_HOURS_LABEL", as: String.self) ?? ""
+        constant("DAILY_OVERVIEW_STANDARD_HOURS_LABEL", as: String.self) ?? "Hours"
     }
 }
 

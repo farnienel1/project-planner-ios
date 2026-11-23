@@ -373,7 +373,9 @@ struct OperativeQualificationsEditorView: View {
     @ViewBuilder
     private func qualificationRow(_ qualification: Qualification) -> some View {
         let isSelected = selectedQualifications.contains(qualification)
-        let shownExpiry = displayedExpiry(for: qualification.id)
+        // Nil = the shared rules did not answer: the expiry controls are not shown (never "No" for a stored date).
+        let expiryLookup = PersonQualifications.expiryLookup(qualificationId: qualification.id, expiryDates: qualificationExpiryDates)
+        let shownExpiry = expiryLookup?.date
         let hasExpiry = shownExpiry != nil
 
         VStack(alignment: .leading, spacing: 10) {
@@ -397,7 +399,12 @@ struct OperativeQualificationsEditorView: View {
                 .accessibilityLabel(isSelected ? "Remove qualification" : "Keep qualification")
             }
 
-            if isSelected {
+            if isSelected, expiryLookup == nil {
+                Text(PersonQualifications.unavailableMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("operativeQualificationsEditor.expiryUnavailable")
+            } else if isSelected {
                 HStack {
                     Text("Expiry date")
                         .font(.subheadline)
@@ -407,10 +414,10 @@ struct OperativeQualificationsEditorView: View {
                         set: { enabled in
                             if enabled {
                                 if displayedExpiry(for: qualification.id) == nil {
-                                    setExpiry(Date(), for: qualification.id)
+                                    _ = setExpiry(Date(), for: qualification.id)
                                 }
                             } else {
-                                setExpiry(nil, for: qualification.id)
+                                _ = setExpiry(nil, for: qualification.id)
                             }
                         }
                     )) {
@@ -429,7 +436,7 @@ struct OperativeQualificationsEditorView: View {
                         "Expires",
                         selection: Binding(
                             get: { expiry },
-                            set: { setExpiry($0, for: qualification.id) }
+                            set: { _ = setExpiry($0, for: qualification.id) }
                         ),
                         displayedComponents: .date
                     )
@@ -517,7 +524,7 @@ struct OperativeQualificationsEditorView: View {
     private func toggleQualification(_ qualification: Qualification) {
         if selectedQualifications.contains(qualification) {
             selectedQualifications.remove(qualification)
-            setExpiry(nil, for: qualification.id)
+            _ = setExpiry(nil, for: qualification.id)
             qualificationCertificateURLs.removeValue(forKey: qualification.id)
             certificateUploadTargets.removeValue(forKey: qualification.id)
         } else {
@@ -525,14 +532,22 @@ struct OperativeQualificationsEditorView: View {
         }
     }
 
-    /// The expiry shown for a qualification (`qualificationExpiryDate`: the exact key, else another spelling).
+    /// The expiry shown for a qualification (`qualificationExpiryDate`: the exact key, else another spelling). Nil
+    /// for no expiry and when the rules did not answer (the row then hides the controls, see `qualificationRow`).
     private func displayedExpiry(for qualificationId: String) -> Date? {
-        PersonQualifications.expiryDate(qualificationId: qualificationId, expiryDates: qualificationExpiryDates)
+        PersonQualifications.expiryLookup(qualificationId: qualificationId, expiryDates: qualificationExpiryDates)?.date
     }
 
     /// Sets (or, with nil, clears) one qualification's expiry on the organisation day (`withQualificationExpiry`).
-    private func setExpiry(_ date: Date?, for qualificationId: String) {
-        qualificationExpiryDates = PersonQualifications.settingExpiry(date, qualificationId: qualificationId, in: qualificationExpiryDates)
+    /// False when the rules did not answer: nothing changes and the editor says so.
+    @discardableResult
+    private func setExpiry(_ date: Date?, for qualificationId: String) -> Bool {
+        guard let next = PersonQualifications.settingExpiry(date, qualificationId: qualificationId, in: qualificationExpiryDates) else {
+            errorMessage = PersonQualifications.unavailableMessage
+            return false
+        }
+        qualificationExpiryDates = next
+        return true
     }
 
     private func revertToBaseline() {
@@ -627,8 +642,11 @@ struct OperativeQualificationsEditorView: View {
             let (added, newExpiries, newPending) = mergeAdditions
             mergeRollback = (selectedQualifications, qualificationExpiryDates, certificateUploadTargets)
             selectedQualifications.formUnion(added)
-            for (id, date) in newExpiries {
-                setExpiry(date, for: id)
+            for (id, date) in newExpiries where !setExpiry(date, for: id) {
+                selectedQualifications = mergeRollback?.quals ?? selectedQualifications
+                qualificationExpiryDates = mergeRollback?.expiry ?? qualificationExpiryDates
+                certificateUploadTargets = mergeRollback?.pending ?? certificateUploadTargets
+                return false
             }
             for (id, url) in newPending {
                 certificateUploadTargets[id] = url

@@ -17,7 +17,7 @@ struct BookLabourCandidate: Identifiable {
     /// With no catalogue row: the account itself under its users id, when the rulebook counts it
     /// (`AccountLabourBooking.bookingOperative`, `bookingIdsForAccount`). Nil otherwise.
     var accountBookingOperative: Operative? = nil
-    /// RULEBOOK 1.60.0 (owner report 17 Nov): set when this person is listed for "Half-day leave not covered"
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): set when this person is listed for "Half-day unbooked"
     /// (`leaveCoverageRows` `leave_cover`), with the uncovered time to prefill custom hours. Nil for an unbooked person.
     var leaveCover: Warning.AnnualLeaveWarningDetails? = nil
 
@@ -638,7 +638,7 @@ struct BookLabourFlowView: View {
         bookingParty.isEmpty ? [fallback] : bookingParty
     }
 
-    /// RULEBOOK 1.60.0 (owner report 17 Nov): a party listed for "Half-day leave not covered" with one shared gap is
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): a party listed for "Half-day unbooked" with one shared gap is
     /// booked straight into custom hours, prefilled with that gap (web `leaveCoverBookingHours`). Nil otherwise.
     private var partyLeaveCoverGap: (start: String, end: String)? {
         guard let first = bookingParty.first?.leaveCover, let start = first.gapStart, let end = first.gapEnd else { return nil }
@@ -2428,7 +2428,7 @@ struct BookLabourFlowView: View {
             )
             listed.append((candidate, isFocused(user, operative: linked, personKey: personKey, userId: userId, focused: focused)))
         }
-        // RULEBOOK 1.60.0 (owner report 17 Nov): the Warnings "Half-day leave not covered" card links here with "Book the
+        // RULEBOOK 1.60.0 (owner report 17 Nov): the Warnings "Half-day unbooked" card links here with "Book the
         // PM / AM". `unbookedLabourRowsOnDay` leaves half-leave days out (they are `leaveCoverageRows`), so the day's
         // leave_cover rows are listed too, in the same warning scope, with the uncovered time to prefill.
         let leaveRows = WarningsComputation.leaveCoverRowsOnDay(

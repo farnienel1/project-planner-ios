@@ -1493,7 +1493,7 @@ enum WarningsComputation {
         }
     }
 
-    /// RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day leave not covered" rows (`leaveCoverageRows`, kind
+    /// RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day unbooked" rows (`leaveCoverageRows`, kind
     /// `leave_cover`) — the same rows the Warnings scan lists — for Book labour and Daily Overview, in the viewer's
     /// scope (`warningScopeFor` for Book labour, `dailyOverviewScopeFor` for Daily Overview).
     @MainActor
