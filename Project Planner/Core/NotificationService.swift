@@ -762,7 +762,6 @@ class NotificationService: ObservableObject {
     /// order changes a number — `receivesJobNotification` with the job's managers, then `excludeActor`; `relatedId` is
     /// the job id (`notificationRelatedIdFor`).
     func notifyVariationRenumbered(
-        parentId: UUID,
         parentDocumentId: String,
         parentName: String,
         isSmallWorks: Bool,

@@ -174,16 +174,18 @@ struct VariationTrackerView: View {
     private func finishDrag() {
         guard dragId != nil else { return }
         dragId = nil
+        guard !busy else { return }
         guard let next = order, next != storedOpenIds else {
             order = nil
             baseRows = nil
             return
         }
-        Task { await save(next) }
+        startSave(next)
     }
 
     /// ↑ / ↓ (and VoiceOver): swap with the next open variation and save, as web does.
     private func moveBy(_ id: String, _ delta: Int) {
+        guard !busy else { return }
         var current = openIds
         guard let from = current.firstIndex(of: id) else { return }
         let to = from + delta
@@ -192,7 +194,7 @@ struct VariationTrackerView: View {
         current.insert(item, at: to)
         baseRows = store.variations
         message = nil
-        Task { await save(current) }
+        startSave(current)
     }
 
     private func showPinned(_ variation: Variation) {
@@ -204,26 +206,27 @@ struct VariationTrackerView: View {
 
     // MARK: - Save
 
-    private func save(_ nextOrder: [String]) async {
-        guard let project,
-              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
-            order = nil
-            baseRows = nil
-            return
-        }
-        guard isOnline else {
-            message = TrackerMessage(text: OnlineOnlyActionError(actionId: UnlistedOfflineAction.renumberVariations.rawValue).localizedDescription, tone: .warn)
-            order = nil
-            baseRows = nil
-            return
-        }
-        let snapshot = baseRows ?? store.variations
+    /// One save at a time (review of #273): `busy` is set before the save's task starts, so a second drop or a tap on
+    /// ↑ / ↓ while it runs is ignored.
+    private func startSave(_ nextOrder: [String]) {
+        guard !busy else { return }
         busy = true
+        Task { await save(nextOrder) }
+    }
+
+    private func save(_ nextOrder: [String]) async {
         defer {
             order = nil
             baseRows = nil
             busy = false
         }
+        guard let project,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return }
+        guard isOnline else {
+            message = TrackerMessage(text: OnlineOnlyActionError(actionId: UnlistedOfflineAction.renumberVariations.rawValue).localizedDescription, tone: .warn)
+            return
+        }
+        let snapshot = baseRows ?? store.variations
         do {
             let result = try await firebaseBackend.applyVariationOrder(
                 parentId: project.documentId,
@@ -239,11 +242,12 @@ struct VariationTrackerView: View {
                 let copies = result.copiesFailed.isEmpty ? "" : " The copy older iPhone builds read did not all update — save again."
                 message = TrackerMessage(text: "Saved: \(moves).\(copies)", tone: result.copiesFailed.isEmpty ? .ok : .warn)
                 let actorName = (userStore.currentUser?.fullName).flatMap { $0.isEmpty ? nil : $0 } ?? "Someone"
+                // Web: the job name stored on the variations (`baseRows[0].parentName`), else "this job".
+                let storedParentName = snapshot.first(where: { !$0.parentName.isEmpty })?.parentName ?? ""
                 Task {
                     await notificationService.notifyVariationRenumbered(
-                        parentId: project.id,
                         parentDocumentId: project.documentId,
-                        parentName: parentName,
+                        parentName: storedParentName,
                         isSmallWorks: project.isSmallWorksDocument,
                         actorName: actorName,
                         jobManagerIds: project.managerIds
@@ -342,7 +346,7 @@ struct VariationTrackerView: View {
             .font(.footnote.weight(.semibold))
             Button("Save order") {
                 dragId = nil
-                if let next = order { Task { await save(next) } }
+                if let next = order { startSave(next) }
             }
             .font(.footnote.weight(.semibold))
             .disabled(!canDrag)
@@ -394,7 +398,9 @@ struct VariationTrackerView: View {
             content
                 .contentShape(Rectangle())
                 .onDrag { startDrag(variation.id) }
-                .opacity(dragId == variation.id ? 0.5 : 1)
+                // Dimmed only while a drag has moved something (a long press that never moved, or a drop outside, leaves
+                // `dragId` set with no order on screen).
+                .opacity(order != nil && dragId == variation.id ? 0.5 : 1)
                 .accessibilityAction(named: "Move up") { moveBy(variation.id, -1) }
                 .accessibilityAction(named: "Move down") { moveBy(variation.id, 1) }
         } else if pinned && canReorder {

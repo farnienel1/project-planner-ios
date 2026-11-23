@@ -168,6 +168,12 @@ final class VariationTrackerDragTests: XCTestCase {
         XCTAssertTrue(view.contains("OfflinePolicy.isEnabled(.renumberVariations"))
         XCTAssertTrue(view.contains("applyVariationOrder("))
         XCTAssertTrue(view.contains("notifyVariationRenumbered("))
+        // Review of #273: one save at a time, and a long press that never moved leaves no row dimmed.
+        XCTAssertTrue(view.contains("guard !busy else { return }\n        busy = true\n        Task { await save(nextOrder) }"))
+        XCTAssertFalse(view.contains("Task { await save(next) }"))
+        XCTAssertFalse(view.contains("Task { await save(current) }"))
+        XCTAssertTrue(view.contains("order != nil && dragId == variation.id"))
+        XCTAssertTrue(text.contains("collection.document(storedId)"), "rows are read by the stored document id")
         XCTAssertTrue(try source("Project Planner/Views/Variations/VariationsListView.swift").contains("project: project"))
     }
 }

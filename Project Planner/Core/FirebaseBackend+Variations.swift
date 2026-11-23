@@ -507,7 +507,10 @@ extension FirebaseBackend {
         for id in staleLocks {
             try await Self.runVariationStaleLockClear(db: db, ref: collection.document(id), variationId: id, userId: uid)
         }
-        let collectionIds = Set(currentDocs.map { $0.documentID.lowercased() })
+        // Review of #273: each row is read by the document id the query returned (screen id → stored id without
+        // case), so a letter-case difference never reads a missing document (which the read rule refuses).
+        var collectionIds: [String: String] = [:]
+        for doc in currentDocs { collectionIds[doc.documentID.lowercased()] = doc.documentID }
         let now = Timestamp(date: Date())
         let answer = try await Self.runVariationOrderTransaction(
             db: db,
@@ -549,7 +552,7 @@ extension FirebaseBackend {
                 guard var next = VariationCodec.variation(from: merged, documentId: write.id) else {
                     throw CanonicalWriteUnavailableError(function: "parseVariationDocument")
                 }
-                if let base = baseRows.first(where: { $0.id == write.id }) {
+                if let base = baseRows.first(where: { $0.id.lowercased() == write.id.lowercased() }) {
                     if !base.parentId.isEmpty { next.parentId = base.parentId }
                     next.parentType = base.parentType
                 }
@@ -598,7 +601,7 @@ extension FirebaseBackend {
         parentId: String,
         order: [String],
         baseRows: [Variation],
-        collectionIds: Set<String>,
+        collectionIds: [String: String],
         userId: String,
         now: Timestamp
     ) async throws -> VariationOrderTransactionAnswer {
@@ -616,18 +619,19 @@ extension FirebaseBackend {
             var stored: [String: [String: Any]] = [:]
             var live: [Variation] = []
             for row in baseRows {
-                guard collectionIds.contains(row.id.lowercased()) else {
+                guard let storedId = collectionIds[row.id.lowercased()] else {
                     live.append(row)
                     continue
                 }
                 let snap: DocumentSnapshot
                 do {
-                    snap = try transaction.getDocument(collection.document(row.id))
+                    snap = try transaction.getDocument(collection.document(storedId))
                 } catch {
                     return fail(error)
                 }
-                if let data = snap.data(), let parsed = VariationCodec.variation(from: data, documentId: row.id) {
-                    stored[row.id] = data
+                // Keyed and parsed by the stored id, so the plan's changes write to that same document.
+                if let data = snap.data(), let parsed = VariationCodec.variation(from: data, documentId: storedId) {
+                    stored[storedId] = data
                     live.append(parsed)
                 } else {
                     live.append(row)
