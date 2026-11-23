@@ -297,4 +297,99 @@ final class Rulebook1740Tests: XCTestCase {
         // Display only: the total of every line is unchanged, and the hidden line is £0.
         XCTAssertEqual(lines.reduce(0) { $0 + $1.amount }, ordered.reduce(0) { $0 + $1.amount })
     }
+
+    // MARK: Owner answers 23 Nov (amended #425)
+
+    func testEmptyStandardLineBesideADeclinedOvertimeLineIsShownDeclined() {
+        let day = Date(timeIntervalSince1970: 1_795_392_000 + 12 * 3600)
+        let lines = [
+            Line(id: "op-A-normal", booking: "A", overtime: false, hours: 0, amount: 0, start: "05:00", end: "07:00", details: ""),
+            Line(id: "op-A-ot", booking: "A", overtime: true, hours: 3, amount: 40, start: "05:00", end: "07:00", details: "05:00–07:00"),
+        ]
+        func input(_ line: Line) -> TimesheetLineOrderInput {
+            TimesheetLineOrderInput(
+                id: line.id, bookingId: "op-\(line.booking)", bookingCollection: "bookings", date: day,
+                isOvertimeLine: line.overtime, paidHours: line.hours, amount: line.amount,
+                bookingStartTime: line.start, bookingEndTime: line.end, details: line.details
+            )
+        }
+        // Overtime not declined: the £0 standard line is hidden.
+        let plain = TimesheetLineDisplayOrder.shown(lines, input: input, isDeclined: { _ in false })
+        XCTAssertEqual(plain.map(\.item.id), ["op-A-ot"])
+        // Overtime declined: the £0 standard line stays, shown declined (`timesheetLineShownDeclined`).
+        let declined = TimesheetLineDisplayOrder.shown(lines, input: input, isDeclined: { $0.id == "op-A-ot" })
+        XCTAssertEqual(declined.map(\.item.id), ["op-A-normal", "op-A-ot"])
+        XCTAssertEqual(declined.map(\.shownDeclined), [true, false])
+    }
+
+    func testCounterSignNoticeSaysTheSheetWasUpdatedOnlyWithAReviewerEditForThisSignature() {
+        let signedMs = signedAt.timeIntervalSince1970 * 1000
+        let record: [String: Any] = [
+            "bookings__b1": ["bookingId": "B1", "collection": "bookings", "fingerprint": "x", "place": "", "deleted": false, "editedBy": "LM", "forSignedAtMs": signedMs],
+        ]
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetSheetChangedByReviewer(["operativeSignedAt": signedMs, "reviewerBookingEdits": record]))
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetSheetChangedByReviewer(["operativeSignedAt": signedMs]))
+        // A record for an earlier signature does not count.
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetSheetChangedByReviewer(["operativeSignedAt": signedMs + 3_600_000, "reviewerBookingEdits": record]))
+
+        let updated = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Lee", changedByReviewer: true)
+        XCTAssertEqual(updated?.title, CanonicalBusinessEngine.constant("TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE", as: String.self))
+        // The message names the signer the iOS notice already passes (no generic "line manager" wording).
+        XCTAssertEqual(updated?.message, "Lee changed your timesheet and signed it off. Open it to check the changes.")
+        let plain = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Lee", changedByReviewer: false)
+        XCTAssertEqual(plain?.title, CanonicalBusinessEngine.constant("TIMESHEET_SIGNED_NOTICE_TITLE", as: String.self))
+        XCTAssertNotEqual(plain?.title, updated?.title)
+
+        // The draft as the reviewer holds it after recording an edit.
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = signedAt
+        draft.versionDocumentId = "timesheet_OP1_1795392000"
+        XCTAssertFalse(CanonicalBusinessEngine.timesheetSheetChangedByReviewer(SignedTimesheetChangeInputs.sheet(draft, keys: [:])))
+        if let edit = TimesheetReviewerEditRecorder.record(
+            draft: draft, collection: "bookings", bookingId: "B1", booking: storedBooking(),
+            write: (set: ["workEndTime": "16:00"], remove: []), editedBy: "LM"
+        ) {
+            TimesheetReviewerBookingEdits.adding(edit.edit, to: &draft)
+        }
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetSheetChangedByReviewer(SignedTimesheetChangeInputs.sheet(draft, keys: [:])))
+    }
+
+    /// RULEBOOK 1.74.0 §8 (owner answer 23 Nov, choice 6): the live invoice leaves off the £0 empty standard row of a
+    /// booking with an overtime line, declined or not — `timesheetInvoiceRows` `omitEmptyStandardParts` (what
+    /// `TimesheetInvoiceRows` passes), read from the iPhone's own line shape (`rulebookTotalsJSON`).
+    func testLiveInvoiceOmitsTheEmptyStandardRowWhateverTheOvertimeDecision() throws {
+        let saturday = LogicFixtures.day(2026, 11, 21)
+        let monday = LogicFixtures.day(2026, 11, 23)
+        let standard = TimesheetPayrollLineItem(
+            id: "op-A1-normal", date: saturday, jobNumber: "J-1", projectName: "Site", details: "",
+            paidHours: 0, payrollBasis: .dayRate, dayRate: 200, hourlyRate: nil, amount: 0, isPayeDay: false,
+            isOvertimeLine: false, bookingId: "op-A1", bookingPaidHours: 13, bookingOvertimeHours: 6.5
+        )
+        let overtime = TimesheetPayrollLineItem(
+            id: "op-A1-ot", date: saturday, jobNumber: "J-1", projectName: "Site (Overtime)", details: "07:30–14:00",
+            paidHours: 13, payrollBasis: .dayRate, dayRate: 200, hourlyRate: nil, amount: 325, isPayeDay: false,
+            isOvertimeLine: true, bookingId: "op-A1", otMultiplier: 2, otClockHours: 6.5
+        )
+        let other = TimesheetPayrollLineItem(
+            id: "op-B1-normal", date: monday, jobNumber: "J-1", projectName: "Site", details: "07:30–16:00",
+            paidHours: 8, payrollBasis: .dayRate, dayRate: 200, hourlyRate: nil, amount: 200, isPayeDay: false,
+            isOvertimeLine: false, bookingId: "op-B1"
+        )
+        let lines = [standard, overtime, other].map(\.rulebookTotalsJSON)
+        func ids(_ sheet: [String: Any], omit: Bool) throws -> [String] {
+            let rows = try XCTUnwrap(CanonicalBusinessEngine.callJSON("timesheetInvoiceRows", arguments: [[
+                "sheet": sheet, "payrollLines": lines, "extrasMode": "decided",
+                "timeZone": OrganizationRulebookContext.timeZoneIdentifier, "omitEmptyStandardParts": omit,
+            ] as [String: Any]]) as? [[String: Any]])
+            return rows.compactMap { $0["id"] as? String }
+        }
+        XCTAssertEqual(try ids([:], omit: false), ["op-A1-normal", "op-A1-ot", "op-B1-normal"])
+        XCTAssertEqual(try ids([:], omit: true), ["op-A1-ot", "op-B1-normal"])
+        let declined: [String: Any] = [
+            "managerSignedAt": signedAt.timeIntervalSince1970 * 1000,
+            "payrollLineReviews": ["op-A1-ot": ["decision": "declined"]],
+        ]
+        // Overtime declined: neither row is invoiced (the review shows the £0 line struck through instead).
+        XCTAssertEqual(try ids(declined, omit: true), ["op-B1-normal"])
+    }
 }

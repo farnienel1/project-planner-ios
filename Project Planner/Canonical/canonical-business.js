@@ -599,7 +599,6 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_ORIGINAL_VERSION_LABEL: () => TIMESHEET_ORIGINAL_VERSION_LABEL,
     TIMESHEET_PAY_INPUTS_LOADING_MESSAGE: () => TIMESHEET_PAY_INPUTS_LOADING_MESSAGE,
     TIMESHEET_PENDING_NOTICE_TYPE: () => TIMESHEET_PENDING_NOTICE_TYPE,
-    TIMESHEET_PENDING_PUSH_REPEAT_WINDOW_MS: () => TIMESHEET_PENDING_PUSH_REPEAT_WINDOW_MS,
     TIMESHEET_REVIEWER_BOOKING_EDITS_FIELD: () => TIMESHEET_REVIEWER_BOOKING_EDITS_FIELD,
     TIMESHEET_REVIEWER_ONLY_FIELDS: () => TIMESHEET_REVIEWER_ONLY_FIELDS,
     TIMESHEET_REVIEW_AND_SIGN_REVISION_LABEL: () => TIMESHEET_REVIEW_AND_SIGN_REVISION_LABEL,
@@ -641,8 +640,11 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_SELF_SIGNED_OWNER_FIELDS: () => TIMESHEET_SELF_SIGNED_OWNER_FIELDS,
     TIMESHEET_SELF_SIGN_PAYE_NOTE: () => TIMESHEET_SELF_SIGN_PAYE_NOTE,
     TIMESHEET_SIGNED_AFTER_MS: () => TIMESHEET_SIGNED_AFTER_MS,
+    TIMESHEET_SIGNED_NOTICE_TITLE: () => TIMESHEET_SIGNED_NOTICE_TITLE,
     TIMESHEET_SIGNED_NOTICE_TYPE: () => TIMESHEET_SIGNED_NOTICE_TYPE,
     TIMESHEET_SIGNED_OFF_EXTRAS_MESSAGE: () => TIMESHEET_SIGNED_OFF_EXTRAS_MESSAGE,
+    TIMESHEET_SIGNED_UPDATED_NOTICE_MESSAGE: () => TIMESHEET_SIGNED_UPDATED_NOTICE_MESSAGE,
+    TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE: () => TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE,
     TIMESHEET_SNAPSHOT_FAILED_MESSAGE: () => TIMESHEET_SNAPSHOT_FAILED_MESSAGE,
     TIMESHEET_SNAPSHOT_LOADING_MESSAGE: () => TIMESHEET_SNAPSHOT_LOADING_MESSAGE,
     TIMESHEET_SUBMISSION_NOTICE_TITLE: () => TIMESHEET_SUBMISSION_NOTICE_TITLE,
@@ -1839,6 +1841,7 @@ var ProjectPlannerCanonical = (() => {
     timesheetLineDisplayOrder: () => timesheetLineDisplayOrder,
     timesheetLineIsEmptyStandardPart: () => timesheetLineIsEmptyStandardPart,
     timesheetLineReviewActionsAllowed: () => timesheetLineReviewActionsAllowed,
+    timesheetLineShownDeclined: () => timesheetLineShownDeclined,
     timesheetListBucket: () => timesheetListBucket,
     timesheetNotificationDedupeKey: () => timesheetNotificationDedupeKey,
     timesheetOwnerCanAddExtras: () => timesheetOwnerCanAddExtras,
@@ -1848,7 +1851,6 @@ var ProjectPlannerCanonical = (() => {
     timesheetOwnerWriteFields: () => timesheetOwnerWriteFields,
     timesheetParticipant: () => timesheetParticipant,
     timesheetPaymentRunPeriodsFromWindow: () => timesheetPaymentRunPeriodsFromWindow,
-    timesheetPendingPushIsRepeat: () => timesheetPendingPushIsRepeat,
     timesheetPeriodContainsDay: () => timesheetPeriodContainsDay,
     timesheetPeriodFromInvoicing: () => timesheetPeriodFromInvoicing,
     timesheetPeriodKey: () => timesheetPeriodKey,
@@ -1877,10 +1879,12 @@ var ProjectPlannerCanonical = (() => {
     timesheetRevisionToSignRecipients: () => timesheetRevisionToSignRecipients,
     timesheetRevisionWaitingLabel: () => timesheetRevisionWaitingLabel,
     timesheetSelfSigned: () => timesheetSelfSigned,
+    timesheetSheetChangedByReviewer: () => timesheetSheetChangedByReviewer,
     timesheetSheetHasActivity: () => timesheetSheetHasActivity,
     timesheetSheetIsRevision: () => timesheetSheetIsRevision,
     timesheetSignOffWriteFields: () => timesheetSignOffWriteFields,
     timesheetSignedEntryKeys: () => timesheetSignedEntryKeys,
+    timesheetSignedNoticeText: () => timesheetSignedNoticeText,
     timesheetSignedRecipients: () => timesheetSignedRecipients,
     timesheetSnapshotMoneyRowsCurrent: () => timesheetSnapshotMoneyRowsCurrent,
     timesheetSnapshotNeedsRebuild: () => timesheetSnapshotNeedsRebuild,
@@ -13657,834 +13661,6 @@ var ProjectPlannerCanonical = (() => {
     return decision != null && decision.state !== "ignored";
   }
 
-  // lib/canonical/payProfile.ts
-  var PAY_PROFILES_COLLECTION = "payProfiles";
-  var PAY_PROFILE_FIELDS = [
-    "payBasis",
-    "dayRate",
-    "hourlyRate",
-    "employmentType",
-    "employmentTypeTransitionFrom",
-    "employmentTypeEffectiveAt"
-  ];
-  function payProfilePath(organizationId, subjectId) {
-    return `organizations/${String(organizationId || "").trim()}/${PAY_PROFILES_COLLECTION}/${String(subjectId || "").trim()}`;
-  }
-  function canViewPersonPay(viewer, subject, roster, options) {
-    if (!viewer || !subject) return false;
-    const viewerIds = new Set(personIdSet(viewer, roster).map(idKey));
-    if (viewerIds.size === 0) return false;
-    if (viewer.isPlatformOwner === true) return true;
-    const subjectIds = personIdSet(subject, roster).map(idKey);
-    if (subjectIds.some((id2) => viewerIds.has(id2))) return true;
-    if (viewer.isActive === false) return false;
-    const level = permissionLevelOf(viewer);
-    if (level === "admin") return true;
-    const operativesManager = level === "manager" && effectivePermissions(viewer).operatives === true;
-    if (subject.catalogueOperative === true) return operativesManager;
-    if (operativesManager && permissionLevelOf(subject) === "operative") return true;
-    if (options?.context !== "timesheetReview") return false;
-    return lineManagerIds(subject, roster).some((id2) => viewerIds.has(idKey(id2)));
-  }
-  function catalogueOperativePaySubjects(operatives, roster) {
-    const rosterIds = /* @__PURE__ */ new Set();
-    const rosterEmails = /* @__PURE__ */ new Set();
-    for (const member of roster || []) {
-      if (!member) continue;
-      for (const id2 of personIdSet(member, null)) rosterIds.add(idKey(id2));
-      const email = idKey(member.email);
-      if (email) rosterEmails.add(email);
-    }
-    const out = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const row3 of operatives || []) {
-      const id2 = typeof row3?.id === "string" ? row3.id.trim() : "";
-      if (!id2 || seen.has(idKey(id2))) continue;
-      const linked = [row3.linkedUserId, row3.userId, row3.uid].some((value) => typeof value === "string" && value.trim() !== "");
-      if (linked || rosterIds.has(idKey(id2))) continue;
-      const email = typeof row3.email === "string" ? row3.email.trim() : "";
-      if (email && rosterEmails.has(idKey(email))) continue;
-      seen.add(idKey(id2));
-      out.push({ id: id2, email: email || null, catalogueOperative: true });
-    }
-    return out;
-  }
-  function parsePayProfileDocument(docId, data) {
-    const fields = {};
-    for (const key7 of PAY_PROFILE_FIELDS) {
-      if (data && Object.prototype.hasOwnProperty.call(data, key7)) fields[key7] = data[key7];
-    }
-    return { subjectId: String(docId || "").trim(), fields };
-  }
-  function overlayPayProfile(person, profile) {
-    if (!profile) return person;
-    const out = { ...person };
-    for (const [key7, value] of Object.entries(profile.fields)) out[key7] = value;
-    return out;
-  }
-  function payProfileWriteFieldsFromProfileWrite(subjectId, profileWrite) {
-    const id2 = String(subjectId || "").trim();
-    if (!id2 || !profileWrite) return null;
-    const out = {};
-    for (const key7 of PAY_PROFILE_FIELDS) {
-      if (Object.prototype.hasOwnProperty.call(profileWrite, key7)) out[key7] = profileWrite[key7];
-    }
-    if (Object.keys(out).length === 0) return null;
-    return { userId: id2, ...out };
-  }
-  function payProfileBackfillWrites(input) {
-    const source = input.source || {};
-    const profile = input.profile || {};
-    const has2 = (data, key7) => Object.prototype.hasOwnProperty.call(data, key7);
-    const set = {};
-    for (const key7 of PAY_PROFILE_FIELDS) {
-      if (has2(source, key7) && !has2(profile, key7)) set[key7] = source[key7];
-    }
-    const profileSet = Object.keys(set).length > 0 ? { userId: String(input.subjectId || "").trim(), ...set } : null;
-    const sourceRemove = [];
-    if (input.strip === true) {
-      for (const key7 of PAY_PROFILE_FIELDS) {
-        if (has2(source, key7) && (has2(profile, key7) || has2(set, key7))) sourceRemove.push(key7);
-      }
-    }
-    return { profileSet, sourceRemove };
-  }
-  function viewerSeesEveryPay(viewer) {
-    if (viewer.isPlatformOwner === true) return true;
-    if (viewer.isActive === false) return false;
-    return permissionLevelOf(viewer) === "admin";
-  }
-  function viewablePayIds(viewer, subjects, roster) {
-    const out = [];
-    const seen = /* @__PURE__ */ new Set();
-    const add = (raw) => {
-      const id2 = typeof raw === "string" ? raw.trim() : "";
-      if (!id2 || seen.has(id2)) return;
-      seen.add(id2);
-      out.push(id2);
-    };
-    add(viewer.id);
-    for (const subject of subjects || []) {
-      if (subject && canViewPersonPay(viewer, subject, roster, { context: "timesheetReview" })) add(subject.id);
-    }
-    return out;
-  }
-  function viewableCatalogueIds(viewer, subjects, roster) {
-    const out = [];
-    const seen = /* @__PURE__ */ new Set();
-    for (const subject of subjects || []) {
-      if (!subject || subject.catalogueOperative !== true) continue;
-      const id2 = typeof subject.id === "string" ? subject.id.trim() : "";
-      if (!id2 || seen.has(id2) || !canViewPersonPay(viewer, subject, roster, { context: "timesheetReview" })) continue;
-      seen.add(id2);
-      out.push(id2);
-    }
-    return out;
-  }
-  function rateHistoryQueryPlan(viewer, subjects, roster, options) {
-    if (options?.privatePay !== true) return { kind: "all" };
-    if (!viewer) return { kind: "people", userIds: [], operativeIds: [] };
-    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
-    const operativeIds = viewableCatalogueIds(viewer, subjects, roster);
-    const catalogue = new Set(operativeIds);
-    const userIds = viewablePayIds(viewer, subjects, roster).filter((id2) => !catalogue.has(id2));
-    return { kind: "people", userIds, operativeIds };
-  }
-  function payProfileReadPlan(viewer, subjects, roster) {
-    if (!viewer) return { kind: "documents", ids: [] };
-    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
-    return { kind: "documents", ids: viewablePayIds(viewer, subjects, roster) };
-  }
-  function sharedDocumentPayWrite(write, options) {
-    if (options?.privatePay !== true || !write) return write;
-    const out = {};
-    for (const [key7, value] of Object.entries(write)) {
-      if (PAY_PROFILE_FIELDS.includes(key7)) continue;
-      out[key7] = value;
-    }
-    return out;
-  }
-  function payEditorStartingValues(person, profile, options) {
-    const overlaid = options?.privatePay === true && profile ? overlayPayProfile(person, profile) : person;
-    const record18 = overlaid || {};
-    const pay = readStoredRates(record18);
-    const rate = pay.payBasis === "hourly" ? pay.hourlyRate : pay.dayRate;
-    const employmentType = Object.prototype.hasOwnProperty.call(record18, "employmentType") ? record18.employmentType ?? null : null;
-    return { record: record18, pay, rate, employmentType, source: overlaid !== person ? "payProfile" : "users" };
-  }
-
-  // lib/canonical/reportPay.ts
-  var PAYE_PAY_CELL_LABEL = "PAYE";
-  function lineIsPaye(line) {
-    if (line.isPaye === true) return true;
-    if (line.isPaye === false) return false;
-    if (line.employmentType == null || String(line.employmentType).trim() === "") return false;
-    return normalizeEmploymentType(line.employmentType) === "paye";
-  }
-  function reportPayCell(line) {
-    if (lineIsPaye(line)) return { pay: null, label: PAYE_PAY_CELL_LABEL, countsTowardPayTotal: false };
-    const pay = typeof line.pay === "number" && Number.isFinite(line.pay) ? roundPennies(line.pay) : null;
-    return { pay, label: null, countsTowardPayTotal: pay != null };
-  }
-  function reportPayTotal(lines) {
-    let total = 0;
-    for (const line of lines) {
-      const cell2 = reportPayCell(line);
-      if (cell2.countsTowardPayTotal && cell2.pay != null) total += cell2.pay;
-    }
-    return roundPennies(total);
-  }
-  function reportPersonPayCell(lines) {
-    if (lines.length > 0 && lines.every(lineIsPaye)) {
-      return { pay: null, label: PAYE_PAY_CELL_LABEL, countsTowardPayTotal: false };
-    }
-    return { pay: reportPayTotal(lines), label: null, countsTowardPayTotal: true };
-  }
-  function payrollLineBookingKey(line) {
-    if (!line) return "";
-    const id2 = line.bookingId ? String(line.bookingId) : String(line.id ?? "").replace(/-(?:normal|ot)$/i, "");
-    const stored = typeof line.bookingCollection === "string" ? line.bookingCollection.trim() : "";
-    const collection = stored || (/^mgr-/i.test(id2) || /^mgr-/i.test(String(line.id ?? "")) ? "managerSiteBookings" : "bookings");
-    return `${collection}|${normalizeDocumentId(id2)}`;
-  }
-  function isInvoiceLine(line) {
-    if (!line) return false;
-    if (line.isPayeDay === true || lineIsPaye(line)) return false;
-    if (line.isLeave === true || String(line.kind || "").trim().toLowerCase() === "leave") return false;
-    return true;
-  }
-  function invoiceLines(lines) {
-    return (lines || []).filter((line) => isInvoiceLine(line));
-  }
-  var INVOICE_AMOUNT_EPSILON = 1e-4;
-  function rowsOf2(value) {
-    return Array.isArray(value) ? value.filter((row3) => Boolean(row3) && typeof row3 === "object") : [];
-  }
-  function jobNumberOf(...values) {
-    for (const value of values) {
-      const job = typeof value === "number" && Number.isFinite(value) ? String(value) : typeof value === "string" ? value.trim() : "";
-      if (job) return job;
-    }
-    return "";
-  }
-  function amountOf(value) {
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
-  }
-  function timesheetInvoiceRows(input) {
-    const sheet = input.sheet && typeof input.sheet === "object" ? input.sheet : {};
-    const lines = input.payrollLines || [];
-    const liveById = new Map(lines.map((line) => [normalizeDocumentId(line.id), line]));
-    const override = sheet.weeklyReportOverride;
-    const rows3 = [];
-    const days = input.timesheetDays ? new Set(input.timesheetDays.map((day) => String(day).trim())) : null;
-    const zone3 = zoneOrLondon(input.timeZone);
-    const onCountedDay = (dayKey) => !days || !dayKey || days.has(dayKey);
-    const entryDay = (entry) => {
-      const ms = documentInstantMs(entry.date) ?? documentInstantMs(entry.startDate);
-      return ms == null ? null : dayKeyInZone(new Date(ms), zone3);
-    };
-    if (override && typeof override === "object") {
-      const snapshot = override;
-      for (const row3 of rowsOf2(snapshot.lines)) {
-        const stored = amountOf(row3.amount);
-        const amount = row3.decision === "edited" ? roundPennies(stored) : stored;
-        if (row3.decision === "declined" || amount <= INVOICE_AMOUNT_EPSILON) continue;
-        const id2 = String(row3.id ?? "").trim();
-        const live = liveById.get(normalizeDocumentId(id2)) ?? null;
-        if (!isInvoiceLine(row3)) continue;
-        rows3.push({ kind: "labour", id: id2, amount, source: "override", line: live, stored: row3, jobNumber: jobNumberOf(live && live.jobNumber, row3.jobNumber) });
-      }
-      for (const [kind, key7] of [["priceWork", "priceWork"], ["expense", "expenses"]]) {
-        for (const row3 of rowsOf2(snapshot[key7])) {
-          const amount = amountOf(row3.amount);
-          if (row3.decision === "declined" || amount <= INVOICE_AMOUNT_EPSILON) continue;
-          rows3.push({ kind, id: String(row3.id ?? "").trim(), amount, source: "override", line: null, stored: row3, jobNumber: jobNumberOf(row3.jobNumber) });
-        }
-      }
-      return rows3;
-    }
-    if (days && days.size === 0) return rows3;
-    const decided = input.extrasMode === "decided";
-    const managerSigned = parseTimesheetStatusFields(sheet).managerSignedAtMs != null;
-    const labourReviews = input.applyLabourReviews == null ? managerSigned : input.applyLabourReviews === true;
-    const groupOf = (line) => payrollLineBookingKey(line);
-    const groupsWithOvertime = new Set(lines.filter((line) => line && line.isOvertimeLine === true).map(groupOf));
-    for (const line of invoiceLines(lines)) {
-      if (!onCountedDay(line.dayKey)) continue;
-      let amount = line.amount;
-      let applied = null;
-      if (decided && labourReviews) {
-        const review = payrollLineReview(sheet, line.id, {
-          bookingFingerprint: line.bookingFingerprint,
-          isOvertimeLine: line.isOvertimeLine,
-          bookingHasOvertimeLine: line.bookingHasOvertimeLine ?? groupsWithOvertime.has(groupOf(line))
-        });
-        if (review?.decision === "declined") continue;
-        if (review?.decision === "edited" && review.revisedAmount != null) {
-          amount = roundPennies(review.revisedAmount);
-          applied = review;
-        }
-      }
-      rows3.push({ kind: "labour", id: line.id, amount, source: "live", line, stored: null, jobNumber: jobNumberOf(line.jobNumber), review: applied });
-    }
-    for (const [kind, key7] of [["priceWork", "priceWorkEntries"], ["expense", "expenseEntries"]]) {
-      for (const entry of rowsOf2(sheet[key7])) {
-        if (!onCountedDay(entryDay(entry))) continue;
-        const own = amountOf(entry.amount);
-        let amount = own;
-        if (decided) {
-          const decision = timesheetEntryDecision(sheet, entry, kind, timesheetTrustedFingerprint(input.entryFingerprints, entry.id));
-          if (decision.decision === "declined") continue;
-          amount = timesheetEntryEffectiveAmount(decision.decision, decision.revisedAmount, own);
-        }
-        rows3.push({ kind, id: String(entry.id ?? "").trim(), amount, source: "live", line: null, stored: entry, jobNumber: jobNumberOf(entry.jobNumber) });
-      }
-    }
-    for (const late of timesheetLateExtraRows(sheet, { entryFingerprints: input.entryFingerprints })) {
-      if (late.decision.state !== "approved" || late.decision.paid <= INVOICE_AMOUNT_EPSILON) continue;
-      if (!onCountedDay(entryDay(late.row))) continue;
-      rows3.push({ kind: late.kind, id: late.id, amount: late.decision.paid, source: "live", line: null, stored: late.row, jobNumber: jobNumberOf(late.row.jobNumber) });
-    }
-    return rows3;
-  }
-  var PAY_HIDDEN_CELL_LABEL = "\u2014";
-  var PAY_HIDDEN_NOTE = "Rates and pay are shown only for people whose pay you may see; the grand total covers those people only.";
-  function reportPayForViewer(rows3, input) {
-    const viewer = input.viewer ?? null;
-    const viewerIsAdmin2 = Boolean(viewer) && viewer?.isActive !== false && (viewer?.isPlatformOwner === true || permissionLevelOf(viewer) === "admin");
-    const canView = (subject) => canViewPersonPay(viewer, subject, input.roster || []);
-    let hiddenPeople = 0;
-    const out = [];
-    const visibleLines = [];
-    for (const row3 of rows3 || []) {
-      const visible = row3.paySubject ? viewerIsAdmin2 || canView(row3.paySubject) : viewerIsAdmin2;
-      if (visible) {
-        out.push(row3);
-        for (const line of row3.lines) visibleLines.push({ isPaye: line.isPaye === true, pay: line.pay });
-        continue;
-      }
-      hiddenPeople += 1;
-      out.push({
-        ...row3,
-        lines: row3.lines.map((line) => ({ ...line, rate: 0, pay: 0, rateText: PAY_HIDDEN_CELL_LABEL, payLabel: PAY_HIDDEN_CELL_LABEL })),
-        personTotal: 0,
-        personTotalLabel: PAY_HIDDEN_CELL_LABEL
-      });
-    }
-    return { rows: out, grandTotal: reportPayTotal(visibleLines), hiddenPeople };
-  }
-
-  // lib/canonical/sensitiveProfile.ts
-  var SENSITIVE_PROFILE_FIELDS = ["utrNumber", "vatNumber"];
-  var SENSITIVE_PROFILE_DOC_ID = "taxIds";
-  var SENSITIVE_VALUE_MAX = 20;
-  var SENSITIVE_HELD_BY_ADMIN_COPY = "Held by admin";
-  var SENSITIVE_EXPORT_OPTION_LABEL = "Include UTR and VAT number";
-  function text16(value) {
-    return typeof value === "string" ? value.trim() : "";
-  }
-  function sensitiveProfileDocPath(userId) {
-    return `users/${text16(userId)}/private/${SENSITIVE_PROFILE_DOC_ID}`;
-  }
-  function canViewSensitiveProfile(input) {
-    const viewer = text16(input.viewerUserId);
-    if (viewer && viewer === text16(input.subjectUserId)) return true;
-    if (input.viewerRole.isOperativeMode) return false;
-    return input.viewerRole.isSuperAdmin || input.viewerRole.isAdmin;
-  }
-  function maskSensitiveValue(value) {
-    const raw = text16(value).replace(/\s+/g, "");
-    if (!raw) return "";
-    if (raw.length <= 4) return "\u2022\u2022\u2022\u2022";
-    return `\u2022\u2022\u2022\u2022 ${raw.slice(-4)}`;
-  }
-  function resolveSensitiveProfile(input) {
-    if (input.privateDoc && typeof input.privateDoc === "object") {
-      return {
-        utrNumber: text16(input.privateDoc.utrNumber),
-        vatNumber: text16(input.privateDoc.vatNumber),
-        source: "private"
-      };
-    }
-    const legacy = input.legacyUser && typeof input.legacyUser === "object" ? input.legacyUser : {};
-    const utrNumber = text16(legacy.utrNumber);
-    const vatNumber = text16(legacy.vatNumber);
-    return { utrNumber, vatNumber, source: utrNumber || vatNumber ? "legacy" : "none" };
-  }
-  function sensitiveProfileWriteFields(input) {
-    const updatedByUserId = text16(input.updatedByUserId);
-    if (!updatedByUserId) return { ok: false, error: "missing_user" };
-    const utrNumber = text16(input.utrNumber);
-    const vatNumber = text16(input.vatNumber);
-    if (utrNumber.length > SENSITIVE_VALUE_MAX || vatNumber.length > SENSITIVE_VALUE_MAX) {
-      return { ok: false, error: "too_long" };
-    }
-    return { ok: true, fields: { utrNumber, vatNumber, updatedByUserId } };
-  }
-  function exportIncludesSensitiveFields(input) {
-    return input.requested === true && input.canView === true;
-  }
-
-  // lib/canonical/money.ts
-  var DEFAULT_CURRENCY_CODE = "GBP";
-  var CURRENCY_OPTIONS = [
-    { code: "GBP", title: "British pound", symbol: "\xA3" },
-    { code: "EUR", title: "Euro", symbol: "\u20AC" },
-    { code: "USD", title: "US dollar", symbol: "$" },
-    { code: "CAD", title: "Canadian dollar", symbol: "CA$" },
-    { code: "AUD", title: "Australian dollar", symbol: "A$" },
-    { code: "NZD", title: "New Zealand dollar", symbol: "NZ$" },
-    { code: "SEK", title: "Swedish krona", symbol: "kr" },
-    { code: "NOK", title: "Norwegian krone", symbol: "kr" },
-    { code: "DKK", title: "Danish krone", symbol: "kr" },
-    { code: "PLN", title: "Polish z\u0142oty", symbol: "z\u0142" },
-    { code: "AED", title: "UAE dirham", symbol: "\u062F.\u0625" }
-  ];
-  var COUNTRY_CURRENCY = {
-    GB: "GBP",
-    UK: "GBP",
-    IE: "EUR",
-    FR: "EUR",
-    DE: "EUR",
-    ES: "EUR",
-    IT: "EUR",
-    NL: "EUR",
-    US: "USD",
-    CA: "CAD",
-    AU: "AUD",
-    NZ: "NZD",
-    SE: "SEK",
-    NO: "NOK",
-    DK: "DKK",
-    PL: "PLN",
-    AE: "AED"
-  };
-  function text17(value) {
-    return typeof value === "string" ? value.trim() : "";
-  }
-  function normalizeCurrencyCode(value) {
-    const code = text17(value).toUpperCase();
-    if (!code) return null;
-    return CURRENCY_OPTIONS.some((option) => option.code === code) ? code : null;
-  }
-  function currencyOption(code) {
-    const normalized = normalizeCurrencyCode(code);
-    return CURRENCY_OPTIONS.find((option) => option.code === normalized) ?? CURRENCY_OPTIONS[0];
-  }
-  function defaultCurrencyForCountry(countryCode) {
-    const country = text17(countryCode).toUpperCase().split("-")[0];
-    return COUNTRY_CURRENCY[country] ?? DEFAULT_CURRENCY_CODE;
-  }
-  function resolveOrganizationCurrency(org) {
-    const doc = org && typeof org === "object" ? org : {};
-    const settings = doc.settings && typeof doc.settings === "object" ? doc.settings : {};
-    return normalizeCurrencyCode(doc.currencyCode) ?? normalizeCurrencyCode(settings.currencyCode) ?? normalizeCurrencyCode(doc.currency) ?? normalizeCurrencyCode(doc["settings.currencyCode"]) ?? defaultCurrencyForCountry(doc.countryCode);
-  }
-  function organizationCurrencyWriteFields(code) {
-    const normalized = normalizeCurrencyCode(code);
-    if (!normalized) return null;
-    return { currencyCode: normalized, currency: normalized, "settings.currencyCode": normalized };
-  }
-  function formatMoney(amount, currencyCode, options = {}) {
-    const decimals = Number.isInteger(options.decimals) && options.decimals >= 0 ? options.decimals : 2;
-    const value = typeof amount === "number" && Number.isFinite(amount) ? amount : Number(amount);
-    const safe = Number.isFinite(value) ? value : 0;
-    const negative = safe < 0 && Math.abs(safe) >= 0.5 * Math.pow(10, -decimals);
-    const fixed = Math.abs(safe).toFixed(decimals);
-    const [whole, fraction] = fixed.split(".");
-    const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-    const body = fraction ? `${grouped}.${fraction}` : grouped;
-    const symbol = currencyOption(currencyCode).symbol;
-    const spaced = /\p{L}$/u.test(symbol) ? `${symbol} ` : symbol;
-    const sign = negative && options.signed !== false ? "-" : "";
-    return `${sign}${spaced}${body}`;
-  }
-  function currencySymbol(currencyCode) {
-    return currencyOption(currencyCode).symbol;
-  }
-
-  // lib/orgTime/orgTimeZone.ts
-  var COUNTRY_TIME_ZONES = {
-    GB: "Europe/London",
-    UK: "Europe/London",
-    "GB-ENG": "Europe/London",
-    "GB-SCT": "Europe/London",
-    "GB-NIR": "Europe/London",
-    IE: "Europe/Dublin",
-    IM: "Europe/Isle_of_Man",
-    JE: "Europe/Jersey",
-    GG: "Europe/Guernsey",
-    AD: "Europe/Andorra",
-    AL: "Europe/Tirane",
-    AM: "Asia/Yerevan",
-    AO: "Africa/Luanda",
-    AR: "America/Argentina/Buenos_Aires",
-    AT: "Europe/Vienna",
-    AU: "Australia/Sydney",
-    AW: "America/Aruba",
-    AX: "Europe/Mariehamn",
-    BA: "Europe/Sarajevo",
-    BB: "America/Barbados",
-    BD: "Asia/Dhaka",
-    BE: "Europe/Brussels",
-    BG: "Europe/Sofia",
-    BJ: "Africa/Porto-Novo",
-    BO: "America/La_Paz",
-    BR: "America/Sao_Paulo",
-    BS: "America/Nassau",
-    BW: "Africa/Gaborone",
-    BY: "Europe/Minsk",
-    BZ: "America/Belize",
-    CA: "America/Toronto",
-    CD: "Africa/Kinshasa",
-    CG: "Africa/Brazzaville",
-    CH: "Europe/Zurich",
-    CL: "America/Santiago",
-    CN: "Asia/Shanghai",
-    CO: "America/Bogota",
-    CR: "America/Costa_Rica",
-    CU: "America/Havana",
-    CY: "Asia/Nicosia",
-    CZ: "Europe/Prague",
-    DE: "Europe/Berlin",
-    DK: "Europe/Copenhagen",
-    DM: "America/Dominica",
-    DO: "America/Santo_Domingo",
-    EC: "America/Guayaquil",
-    EE: "Europe/Tallinn",
-    EG: "Africa/Cairo",
-    ES: "Europe/Madrid",
-    FI: "Europe/Helsinki",
-    FO: "Atlantic/Faroe",
-    FR: "Europe/Paris",
-    GA: "Africa/Libreville",
-    GD: "America/Grenada",
-    GE: "Asia/Tbilisi",
-    GH: "Africa/Accra",
-    GI: "Europe/Gibraltar",
-    GL: "America/Nuuk",
-    GM: "Africa/Banjul",
-    GP: "America/Guadeloupe",
-    GR: "Europe/Athens",
-    GT: "America/Guatemala",
-    GY: "America/Guyana",
-    HK: "Asia/Hong_Kong",
-    HN: "America/Tegucigalpa",
-    HR: "Europe/Zagreb",
-    HT: "America/Port-au-Prince",
-    HU: "Europe/Budapest",
-    ID: "Asia/Jakarta",
-    IN: "Asia/Kolkata",
-    IS: "Atlantic/Reykjavik",
-    IT: "Europe/Rome",
-    JM: "America/Jamaica",
-    JP: "Asia/Tokyo",
-    KE: "Africa/Nairobi",
-    KR: "Asia/Seoul",
-    KY: "America/Cayman",
-    KZ: "Asia/Almaty",
-    LC: "America/St_Lucia",
-    LI: "Europe/Vaduz",
-    LS: "Africa/Maseru",
-    LT: "Europe/Vilnius",
-    LU: "Europe/Luxembourg",
-    LV: "Europe/Riga",
-    MA: "Africa/Casablanca",
-    MC: "Europe/Monaco",
-    MD: "Europe/Chisinau",
-    ME: "Europe/Podgorica",
-    MG: "Indian/Antananarivo",
-    MK: "Europe/Skopje",
-    MN: "Asia/Ulaanbaatar",
-    MQ: "America/Martinique",
-    MS: "America/Montserrat",
-    MT: "Europe/Malta",
-    MX: "America/Mexico_City",
-    MZ: "Africa/Maputo",
-    NA: "Africa/Windhoek",
-    NE: "Africa/Niamey",
-    NG: "Africa/Lagos",
-    NI: "America/Managua",
-    NL: "Europe/Amsterdam",
-    NO: "Europe/Oslo",
-    NZ: "Pacific/Auckland",
-    PA: "America/Panama",
-    PE: "America/Lima",
-    PG: "Pacific/Port_Moresby",
-    PH: "Asia/Manila",
-    PL: "Europe/Warsaw",
-    PR: "America/Puerto_Rico",
-    PT: "Europe/Lisbon",
-    PY: "America/Asuncion",
-    RO: "Europe/Bucharest",
-    RS: "Europe/Belgrade",
-    RU: "Europe/Moscow",
-    SC: "Indian/Mahe",
-    SE: "Europe/Stockholm",
-    SG: "Asia/Singapore",
-    SI: "Europe/Ljubljana",
-    SJ: "Arctic/Longyearbyen",
-    SK: "Europe/Bratislava",
-    SM: "Europe/San_Marino",
-    SR: "America/Paramaribo",
-    SV: "America/El_Salvador",
-    TN: "Africa/Tunis",
-    TR: "Europe/Istanbul",
-    UA: "Europe/Kyiv",
-    UG: "Africa/Kampala",
-    US: "America/New_York",
-    UY: "America/Montevideo",
-    VA: "Europe/Vatican",
-    VE: "America/Caracas",
-    VN: "Asia/Ho_Chi_Minh",
-    ZA: "Africa/Johannesburg",
-    ZW: "Africa/Harare"
-  };
-  function ianaTimeZoneForCountry(countryCode) {
-    const code = (countryCode || "GB").trim().toUpperCase();
-    return COUNTRY_TIME_ZONES[code] || LONDON_TIME_ZONE;
-  }
-
-  // lib/canonical/organizationTimeZone.ts
-  function organizationTimeZone(countryCode) {
-    return ianaTimeZoneForCountry(countryCode);
-  }
-
-  // lib/canonical/rulebookStamp.ts
-  function rulebookStamp() {
-    return {
-      version: true ? "1.74.0" : "",
-      sha256: true ? "4565975a0dde2a62a134331f92852d6fa931e22c8a83e9cb55a90815273c7952" : ""
-    };
-  }
-  function rulebookVersionLabel(version) {
-    const value = (typeof version === "string" ? version.trim() : "") || rulebookStamp().version;
-    return /^\d+\.\d+\.\d+$/.test(value) ? `Rules ${value}` : "";
-  }
-
-  // lib/canonical/holidayDocument.ts
-  var HOLIDAY_DOCUMENT_KEYS = {
-    start: ["startDate", "start_date", "start", "from", "dateFrom", "holidayStart", "date"],
-    end: ["endDate", "end_date", "end", "to", "dateTo", "holidayEnd"],
-    userId: ["userId", "user_id", "uid", "userID", "linkedUserId", "employeeUserId"],
-    nestedUserId: ["id", "uid", "userId", "userID"],
-    operativeId: ["operativeId", "operative_id", "operativeID"],
-    status: ["status", "holidayStatus", "approvalStatus"],
-    timeSlot: ["timeSlot", "slot", "halfDay"],
-    decisionNote: ["decisionNote", "note"],
-    approvedByUserId: ["approvedByUserId", "approvedBy"]
-  };
-  var DAY_KEY3 = /^(\d{4})-(\d{2})-(\d{2})$/;
-  function text18(value) {
-    return typeof value === "string" ? value.trim() : "";
-  }
-  function firstText3(row3, keys) {
-    for (const key7 of keys) {
-      const value = text18(row3[key7]);
-      if (value) return value;
-    }
-    return "";
-  }
-  function validCalendarDay(year, month, day) {
-    if (!year || month < 1 || month > 12 || day < 1 || day > 31) return "";
-    const date = new Date(Date.UTC(year, month - 1, day));
-    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
-    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  }
-  function epochMs(value) {
-    if (!Number.isFinite(value) || value <= 0) return null;
-    return value > 1e10 ? value : value * 1e3;
-  }
-  function holidayDocumentDayKey(raw, timeZone) {
-    const zone3 = zoneOrLondon(timeZone);
-    if (raw == null || raw === "") return "";
-    if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? "" : dayKeyInZone(raw, zone3);
-    if (typeof raw === "number") {
-      const ms = epochMs(raw);
-      return ms == null ? "" : dayKeyInZone(new Date(ms), zone3);
-    }
-    if (typeof raw === "string") {
-      const value = raw.trim();
-      if (!value) return "";
-      let match = value.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
-      if (match) return validCalendarDay(Number(match[1]), Number(match[2]), Number(match[3]));
-      match = value.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
-      if (match) return validCalendarDay(Number(match[3]), Number(match[2]), Number(match[1]));
-      const ms = Date.parse(value);
-      return Number.isNaN(ms) ? "" : dayKeyInZone(new Date(ms), zone3);
-    }
-    if (typeof raw === "object") {
-      const row3 = raw;
-      const seconds = typeof row3.seconds === "number" ? row3.seconds : typeof row3._seconds === "number" ? row3._seconds : null;
-      if (seconds != null && Number.isFinite(seconds)) {
-        const nanos = typeof row3.nanoseconds === "number" ? row3.nanoseconds : typeof row3._nanoseconds === "number" ? row3._nanoseconds : 0;
-        return dayKeyInZone(new Date(seconds * 1e3 + Math.floor((Number(nanos) || 0) / 1e6)), zone3);
-      }
-      if (typeof row3.toDate === "function") {
-        try {
-          const date = row3.toDate();
-          if (date instanceof Date && !Number.isNaN(date.getTime())) return dayKeyInZone(date, zone3);
-        } catch {
-          return "";
-        }
-      }
-    }
-    return "";
-  }
-  function firstDayKey(row3, keys, zone3) {
-    for (const key7 of keys) {
-      const dayKey = holidayDocumentDayKey(row3[key7], zone3);
-      if (dayKey) return dayKey;
-    }
-    return "";
-  }
-  function hasValue2(value) {
-    if (value == null || value === false || value === "") return false;
-    if (typeof value === "string") return value.trim() !== "";
-    return true;
-  }
-  function parseHolidayDocument(docId, data, timeZone) {
-    const id2 = text18(docId);
-    if (!id2) return null;
-    const row3 = data && typeof data === "object" ? data : {};
-    const zone3 = zoneOrLondon(timeZone);
-    const start = firstDayKey(row3, HOLIDAY_DOCUMENT_KEYS.start, zone3);
-    if (!start || !DAY_KEY3.test(start)) return null;
-    const end = firstDayKey(row3, HOLIDAY_DOCUMENT_KEYS.end, zone3) || start;
-    const [startDayKey, endDayKey] = end < start ? [end, start] : [start, end];
-    let userId = firstText3(row3, HOLIDAY_DOCUMENT_KEYS.userId);
-    if (!userId && row3.user && typeof row3.user === "object") {
-      userId = firstText3(row3.user, HOLIDAY_DOCUMENT_KEYS.nestedUserId);
-    }
-    const operativeId = firstText3(row3, HOLIDAY_DOCUMENT_KEYS.operativeId);
-    const status = normalizeHolidayStatus(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.status));
-    const cancellationRequestedByUserId = text18(row3.cancellationRequestedByUserId);
-    const organizationId = text18(row3.organizationId);
-    const parsed = {
-      id: id2,
-      userId: userId || null,
-      operativeId: operativeId || null,
-      startDayKey,
-      endDayKey,
-      timeSlot: normalizeHolidayTimeSlot(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.timeSlot)),
-      status,
-      approved: status === "approved",
-      approvedByUserId: firstText3(row3, HOLIDAY_DOCUMENT_KEYS.approvedByUserId) || null,
-      cancellationRequested: hasValue2(row3.cancellationRequestedAt),
-      cancellationRequestedByUserId: cancellationRequestedByUserId || null,
-      decisionNote: parseHolidayDecisionNote(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.decisionNote))
-    };
-    if (organizationId) parsed.organizationId = organizationId;
-    return parsed;
-  }
-  function parseHolidayDocuments(docs, timeZone) {
-    const out = [];
-    for (const entry of docs || []) {
-      const parsed = parseHolidayDocument(entry?.id, entry?.data, timeZone);
-      if (parsed) out.push(parsed);
-    }
-    return out;
-  }
-  function labourHolidayInput(record18) {
-    return {
-      id: record18.id,
-      userId: record18.userId,
-      operativeId: record18.operativeId,
-      startDayKey: record18.startDayKey,
-      endDayKey: record18.endDayKey,
-      timeSlot: record18.timeSlot,
-      approved: record18.approved
-    };
-  }
-
-  // lib/canonical/timesheetLines.ts
-  var OVERLAPPING_BOOKING_NOTE = "Overlaps another booking \u2014 check with your manager";
-  var OVERLAPPING_BOOKING_REVIEWER_NOTE = "Overlaps another booking \u2014 check the schedule for this project.";
-  function overlappingBookingNote(input) {
-    return input?.reviewing === true ? OVERLAPPING_BOOKING_REVIEWER_NOTE : OVERLAPPING_BOOKING_NOTE;
-  }
-  function overlappingBookingIds(bookings, day) {
-    const byDay = /* @__PURE__ */ new Map();
-    for (const booking of bookings || []) {
-      const id2 = String(booking?.id || "").trim();
-      if (!id2) continue;
-      const key7 = String(booking.dayKey || "").trim();
-      const list = byDay.get(key7) || [];
-      list.push(booking);
-      byDay.set(key7, list);
-    }
-    const flagged = /* @__PURE__ */ new Set();
-    const intervalOf = (booking) => slotInterval(
-      { timeSlot: booking.timeSlot, workStartTime: booking.workStartTime, workEndTime: booking.workEndTime },
-      bookingStandardDayOn(day, booking.dayKey)
-    );
-    const carried = /* @__PURE__ */ new Map();
-    for (const [key7, list] of byDay) {
-      const next = nextCalendarDayKey(key7);
-      if (!next) continue;
-      for (const booking of list) {
-        if (intervalCrossesMidnight(intervalOf(booking))) carried.set(next, [...carried.get(next) || [], booking]);
-      }
-    }
-    for (const [key7, list] of byDay) {
-      const carriedIn = carried.get(key7) || [];
-      if (list.length + carriedIn.length < 2) continue;
-      const entries = [...list.map((b) => ({ b, carried: false })), ...carriedIn.map((b) => ({ b, carried: true }))];
-      const intervals = entries.map(
-        (entry) => entry.carried ? overnightCarryInterval(intervalOf(entry.b)) : intervalOf(entry.b)
-      );
-      for (const group of overlappingIntervalGroups(intervals)) {
-        if (group.every((index) => entries[index].carried)) continue;
-        for (const index of group) flagged.add(String(entries[index].b.id).trim());
-      }
-    }
-    const out = [];
-    for (const booking of bookings || []) {
-      const id2 = String(booking?.id || "").trim();
-      if (id2 && flagged.has(id2) && !out.includes(id2)) out.push(id2);
-    }
-    return out;
-  }
-  function timesheetLeaveLabel(timeSlot) {
-    const slot = normalizeHolidayTimeSlot(timeSlot);
-    if (slot === "AM") return "Annual leave (AM)";
-    if (slot === "PM") return "Annual leave (PM)";
-    return "Annual leave (full day)";
-  }
-  function timesheetLeaveLines(leaveRecords, period, timeZone, nonWorkingDayKeys, dayPolicy) {
-    const start = String(period?.startDayKey || "").trim();
-    const end = String(period?.endDayKey || "").trim();
-    if (!start || !end || start > end) return [];
-    const byDay = /* @__PURE__ */ new Map();
-    for (const record18 of leaveRecords || []) {
-      if (!record18) continue;
-      const approved = record18.approved === true || record18.approved == null && normalizeHolidayStatus(record18.status) === "approved";
-      if (!approved) continue;
-      const slot = normalizeHolidayTimeSlot(record18.timeSlot);
-      for (const dayKey of leaveRecordDayKeys(record18, timeZone, nonWorkingDayKeys)) {
-        if (dayKey < start || dayKey > end) continue;
-        const list = byDay.get(dayKey) || [];
-        if (list.some((line2) => line2.timeSlot === slot || line2.timeSlot === "FULL DAY")) continue;
-        const line = {
-          id: `leave-${String(record18.id)}-${dayKey}`,
-          leaveId: String(record18.id),
-          dayKey,
-          timeSlot: slot,
-          label: timesheetLeaveLabel(slot)
-        };
-        if (dayPolicy) {
-          const halves = leaveHalfDayWindows(dayPolicy(dayKey));
-          const half = slot === "AM" ? halves.am : slot === "PM" ? halves.pm : halves.day;
-          line.timeRange = `${formatClockMinutes(half.start)}\u2013${formatClockMinutes(half.end)}`;
-        }
-        byDay.set(dayKey, slot === "FULL DAY" ? [line] : [...list, line]);
-      }
-    }
-    const lines = Array.from(byDay.values()).flat();
-    const order = { "FULL DAY": 0, AM: 1, PM: 2 };
-    return lines.sort((a, b) => a.dayKey !== b.dayKey ? a.dayKey < b.dayKey ? -1 : 1 : order[a.timeSlot] - order[b.timeSlot]);
-  }
-
   // lib/canonical/bookingTombstones.ts
   var BOOKING_TOMBSTONE_COLLECTION = "deletedBookings";
   var TOMBSTONED_BOOKING_COLLECTIONS = ["bookings", "managerSiteBookings", "subcontractorBookings"];
@@ -14604,7 +13780,7 @@ var ProjectPlannerCanonical = (() => {
 
   // lib/canonical/payePayrun.ts
   var MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  var DAY_KEY4 = /^\d{4}-\d{2}-\d{2}$/;
+  var DAY_KEY3 = /^\d{4}-\d{2}-\d{2}$/;
   var PAYE_PAYDAY_MIN = 1;
   var PAYE_PAYDAY_MAX = 31;
   var PAYE_PAYDAY_NOT_SET_MESSAGE = "Ask an admin to set the PAYE payday";
@@ -14649,7 +13825,7 @@ var ProjectPlannerCanonical = (() => {
     return key3(yy, mm, Math.min(day, daysInMonth(yy, mm)));
   }
   function formatPayePayrunDay(dayKey) {
-    if (!DAY_KEY4.test(String(dayKey || ""))) return String(dayKey || "");
+    if (!DAY_KEY3.test(String(dayKey || ""))) return String(dayKey || "");
     const { m, d } = parts(dayKey);
     return `${d} ${MONTH_SHORT[m - 1]}`;
   }
@@ -14665,7 +13841,7 @@ var ProjectPlannerCanonical = (() => {
       const row3 = record5(entry);
       const day = dayOfMonth(row3?.day);
       const from = String(row3?.effectiveFrom ?? "").trim();
-      if (day != null && DAY_KEY4.test(from)) rows3.push({ day, effectiveFrom: from, index });
+      if (day != null && DAY_KEY3.test(from)) rows3.push({ day, effectiveFrom: from, index });
     });
     rows3.sort((a, b) => a.effectiveFrom === b.effectiveFrom ? a.index - b.index : a.effectiveFrom < b.effectiveFrom ? -1 : 1);
     const out = rows3.map(({ day, effectiveFrom }) => ({ day, effectiveFrom }));
@@ -14693,7 +13869,7 @@ var ProjectPlannerCanonical = (() => {
     return found;
   }
   function payePayrunPeriod(source, dayKey) {
-    if (!DAY_KEY4.test(String(dayKey || ""))) return null;
+    if (!DAY_KEY3.test(String(dayKey || ""))) return null;
     const history = payePaydayHistory(source);
     const index = entryIndexOn(history, dayKey);
     if (index < 0) return null;
@@ -14712,7 +13888,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function payePastPayruns(source, todayKey4, limit = 60) {
     const history = payePaydayHistory(source);
-    if (history.length === 0 || !DAY_KEY4.test(String(todayKey4 || ""))) return [];
+    if (history.length === 0 || !DAY_KEY3.test(String(todayKey4 || ""))) return [];
     const first = history[0].effectiveFrom;
     const current = payePayrunPeriod(source, todayKey4);
     let cursor = current ? addDays(current.start, -1) : todayKey4;
@@ -14730,7 +13906,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function payePaydayWriteFields(source, day, todayKey4) {
     const next = dayOfMonth(day);
-    if (next == null || !DAY_KEY4.test(String(todayKey4 || ""))) return null;
+    if (next == null || !DAY_KEY3.test(String(todayKey4 || ""))) return null;
     const history = payePaydayHistory(source);
     const current = payePayrunPeriod(source, todayKey4);
     if (current && current.payday === next) {
@@ -14747,7 +13923,7 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function payeRangeDayKeys(start, end) {
-    if (!DAY_KEY4.test(String(start || "")) || !DAY_KEY4.test(String(end || "")) || start > end) return [];
+    if (!DAY_KEY3.test(String(start || "")) || !DAY_KEY3.test(String(end || "")) || start > end) return [];
     const out = [];
     let cursor = start;
     while (cursor <= end && out.length <= 400) {
@@ -14759,7 +13935,7 @@ var ProjectPlannerCanonical = (() => {
   function payeCustomRange(start, end) {
     const a = String(start ?? "").trim();
     const b = String(end ?? "").trim();
-    if (!DAY_KEY4.test(a) || !DAY_KEY4.test(b)) return null;
+    if (!DAY_KEY3.test(a) || !DAY_KEY3.test(b)) return null;
     return a <= b ? { start: a, end: b } : { start: b, end: a };
   }
   var PAYE_PAYDAY_REQUIRED_MESSAGE = "Choose the PAYE payday \u2014 PAYE overtime, price work and expenses run on it.";
@@ -14949,30 +14125,6 @@ var ProjectPlannerCanonical = (() => {
     }
     if (type === TIMESHEET_SIGNED_NOTICE_TYPE) return `timesheetSigned|${subject}|${seconds}${suffix}`;
     return null;
-  }
-  var TIMESHEET_PENDING_PUSH_REPEAT_WINDOW_MS = 2 * 60 * 1e3;
-  function msOf(value) {
-    return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
-  }
-  function timesheetPendingPushIsRepeat(input) {
-    const row3 = input.row;
-    if (!row3 || idText(row3.type) !== TIMESHEET_PENDING_NOTICE_TYPE) return false;
-    const user = idKey(row3.userId);
-    const subject = idKey(row3.deepLinkUserId);
-    const week = msOf(row3.deepLinkWeekStartMs);
-    const at = msOf(row3.createdAtMs);
-    if (!user || !subject || week == null || at == null) return false;
-    const window = msOf(input.windowMs) ?? TIMESHEET_PENDING_PUSH_REPEAT_WINDOW_MS;
-    const id2 = idText(row3.id);
-    return (input.recent ?? []).some((other) => {
-      if (!other || idText(other.type) !== TIMESHEET_PENDING_NOTICE_TYPE) return false;
-      if (id2 && idText(other.id) === id2) return false;
-      if (idKey(other.userId) !== user || idKey(other.deepLinkUserId) !== subject) return false;
-      if (msOf(other.deepLinkWeekStartMs) !== week) return false;
-      const otherAt = msOf(other.createdAtMs);
-      if (otherAt == null || at - otherAt > window) return false;
-      return otherAt < at || otherAt === at && idText(other.id) < id2;
-    });
   }
   function lineManagerPeerNoticeKey(input) {
     const peer = idText(input?.peerId);
@@ -15319,14 +14471,14 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/reportHeader.ts
-  function text19(value) {
+  function text16(value) {
     return value == null ? "" : String(value).trim();
   }
   function reportGeneratedText(input) {
     const ms = Number.isFinite(Number(input.generatedAtMs)) && input.generatedAtMs != null ? Number(input.generatedAtMs) : input.nowMs != null && Number.isFinite(Number(input.nowMs)) ? Number(input.nowMs) : null;
     const generatedAt = ms == null ? "" : formatStampInZone(new Date(ms), zoneOrLondon(input.timeZone));
-    const by = text19(input.generatedBy);
-    const generatedBy = text19(input.generatedByName) || (!by || by.toLowerCase() === text19(input.userId).toLowerCase() ? text19(input.userName) : "");
+    const by = text16(input.generatedBy);
+    const generatedBy = text16(input.generatedByName) || (!by || by.toLowerCase() === text16(input.userId).toLowerCase() ? text16(input.userName) : "");
     const generated = generatedAt && generatedBy ? `${generatedAt} by ${generatedBy}` : generatedAt || generatedBy;
     return { generatedAt, generatedBy, generated };
   }
@@ -15412,7 +14564,7 @@ var ProjectPlannerCanonical = (() => {
   var OVERTIME_REVIEWS_COLLECTION = "overtimeReviews";
   var OVERTIME_REPORTS_COLLECTION = "overtimeReports";
   var OVERTIME_REQUEST_STATUSES = ["pending", "approved", "withdrawn"];
-  function text20(value) {
+  function text17(value) {
     return value == null ? "" : String(value).trim();
   }
   function round2(value) {
@@ -15422,14 +14574,14 @@ var ProjectPlannerCanonical = (() => {
     return `${round2(hours2)}h`;
   }
   function clockOf(value) {
-    const minutes = parseClockMinutes(text20(value));
+    const minutes = parseClockMinutes(text17(value));
     return minutes == null ? "" : formatClockMinutes(minutes);
   }
   function collectionOf(booking) {
-    return text20(booking.collection) === "managerSiteBookings" ? "managerSiteBookings" : "bookings";
+    return text17(booking.collection) === "managerSiteBookings" ? "managerSiteBookings" : "bookings";
   }
   function slotKey(raw) {
-    return text20(raw).toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
+    return text17(raw).toUpperCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ");
   }
   function isCustomSlot(raw) {
     const slot = slotKey(raw);
@@ -15460,9 +14612,9 @@ var ProjectPlannerCanonical = (() => {
   function overtimeBookingFingerprint(booking) {
     if (!booking) return "";
     const rate = multiplierOf(booking.otMultiplierOverride);
-    const status = (normalizeBookingStatus(booking.status) ?? (text20(booking.status) || "Confirmed")).toLowerCase();
+    const status = (normalizeBookingStatus(booking.status) ?? (text17(booking.status) || "Confirmed")).toLowerCase();
     return [
-      text20(booking.dayKey),
+      text17(booking.dayKey),
       // Written exactly as before 1.46.0 (upper case, `_` / `-` as spaces), so app builds on the 1.45 script write and
       // compare the same strings. 1.46.0 apps compare with `overtimeFingerprintsMatch`, which reads the slot canonically,
       // so `CUSTOM` (web) and `CUSTOM HOURS` (iOS `CUSTOM_HOURS`) are one booking.
@@ -15480,7 +14632,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function overtimeForBooking(input) {
     const booking = input.booking;
-    if (!booking || !/^\d{4}-\d{2}-\d{2}$/.test(text20(booking.dayKey)) || isCancelled(booking)) return null;
+    if (!booking || !/^\d{4}-\d{2}-\d{2}$/.test(text17(booking.dayKey)) || isCancelled(booking)) return null;
     const zone3 = zoneOrLondon(input.timeZone);
     const policy = effectivePayrollTimePolicy(input.organization, booking.dayKey, zone3);
     const result2 = payrollHoursResult({
@@ -15542,21 +14694,21 @@ var ProjectPlannerCanonical = (() => {
     return null;
   }
   function dayKeyOrEmpty(value) {
-    const key7 = text20(value);
+    const key7 = text17(value);
     return /^\d{4}-\d{2}-\d{2}$/.test(key7) ? key7 : "";
   }
   function parseRequestLine(raw) {
     if (!raw || typeof raw !== "object") return null;
     const row3 = raw;
-    const bookingId = text20(row3.bookingId);
+    const bookingId = text17(row3.bookingId);
     if (!bookingId) return null;
-    const action = text20(row3.action);
+    const action = text17(row3.action);
     return {
       bookingId,
-      collection: collectionOf({ collection: text20(row3.collection) }),
+      collection: collectionOf({ collection: text17(row3.collection) }),
       dayKey: dayKeyOrEmpty(row3.dayKey),
-      jobId: text20(row3.jobId) || null,
-      fingerprint: text20(row3.fingerprint),
+      jobId: text17(row3.jobId) || null,
+      fingerprint: text17(row3.fingerprint),
       action: action === "edit" || action === "strike" ? action : "keep",
       proposedStart: clockOf(row3.proposedStart) || null,
       proposedEnd: clockOf(row3.proposedEnd) || null,
@@ -15569,7 +14721,7 @@ var ProjectPlannerCanonical = (() => {
   function parseDecision(raw) {
     if (!raw || typeof raw !== "object") return null;
     const row3 = raw;
-    const action = text20(row3.action);
+    const action = text17(row3.action);
     if (action === "approve") return { action: "approve" };
     if (action === "strike") return { action: "strike" };
     if (action === "edit") {
@@ -15582,23 +14734,23 @@ var ProjectPlannerCanonical = (() => {
   }
   function parseOvertimeRequestDocument(docId, data) {
     const row3 = data && typeof data === "object" ? data : {};
-    const status = text20(row3.status).toLowerCase();
+    const status = text17(row3.status).toLowerCase();
     const decisions = {};
     const rawDecisions = row3.decisions && typeof row3.decisions === "object" ? row3.decisions : {};
     for (const [bookingId, value] of Object.entries(rawDecisions)) {
       const decision = parseDecision(value);
       if (decision) decisions[bookingId] = decision;
     }
-    const ids = (value) => Array.isArray(value) ? value.map(text20).filter(Boolean) : [];
+    const ids = (value) => Array.isArray(value) ? value.map(text17).filter(Boolean) : [];
     return {
-      id: text20(docId),
-      userId: text20(row3.userId),
+      id: text17(docId),
+      userId: text17(row3.userId),
       rangeStart: dayKeyOrEmpty(row3.rangeStart),
       rangeEnd: dayKeyOrEmpty(row3.rangeEnd),
       status: OVERTIME_REQUEST_STATUSES.includes(status) ? status : "pending",
       lines: (Array.isArray(row3.lines) ? row3.lines : []).map(parseRequestLine).filter((line) => line != null),
       decisions,
-      decidedBy: text20(row3.decidedBy) || null,
+      decidedBy: text17(row3.decidedBy) || null,
       createdAtMs: instantMs(row3.createdAt),
       decidedAtMs: instantMs(row3.decidedAt),
       appliedBookingIds: ids(row3.appliedBookingIds),
@@ -15609,21 +14761,21 @@ var ProjectPlannerCanonical = (() => {
   }
   function parseOvertimeReviewDocument(docId, data) {
     const row3 = data && typeof data === "object" ? data : {};
-    const decision = text20(row3.decision);
+    const decision = text17(row3.decision);
     return {
-      id: text20(docId),
-      userId: text20(row3.userId),
-      bookingId: text20(row3.bookingId),
-      collection: collectionOf({ collection: text20(row3.collection) }),
+      id: text17(docId),
+      userId: text17(row3.userId),
+      bookingId: text17(row3.bookingId),
+      collection: collectionOf({ collection: text17(row3.collection) }),
       decision: OVERTIME_REVIEW_DECISIONS.includes(decision) ? decision : "approved",
-      fingerprint: text20(row3.fingerprint),
-      reviewedBy: text20(row3.reviewedBy) || null,
+      fingerprint: text17(row3.fingerprint),
+      reviewedBy: text17(row3.reviewedBy) || null,
       reviewedAtMs: instantMs(row3.reviewedAt),
-      requestId: text20(row3.requestId) || null
+      requestId: text17(row3.requestId) || null
     };
   }
   function overtimeReviewDocId(userId, bookingId) {
-    return `${text20(userId)}_${text20(bookingId)}`;
+    return `${text17(userId)}_${text17(bookingId)}`;
   }
   function newestPending(requests, bookingId) {
     let best = null;
@@ -15651,19 +14803,19 @@ var ProjectPlannerCanonical = (() => {
     return (list || []).some((row3) => idKey(row3) === idKey(id2));
   }
   function fingerprintParts(fingerprint) {
-    const [day, slot, start, end] = text20(fingerprint).split("|");
-    return { dayKey: dayKeyOrEmpty(day), timeSlot: text20(slot), start: clockOf(start), end: clockOf(end) };
+    const [day, slot, start, end] = text17(fingerprint).split("|");
+    return { dayKey: dayKeyOrEmpty(day), timeSlot: text17(slot), start: clockOf(start), end: clockOf(end) };
   }
   function stateLabelFor(state, deciderName) {
     return OVERTIME_LINE_STATE_LABELS[state].replace("{name}", deciderName || "your line manager");
   }
   function payeOvertimeLines(input) {
     const ids = new Set((input.personIds || []).map(idKey).filter(Boolean));
-    const start = text20(input.range?.start);
-    const end = text20(input.range?.end);
+    const start = text17(input.range?.start);
+    const end = text17(input.range?.end);
     const reviews = input.reviews || [];
     const requests = input.requests || [];
-    const names = new Map(Object.entries(input.names || {}).map(([id2, name]) => [idKey(id2), text20(name)]));
+    const names = new Map(Object.entries(input.names || {}).map(([id2, name]) => [idKey(id2), text17(name)]));
     const nameOf = (id2) => id2 ? names.get(idKey(id2)) || null : null;
     const out = [];
     const seen = /* @__PURE__ */ new Set();
@@ -15671,7 +14823,7 @@ var ProjectPlannerCanonical = (() => {
     for (const booking of input.bookings || []) {
       if (!booking || !ids.has(idKey(booking.personId))) continue;
       liveIds.add(idKey(booking.id));
-      const day = text20(booking.dayKey);
+      const day = text17(booking.dayKey);
       if (!day || day < start || day > end) continue;
       const bookingKey = `${collectionOf(booking)}/${idKey(booking.id)}`;
       if (seen.has(bookingKey)) continue;
@@ -15702,21 +14854,21 @@ var ProjectPlannerCanonical = (() => {
         else if (review) state = "reopened";
         else state = "needsReview";
       }
-      const jobNumber = text20(booking.jobNumber);
-      const jobName = text20(booking.jobName);
+      const jobNumber = text17(booking.jobNumber);
+      const jobName = text17(booking.jobName);
       const deciderName = nameOf(decidedBy);
       out.push({
-        bookingId: text20(booking.id),
+        bookingId: text17(booking.id),
         collection: collectionOf(booking),
         dayKey: day,
         dayLabel: formatPaymentRunDay(day),
-        jobId: text20(booking.jobId) || null,
+        jobId: text17(booking.jobId) || null,
         jobNumber,
         jobName,
         title: [jobNumber, jobName].filter(Boolean).join(" \xB7 ") || "Booking",
         start: clockOf(booking.workStartTime),
         end: clockOf(booking.workEndTime),
-        timeSlot: text20(booking.timeSlot),
+        timeSlot: text17(booking.timeSlot),
         fingerprint,
         state,
         stateLabel: stateLabelFor(state, deciderName),
@@ -15729,7 +14881,7 @@ var ProjectPlannerCanonical = (() => {
         sentLine: pending ? pending.line : returned ? returned.line : null
       });
     }
-    const jobs = new Map((input.jobs || []).filter((row3) => row3 && text20(row3.id)).map((row3) => [idKey(row3.id), row3]));
+    const jobs = new Map((input.jobs || []).filter((row3) => row3 && text17(row3.id)).map((row3) => [idKey(row3.id), row3]));
     for (const review of reviews) {
       if (review.decision !== "deleted" || liveIds.has(idKey(review.bookingId))) continue;
       const key7 = `${review.collection}/${idKey(review.bookingId)}`;
@@ -15741,8 +14893,8 @@ var ProjectPlannerCanonical = (() => {
       if (!day || day < start || day > end) continue;
       seen.add(key7);
       const job = line?.jobId ? jobs.get(idKey(line.jobId)) : void 0;
-      const jobNumber = text20(job?.jobNumber);
-      const jobName = text20(job?.jobName);
+      const jobNumber = text17(job?.jobNumber);
+      const jobName = text17(job?.jobName);
       const decidedBy = review.requestId ? review.reviewedBy : null;
       const deciderName = nameOf(decidedBy);
       out.push({
@@ -15793,7 +14945,7 @@ var ProjectPlannerCanonical = (() => {
     const to = window ? Math.min(e, window.end) : 0;
     if (!window || to <= from) {
       if (collectionOf(booking) === "managerSiteBookings") return { kind: "notAllowed", message: OVERTIME_CANCEL_NOT_ALLOWED_MESSAGE };
-      const title = [text20(booking.jobNumber), text20(booking.jobName)].filter(Boolean).join(" ");
+      const title = [text17(booking.jobNumber), text17(booking.jobName)].filter(Boolean).join(" ");
       const summary = [formatPaymentRunDay(booking.dayKey), title, `${formatClockMinutes(s)}\u2013${formatClockMinutes(e % (24 * 60))}`].filter(Boolean).join(" \xB7 ");
       return { kind: "delete", warning: { ...OVERTIME_DELETE_WARNING, summary } };
     }
@@ -15848,7 +15000,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function overtimeRateControl(input) {
     const zone3 = zoneOrLondon(input.timeZone);
-    const day = text20(input.booking?.dayKey);
+    const day = text17(input.booking?.dayKey);
     const organizationMultiplier = /^\d{4}-\d{2}-\d{2}$/.test(day) ? organizationOvertimeMultiplier(input.organization, day, zone3) : 1.5;
     const custom = isCustomSlot(input.booking?.timeSlot) && Boolean(clockOf(input.booking?.workStartTime)) && Boolean(clockOf(input.booking?.workEndTime));
     const figures = custom ? overtimeForBooking({ booking: input.booking, organization: input.organization, timeZone: zone3, minMinutes: 0 }) : null;
@@ -15868,8 +15020,8 @@ var ProjectPlannerCanonical = (() => {
   function canEditOwnBookingOvertime(input) {
     const viewer = input.viewer;
     if (!viewer || !input.isPaye) return "none";
-    const day = text20(input.booking?.dayKey);
-    const limit = text20(input.editableUntilKey) || text20(input.todayKey);
+    const day = text17(input.booking?.dayKey);
+    const limit = text17(input.editableUntilKey) || text17(input.todayKey);
     if (limit && day && day > limit) return "none";
     const role = viewer.role;
     if (!role) return "none";
@@ -15885,7 +15037,7 @@ var ProjectPlannerCanonical = (() => {
     return rulesMayWrite ? "direct" : "request";
   }
   function overtimeEditableUntil(organization, todayKey4) {
-    const today = text20(todayKey4);
+    const today = text17(todayKey4);
     const current = payePayrunPeriod(organization, today);
     return current && current.end > today ? current.end : today;
   }
@@ -15927,20 +15079,20 @@ var ProjectPlannerCanonical = (() => {
   function overtimeHubAccess(input) {
     const viewer = input.viewer;
     if (!viewer || viewer.isActive === false) return { showButton: false, mine: false, users: false };
-    const mine = text20(viewer.employmentType).toLowerCase() === "paye";
+    const mine = text17(viewer.employmentType).toLowerCase() === "paye";
     const users = isAdminOutsideOperativeMode(viewer) || overtimeUserSubjects(viewer, input.roster).length > 0;
     return { showButton: mine || users, mine, users };
   }
   function overtimeRequestLineFields(input) {
     const booking = input.booking;
-    if (!booking || !text20(booking.id)) return null;
+    if (!booking || !text17(booking.id)) return null;
     if (input.personIds && !overtimeBookingIsTheirs(booking, input.personIds)) return null;
     const before = overtimeForBooking({ booking, organization: input.organization, timeZone: input.timeZone, minMinutes: 0 });
     const base = {
-      bookingId: text20(booking.id),
+      bookingId: text17(booking.id),
       collection: collectionOf(booking),
-      dayKey: text20(booking.dayKey),
-      jobId: text20(booking.jobId) || null,
+      dayKey: text17(booking.dayKey),
+      jobId: text17(booking.jobId) || null,
       fingerprint: overtimeBookingFingerprint(booking),
       action: "keep",
       proposedStart: null,
@@ -15978,7 +15130,7 @@ var ProjectPlannerCanonical = (() => {
     return base;
   }
   function overtimeRequestWriteFields(input) {
-    const userId = text20(input.userId);
+    const userId = text17(input.userId);
     const start = dayKeyOrEmpty(input.rangeStart);
     const end = dayKeyOrEmpty(input.rangeEnd);
     if (!userId || !start || !end || start > end || !input.lines) return null;
@@ -16006,7 +15158,7 @@ var ProjectPlannerCanonical = (() => {
   function overtimeDeciderMayWriteBooking(input) {
     if (input.deciderIsAdmin === true) return true;
     if ((input.writableBookingIds || []).some((id2) => idKey(id2) === idKey(input.booking.id))) return true;
-    if (text20(input.booking.personId) === "") return false;
+    if (text17(input.booking.personId) === "") return false;
     const ids = input.requesterIds && input.requesterIds.length > 0 ? input.requesterIds : [input.requesterUserId];
     return overtimeBookingIsTheirs(input.booking, ids);
   }
@@ -16084,8 +15236,8 @@ var ProjectPlannerCanonical = (() => {
     const previouslyApplied = new Set((request.appliedBookingIds || []).map(idKey));
     const previouslyDropped = new Set((request.droppedBookingIds || []).map(idKey));
     const requesterIds = input.requesterIds && input.requesterIds.length > 0 ? input.requesterIds : [request.userId];
-    const platform = text20(input.platform) || "web";
-    const deciderId = text20(input.deciderId);
+    const platform = text17(input.platform) || "web";
+    const deciderId = text17(input.deciderId);
     const outcomes = {};
     const bookingWrites = [];
     const bookingDeletes = [];
@@ -16250,12 +15402,12 @@ var ProjectPlannerCanonical = (() => {
     const reviewWrite = (reviewDecision, fingerprint) => ({
       docId: overtimeReviewDocId(input.userId, booking.id),
       fields: {
-        userId: text20(input.userId),
-        bookingId: text20(booking.id),
+        userId: text17(input.userId),
+        bookingId: text17(booking.id),
         collection: collectionOf(booking),
         decision: reviewDecision,
         fingerprint,
-        reviewedBy: text20(input.reviewerId),
+        reviewedBy: text17(input.reviewerId),
         requestId: null
       }
     });
@@ -16271,7 +15423,7 @@ var ProjectPlannerCanonical = (() => {
         decision = "trimmed";
       }
       if (outcome.kind === "delete") {
-        const del = overtimeBookingDelete({ booking, deletedBy: input.reviewerId, platform: text20(input.platform) || "web" });
+        const del = overtimeBookingDelete({ booking, deletedBy: input.reviewerId, platform: text17(input.platform) || "web" });
         if (!del) return null;
         return { bookingWrite: null, bookingDelete: del, reviewWrite: reviewWrite("deleted", overtimeBookingFingerprint(booking)), hoursChanged: true };
       }
@@ -16280,7 +15432,7 @@ var ProjectPlannerCanonical = (() => {
     const changed = Object.keys(fields.set).length > 0 || fields.remove.length > 0;
     const next = change && changed ? overtimeBookingAfter(booking, change) : booking;
     return {
-      bookingWrite: changed ? { collection: collectionOf(booking), bookingId: text20(booking.id), ...fields } : null,
+      bookingWrite: changed ? { collection: collectionOf(booking), bookingId: text17(booking.id), ...fields } : null,
       bookingDelete: null,
       reviewWrite: reviewWrite(changed ? decision : "approved", overtimeBookingFingerprint(next)),
       hoursChanged: changed
@@ -16300,10 +15452,10 @@ var ProjectPlannerCanonical = (() => {
   }
   var overtimeReturnedRecipients = overtimeReviewedRecipients;
   function overtimeReturnedMessage(input) {
-    const name = text20(input.deciderName) || (input.deciderIsLineManager ? "Your line manager" : "An admin");
+    const name = text17(input.deciderName) || (input.deciderIsLineManager ? "Your line manager" : "An admin");
     return {
       title: "Overtime returned",
-      message: input.deciderIsLineManager ? text20(input.deciderName) ? `Your line manager ${name} has returned your overtime request` : "Your line manager has returned your overtime request" : `${name} has returned your overtime request`
+      message: input.deciderIsLineManager ? text17(input.deciderName) ? `Your line manager ${name} has returned your overtime request` : "Your line manager has returned your overtime request" : `${name} has returned your overtime request`
     };
   }
   function overtimeDeciderIsLineManager(decider, requester, roster) {
@@ -16315,7 +15467,7 @@ var ProjectPlannerCanonical = (() => {
     return lineManagerIds(requester, members).some((id2) => deciderIds.has(idKey(id2)));
   }
   function overtimeRequestSubmittedMessage(input) {
-    const name = text20(input.requesterName) || "Someone";
+    const name = text17(input.requesterName) || "Someone";
     return {
       title: `Overtime request from ${name}`,
       message: `${name} sent their overtime for ${formatPaymentRunDay(input.rangeStart)} \u2013 ${formatPaymentRunDay(input.rangeEnd)} for approval.`
@@ -16323,7 +15475,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function overtimeLineReopened(input) {
     const before = input.before;
-    if (!before || !text20(before.id)) return { reopened: false, returned: false };
+    if (!before || !text17(before.id)) return { reopened: false, returned: false };
     const oldPrint = overtimeBookingFingerprint(before);
     if (input.after && overtimeBookingFingerprint(input.after) === oldPrint) return { reopened: false, returned: false };
     if (input.reviews == null || input.requests == null) {
@@ -16342,15 +15494,15 @@ var ProjectPlannerCanonical = (() => {
     const account = notificationRecipientAccountId(input.bookedId, members, catalogue);
     if (!account) return [];
     const person = members.find((member) => idKey(member.id) === idKey(account));
-    if (!person || text20(person.employmentType).toLowerCase() !== "paye") return [];
+    if (!person || text17(person.employmentType).toLowerCase() !== "paye") return [];
     const managers = input.returned ? lineManagerIds(person, members) : [];
     return excludeActor([account, ...managers], input.actor, members);
   }
   function overtimeReopenedMessage(input) {
-    const day = /^\d{4}-\d{2}-\d{2}$/.test(text20(input.dayKey)) ? formatPaymentRunDay(text20(input.dayKey)) : "a day";
-    const job = text20(input.jobNumber) ? ` (${text20(input.jobNumber)})` : "";
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(text17(input.dayKey)) ? formatPaymentRunDay(text17(input.dayKey)) : "a day";
+    const job = text17(input.jobNumber) ? ` (${text17(input.jobNumber)})` : "";
     if (input.forLineManager) {
-      const who = text20(input.personName) || "Someone";
+      const who = text17(input.personName) || "Someone";
       return { title: "Overtime line reopened", message: `${who}'s booking on ${day}${job} changed after you returned their overtime. They need to check it and send it again.` };
     }
     return { title: "Overtime line reopened", message: `Your booking on ${day}${job} changed. Check that overtime line and send it again.` };
@@ -16360,7 +15512,7 @@ var ProjectPlannerCanonical = (() => {
     const rangeEnd = dayKeyOrEmpty(input.rangeEnd);
     const day = rangeStart || dayKeyOrEmpty(input.dayKey);
     if (!day) return null;
-    const current = payePayrunPeriod(input.organization, text20(input.todayKey));
+    const current = payePayrunPeriod(input.organization, text17(input.todayKey));
     const containing = payePayrunPeriod(input.organization, day);
     const fits = (period) => Boolean(period && day >= period.start && day <= period.end && (!rangeEnd || rangeEnd <= period.end));
     if (current && fits(current)) return { range: "current", start: current.start, end: current.end };
@@ -16401,11 +15553,11 @@ var ProjectPlannerCanonical = (() => {
       };
     });
     return {
-      userId: text20(input.userId),
-      userName: text20(input.userName),
-      companyName: text20(input.companyName),
-      rangeStart: text20(input.rangeStart),
-      rangeEnd: text20(input.rangeEnd),
+      userId: text17(input.userId),
+      userName: text17(input.userName),
+      companyName: text17(input.companyName),
+      rangeStart: text17(input.rangeStart),
+      rangeEnd: text17(input.rangeEnd),
       kind: "overtime",
       lines,
       totals: {
@@ -16413,7 +15565,7 @@ var ProjectPlannerCanonical = (() => {
         clockHours: round2(lines.reduce((sum, line) => sum + line.clockHours, 0)),
         lineCount: lines.length
       },
-      generatedBy: text20(input.generatedBy)
+      generatedBy: text17(input.generatedBy)
     };
   }
   function overtimeReportOutOfDate(input) {
@@ -16431,7 +15583,7 @@ var ProjectPlannerCanonical = (() => {
     for (const line of saved) {
       const now = current.get(idKey(line.bookingId));
       if (!now) return true;
-      if (text20(line.fingerprint) && !overtimeFingerprintsMatch(line.fingerprint, now.fingerprint)) return true;
+      if (text17(line.fingerprint) && !overtimeFingerprintsMatch(line.fingerprint, now.fingerprint)) return true;
       if (round2(line.overtimeHours) !== round2(now.overtimeHours)) return true;
     }
     return false;
@@ -16442,31 +15594,31 @@ var ProjectPlannerCanonical = (() => {
       const r = raw && typeof raw === "object" ? raw : {};
       const dayKey = dayKeyOrEmpty(r.dayKey);
       return {
-        bookingId: text20(r.bookingId),
+        bookingId: text17(r.bookingId),
         dayKey,
-        dayLabel: text20(r.dayLabel) || (dayKey ? formatPaymentRunDay(dayKey) : ""),
-        jobNumber: text20(r.jobNumber),
-        jobName: text20(r.jobName),
+        dayLabel: text17(r.dayLabel) || (dayKey ? formatPaymentRunDay(dayKey) : ""),
+        jobNumber: text17(r.jobNumber),
+        jobName: text17(r.jobName),
         start: clockOf(r.start),
         end: clockOf(r.end),
         clockHours: round2(Number(r.clockHours) || 0),
         multiplier: Number(r.multiplier) > 0 ? Number(r.multiplier) : 1,
         breakHours: round2(Number(r.breakHours) || 0),
         overtimeHours: round2(Number(r.overtimeHours) || 0),
-        text: text20(r.text),
-        fingerprint: text20(r.fingerprint),
-        state: text20(r.state),
-        note: text20(r.note),
+        text: text17(r.text),
+        fingerprint: text17(r.fingerprint),
+        state: text17(r.state),
+        note: text17(r.note),
         declined: r.declined === true,
-        declinedByName: text20(r.declinedByName)
+        declinedByName: text17(r.declinedByName)
       };
     });
     const totals = row3.totals && typeof row3.totals === "object" ? row3.totals : {};
     return {
-      id: text20(docId),
-      userId: text20(row3.userId),
-      userName: text20(row3.userName),
-      companyName: text20(row3.companyName),
+      id: text17(docId),
+      userId: text17(row3.userId),
+      userName: text17(row3.userName),
+      companyName: text17(row3.companyName),
       rangeStart: dayKeyOrEmpty(row3.rangeStart),
       rangeEnd: dayKeyOrEmpty(row3.rangeEnd),
       kind: "overtime",
@@ -16476,7 +15628,7 @@ var ProjectPlannerCanonical = (() => {
         clockHours: round2(Number(totals.clockHours) || lines.reduce((sum, line) => sum + line.clockHours, 0)),
         lineCount: Number(totals.lineCount) || lines.length
       },
-      generatedBy: text20(row3.generatedBy),
+      generatedBy: text17(row3.generatedBy),
       generatedAtMs: instantMs(row3.generatedAt),
       // 1.33.0: a stored out-of-date mark, if one is ever written (today the apps work it out: `overtimeReportOutOfDate`).
       outOfDate: row3.outOfDate === true || instantMs(row3.outOfDateAt ?? row3.outOfDateAtMs) != null,
@@ -16489,11 +15641,11 @@ var ProjectPlannerCanonical = (() => {
       const declinedBy = overtimeReportLineDeclinedBy(line);
       const declined = declinedBy != null;
       return {
-        bookingId: text20(line.bookingId),
-        day: text20(line.dayLabel) || (line.dayKey ? formatPaymentRunDay(line.dayKey) : ""),
-        job: [text20(line.jobNumber), text20(line.jobName)].filter(Boolean).join(" "),
+        bookingId: text17(line.bookingId),
+        day: text17(line.dayLabel) || (line.dayKey ? formatPaymentRunDay(line.dayKey) : ""),
+        job: [text17(line.jobNumber), text17(line.jobName)].filter(Boolean).join(" "),
         time: line.start && line.end ? `${line.start}\u2013${line.end}` : "",
-        overtime: declined ? hoursText(0) : text20(line.text),
+        overtime: declined ? hoursText(0) : text17(line.text),
         note: declined ? declinedBy ? `${OVERTIME_REPORT_DECLINED_PREFIX} ${declinedBy}` : OVERTIME_REPORT_DECLINED_PREFIX.replace(/ by$/, "") : "",
         declined
       };
@@ -16512,13 +15664,13 @@ var ProjectPlannerCanonical = (() => {
     });
     const outOfDate = overtimeReportIsOutOfDate(snapshot);
     return {
-      title: `${OVERTIME_REPORT_TITLE} \xB7 ${text20(snapshot.userName)}`,
+      title: `${OVERTIME_REPORT_TITLE} \xB7 ${text17(snapshot.userName)}`,
       subtitle: period,
       rows: rows3,
       total: `${OVERTIME_REPORT_TOTAL_LABEL}: ${totalValue}`,
       documentTitle: OVERTIME_REPORT_TITLE,
-      companyName: text20(snapshot.companyName),
-      personName: text20(snapshot.userName),
+      companyName: text17(snapshot.companyName),
+      personName: text17(snapshot.userName),
       period,
       ...generated,
       columns: [...OVERTIME_REPORT_COLUMNS],
@@ -16526,7 +15678,7 @@ var ProjectPlannerCanonical = (() => {
       totalLabel: OVERTIME_REPORT_TOTAL_LABEL,
       totalValue,
       emptyMessage: OVERTIME_NO_LINES_MESSAGE,
-      footer: [text20(snapshot.companyName), OVERTIME_REPORT_TITLE, text20(snapshot.userName)].filter(Boolean).join(" \xB7 "),
+      footer: [text17(snapshot.companyName), OVERTIME_REPORT_TITLE, text17(snapshot.userName)].filter(Boolean).join(" \xB7 "),
       outOfDate,
       outOfDateNote: outOfDate ? OVERTIME_REPORT_OUT_OF_DATE_NOTE : ""
     };
@@ -16537,7 +15689,7 @@ var ProjectPlannerCanonical = (() => {
   var OVERTIME_REPORT_OUT_OF_DATE_NOTE = "Out of date: a booking changed after this report was generated. Generate a replacement report.";
   function overtimeReportLineDeclinedBy(line) {
     if (!line) return null;
-    const name = text20(line.declinedByName);
+    const name = text17(line.declinedByName);
     if (name) return name;
     return line.declined === true ? "" : null;
   }
@@ -16547,7 +15699,7 @@ var ProjectPlannerCanonical = (() => {
     return snapshot.outOfDateAtMs != null && Number.isFinite(Number(snapshot.outOfDateAtMs)) && Number(snapshot.outOfDateAtMs) > 0;
   }
   function weeklyReportPayeDay(person, dayKey, timeZone) {
-    if (!person || !/^\d{4}-\d{2}-\d{2}$/.test(text20(dayKey))) return false;
+    if (!person || !/^\d{4}-\d{2}-\d{2}$/.test(text17(dayKey))) return false;
     const zone3 = zoneOrLondon(timeZone);
     return employmentTypeOnDay(person, dateFromDayKeyInZone(dayKey, zone3), zone3) === "paye";
   }
@@ -16569,7 +15721,7 @@ var ProjectPlannerCanonical = (() => {
         const key7 = `${idKey(person.id)}|${idKey(line.jobId ?? line.jobNumber)}|${figures.multiplier}|${changed ? "c" : "o"}|${figures.organizationMultiplier}`;
         const row3 = rows3.get(key7) ?? {
           personId: idText(person.id),
-          name: text20(person.name),
+          name: text17(person.name),
           jobId: line.jobId,
           jobNumber: line.jobNumber,
           jobName: line.jobName,
@@ -16594,7 +15746,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function overtimeRateCreateControl(input) {
     const zone3 = zoneOrLondon(input.timeZone);
-    const day = text20(input.dayKey);
+    const day = text17(input.dayKey);
     const organizationMultiplier = /^\d{4}-\d{2}-\d{2}$/.test(day) ? organizationOvertimeMultiplier(input.organization, day, zone3) : 1.5;
     const steps = [...OVERTIME_MULTIPLIER_STEPS];
     if (!steps.some((step) => Math.abs(step - organizationMultiplier) < 1e-9)) steps.push(organizationMultiplier);
@@ -16625,7 +15777,7 @@ var ProjectPlannerCanonical = (() => {
     return { otMultiplierOverride: chosen };
   }
   function overtimeBookingSlot(raw) {
-    return normalizeBookingTimeSlot(raw) ?? text20(raw);
+    return normalizeBookingTimeSlot(raw) ?? text17(raw);
   }
 
   // lib/canonical/timesheetBookingChanges.ts
@@ -16641,14 +15793,14 @@ var ProjectPlannerCanonical = (() => {
   var SIGNED_TIMESHEET_ADDITION_WINDOW_MS = 10 * 60 * 1e3;
   function signedTimesheetBookingPlace(doc) {
     if (!doc) return "";
-    const collection = text21(doc.collection) || "bookings";
+    const collection = text18(doc.collection) || "bookings";
     if (collection === "bookings") {
-      const job = normalizeDocumentId(text21(doc.projectId));
+      const job = normalizeDocumentId(text18(doc.projectId));
       return job ? `job|${job}` : "";
     }
-    const kind = text21(doc.locationType).toLowerCase();
+    const kind = text18(doc.locationType).toLowerCase();
     if (!kind) return "";
-    return `${kind}|${normalizeDocumentId(text21(doc.locationId))}|${text21(doc.customLocationName).toLowerCase()}`;
+    return `${kind}|${normalizeDocumentId(text18(doc.locationId))}|${text18(doc.customLocationName).toLowerCase()}`;
   }
   var SNAPSHOT_GAP_REPORTS = "signed";
   var SNAPSHOT_GAP_FROM_MS = null;
@@ -16660,7 +15812,7 @@ var ProjectPlannerCanonical = (() => {
     }
     return null;
   }
-  function text21(value) {
+  function text18(value) {
     return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
   }
   function realMs(value) {
@@ -16678,14 +15830,14 @@ var ProjectPlannerCanonical = (() => {
   }
   function lineBooking(line) {
     if (!line) return null;
-    const rawId = text21(line.id);
+    const rawId = text18(line.id);
     const match = rawId.match(/^(op|mgr)-(.+)-(?:normal|ot)$/i);
     const prefix = match ? match[1].toLowerCase() : "";
-    let bookingId = text21(line.bookingId);
+    let bookingId = text18(line.bookingId);
     if (bookingId && match && bookingId.toLowerCase() === `${prefix}-${match[2]}`.toLowerCase()) bookingId = match[2];
     if (!bookingId && match) bookingId = match[2];
     if (!bookingId) return null;
-    const stored = text21(line.bookingCollection);
+    const stored = text18(line.bookingCollection);
     return { collection: stored || (prefix === "mgr" ? "managerSiteBookings" : "bookings"), bookingId };
   }
   function keyOf(collection, bookingId) {
@@ -16706,7 +15858,7 @@ var ProjectPlannerCanonical = (() => {
         continue;
       }
       const key7 = keyOf(booking.collection, booking.bookingId);
-      const fingerprint = text21(line.bookingFingerprint);
+      const fingerprint = text18(line.bookingFingerprint);
       const created = documentInstantMs(line.bookingCreatedAt);
       const updated = documentInstantMs(line.bookingUpdatedAt);
       const writtenMs = created == null && updated == null ? null : Math.max(created ?? 0, updated ?? 0);
@@ -16729,7 +15881,7 @@ var ProjectPlannerCanonical = (() => {
       if (!booking) continue;
       const key7 = keyOf(booking.collection, booking.bookingId);
       if (!side.has(key7)) {
-        side.set(key7, { bookingId: booking.bookingId, fingerprint: text21(r.fingerprint), personId: text21(r.personId), place: text21(r.place), writtenMs: null });
+        side.set(key7, { bookingId: booking.bookingId, fingerprint: text18(r.fingerprint), personId: text18(r.personId), place: text18(r.place), writtenMs: null });
       }
     }
     return side;
@@ -16738,16 +15890,16 @@ var ProjectPlannerCanonical = (() => {
     return overtimeBookingFingerprint({
       id: doc.bookingId,
       personId: "",
-      dayKey: text21(doc.dayKey),
-      timeSlot: text21(doc.timeSlot),
-      workStartTime: text21(doc.workStartTime) || void 0,
-      workEndTime: text21(doc.workEndTime) || void 0,
+      dayKey: text18(doc.dayKey),
+      timeSlot: text18(doc.timeSlot),
+      workStartTime: text18(doc.workStartTime) || void 0,
+      workEndTime: text18(doc.workEndTime) || void 0,
       isBreakRemoved: doc.isBreakRemoved === true,
       otMultiplierOverride: typeof doc.otMultiplierOverride === "number" ? doc.otMultiplierOverride : null
     });
   }
   function statusTakesItOff(status) {
-    return text21(status) !== "" && !bookingOccupiesDay(status);
+    return text18(status) !== "" && !bookingOccupiesDay(status);
   }
   function diffSides(signed, live, documents, addedAfterMs, reviewerEdits = null) {
     const fingerprinted = Array.from(signed.values()).some((row3) => row3.fingerprint !== "");
@@ -16776,7 +15928,7 @@ var ProjectPlannerCanonical = (() => {
         removed.push(row3.bookingId);
         continue;
       }
-      const docPerson = normalizeDocumentId(text21(doc.personId));
+      const docPerson = normalizeDocumentId(text18(doc.personId));
       if (row3.personId && docPerson && normalizeDocumentId(row3.personId) !== docPerson && documents.personIds && !documents.personIds.has(docPerson)) {
         removed.push(row3.bookingId);
         continue;
@@ -16796,9 +15948,9 @@ var ProjectPlannerCanonical = (() => {
   }
   var TIMESHEET_REVIEWER_BOOKING_EDITS_FIELD = "reviewerBookingEdits";
   function timesheetReviewerBookingEditKey(collection, bookingId) {
-    const id2 = normalizeDocumentId(text21(bookingId));
+    const id2 = normalizeDocumentId(text18(bookingId));
     if (!id2) return "";
-    const kind = text21(collection) || "bookings";
+    const kind = text18(collection) || "bookings";
     return `${kind}__${id2}`.replace(/[^A-Za-z0-9_-]/g, "_");
   }
   function currentReviewerEdits(raw, operativeSignedMs) {
@@ -16814,14 +15966,32 @@ var ProjectPlannerCanonical = (() => {
       out.set(keyOf(booking.collection, booking.bookingId), {
         bookingId: booking.bookingId,
         collection: booking.collection,
-        fingerprint: text21(row3.fingerprint),
-        place: text21(row3.place),
+        fingerprint: text18(row3.fingerprint),
+        place: text18(row3.place),
         deleted: row3.deleted === true,
-        editedBy: text21(row3.editedBy),
+        editedBy: text18(row3.editedBy),
         forSignedAtMs: forMs
       });
     }
     return out.size > 0 ? out : null;
+  }
+  function timesheetSheetChangedByReviewer(sheet) {
+    if (!sheet) return false;
+    const signedMs = realMs(sheet.operativeSignedAt) ?? realMs(sheet.operativeSignedAtMs);
+    return currentReviewerEdits(sheet.reviewerBookingEdits, signedMs) != null;
+  }
+  var TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE = "Your timesheet was updated and signed off";
+  var TIMESHEET_SIGNED_UPDATED_NOTICE_MESSAGE = "Your timesheet was changed and signed off. Open it to check the changes.";
+  var TIMESHEET_SIGNED_NOTICE_TITLE = "Timesheet signed";
+  function timesheetSignedNoticeText(input) {
+    const name = text18(input.signedByName);
+    if (input.changedByReviewer === true) {
+      return {
+        title: TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE,
+        message: name ? `${name} changed your timesheet and signed it off. Open it to check the changes.` : TIMESHEET_SIGNED_UPDATED_NOTICE_MESSAGE
+      };
+    }
+    return { title: TIMESHEET_SIGNED_NOTICE_TITLE, message: `${name || "Your line manager"} signed your timesheet.` };
   }
   function timesheetReviewerBookingEditRecord(input) {
     const sheet = input.sheet;
@@ -16843,28 +16013,28 @@ var ProjectPlannerCanonical = (() => {
         fingerprint: after ? documentFingerprint({ ...after, bookingId: booking.bookingId, collection: booking.collection }) : "",
         place: after ? signedTimesheetBookingPlace({ ...after, collection: booking.collection }) : "",
         deleted,
-        editedBy: text21(input.editedBy),
+        editedBy: text18(input.editedBy),
         forSignedAtMs: signedMs
       }
     };
   }
   function signedTimesheetBookingRecord(liveLines, liveBookings) {
     const docs = /* @__PURE__ */ new Map();
-    for (const doc of liveBookings ?? []) if (doc && text21(doc.bookingId)) docs.set(keyOf(text21(doc.collection) || "bookings", text21(doc.bookingId)), doc);
+    for (const doc of liveBookings ?? []) if (doc && text18(doc.bookingId)) docs.set(keyOf(text18(doc.collection) || "bookings", text18(doc.bookingId)), doc);
     const out = /* @__PURE__ */ new Map();
     for (const line of liveLines ?? []) {
       if (!line || line.isLeave === true || line.isPayeDay === true) continue;
       const booking = lineBooking(line);
       if (!booking) continue;
       const key7 = keyOf(booking.collection, booking.bookingId);
-      const fingerprint = text21(line.bookingFingerprint);
+      const fingerprint = text18(line.bookingFingerprint);
       const held = out.get(key7);
       if (held) {
         if (!held.fingerprint && fingerprint) held.fingerprint = fingerprint;
         continue;
       }
       const doc = docs.get(key7);
-      out.set(key7, { bookingId: booking.bookingId, collection: booking.collection, fingerprint, personId: text21(doc?.personId), place: signedTimesheetBookingPlace(doc) });
+      out.set(key7, { bookingId: booking.bookingId, collection: booking.collection, fingerprint, personId: text18(doc?.personId), place: signedTimesheetBookingPlace(doc) });
     }
     return Array.from(out.entries()).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([, row3]) => row3);
   }
@@ -16894,10 +16064,10 @@ var ProjectPlannerCanonical = (() => {
     let documents = null;
     if (Array.isArray(input.liveBookings)) {
       const byKey = /* @__PURE__ */ new Map();
-      for (const doc of input.liveBookings) if (doc && text21(doc.bookingId)) byKey.set(keyOf(text21(doc.collection) || "bookings", text21(doc.bookingId)), doc);
+      for (const doc of input.liveBookings) if (doc && text18(doc.bookingId)) byKey.set(keyOf(text18(doc.collection) || "bookings", text18(doc.bookingId)), doc);
       const tombstoned = /* @__PURE__ */ new Set();
-      for (const row3 of input.tombstonedBookingIds ?? []) if (row3 && text21(row3.bookingId)) tombstoned.add(keyOf(text21(row3.collection) || "bookings", text21(row3.bookingId)));
-      const personIds = Array.isArray(input.personIds) ? new Set(input.personIds.map((id2) => normalizeDocumentId(text21(id2))).filter(Boolean)) : null;
+      for (const row3 of input.tombstonedBookingIds ?? []) if (row3 && text18(row3.bookingId)) tombstoned.add(keyOf(text18(row3.collection) || "bookings", text18(row3.bookingId)));
+      const personIds = Array.isArray(input.personIds) ? new Set(input.personIds.map((id2) => normalizeDocumentId(text18(id2))).filter(Boolean)) : null;
       documents = { byKey, tombstoned, personIds };
     }
     let snapshotDiff = null;
@@ -17016,7 +16186,7 @@ var ProjectPlannerCanonical = (() => {
     const operativeSignedMs = realMs(sheet.operativeSignedAt) ?? realMs(sheet.operativeSignedAtMs);
     const override = sheet.weeklyReportOverride && typeof sheet.weeklyReportOverride === "object" ? sheet.weeklyReportOverride : null;
     if (operativeSignedMs == null && !override) return none;
-    const bookingKey = keyOf(text21(input.booking.collection) || "bookings", text21(input.booking.bookingId));
+    const bookingKey = keyOf(text18(input.booking.collection) || "bookings", text18(input.booking.bookingId));
     const recordAtMs = realMs(sheet.operativeSignedBookingsAt);
     const recordSignedAtMs = realMs(sheet.operativeSignedBookingsSignedAt);
     const recordCurrent = operativeSignedMs != null && (recordSignedAtMs != null ? Math.abs(operativeSignedMs - recordSignedAtMs) <= RECORD_SIGNED_AT_MATCH_MS : recordAtMs != null && operativeSignedMs <= recordAtMs + RECORD_SIGNATURE_TOLERANCE_MS);
@@ -17045,7 +16215,7 @@ var ProjectPlannerCanonical = (() => {
     const live = /* @__PURE__ */ new Map();
     if (input.after && input.afterOnSheet) {
       live.set(bookingKey, {
-        bookingId: text21(input.booking.bookingId),
+        bookingId: text18(input.booking.bookingId),
         fingerprint: documentFingerprint(input.after),
         personId: "",
         place: "",
@@ -17054,7 +16224,7 @@ var ProjectPlannerCanonical = (() => {
     }
     const byKey = /* @__PURE__ */ new Map();
     if (input.after) byKey.set(bookingKey, input.after);
-    const personIds = Array.isArray(input.personIds) ? new Set(input.personIds.map((id2) => normalizeDocumentId(text21(id2))).filter(Boolean)) : null;
+    const personIds = Array.isArray(input.personIds) ? new Set(input.personIds.map((id2) => normalizeDocumentId(text18(id2))).filter(Boolean)) : null;
     const reviewerEdits = currentReviewerEdits(sheet.reviewerBookingEdits, operativeSignedMs);
     const found = diffSides(signed, live, { byKey, tombstoned: /* @__PURE__ */ new Set(), personIds }, addedAfter, reviewerEdits);
     const kind = found.changed.length > 0 ? "changed" : found.removed.length > 0 ? "removed" : found.added.length > 0 ? "added" : null;
@@ -17064,14 +16234,14 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/timesheetLineDisplay.ts
   var NO_JOB_NUMBER = /* @__PURE__ */ new Set(["", "\u2014", "-", "\u2013"]);
   var SLOT_LABELS = { "FULL DAY": "Full day", AM: "AM", PM: "PM" };
-  function text22(value) {
+  function text19(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function timesheetLineDisplay(line, day) {
-    const jobNumber = text22(line?.jobNumber);
-    const name = text22(line?.projectName);
+    const jobNumber = text19(line?.jobNumber);
+    const name = text19(line?.projectName);
     const title = NO_JOB_NUMBER.has(jobNumber) ? name || "Booking" : name ? `${jobNumber} \xB7 ${name}` : jobNumber;
-    const details = text22(line?.details);
+    const details = text19(line?.details);
     const clock5 = timesheetLineClockText(details);
     if (/\d{1,2}:\d{2}/.test(clock5)) return { title, times: clock5 };
     const [head, ...rest] = details.split(" \xB7 ");
@@ -17079,7 +16249,7 @@ var ProjectPlannerCanonical = (() => {
     const slot = normalizeBookingTimeSlot(head.trim());
     const label = slot ? SLOT_LABELS[slot] : void 0;
     if (label) {
-      const dayKey = text22(line?.dayKey);
+      const dayKey = text19(line?.dayKey);
       const interval2 = day ? slotInterval({ timeSlot: slot }, bookingStandardDayOn(day, dayKey || null)) : null;
       if (interval2 && interval2.end > interval2.start) {
         return { title, times: `${label} ${formatClockMinutes(interval2.start)}\u2013${formatClockMinutes(interval2.end)}${suffix}` };
@@ -17091,7 +16261,7 @@ var ProjectPlannerCanonical = (() => {
   var EMPTY_LINE_EPSILON = 1e-4;
   function lineGroupKey(line, index) {
     const key7 = signedTimesheetLineBookingKey(line);
-    return key7 || `line|${text22(line.id) || String(index)}`;
+    return key7 || `line|${text19(line.id) || String(index)}`;
   }
   function clockMinutes(value) {
     const match = value.match(/(\d{1,2}):(\d{2})/);
@@ -17102,14 +16272,21 @@ var ProjectPlannerCanonical = (() => {
   function numberOf(value) {
     return typeof value === "number" && Number.isFinite(value) ? value : 0;
   }
-  function timesheetLineIsEmptyStandardPart(line, lines, effectiveAmount) {
+  function timesheetLineIsEmptyStandardPart(line, lines, effectiveAmount, isDeclined) {
     if (line.isOvertimeLine === true) return false;
     if (Math.abs(numberOf(line.paidHours)) > EMPTY_LINE_EPSILON) return false;
     const amount = effectiveAmount ? effectiveAmount(line) : numberOf(line.amount);
     if (Math.abs(amount) > EMPTY_LINE_EPSILON) return false;
     const key7 = signedTimesheetLineBookingKey(line);
     if (!key7) return false;
-    return lines.some((other) => other !== line && other.isOvertimeLine === true && signedTimesheetLineBookingKey(other) === key7);
+    return lines.some(
+      (other) => other !== line && other.isOvertimeLine === true && signedTimesheetLineBookingKey(other) === key7 && !(isDeclined && isDeclined(other))
+    );
+  }
+  function timesheetLineShownDeclined(line, lines, isDeclined, effectiveAmount) {
+    if (line.isOvertimeLine === true) return false;
+    if (!timesheetLineIsEmptyStandardPart(line, lines, effectiveAmount)) return false;
+    return !timesheetLineIsEmptyStandardPart(line, lines, effectiveAmount, isDeclined);
   }
   function timesheetLineDisplayOrder(lines, options) {
     const all = (lines ?? []).filter(Boolean);
@@ -17117,13 +16294,13 @@ var ProjectPlannerCanonical = (() => {
     const effective = options?.effectiveAmount ?? null;
     const groups = /* @__PURE__ */ new Map();
     all.forEach((line, index) => {
-      const key7 = `${text22(line.dayKey)}|${lineGroupKey(line, index)}`;
+      const key7 = `${text19(line.dayKey)}|${lineGroupKey(line, index)}`;
       const named = Boolean(signedTimesheetLineBookingKey(line));
-      let start = clockMinutes(text22(line.bookingStartTime));
-      let end = clockMinutes(text22(line.bookingEndTime));
+      let start = clockMinutes(text19(line.bookingStartTime));
+      let end = clockMinutes(text19(line.bookingEndTime));
       let fromOvertime = false;
       if (start == null) {
-        const dayKey = text22(line.dayKey);
+        const dayKey = text19(line.dayKey);
         const times3 = timesheetLineDisplay({ details: line.details ?? "", dayKey }, options?.day ? options.day(dayKey) ?? null : null).times;
         const match = times3.match(/(\d{1,2}:\d{2})\s*[–-]\s*(\d{1,2}:\d{2})/);
         if (match) {
@@ -17142,10 +16319,10 @@ var ProjectPlannerCanonical = (() => {
         held.fromOvertime = fromOvertime;
       }
     });
-    const indexed = all.map((line, index) => ({ line, index, group: `${text22(line.dayKey)}|${lineGroupKey(line, index)}` }));
+    const indexed = all.map((line, index) => ({ line, index, group: `${text19(line.dayKey)}|${lineGroupKey(line, index)}` }));
     indexed.sort((a, b) => {
-      const dayA = text22(a.line.dayKey);
-      const dayB = text22(b.line.dayKey);
+      const dayA = text19(a.line.dayKey);
+      const dayB = text19(b.line.dayKey);
       if (dayA !== dayB) return dayA < dayB ? -1 : 1;
       if (a.group !== b.group) {
         const ga = groups.get(a.group);
@@ -17163,7 +16340,839 @@ var ProjectPlannerCanonical = (() => {
     const ordered = indexed.map((row3) => row3.line);
     if (!hide) return ordered;
     const effectiveAmount = effective ? (line) => effective(line) : null;
-    return ordered.filter((line) => !timesheetLineIsEmptyStandardPart(line, all, effectiveAmount));
+    const declined = options?.isDeclined ? (line) => options.isDeclined(line) : null;
+    return ordered.filter((line) => !timesheetLineIsEmptyStandardPart(line, all, effectiveAmount, declined));
+  }
+
+  // lib/canonical/payProfile.ts
+  var PAY_PROFILES_COLLECTION = "payProfiles";
+  var PAY_PROFILE_FIELDS = [
+    "payBasis",
+    "dayRate",
+    "hourlyRate",
+    "employmentType",
+    "employmentTypeTransitionFrom",
+    "employmentTypeEffectiveAt"
+  ];
+  function payProfilePath(organizationId, subjectId) {
+    return `organizations/${String(organizationId || "").trim()}/${PAY_PROFILES_COLLECTION}/${String(subjectId || "").trim()}`;
+  }
+  function canViewPersonPay(viewer, subject, roster, options) {
+    if (!viewer || !subject) return false;
+    const viewerIds = new Set(personIdSet(viewer, roster).map(idKey));
+    if (viewerIds.size === 0) return false;
+    if (viewer.isPlatformOwner === true) return true;
+    const subjectIds = personIdSet(subject, roster).map(idKey);
+    if (subjectIds.some((id2) => viewerIds.has(id2))) return true;
+    if (viewer.isActive === false) return false;
+    const level = permissionLevelOf(viewer);
+    if (level === "admin") return true;
+    const operativesManager = level === "manager" && effectivePermissions(viewer).operatives === true;
+    if (subject.catalogueOperative === true) return operativesManager;
+    if (operativesManager && permissionLevelOf(subject) === "operative") return true;
+    if (options?.context !== "timesheetReview") return false;
+    return lineManagerIds(subject, roster).some((id2) => viewerIds.has(idKey(id2)));
+  }
+  function catalogueOperativePaySubjects(operatives, roster) {
+    const rosterIds = /* @__PURE__ */ new Set();
+    const rosterEmails = /* @__PURE__ */ new Set();
+    for (const member of roster || []) {
+      if (!member) continue;
+      for (const id2 of personIdSet(member, null)) rosterIds.add(idKey(id2));
+      const email = idKey(member.email);
+      if (email) rosterEmails.add(email);
+    }
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const row3 of operatives || []) {
+      const id2 = typeof row3?.id === "string" ? row3.id.trim() : "";
+      if (!id2 || seen.has(idKey(id2))) continue;
+      const linked = [row3.linkedUserId, row3.userId, row3.uid].some((value) => typeof value === "string" && value.trim() !== "");
+      if (linked || rosterIds.has(idKey(id2))) continue;
+      const email = typeof row3.email === "string" ? row3.email.trim() : "";
+      if (email && rosterEmails.has(idKey(email))) continue;
+      seen.add(idKey(id2));
+      out.push({ id: id2, email: email || null, catalogueOperative: true });
+    }
+    return out;
+  }
+  function parsePayProfileDocument(docId, data) {
+    const fields = {};
+    for (const key7 of PAY_PROFILE_FIELDS) {
+      if (data && Object.prototype.hasOwnProperty.call(data, key7)) fields[key7] = data[key7];
+    }
+    return { subjectId: String(docId || "").trim(), fields };
+  }
+  function overlayPayProfile(person, profile) {
+    if (!profile) return person;
+    const out = { ...person };
+    for (const [key7, value] of Object.entries(profile.fields)) out[key7] = value;
+    return out;
+  }
+  function payProfileWriteFieldsFromProfileWrite(subjectId, profileWrite) {
+    const id2 = String(subjectId || "").trim();
+    if (!id2 || !profileWrite) return null;
+    const out = {};
+    for (const key7 of PAY_PROFILE_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(profileWrite, key7)) out[key7] = profileWrite[key7];
+    }
+    if (Object.keys(out).length === 0) return null;
+    return { userId: id2, ...out };
+  }
+  function payProfileBackfillWrites(input) {
+    const source = input.source || {};
+    const profile = input.profile || {};
+    const has2 = (data, key7) => Object.prototype.hasOwnProperty.call(data, key7);
+    const set = {};
+    for (const key7 of PAY_PROFILE_FIELDS) {
+      if (has2(source, key7) && !has2(profile, key7)) set[key7] = source[key7];
+    }
+    const profileSet = Object.keys(set).length > 0 ? { userId: String(input.subjectId || "").trim(), ...set } : null;
+    const sourceRemove = [];
+    if (input.strip === true) {
+      for (const key7 of PAY_PROFILE_FIELDS) {
+        if (has2(source, key7) && (has2(profile, key7) || has2(set, key7))) sourceRemove.push(key7);
+      }
+    }
+    return { profileSet, sourceRemove };
+  }
+  function viewerSeesEveryPay(viewer) {
+    if (viewer.isPlatformOwner === true) return true;
+    if (viewer.isActive === false) return false;
+    return permissionLevelOf(viewer) === "admin";
+  }
+  function viewablePayIds(viewer, subjects, roster) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    const add = (raw) => {
+      const id2 = typeof raw === "string" ? raw.trim() : "";
+      if (!id2 || seen.has(id2)) return;
+      seen.add(id2);
+      out.push(id2);
+    };
+    add(viewer.id);
+    for (const subject of subjects || []) {
+      if (subject && canViewPersonPay(viewer, subject, roster, { context: "timesheetReview" })) add(subject.id);
+    }
+    return out;
+  }
+  function viewableCatalogueIds(viewer, subjects, roster) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const subject of subjects || []) {
+      if (!subject || subject.catalogueOperative !== true) continue;
+      const id2 = typeof subject.id === "string" ? subject.id.trim() : "";
+      if (!id2 || seen.has(id2) || !canViewPersonPay(viewer, subject, roster, { context: "timesheetReview" })) continue;
+      seen.add(id2);
+      out.push(id2);
+    }
+    return out;
+  }
+  function rateHistoryQueryPlan(viewer, subjects, roster, options) {
+    if (options?.privatePay !== true) return { kind: "all" };
+    if (!viewer) return { kind: "people", userIds: [], operativeIds: [] };
+    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
+    const operativeIds = viewableCatalogueIds(viewer, subjects, roster);
+    const catalogue = new Set(operativeIds);
+    const userIds = viewablePayIds(viewer, subjects, roster).filter((id2) => !catalogue.has(id2));
+    return { kind: "people", userIds, operativeIds };
+  }
+  function payProfileReadPlan(viewer, subjects, roster) {
+    if (!viewer) return { kind: "documents", ids: [] };
+    if (viewerSeesEveryPay(viewer)) return { kind: "all" };
+    return { kind: "documents", ids: viewablePayIds(viewer, subjects, roster) };
+  }
+  function sharedDocumentPayWrite(write, options) {
+    if (options?.privatePay !== true || !write) return write;
+    const out = {};
+    for (const [key7, value] of Object.entries(write)) {
+      if (PAY_PROFILE_FIELDS.includes(key7)) continue;
+      out[key7] = value;
+    }
+    return out;
+  }
+  function payEditorStartingValues(person, profile, options) {
+    const overlaid = options?.privatePay === true && profile ? overlayPayProfile(person, profile) : person;
+    const record18 = overlaid || {};
+    const pay = readStoredRates(record18);
+    const rate = pay.payBasis === "hourly" ? pay.hourlyRate : pay.dayRate;
+    const employmentType = Object.prototype.hasOwnProperty.call(record18, "employmentType") ? record18.employmentType ?? null : null;
+    return { record: record18, pay, rate, employmentType, source: overlaid !== person ? "payProfile" : "users" };
+  }
+
+  // lib/canonical/reportPay.ts
+  var PAYE_PAY_CELL_LABEL = "PAYE";
+  function lineIsPaye(line) {
+    if (line.isPaye === true) return true;
+    if (line.isPaye === false) return false;
+    if (line.employmentType == null || String(line.employmentType).trim() === "") return false;
+    return normalizeEmploymentType(line.employmentType) === "paye";
+  }
+  function reportPayCell(line) {
+    if (lineIsPaye(line)) return { pay: null, label: PAYE_PAY_CELL_LABEL, countsTowardPayTotal: false };
+    const pay = typeof line.pay === "number" && Number.isFinite(line.pay) ? roundPennies(line.pay) : null;
+    return { pay, label: null, countsTowardPayTotal: pay != null };
+  }
+  function reportPayTotal(lines) {
+    let total = 0;
+    for (const line of lines) {
+      const cell2 = reportPayCell(line);
+      if (cell2.countsTowardPayTotal && cell2.pay != null) total += cell2.pay;
+    }
+    return roundPennies(total);
+  }
+  function reportPersonPayCell(lines) {
+    if (lines.length > 0 && lines.every(lineIsPaye)) {
+      return { pay: null, label: PAYE_PAY_CELL_LABEL, countsTowardPayTotal: false };
+    }
+    return { pay: reportPayTotal(lines), label: null, countsTowardPayTotal: true };
+  }
+  function payrollLineBookingKey(line) {
+    if (!line) return "";
+    const id2 = line.bookingId ? String(line.bookingId) : String(line.id ?? "").replace(/-(?:normal|ot)$/i, "");
+    const stored = typeof line.bookingCollection === "string" ? line.bookingCollection.trim() : "";
+    const collection = stored || (/^mgr-/i.test(id2) || /^mgr-/i.test(String(line.id ?? "")) ? "managerSiteBookings" : "bookings");
+    return `${collection}|${normalizeDocumentId(id2)}`;
+  }
+  function isInvoiceLine(line) {
+    if (!line) return false;
+    if (line.isPayeDay === true || lineIsPaye(line)) return false;
+    if (line.isLeave === true || String(line.kind || "").trim().toLowerCase() === "leave") return false;
+    return true;
+  }
+  function invoiceLines(lines) {
+    return (lines || []).filter((line) => isInvoiceLine(line));
+  }
+  var INVOICE_AMOUNT_EPSILON = 1e-4;
+  function rowsOf2(value) {
+    return Array.isArray(value) ? value.filter((row3) => Boolean(row3) && typeof row3 === "object") : [];
+  }
+  function jobNumberOf(...values) {
+    for (const value of values) {
+      const job = typeof value === "number" && Number.isFinite(value) ? String(value) : typeof value === "string" ? value.trim() : "";
+      if (job) return job;
+    }
+    return "";
+  }
+  function amountOf(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  }
+  function timesheetInvoiceRows(input) {
+    const sheet = input.sheet && typeof input.sheet === "object" ? input.sheet : {};
+    const lines = input.payrollLines || [];
+    const liveById = new Map(lines.map((line) => [normalizeDocumentId(line.id), line]));
+    const override = sheet.weeklyReportOverride;
+    const rows3 = [];
+    const days = input.timesheetDays ? new Set(input.timesheetDays.map((day) => String(day).trim())) : null;
+    const zone3 = zoneOrLondon(input.timeZone);
+    const onCountedDay = (dayKey) => !days || !dayKey || days.has(dayKey);
+    const entryDay = (entry) => {
+      const ms = documentInstantMs(entry.date) ?? documentInstantMs(entry.startDate);
+      return ms == null ? null : dayKeyInZone(new Date(ms), zone3);
+    };
+    if (override && typeof override === "object") {
+      const snapshot = override;
+      for (const row3 of rowsOf2(snapshot.lines)) {
+        const stored = amountOf(row3.amount);
+        const amount = row3.decision === "edited" ? roundPennies(stored) : stored;
+        if (row3.decision === "declined" || amount <= INVOICE_AMOUNT_EPSILON) continue;
+        const id2 = String(row3.id ?? "").trim();
+        const live = liveById.get(normalizeDocumentId(id2)) ?? null;
+        if (!isInvoiceLine(row3)) continue;
+        rows3.push({ kind: "labour", id: id2, amount, source: "override", line: live, stored: row3, jobNumber: jobNumberOf(live && live.jobNumber, row3.jobNumber) });
+      }
+      for (const [kind, key7] of [["priceWork", "priceWork"], ["expense", "expenses"]]) {
+        for (const row3 of rowsOf2(snapshot[key7])) {
+          const amount = amountOf(row3.amount);
+          if (row3.decision === "declined" || amount <= INVOICE_AMOUNT_EPSILON) continue;
+          rows3.push({ kind, id: String(row3.id ?? "").trim(), amount, source: "override", line: null, stored: row3, jobNumber: jobNumberOf(row3.jobNumber) });
+        }
+      }
+      return rows3;
+    }
+    if (days && days.size === 0) return rows3;
+    const decided = input.extrasMode === "decided";
+    const managerSigned = parseTimesheetStatusFields(sheet).managerSignedAtMs != null;
+    const labourReviews = input.applyLabourReviews == null ? managerSigned : input.applyLabourReviews === true;
+    const groupOf = (line) => payrollLineBookingKey(line);
+    const groupsWithOvertime = new Set(lines.filter((line) => line && line.isOvertimeLine === true).map(groupOf));
+    for (const line of invoiceLines(lines)) {
+      if (!onCountedDay(line.dayKey)) continue;
+      let amount = line.amount;
+      let applied = null;
+      if (decided && labourReviews) {
+        const review = payrollLineReview(sheet, line.id, {
+          bookingFingerprint: line.bookingFingerprint,
+          isOvertimeLine: line.isOvertimeLine,
+          bookingHasOvertimeLine: line.bookingHasOvertimeLine ?? groupsWithOvertime.has(groupOf(line))
+        });
+        if (review?.decision === "declined") continue;
+        if (review?.decision === "edited" && review.revisedAmount != null) {
+          amount = roundPennies(review.revisedAmount);
+          applied = review;
+        }
+      }
+      if (input.omitEmptyStandardParts === true && Math.abs(amount) <= INVOICE_AMOUNT_EPSILON && timesheetLineIsEmptyStandardPart({ ...line, id: line.id, amount }, lines)) {
+        continue;
+      }
+      rows3.push({ kind: "labour", id: line.id, amount, source: "live", line, stored: null, jobNumber: jobNumberOf(line.jobNumber), review: applied });
+    }
+    for (const [kind, key7] of [["priceWork", "priceWorkEntries"], ["expense", "expenseEntries"]]) {
+      for (const entry of rowsOf2(sheet[key7])) {
+        if (!onCountedDay(entryDay(entry))) continue;
+        const own = amountOf(entry.amount);
+        let amount = own;
+        if (decided) {
+          const decision = timesheetEntryDecision(sheet, entry, kind, timesheetTrustedFingerprint(input.entryFingerprints, entry.id));
+          if (decision.decision === "declined") continue;
+          amount = timesheetEntryEffectiveAmount(decision.decision, decision.revisedAmount, own);
+        }
+        rows3.push({ kind, id: String(entry.id ?? "").trim(), amount, source: "live", line: null, stored: entry, jobNumber: jobNumberOf(entry.jobNumber) });
+      }
+    }
+    for (const late of timesheetLateExtraRows(sheet, { entryFingerprints: input.entryFingerprints })) {
+      if (late.decision.state !== "approved" || late.decision.paid <= INVOICE_AMOUNT_EPSILON) continue;
+      if (!onCountedDay(entryDay(late.row))) continue;
+      rows3.push({ kind: late.kind, id: late.id, amount: late.decision.paid, source: "live", line: null, stored: late.row, jobNumber: jobNumberOf(late.row.jobNumber) });
+    }
+    return rows3;
+  }
+  var PAY_HIDDEN_CELL_LABEL = "\u2014";
+  var PAY_HIDDEN_NOTE = "Rates and pay are shown only for people whose pay you may see; the grand total covers those people only.";
+  function reportPayForViewer(rows3, input) {
+    const viewer = input.viewer ?? null;
+    const viewerIsAdmin2 = Boolean(viewer) && viewer?.isActive !== false && (viewer?.isPlatformOwner === true || permissionLevelOf(viewer) === "admin");
+    const canView = (subject) => canViewPersonPay(viewer, subject, input.roster || []);
+    let hiddenPeople = 0;
+    const out = [];
+    const visibleLines = [];
+    for (const row3 of rows3 || []) {
+      const visible = row3.paySubject ? viewerIsAdmin2 || canView(row3.paySubject) : viewerIsAdmin2;
+      if (visible) {
+        out.push(row3);
+        for (const line of row3.lines) visibleLines.push({ isPaye: line.isPaye === true, pay: line.pay });
+        continue;
+      }
+      hiddenPeople += 1;
+      out.push({
+        ...row3,
+        lines: row3.lines.map((line) => ({ ...line, rate: 0, pay: 0, rateText: PAY_HIDDEN_CELL_LABEL, payLabel: PAY_HIDDEN_CELL_LABEL })),
+        personTotal: 0,
+        personTotalLabel: PAY_HIDDEN_CELL_LABEL
+      });
+    }
+    return { rows: out, grandTotal: reportPayTotal(visibleLines), hiddenPeople };
+  }
+
+  // lib/canonical/sensitiveProfile.ts
+  var SENSITIVE_PROFILE_FIELDS = ["utrNumber", "vatNumber"];
+  var SENSITIVE_PROFILE_DOC_ID = "taxIds";
+  var SENSITIVE_VALUE_MAX = 20;
+  var SENSITIVE_HELD_BY_ADMIN_COPY = "Held by admin";
+  var SENSITIVE_EXPORT_OPTION_LABEL = "Include UTR and VAT number";
+  function text20(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function sensitiveProfileDocPath(userId) {
+    return `users/${text20(userId)}/private/${SENSITIVE_PROFILE_DOC_ID}`;
+  }
+  function canViewSensitiveProfile(input) {
+    const viewer = text20(input.viewerUserId);
+    if (viewer && viewer === text20(input.subjectUserId)) return true;
+    if (input.viewerRole.isOperativeMode) return false;
+    return input.viewerRole.isSuperAdmin || input.viewerRole.isAdmin;
+  }
+  function maskSensitiveValue(value) {
+    const raw = text20(value).replace(/\s+/g, "");
+    if (!raw) return "";
+    if (raw.length <= 4) return "\u2022\u2022\u2022\u2022";
+    return `\u2022\u2022\u2022\u2022 ${raw.slice(-4)}`;
+  }
+  function resolveSensitiveProfile(input) {
+    if (input.privateDoc && typeof input.privateDoc === "object") {
+      return {
+        utrNumber: text20(input.privateDoc.utrNumber),
+        vatNumber: text20(input.privateDoc.vatNumber),
+        source: "private"
+      };
+    }
+    const legacy = input.legacyUser && typeof input.legacyUser === "object" ? input.legacyUser : {};
+    const utrNumber = text20(legacy.utrNumber);
+    const vatNumber = text20(legacy.vatNumber);
+    return { utrNumber, vatNumber, source: utrNumber || vatNumber ? "legacy" : "none" };
+  }
+  function sensitiveProfileWriteFields(input) {
+    const updatedByUserId = text20(input.updatedByUserId);
+    if (!updatedByUserId) return { ok: false, error: "missing_user" };
+    const utrNumber = text20(input.utrNumber);
+    const vatNumber = text20(input.vatNumber);
+    if (utrNumber.length > SENSITIVE_VALUE_MAX || vatNumber.length > SENSITIVE_VALUE_MAX) {
+      return { ok: false, error: "too_long" };
+    }
+    return { ok: true, fields: { utrNumber, vatNumber, updatedByUserId } };
+  }
+  function exportIncludesSensitiveFields(input) {
+    return input.requested === true && input.canView === true;
+  }
+
+  // lib/canonical/money.ts
+  var DEFAULT_CURRENCY_CODE = "GBP";
+  var CURRENCY_OPTIONS = [
+    { code: "GBP", title: "British pound", symbol: "\xA3" },
+    { code: "EUR", title: "Euro", symbol: "\u20AC" },
+    { code: "USD", title: "US dollar", symbol: "$" },
+    { code: "CAD", title: "Canadian dollar", symbol: "CA$" },
+    { code: "AUD", title: "Australian dollar", symbol: "A$" },
+    { code: "NZD", title: "New Zealand dollar", symbol: "NZ$" },
+    { code: "SEK", title: "Swedish krona", symbol: "kr" },
+    { code: "NOK", title: "Norwegian krone", symbol: "kr" },
+    { code: "DKK", title: "Danish krone", symbol: "kr" },
+    { code: "PLN", title: "Polish z\u0142oty", symbol: "z\u0142" },
+    { code: "AED", title: "UAE dirham", symbol: "\u062F.\u0625" }
+  ];
+  var COUNTRY_CURRENCY = {
+    GB: "GBP",
+    UK: "GBP",
+    IE: "EUR",
+    FR: "EUR",
+    DE: "EUR",
+    ES: "EUR",
+    IT: "EUR",
+    NL: "EUR",
+    US: "USD",
+    CA: "CAD",
+    AU: "AUD",
+    NZ: "NZD",
+    SE: "SEK",
+    NO: "NOK",
+    DK: "DKK",
+    PL: "PLN",
+    AE: "AED"
+  };
+  function text21(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function normalizeCurrencyCode(value) {
+    const code = text21(value).toUpperCase();
+    if (!code) return null;
+    return CURRENCY_OPTIONS.some((option) => option.code === code) ? code : null;
+  }
+  function currencyOption(code) {
+    const normalized = normalizeCurrencyCode(code);
+    return CURRENCY_OPTIONS.find((option) => option.code === normalized) ?? CURRENCY_OPTIONS[0];
+  }
+  function defaultCurrencyForCountry(countryCode) {
+    const country = text21(countryCode).toUpperCase().split("-")[0];
+    return COUNTRY_CURRENCY[country] ?? DEFAULT_CURRENCY_CODE;
+  }
+  function resolveOrganizationCurrency(org) {
+    const doc = org && typeof org === "object" ? org : {};
+    const settings = doc.settings && typeof doc.settings === "object" ? doc.settings : {};
+    return normalizeCurrencyCode(doc.currencyCode) ?? normalizeCurrencyCode(settings.currencyCode) ?? normalizeCurrencyCode(doc.currency) ?? normalizeCurrencyCode(doc["settings.currencyCode"]) ?? defaultCurrencyForCountry(doc.countryCode);
+  }
+  function organizationCurrencyWriteFields(code) {
+    const normalized = normalizeCurrencyCode(code);
+    if (!normalized) return null;
+    return { currencyCode: normalized, currency: normalized, "settings.currencyCode": normalized };
+  }
+  function formatMoney(amount, currencyCode, options = {}) {
+    const decimals = Number.isInteger(options.decimals) && options.decimals >= 0 ? options.decimals : 2;
+    const value = typeof amount === "number" && Number.isFinite(amount) ? amount : Number(amount);
+    const safe = Number.isFinite(value) ? value : 0;
+    const negative = safe < 0 && Math.abs(safe) >= 0.5 * Math.pow(10, -decimals);
+    const fixed = Math.abs(safe).toFixed(decimals);
+    const [whole, fraction] = fixed.split(".");
+    const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const body = fraction ? `${grouped}.${fraction}` : grouped;
+    const symbol = currencyOption(currencyCode).symbol;
+    const spaced = /\p{L}$/u.test(symbol) ? `${symbol} ` : symbol;
+    const sign = negative && options.signed !== false ? "-" : "";
+    return `${sign}${spaced}${body}`;
+  }
+  function currencySymbol(currencyCode) {
+    return currencyOption(currencyCode).symbol;
+  }
+
+  // lib/orgTime/orgTimeZone.ts
+  var COUNTRY_TIME_ZONES = {
+    GB: "Europe/London",
+    UK: "Europe/London",
+    "GB-ENG": "Europe/London",
+    "GB-SCT": "Europe/London",
+    "GB-NIR": "Europe/London",
+    IE: "Europe/Dublin",
+    IM: "Europe/Isle_of_Man",
+    JE: "Europe/Jersey",
+    GG: "Europe/Guernsey",
+    AD: "Europe/Andorra",
+    AL: "Europe/Tirane",
+    AM: "Asia/Yerevan",
+    AO: "Africa/Luanda",
+    AR: "America/Argentina/Buenos_Aires",
+    AT: "Europe/Vienna",
+    AU: "Australia/Sydney",
+    AW: "America/Aruba",
+    AX: "Europe/Mariehamn",
+    BA: "Europe/Sarajevo",
+    BB: "America/Barbados",
+    BD: "Asia/Dhaka",
+    BE: "Europe/Brussels",
+    BG: "Europe/Sofia",
+    BJ: "Africa/Porto-Novo",
+    BO: "America/La_Paz",
+    BR: "America/Sao_Paulo",
+    BS: "America/Nassau",
+    BW: "Africa/Gaborone",
+    BY: "Europe/Minsk",
+    BZ: "America/Belize",
+    CA: "America/Toronto",
+    CD: "Africa/Kinshasa",
+    CG: "Africa/Brazzaville",
+    CH: "Europe/Zurich",
+    CL: "America/Santiago",
+    CN: "Asia/Shanghai",
+    CO: "America/Bogota",
+    CR: "America/Costa_Rica",
+    CU: "America/Havana",
+    CY: "Asia/Nicosia",
+    CZ: "Europe/Prague",
+    DE: "Europe/Berlin",
+    DK: "Europe/Copenhagen",
+    DM: "America/Dominica",
+    DO: "America/Santo_Domingo",
+    EC: "America/Guayaquil",
+    EE: "Europe/Tallinn",
+    EG: "Africa/Cairo",
+    ES: "Europe/Madrid",
+    FI: "Europe/Helsinki",
+    FO: "Atlantic/Faroe",
+    FR: "Europe/Paris",
+    GA: "Africa/Libreville",
+    GD: "America/Grenada",
+    GE: "Asia/Tbilisi",
+    GH: "Africa/Accra",
+    GI: "Europe/Gibraltar",
+    GL: "America/Nuuk",
+    GM: "Africa/Banjul",
+    GP: "America/Guadeloupe",
+    GR: "Europe/Athens",
+    GT: "America/Guatemala",
+    GY: "America/Guyana",
+    HK: "Asia/Hong_Kong",
+    HN: "America/Tegucigalpa",
+    HR: "Europe/Zagreb",
+    HT: "America/Port-au-Prince",
+    HU: "Europe/Budapest",
+    ID: "Asia/Jakarta",
+    IN: "Asia/Kolkata",
+    IS: "Atlantic/Reykjavik",
+    IT: "Europe/Rome",
+    JM: "America/Jamaica",
+    JP: "Asia/Tokyo",
+    KE: "Africa/Nairobi",
+    KR: "Asia/Seoul",
+    KY: "America/Cayman",
+    KZ: "Asia/Almaty",
+    LC: "America/St_Lucia",
+    LI: "Europe/Vaduz",
+    LS: "Africa/Maseru",
+    LT: "Europe/Vilnius",
+    LU: "Europe/Luxembourg",
+    LV: "Europe/Riga",
+    MA: "Africa/Casablanca",
+    MC: "Europe/Monaco",
+    MD: "Europe/Chisinau",
+    ME: "Europe/Podgorica",
+    MG: "Indian/Antananarivo",
+    MK: "Europe/Skopje",
+    MN: "Asia/Ulaanbaatar",
+    MQ: "America/Martinique",
+    MS: "America/Montserrat",
+    MT: "Europe/Malta",
+    MX: "America/Mexico_City",
+    MZ: "Africa/Maputo",
+    NA: "Africa/Windhoek",
+    NE: "Africa/Niamey",
+    NG: "Africa/Lagos",
+    NI: "America/Managua",
+    NL: "Europe/Amsterdam",
+    NO: "Europe/Oslo",
+    NZ: "Pacific/Auckland",
+    PA: "America/Panama",
+    PE: "America/Lima",
+    PG: "Pacific/Port_Moresby",
+    PH: "Asia/Manila",
+    PL: "Europe/Warsaw",
+    PR: "America/Puerto_Rico",
+    PT: "Europe/Lisbon",
+    PY: "America/Asuncion",
+    RO: "Europe/Bucharest",
+    RS: "Europe/Belgrade",
+    RU: "Europe/Moscow",
+    SC: "Indian/Mahe",
+    SE: "Europe/Stockholm",
+    SG: "Asia/Singapore",
+    SI: "Europe/Ljubljana",
+    SJ: "Arctic/Longyearbyen",
+    SK: "Europe/Bratislava",
+    SM: "Europe/San_Marino",
+    SR: "America/Paramaribo",
+    SV: "America/El_Salvador",
+    TN: "Africa/Tunis",
+    TR: "Europe/Istanbul",
+    UA: "Europe/Kyiv",
+    UG: "Africa/Kampala",
+    US: "America/New_York",
+    UY: "America/Montevideo",
+    VA: "Europe/Vatican",
+    VE: "America/Caracas",
+    VN: "Asia/Ho_Chi_Minh",
+    ZA: "Africa/Johannesburg",
+    ZW: "Africa/Harare"
+  };
+  function ianaTimeZoneForCountry(countryCode) {
+    const code = (countryCode || "GB").trim().toUpperCase();
+    return COUNTRY_TIME_ZONES[code] || LONDON_TIME_ZONE;
+  }
+
+  // lib/canonical/organizationTimeZone.ts
+  function organizationTimeZone(countryCode) {
+    return ianaTimeZoneForCountry(countryCode);
+  }
+
+  // lib/canonical/rulebookStamp.ts
+  function rulebookStamp() {
+    return {
+      version: true ? "1.74.0" : "",
+      sha256: true ? "59f72ebcd83c046d5035b8687072d7ba933171aa38712c67e2c20592e77d5bbb" : ""
+    };
+  }
+  function rulebookVersionLabel(version) {
+    const value = (typeof version === "string" ? version.trim() : "") || rulebookStamp().version;
+    return /^\d+\.\d+\.\d+$/.test(value) ? `Rules ${value}` : "";
+  }
+
+  // lib/canonical/holidayDocument.ts
+  var HOLIDAY_DOCUMENT_KEYS = {
+    start: ["startDate", "start_date", "start", "from", "dateFrom", "holidayStart", "date"],
+    end: ["endDate", "end_date", "end", "to", "dateTo", "holidayEnd"],
+    userId: ["userId", "user_id", "uid", "userID", "linkedUserId", "employeeUserId"],
+    nestedUserId: ["id", "uid", "userId", "userID"],
+    operativeId: ["operativeId", "operative_id", "operativeID"],
+    status: ["status", "holidayStatus", "approvalStatus"],
+    timeSlot: ["timeSlot", "slot", "halfDay"],
+    decisionNote: ["decisionNote", "note"],
+    approvedByUserId: ["approvedByUserId", "approvedBy"]
+  };
+  var DAY_KEY4 = /^(\d{4})-(\d{2})-(\d{2})$/;
+  function text22(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function firstText3(row3, keys) {
+    for (const key7 of keys) {
+      const value = text22(row3[key7]);
+      if (value) return value;
+    }
+    return "";
+  }
+  function validCalendarDay(year, month, day) {
+    if (!year || month < 1 || month > 12 || day < 1 || day > 31) return "";
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return "";
+    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+  function epochMs(value) {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    return value > 1e10 ? value : value * 1e3;
+  }
+  function holidayDocumentDayKey(raw, timeZone) {
+    const zone3 = zoneOrLondon(timeZone);
+    if (raw == null || raw === "") return "";
+    if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? "" : dayKeyInZone(raw, zone3);
+    if (typeof raw === "number") {
+      const ms = epochMs(raw);
+      return ms == null ? "" : dayKeyInZone(new Date(ms), zone3);
+    }
+    if (typeof raw === "string") {
+      const value = raw.trim();
+      if (!value) return "";
+      let match = value.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+      if (match) return validCalendarDay(Number(match[1]), Number(match[2]), Number(match[3]));
+      match = value.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
+      if (match) return validCalendarDay(Number(match[3]), Number(match[2]), Number(match[1]));
+      const ms = Date.parse(value);
+      return Number.isNaN(ms) ? "" : dayKeyInZone(new Date(ms), zone3);
+    }
+    if (typeof raw === "object") {
+      const row3 = raw;
+      const seconds = typeof row3.seconds === "number" ? row3.seconds : typeof row3._seconds === "number" ? row3._seconds : null;
+      if (seconds != null && Number.isFinite(seconds)) {
+        const nanos = typeof row3.nanoseconds === "number" ? row3.nanoseconds : typeof row3._nanoseconds === "number" ? row3._nanoseconds : 0;
+        return dayKeyInZone(new Date(seconds * 1e3 + Math.floor((Number(nanos) || 0) / 1e6)), zone3);
+      }
+      if (typeof row3.toDate === "function") {
+        try {
+          const date = row3.toDate();
+          if (date instanceof Date && !Number.isNaN(date.getTime())) return dayKeyInZone(date, zone3);
+        } catch {
+          return "";
+        }
+      }
+    }
+    return "";
+  }
+  function firstDayKey(row3, keys, zone3) {
+    for (const key7 of keys) {
+      const dayKey = holidayDocumentDayKey(row3[key7], zone3);
+      if (dayKey) return dayKey;
+    }
+    return "";
+  }
+  function hasValue2(value) {
+    if (value == null || value === false || value === "") return false;
+    if (typeof value === "string") return value.trim() !== "";
+    return true;
+  }
+  function parseHolidayDocument(docId, data, timeZone) {
+    const id2 = text22(docId);
+    if (!id2) return null;
+    const row3 = data && typeof data === "object" ? data : {};
+    const zone3 = zoneOrLondon(timeZone);
+    const start = firstDayKey(row3, HOLIDAY_DOCUMENT_KEYS.start, zone3);
+    if (!start || !DAY_KEY4.test(start)) return null;
+    const end = firstDayKey(row3, HOLIDAY_DOCUMENT_KEYS.end, zone3) || start;
+    const [startDayKey, endDayKey] = end < start ? [end, start] : [start, end];
+    let userId = firstText3(row3, HOLIDAY_DOCUMENT_KEYS.userId);
+    if (!userId && row3.user && typeof row3.user === "object") {
+      userId = firstText3(row3.user, HOLIDAY_DOCUMENT_KEYS.nestedUserId);
+    }
+    const operativeId = firstText3(row3, HOLIDAY_DOCUMENT_KEYS.operativeId);
+    const status = normalizeHolidayStatus(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.status));
+    const cancellationRequestedByUserId = text22(row3.cancellationRequestedByUserId);
+    const organizationId = text22(row3.organizationId);
+    const parsed = {
+      id: id2,
+      userId: userId || null,
+      operativeId: operativeId || null,
+      startDayKey,
+      endDayKey,
+      timeSlot: normalizeHolidayTimeSlot(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.timeSlot)),
+      status,
+      approved: status === "approved",
+      approvedByUserId: firstText3(row3, HOLIDAY_DOCUMENT_KEYS.approvedByUserId) || null,
+      cancellationRequested: hasValue2(row3.cancellationRequestedAt),
+      cancellationRequestedByUserId: cancellationRequestedByUserId || null,
+      decisionNote: parseHolidayDecisionNote(firstText3(row3, HOLIDAY_DOCUMENT_KEYS.decisionNote))
+    };
+    if (organizationId) parsed.organizationId = organizationId;
+    return parsed;
+  }
+  function parseHolidayDocuments(docs, timeZone) {
+    const out = [];
+    for (const entry of docs || []) {
+      const parsed = parseHolidayDocument(entry?.id, entry?.data, timeZone);
+      if (parsed) out.push(parsed);
+    }
+    return out;
+  }
+  function labourHolidayInput(record18) {
+    return {
+      id: record18.id,
+      userId: record18.userId,
+      operativeId: record18.operativeId,
+      startDayKey: record18.startDayKey,
+      endDayKey: record18.endDayKey,
+      timeSlot: record18.timeSlot,
+      approved: record18.approved
+    };
+  }
+
+  // lib/canonical/timesheetLines.ts
+  var OVERLAPPING_BOOKING_NOTE = "Overlaps another booking \u2014 check with your manager";
+  var OVERLAPPING_BOOKING_REVIEWER_NOTE = "Overlaps another booking \u2014 check the schedule for this project.";
+  function overlappingBookingNote(input) {
+    return input?.reviewing === true ? OVERLAPPING_BOOKING_REVIEWER_NOTE : OVERLAPPING_BOOKING_NOTE;
+  }
+  function overlappingBookingIds(bookings, day) {
+    const byDay = /* @__PURE__ */ new Map();
+    for (const booking of bookings || []) {
+      const id2 = String(booking?.id || "").trim();
+      if (!id2) continue;
+      const key7 = String(booking.dayKey || "").trim();
+      const list = byDay.get(key7) || [];
+      list.push(booking);
+      byDay.set(key7, list);
+    }
+    const flagged = /* @__PURE__ */ new Set();
+    const intervalOf = (booking) => slotInterval(
+      { timeSlot: booking.timeSlot, workStartTime: booking.workStartTime, workEndTime: booking.workEndTime },
+      bookingStandardDayOn(day, booking.dayKey)
+    );
+    const carried = /* @__PURE__ */ new Map();
+    for (const [key7, list] of byDay) {
+      const next = nextCalendarDayKey(key7);
+      if (!next) continue;
+      for (const booking of list) {
+        if (intervalCrossesMidnight(intervalOf(booking))) carried.set(next, [...carried.get(next) || [], booking]);
+      }
+    }
+    for (const [key7, list] of byDay) {
+      const carriedIn = carried.get(key7) || [];
+      if (list.length + carriedIn.length < 2) continue;
+      const entries = [...list.map((b) => ({ b, carried: false })), ...carriedIn.map((b) => ({ b, carried: true }))];
+      const intervals = entries.map(
+        (entry) => entry.carried ? overnightCarryInterval(intervalOf(entry.b)) : intervalOf(entry.b)
+      );
+      for (const group of overlappingIntervalGroups(intervals)) {
+        if (group.every((index) => entries[index].carried)) continue;
+        for (const index of group) flagged.add(String(entries[index].b.id).trim());
+      }
+    }
+    const out = [];
+    for (const booking of bookings || []) {
+      const id2 = String(booking?.id || "").trim();
+      if (id2 && flagged.has(id2) && !out.includes(id2)) out.push(id2);
+    }
+    return out;
+  }
+  function timesheetLeaveLabel(timeSlot) {
+    const slot = normalizeHolidayTimeSlot(timeSlot);
+    if (slot === "AM") return "Annual leave (AM)";
+    if (slot === "PM") return "Annual leave (PM)";
+    return "Annual leave (full day)";
+  }
+  function timesheetLeaveLines(leaveRecords, period, timeZone, nonWorkingDayKeys, dayPolicy) {
+    const start = String(period?.startDayKey || "").trim();
+    const end = String(period?.endDayKey || "").trim();
+    if (!start || !end || start > end) return [];
+    const byDay = /* @__PURE__ */ new Map();
+    for (const record18 of leaveRecords || []) {
+      if (!record18) continue;
+      const approved = record18.approved === true || record18.approved == null && normalizeHolidayStatus(record18.status) === "approved";
+      if (!approved) continue;
+      const slot = normalizeHolidayTimeSlot(record18.timeSlot);
+      for (const dayKey of leaveRecordDayKeys(record18, timeZone, nonWorkingDayKeys)) {
+        if (dayKey < start || dayKey > end) continue;
+        const list = byDay.get(dayKey) || [];
+        if (list.some((line2) => line2.timeSlot === slot || line2.timeSlot === "FULL DAY")) continue;
+        const line = {
+          id: `leave-${String(record18.id)}-${dayKey}`,
+          leaveId: String(record18.id),
+          dayKey,
+          timeSlot: slot,
+          label: timesheetLeaveLabel(slot)
+        };
+        if (dayPolicy) {
+          const halves = leaveHalfDayWindows(dayPolicy(dayKey));
+          const half = slot === "AM" ? halves.am : slot === "PM" ? halves.pm : halves.day;
+          line.timeRange = `${formatClockMinutes(half.start)}\u2013${formatClockMinutes(half.end)}`;
+        }
+        byDay.set(dayKey, slot === "FULL DAY" ? [line] : [...list, line]);
+      }
+    }
+    const lines = Array.from(byDay.values()).flat();
+    const order = { "FULL DAY": 0, AM: 1, PM: 2 };
+    return lines.sort((a, b) => a.dayKey !== b.dayKey ? a.dayKey < b.dayKey ? -1 : 1 : order[a.timeSlot] - order[b.timeSlot]);
   }
 
   // lib/canonical/timesheetLineEdit.ts

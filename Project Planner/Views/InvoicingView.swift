@@ -2863,8 +2863,12 @@ private struct MyTimesheetView: View {
 
     /// RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder`: booking by booking (A, A overtime, B, B overtime), a booking's
     /// empty 0h / £0 standard line left out when it has an overtime line. Display only: every figure reads `payrollLines`.
-    private var invoiceRows: [InvoiceLineItem] {
-        TimesheetLineDisplayOrder.payrollLines(payrollLines, draft: draft).map { InvoiceLineItem(payrollLine: $0) }
+    /// 1.74.0 (owner answer 23 Nov, choice 6): a £0 standard line whose booking's overtime line is declined stays, drawn
+    /// struck through (`timesheetLineShownDeclined`).
+    private var invoiceRows: [TimesheetLineDisplayOrder.Shown<InvoiceLineItem>] {
+        TimesheetLineDisplayOrder.payrollLines(payrollLines, draft: draft).map {
+            TimesheetLineDisplayOrder.Shown(item: InvoiceLineItem(payrollLine: $0.item), shownDeclined: $0.shownDeclined)
+        }
     }
 
     private var payrollLines: [TimesheetPayrollLineItem] {
@@ -3015,8 +3019,9 @@ private struct MyTimesheetView: View {
                             .foregroundStyle(.secondary)
                             .padding(14)
                     } else {
-                        ForEach(Array(shownRows.enumerated()), id: \.offset) { index, row in
-                        let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
+                        ForEach(Array(shownRows.enumerated()), id: \.offset) { index, shown in
+                        let row = shown.item
+                        let removed = shown.shownDeclined || TimesheetDraftAdjustments.isPayrollLineRemoved(
                             line: row.payrollLine,
                             draft: draft,
                             managerHasSigned: managerHasSigned
@@ -6522,8 +6527,8 @@ private struct OperativeTimesheetReviewView: View {
             }
             // RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder`: booking by booking, each booking's standard line then its
             // overtime line; an all-overtime booking's empty 0h / £0 standard line is not shown. Display only.
-            ForEach(TimesheetLineDisplayOrder.payrollLines(payrollSummary.lineItems, draft: draft)) { row in
-                managerPayrollLineRow(row)
+            ForEach(TimesheetLineDisplayOrder.payrollLines(payrollSummary.lineItems, draft: draft), id: \.item.id) { shown in
+                managerPayrollLineRow(shown.item, shownDeclined: shown.shownDeclined)
             }
             if !leaveLines.isEmpty {
                 TimesheetLeaveInfoRows(lines: leaveLines)
@@ -7054,10 +7059,12 @@ private struct OperativeTimesheetReviewView: View {
         }
     }
 
+    /// `shownDeclined` (RULEBOOK 1.74.0 `timesheetLineShownDeclined`): a £0 standard line kept beside its booking's
+    /// declined overtime line, drawn struck through.
     @ViewBuilder
-    private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem) -> some View {
+    private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem, shownDeclined: Bool = false) -> some View {
         let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id, live: row)
-        let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
+        let removed = shownDeclined || TimesheetDraftAdjustments.isPayrollLineRemoved(
             line: row,
             draft: draft,
             managerHasSigned: managerHasSigned,
@@ -7856,13 +7863,19 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 // RULEBOOK 1.60.1: the counter-signature (REV and instant, read from the signed draft) keys the signed
                 // notice and the line-manager peer rows.
                 let counterSignature = TimesheetSignatureNotices.counterSigned(draft)
+                // RULEBOOK 1.74.0 §13: the person is told when the sheet carries a reviewer edit for their current
+                // signature (`timesheetSheetChangedByReviewer` on the sheet as counter-signed).
+                let changedByReviewer = CanonicalBusinessEngine.timesheetSheetChangedByReviewer(
+                    SignedTimesheetChangeInputs.sheet(draft, keys: [:])
+                )
                 Task {
                     await notificationService.notifyTimesheetCounterSigned(
                         operative: operative,
                         signedByName: signer,
                         weekStart: week.start,
                         weekTitle: week.title,
-                        signature: counterSignature
+                        signature: counterSignature,
+                        changedByReviewer: changedByReviewer
                     )
                 }
                 showingManagerSignSheet = false
@@ -8881,6 +8894,9 @@ enum TimesheetInvoiceRows {
         var input: [String: Any] = [
             "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            // RULEBOOK 1.74.0 §8 (owner answer 23 Nov, choice 6): a live invoice leaves off the £0 empty standard row of a
+            // booking with an overtime line, declined or not — decided by the rulebook, never dropped in Swift.
+            "omitEmptyStandardParts": true,
         ]
         // RULEBOOK 1.45.0 §8: the loaded copy's stored-row fingerprints, handed over explicitly (`entryFingerprints`).
         let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
@@ -9026,9 +9042,8 @@ enum TimesheetInvoiceRows {
     }
 
     /// RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder` (web `timesheetExport.ts`): the labour rows booking by booking
-    /// (each booking's standard row then its overtime row), a live booking's 0h / £0 standard row left off when the
-    /// booking has no standard part; price work and expenses keep their order after the labour rows. Display only: the
-    /// rows and amounts are the script's (a hidden row is £0), so the invoice total is unchanged.
+    /// (each booking's standard row then its overtime row); price work and expenses keep their order after the labour
+    /// rows. Order only: which rows exist is `timesheetInvoiceRows` (`omitEmptyStandardParts`), so nothing is dropped here.
     private static func displayOrdered(
         _ rows: [InvoiceLineItem],
         live: [String: TimesheetPayrollLineItem],
@@ -9036,10 +9051,8 @@ enum TimesheetInvoiceRows {
     ) -> [InvoiceLineItem] {
         func isMoney(_ row: InvoiceLineItem) -> Bool { row.lineId.hasPrefix("pw-") || row.lineId.hasPrefix("exp-") }
         let labour = rows.filter { !isMoney($0) }
-        let ordered = TimesheetLineDisplayOrder.ordered(labour) { row in
+        let ordered = TimesheetLineDisplayOrder.orderedKeepingAll(labour) { row in
             let line = live[key(row.lineId)]
-            // A signed snapshot row is never hidden (web: `effectiveAmount` +∞); a signed snapshot holds no £0 row.
-            let signed = line == nil
             return TimesheetLineOrderInput(
                 id: row.lineId,
                 bookingId: row.bookingId ?? line?.bookingId,
@@ -9047,7 +9060,7 @@ enum TimesheetInvoiceRows {
                 date: row.date,
                 isOvertimeLine: row.isOvertimeLine,
                 paidHours: row.paidHours,
-                amount: signed ? max(abs(row.amount), 1) : row.amount,
+                amount: row.amount,
                 bookingStartTime: line?.bookingStartTime,
                 bookingEndTime: line?.bookingEndTime,
                 details: row.details

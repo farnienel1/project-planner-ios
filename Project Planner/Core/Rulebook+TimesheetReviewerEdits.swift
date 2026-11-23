@@ -104,10 +104,35 @@ extension CanonicalBusinessEngine {
     /// the `effectiveAmount` / `day` functions, so callers put the effective amount in `amount` (what the function reads
     /// without one) and a named slot's resolved clock window in `details` (what `day` would give). Nil when the script
     /// did not answer.
-    nonisolated static func timesheetLineDisplayOrder(_ rows: [[String: Any]]) -> [Int]? {
-        guard let ordered = callJSON("timesheetLineDisplayOrder", arguments: [rows]) as? [[String: Any]] else { return nil }
+    nonisolated static func timesheetLineDisplayOrder(_ rows: [[String: Any]], hideEmptyStandardParts: Bool = true) -> [Int]? {
+        var arguments: [Any] = [rows]
+        if !hideEmptyStandardParts { arguments.append(["hideEmptyStandardParts": false]) }
+        guard let ordered = callJSON("timesheetLineDisplayOrder", arguments: arguments) as? [[String: Any]] else { return nil }
         let indexes = ordered.compactMap { ($0["__index"] as? NSNumber)?.intValue }
         return indexes.count == ordered.count ? indexes : nil
+    }
+
+    /// RULEBOOK 1.74.0 `timesheetLineIsEmptyStandardPart(line, lines)`: the line is a 0h / £0 standard line whose booking
+    /// has an overtime line among `lines`. The bridge cannot pass the `isDeclined` function, so callers pass `lines`
+    /// without the declined overtime lines to get the declined-aware answer (the function only asks `isDeclined` of the
+    /// booking's other overtime lines). Nil when the script did not answer.
+    nonisolated static func timesheetLineIsEmptyStandardPart(_ line: [String: Any], lines: [[String: Any]]) -> Bool? {
+        callJSON("timesheetLineIsEmptyStandardPart", arguments: [line, lines]) as? Bool
+    }
+
+    /// RULEBOOK 1.74.0 §13 `timesheetSheetChangedByReviewer(sheet)`: the sheet carries a reviewer booking edit for the
+    /// person's current signature. False when the script did not answer.
+    nonisolated static func timesheetSheetChangedByReviewer(_ sheet: [String: Any]) -> Bool {
+        callJSON("timesheetSheetChangedByReviewer", arguments: [sheet]) as? Bool ?? false
+    }
+
+    /// RULEBOOK 1.74.0 §13 `timesheetSignedNoticeText({ signedByName, changedByReviewer })`: the title and message of the
+    /// `timesheet_signed_by_manager` row. Nil when the script did not answer.
+    nonisolated static func timesheetSignedNoticeText(signedByName: String, changedByReviewer: Bool) -> (title: String, message: String)? {
+        let input: [String: Any] = ["signedByName": signedByName, "changedByReviewer": changedByReviewer]
+        guard let row = callJSON("timesheetSignedNoticeText", arguments: [input]) as? [String: Any],
+              let title = row["title"] as? String, let message = row["message"] as? String else { return nil }
+        return (title, message)
     }
 }
 
@@ -130,13 +155,60 @@ nonisolated struct TimesheetLineOrderInput {
 /// RULEBOOK 1.74.0 §8: orders any list of timesheet lines with the rulebook's `timesheetLineDisplayOrder`. Display only:
 /// figures keep reading every line. When the script does not answer, the list is shown as given (never hidden).
 enum TimesheetLineDisplayOrder {
+    /// One shown line: the item and whether it is drawn struck through as declined (`timesheetLineShownDeclined`: a £0
+    /// standard line kept because its booking's overtime line is declined).
+    struct Shown<T> {
+        let item: T
+        let shownDeclined: Bool
+    }
+
     static func ordered<T>(_ items: [T], input: (T) -> TimesheetLineOrderInput) -> [T] {
+        shown(items, input: input, isDeclined: nil).map(\.item)
+    }
+
+    /// The rulebook's order only, nothing left out (`hideEmptyStandardParts: false`) — for rows the rulebook has
+    /// already decided (an invoice's rows, `timesheetInvoiceRows` `omitEmptyStandardParts`).
+    static func orderedKeepingAll<T>(_ items: [T], input: (T) -> TimesheetLineOrderInput) -> [T] {
         guard items.count > 0 else { return items }
-        let rows: [[String: Any]] = items.enumerated().map { index, item in
-            row(input(item), index: index)
-        }
-        guard let indexes = CanonicalBusinessEngine.timesheetLineDisplayOrder(rows) else { return items }
+        let rows: [[String: Any]] = items.enumerated().map { index, item in row(input(item), index: index) }
+        guard let indexes = CanonicalBusinessEngine.timesheetLineDisplayOrder(rows, hideEmptyStandardParts: false) else { return items }
         return indexes.compactMap { items.indices.contains($0) ? items[$0] : nil }
+    }
+
+    /// RULEBOOK 1.74.0 §8: `timesheetLineDisplayOrder(lines, { isDeclined })` and `timesheetLineShownDeclined`. The bridge
+    /// cannot pass functions, so with `isDeclined` the order is asked for without hiding, and each empty standard
+    /// candidate is asked `timesheetLineIsEmptyStandardPart` twice — against every line (hidden unless declined) and
+    /// against the lines without the declined overtime lines (what `isDeclined` gives the function): hidden when both say
+    /// so, shown declined when only the first does. Exactly the web filter and `timesheetLineShownDeclined`.
+    static func shown<T>(_ items: [T], input: (T) -> TimesheetLineOrderInput, isDeclined: ((T) -> Bool)?) -> [Shown<T>] {
+        guard items.count > 0 else { return [] }
+        let inputs = items.map(input)
+        let rows: [[String: Any]] = inputs.enumerated().map { index, line in row(line, index: index) }
+        guard let isDeclined else {
+            guard let indexes = CanonicalBusinessEngine.timesheetLineDisplayOrder(rows) else {
+                return items.map { Shown(item: $0, shownDeclined: false) }
+            }
+            return indexes.compactMap { items.indices.contains($0) ? Shown(item: items[$0], shownDeclined: false) : nil }
+        }
+        guard let indexes = CanonicalBusinessEngine.timesheetLineDisplayOrder(rows, hideEmptyStandardParts: false) else {
+            return items.map { Shown(item: $0, shownDeclined: false) }
+        }
+        let declined = Set(items.indices.filter { inputs[$0].isOvertimeLine && isDeclined(items[$0]) })
+        let undeclined = rows.enumerated().filter { !declined.contains($0.offset) }.map(\.element)
+        var out: [Shown<T>] = []
+        for index in indexes where items.indices.contains(index) {
+            let line = inputs[index]
+            // Only a 0h / £0 standard line can be empty (the function's own first test); no script call otherwise.
+            guard !line.isOvertimeLine, abs(line.paidHours) <= 0.0001, abs(line.amount) <= 0.0001,
+                  CanonicalBusinessEngine.timesheetLineIsEmptyStandardPart(rows[index], lines: rows) == true else {
+                out.append(Shown(item: items[index], shownDeclined: false))
+                continue
+            }
+            if CanonicalBusinessEngine.timesheetLineIsEmptyStandardPart(rows[index], lines: undeclined) == false {
+                out.append(Shown(item: items[index], shownDeclined: true))
+            }
+        }
+        return out
     }
 
     /// The collector's lines in display order. `effectiveAmount` (optional) is the amount a review would pay.
@@ -161,15 +233,40 @@ enum TimesheetLineDisplayOrder {
     }
 
     /// The collector's lines in display order for a sheet: a line an edited review would pay (`payrollLineReview`
-    /// `edited`, revised amount larger than the line's) is never hidden (web `TimesheetPeriodPage` `effectiveAmount`).
-    static func payrollLines(_ lines: [TimesheetPayrollLineItem], draft: TimesheetDraft) -> [TimesheetPayrollLineItem] {
-        payrollLines(lines) { line in
+    /// `edited`, revised amount larger than the line's) is never hidden (web `TimesheetPeriodPage` `effectiveAmount`),
+    /// and a £0 standard line whose booking's overtime line is declined (its stored review) stays, shown declined.
+    static func payrollLines(_ lines: [TimesheetPayrollLineItem], draft: TimesheetDraft) -> [Shown<TimesheetPayrollLineItem>] {
+        shown(lines, input: { line in
+            var amount = line.amount
             // Only a 0h / £0 standard line can be hidden; every other line keeps its own amount (no script call).
-            guard !line.isOvertimeLine, abs(line.amount) <= 0.0001 else { return line.amount }
-            let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)
-            guard review?.decision == .edited, let revised = review?.revisedAmount else { return line.amount }
-            return max(line.amount, revised)
-        }
+            if !line.isOvertimeLine, abs(line.amount) <= 0.0001 {
+                let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)
+                if review?.decision == .edited, let revised = review?.revisedAmount { amount = max(line.amount, revised) }
+            }
+            return TimesheetLineOrderInput(
+                id: line.id,
+                bookingId: line.bookingId,
+                bookingCollection: line.bookingCollection,
+                date: line.date,
+                isOvertimeLine: line.isOvertimeLine,
+                paidHours: line.paidHours,
+                amount: amount,
+                bookingStartTime: line.bookingStartTime,
+                bookingEndTime: line.bookingEndTime,
+                details: line.details
+            )
+        }, isDeclined: { line in
+            TimesheetDraftAdjustments.payrollReview(in: draft, lineId: line.id, live: line)?.decision == .declined
+        })
+    }
+
+    /// The JSON row `timesheetLineDisplayOrder` / `timesheetLineIsEmptyStandardPart` read for one collector line.
+    static func rulebookRow(_ line: TimesheetPayrollLineItem, amount: Double? = nil, index: Int = 0) -> [String: Any] {
+        row(TimesheetLineOrderInput(
+            id: line.id, bookingId: line.bookingId, bookingCollection: line.bookingCollection, date: line.date,
+            isOvertimeLine: line.isOvertimeLine, paidHours: line.paidHours, amount: amount ?? line.amount,
+            bookingStartTime: line.bookingStartTime, bookingEndTime: line.bookingEndTime, details: line.details
+        ), index: index)
     }
 
     private static func row(_ line: TimesheetLineOrderInput, index: Int) -> [String: Any] {
