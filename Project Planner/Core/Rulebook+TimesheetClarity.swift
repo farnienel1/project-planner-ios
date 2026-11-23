@@ -144,7 +144,8 @@ extension CanonicalBusinessEngine {
         lineManagerName: String?,
         changedDayLabel: String?,
         changedBookingCount: Int,
-        hasInvoiceDays: Bool
+        hasInvoiceDays: Bool,
+        hasLineManager: Bool = true
     ) -> RulebookTimesheetNextStep? {
         let input: [String: Any] = [
             "sheet": sheet,
@@ -158,6 +159,8 @@ extension CanonicalBusinessEngine {
             "changedDayLabel": RulebookJSON.orNull(changedDayLabel),
             "changedBookingCount": changedBookingCount,
             "hasInvoiceDays": hasInvoiceDays,
+            // Review of 1.77.0 (fix 4): no active line manager reads "Waiting for an admin to sign off".
+            "hasLineManager": hasLineManager,
         ]
         return RulebookTimesheetNextStep(json: callJSON("timesheetNextStep", arguments: [input]))
     }
@@ -206,7 +209,8 @@ extension CanonicalBusinessEngine {
         revisionDue: Bool,
         lateExtrasAllowed: Bool,
         personName: String?,
-        lineManagerName: String?
+        lineManagerName: String?,
+        hasLineManager: Bool = true
     ) -> RulebookTimesheetCorrectionOption {
         let input: [String: Any] = [
             "sheet": sheet,
@@ -220,6 +224,7 @@ extension CanonicalBusinessEngine {
             "lateExtrasAllowed": lateExtrasAllowed,
             "personName": RulebookJSON.orNull(personName),
             "lineManagerName": RulebookJSON.orNull(lineManagerName),
+            "hasLineManager": hasLineManager,
         ]
         return RulebookTimesheetCorrectionOption(json: callJSON("timesheetCorrectionOption", arguments: [input])) ?? .none
     }
@@ -303,6 +308,19 @@ enum TimesheetClarityNames {
             let name = (ids[0]["name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
             !name.isEmpty else { return nil }
         return name
+    }
+
+    /// Review of 1.77.0 (fix 4): `hasActiveLineManager(person, roster)` — false: the other admins sign off, and the
+    /// whose-turn line and correction help name "an admin" (web passes the same, `userHasLineManager`).
+    static func hasLineManager(_ person: AppUser, roster: [AppUser]) -> Bool {
+        CanonicalBusinessEngine.overtimeHasActiveLineManager(person: RulebookPeople.person(person), roster: RulebookPeople.roster(roster))
+    }
+
+    /// Review of 1.77.0 (nit a): `hasInvoiceDays` — the person has self-employed days in this pay run
+    /// (`timesheetDaysForPerson`, web `sheetDays`); true when the script did not answer (as web with no days known).
+    static func hasInvoiceDays(_ person: AppUser, period: ClosedRange<Date>) -> Bool {
+        guard let days = TimesheetTotalsSource.timesheetDays(for: person, period: period) else { return true }
+        return !days.isEmpty
     }
 
     static func personName(_ person: AppUser) -> String? {

@@ -94,6 +94,29 @@ final class Rulebook1770Tests: XCTestCase {
         XCTAssertNil(correction([:], subject: true, reviewer: false).action)
     }
 
+    /// Review of 1.77.0: no active line manager names an admin; the reviewer's revision help keeps the B1 sentence.
+    func testNoLineManagerAndReviewerRevisionHelp() {
+        let personOnly: [String: Any] = ["operativeSignedAt": personSigned.timeIntervalSince1970 * 1000, "operativeSignedByName": "Jo"]
+        let noLineManager = CanonicalBusinessEngine.timesheetNextStep(
+            sheet: personOnly, viewerRole: "person", selfSigned: false, change: nil,
+            revisionDue: false, revisionDueLabel: nil, revisionLabel: nil,
+            personName: "Jo", lineManagerName: "Sam",
+            changedDayLabel: nil, changedBookingCount: 0, hasInvoiceDays: true, hasLineManager: false
+        )
+        XCTAssertEqual(noLineManager?.text, "Waiting for an admin to sign off")
+        XCTAssertEqual(next(personOnly, role: "person")?.text, "Waiting for Sam to sign off")
+
+        var exported = counterSigned()
+        exported["exportedAt"] = (managerSigned.timeIntervalSince1970 + 86_400) * 1000
+        let reviewerRevision = CanonicalBusinessEngine.timesheetCorrectionOption(
+            sheet: exported, viewerIsSubject: false, viewerIsReviewer: true, selfSigned: false, reopened: false,
+            revisionAllowed: true, nextRevisionLabel: "REV 2", revisionDue: false,
+            lateExtrasAllowed: false, personName: "Jo", lineManagerName: "Sam"
+        )
+        XCTAssertEqual(reviewerRevision.action, "createRevision")
+        XCTAssertEqual(reviewerRevision.help, "This creates REV 2 — Jo signs it, then you sign it off. You can change its bookings before they sign it.")
+    }
+
     func testCounterSignedNoticeEndsWithTheInvoicePrompt() {
         let plain = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Sam", changedByReviewer: false)
         XCTAssertEqual(plain?.message, "Sam signed your timesheet. Next: generate your invoice.")

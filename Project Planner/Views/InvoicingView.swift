@@ -2942,26 +2942,47 @@ private struct MyTimesheetView: View {
             lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
-            hasInvoiceDays: true
+            hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(currentUser, period: week.start...week.end),
+            hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
         )
+    }
+
+    /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision` with `writerIsSubject` — the person's own revision of this pay run
+    /// (review of 1.77.0: the same check web passes as `revisionAllowed`, and its `nextRevision` names it). Nil when the
+    /// sheet is not exported or the script did not answer.
+    private var personRevisionCheck: RulebookTimesheetRevisionCheck? {
+        guard TimesheetApprovalPolicy.isExported(draft), let currentUser = userStore.displayUser else { return nil }
+        let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: currentUser.id, weekStart: week.start)
+        let reviewerInput: [String: Any] = [
+            "writerUserId": Auth.auth().currentUser?.uid ?? currentUser.id,
+            "subjectUserId": currentUser.id,
+            "writerIsAdmin": currentUser.isRosterAdmin,
+            "writerFormerIds": currentUser.formerUserIds,
+            "writerAliasIds": currentUser.sameEmailUserIds,
+            "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(currentUser) ?? [],
+            "roster": RulebookRosterSnapshot.roster,
+        ]
+        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: true)
     }
 
     /// Point 1: the one "Correct this timesheet" entry (`timesheetCorrectionOption`).
     private var clarityCorrection: RulebookTimesheetCorrectionOption {
         guard let currentUser = userStore.displayUser else { return .none }
+        let revisionCheck = personRevisionCheck
         return CanonicalBusinessEngine.timesheetCorrectionOption(
             sheet: TimesheetDraftStore.statusPayload(for: draft),
             viewerIsSubject: true,
             viewerIsReviewer: false,
             selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
             reopened: bookingChange?.reopened == true,
-            // The person's own revision is allowed exactly when one is due (web `canCreate`).
-            revisionAllowed: revisionDue.due,
-            nextRevisionLabel: revisionDue.label,
+            // Review of 1.77.0: `canCreateTimesheetRevision(...).allowed` with `writerIsSubject`, as web.
+            revisionAllowed: revisionCheck?.allowed == true,
+            nextRevisionLabel: revisionCheck?.nextRevision.map { CanonicalBusinessEngine.timesheetRevisionLabel($0) } ?? revisionDue.label,
             revisionDue: revisionDue.due,
             lateExtrasAllowed: lateExtrasPermission.allowed,
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers)
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
         )
     }
 
@@ -6412,7 +6433,8 @@ private struct OperativeTimesheetReviewView: View {
             lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
-            hasInvoiceDays: true
+            hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(operative, period: week.start...week.end),
+            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
         )
     }
 
@@ -6426,11 +6448,14 @@ private struct OperativeTimesheetReviewView: View {
             selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
             reopened: bookingChange?.reopened == true,
             revisionAllowed: reviewerMayCreateRevision,
-            nextRevisionLabel: revisionDue.label,
+            // Review of 1.77.0 (fix 1): the next revision's label from `canCreateTimesheetRevision(...).nextRevision`, as
+            // web (`revisionCheck.nextRevision`) — `revisionDue.label` is empty unless a revision is due.
+            nextRevisionLabel: reviewerRevisionCheck?.nextRevision.map { CanonicalBusinessEngine.timesheetRevisionLabel($0) },
             revisionDue: revisionDue.due,
             lateExtrasAllowed: false,
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers)
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
         )
     }
 
@@ -7031,7 +7056,13 @@ private struct OperativeTimesheetReviewView: View {
     /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision`: this viewer (an admin or the person's line manager,
     /// `timesheetWriterIsReviewer`) may create the next revision of this exported latest version ("Create revision").
     private var reviewerMayCreateRevision: Bool {
-        guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return false }
+        reviewerRevisionCheck?.allowed == true
+    }
+
+    /// The `canCreateTimesheetRevision` answer behind `reviewerMayCreateRevision` (its `nextRevision` names the revision
+    /// in the correction help). Nil when not a reviewer, not exported, or the script did not answer.
+    private var reviewerRevisionCheck: RulebookTimesheetRevisionCheck? {
+        guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return nil }
         let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: operative.id, weekStart: week.start)
         let reviewerInput: [String: Any] = [
             "writerUserId": viewer.id,
@@ -7042,7 +7073,7 @@ private struct OperativeTimesheetReviewView: View {
             "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(operative) ?? [],
             "roster": RulebookRosterSnapshot.roster,
         ]
-        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)?.allowed == true
+        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)
     }
 
     @State private var isCreatingRevision = false
