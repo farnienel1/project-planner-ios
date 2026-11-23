@@ -4732,13 +4732,31 @@ struct OperativeTimesheetsView: View {
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 8)
-                                // RULEBOOK 1.55.0 §8: the pay run's earlier versions, read only, each with its PDF.
+                                // RULEBOOK 1.55.0 §8, owner item 23 (23 Nov): every exported version of the pay run,
+                                // oldest first, each with its invoice number, signed date, total, difference and PDF.
                                 if !row.earlier.isEmpty {
-                                    TimesheetEarlierVersionsList(versions: row.earlier) { version in
-                                        downloadEarlierVersionPDF(version, of: row)
+                                    if row.versions.count > 1 {
+                                        TimesheetExportedVersionsList(
+                                            rows: TimesheetExportedVersionRow.rows(
+                                                versions: row.versions,
+                                                currency: OrganizationRulebookContext.currencyCode
+                                            )
+                                        ) { versionRow in
+                                            if versionRow.latest {
+                                                Task { await downloadExportedPDF(row, confirmedRebuild: false) }
+                                            } else {
+                                                downloadEarlierVersionPDF(versionRow.version, of: row)
+                                            }
+                                        }
+                                        .padding(.horizontal, 14)
+                                        .padding(.bottom, 8)
+                                    } else {
+                                        TimesheetEarlierVersionsList(versions: row.earlier) { version in
+                                            downloadEarlierVersionPDF(version, of: row)
+                                        }
+                                        .padding(.horizontal, 14)
+                                        .padding(.bottom, 8)
                                     }
-                                    .padding(.horizontal, 14)
-                                    .padding(.bottom, 8)
                                 }
                                 if row.id != filteredExportedHistory.last?.id {
                                     Divider().padding(.leading, 66)
@@ -5986,6 +6004,7 @@ private enum ExportedTimesheetHistoryLoader {
                     week: period,
                     draft: decoded,
                     earlier: item.earlier,
+                    versions: item.chain.firstIndex { $0.documentId == item.documentId }.map { Array(item.chain[...$0]) } ?? [],
                     unresolvedPerson: entry.unresolved,
                     opensReview: opens
                 )
@@ -6058,6 +6077,8 @@ private struct ExportedTimesheetHistoryRow: Identifiable {
     let draft: TimesheetDraft
     /// RULEBOOK 1.55.0 §8: the pay run's earlier versions (before the one this row shows), newest first, read only.
     var earlier: [TimesheetVersionInfo] = []
+    /// Owner item 23 (23 Nov): the pay run's versions up to and including the one this row shows, oldest first.
+    var versions: [TimesheetVersionInfo] = []
     /// Web `isUnresolvedTimesheetPerson`: the stored person is nobody in the organisation (admins only) — the row shows
     /// "Unknown person · <hint>" and has no profile or review screen to open; Download PDF still works.
     var unresolvedPerson: Bool = false

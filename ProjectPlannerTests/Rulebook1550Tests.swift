@@ -113,6 +113,35 @@ final class Rulebook1550Tests: XCTestCase {
         XCTAssertEqual(unknown.note, "REV 1 · Difference not available (older export)")
     }
 
+    /// Owner item 23 (23 Nov): User Timesheets → Exported lists every version, oldest first, each with its invoice
+    /// number, signed date, total (from its own signed copy) and the difference from the version before it.
+    func testExportedVersionRowsListEveryVersionOldestFirst() throws {
+        var revised = signedSheet(exported: true)
+        revised["revisionOf"] = original
+        revised["revision"] = 1
+        revised["previousVersionId"] = original
+        var override = try XCTUnwrap(revised["weeklyReportOverride"] as? [String: Any])
+        override["lines"] = [["id": "l1", "date": timestamp("2026-11-03T00:00:00Z"), "amount": 676.47, "decision": "approved",
+                              "paidHours": 8, "days": 1, "isOvertime": false]]
+        revised["weeklyReportOverride"] = override
+        let versions = try chain([(revision1, revised), (original, signedSheet(exported: true))])
+        let rows = TimesheetExportedVersionRow.rows(versions: Array(versions.reversed()), currency: "GBP")
+        XCTAssertEqual(rows.map(\.label), ["Original", "REV 1"])
+        XCTAssertEqual(rows.map(\.invoiceNumber), ["TS-1793404800-U1", "TS-1793404800-U1-REV1"])
+        XCTAssertEqual(rows.map(\.totalText), ["£632.35", "£676.47"])
+        XCTAssertNil(rows[0].differenceText)
+        XCTAssertEqual(rows[1].differenceText, "+£44.12")
+        XCTAssertEqual(rows.map(\.latest), [false, true])
+        XCTAssertEqual(rows[0].signedAt, ISO8601DateFormatter().date(from: "2026-11-16T10:00:00Z"))
+        // An older export with no signed copy is still listed (guardrail 3), with the rulebook's "not available" words.
+        var older = signedSheet(exported: true)
+        older.removeValue(forKey: "weeklyReportOverride")
+        let olderRows = TimesheetExportedVersionRow.rows(versions: try chain([(original, older), (revision1, revised)]), currency: "GBP")
+        XCTAssertEqual(olderRows.count, 2)
+        XCTAssertEqual(olderRows[0].totalText, "Total not available (older export)")
+        XCTAssertEqual(olderRows[1].differenceText, CanonicalBusinessEngine.timesheetRevisionDifferenceUnknown)
+    }
+
     // MARK: Versions
 
     func testChainLatestReportAndEarlierVersions() throws {
