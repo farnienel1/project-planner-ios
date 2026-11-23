@@ -97,7 +97,7 @@ final class Rulebook1601Tests: XCTestCase {
         XCTAssertTrue(source.contains("let signature = TimesheetSignatureNotices.ownerSigned(draft)"))
         XCTAssertTrue(source.contains("let counterSignature = TimesheetSignatureNotices.counterSigned(draft)"))
         XCTAssertTrue(source.contains("signature: signature\n"), "notifyTimesheetSubmitted gets the person's signature")
-        XCTAssertTrue(source.contains("signature: counterSignature\n"), "notifyTimesheetCounterSigned gets the counter-signature")
+        XCTAssertTrue(source.contains("signature: counterSignature\n") || source.contains("signature: counterSignature,\n"), "notifyTimesheetCounterSigned gets the counter-signature")
         let service = try String(contentsOf: root.appendingPathComponent("Project Planner/Core/NotificationService.swift"), encoding: .utf8)
         XCTAssertTrue(service.contains("signedAt: signature.signedAt\n"), "the peer rows get the counter-sign instant")
     }

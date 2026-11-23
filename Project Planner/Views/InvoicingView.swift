@@ -1918,6 +1918,8 @@ enum TimesheetDraftStore {
             output.lateExtras = late
         }
         output.extraEntryReviewsJSON = TimesheetLateExtrasSupport.reviewsJSONText(fromStoredSheet: map)
+        // RULEBOOK 1.74.0 §8: the reviewer's booking edits (read only; never part of `asFirestoreMap`, so no save writes it).
+        output.reviewerBookingEditsJSON = TimesheetReviewerBookingEdits.jsonText(fromStoredSheet: map)
         // RULEBOOK 1.54.0 (review of #337): the stored `exportedAt` as the security rules test it.
         output.exportedAtStored = CanonicalBusinessEngine.timesheetExportedFieldSet(map["exportedAt"])
         // RULEBOOK 1.55.0 §8: the version this copy was read from (its document id and REV number), and — on a
@@ -2732,6 +2734,9 @@ private struct MyTimesheetView: View {
     @State private var invoiceErrorMessage: String?
     /// Shown when the cloud save failed (it used to fail silently).
     @State private var saveErrorMessage: String?
+    /// RULEBOOK 1.74.0 §13 (owner report 23 Nov): one tap = one signature = one "needs sign-off" notice. True while a
+    /// signature is being saved; a second press is ignored (web refuses a second sign press while the first saves).
+    @State private var signatureSaving = false
     /// RULEBOOK 1.43.0 §8: the empty-snapshot rebuild runs once per visit.
     @State private var snapshotRebuildTried = false
     /// RULEBOOK 1.43.0 (review r318, 2nd round): the period's sheet could not be read. Nothing is saved, signed or
@@ -2818,7 +2823,8 @@ private struct MyTimesheetView: View {
     }
 
     private var shiftCount: Int {
-        invoiceRows.count
+        // RULEBOOK 1.74.0: a figure, so it counts every line (the display order hides none from figures).
+        payrollLines.count
     }
 
     private var managerHasSigned: Bool { draft.managerSignedAt != nil }
@@ -2855,8 +2861,14 @@ private struct MyTimesheetView: View {
         )
     }
 
-    private var invoiceRows: [InvoiceLineItem] {
-        payrollLines.map { InvoiceLineItem(payrollLine: $0) }
+    /// RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder`: booking by booking (A, A overtime, B, B overtime), a booking's
+    /// empty 0h / £0 standard line left out when it has an overtime line. Display only: every figure reads `payrollLines`.
+    /// 1.74.0 (owner answer 23 Nov, choice 6): a £0 standard line whose booking's overtime line is declined stays, drawn
+    /// struck through (`timesheetLineShownDeclined`).
+    private var invoiceRows: [TimesheetLineDisplayOrder.Shown<InvoiceLineItem>] {
+        TimesheetLineDisplayOrder.payrollLines(payrollLines, draft: draft).map {
+            TimesheetLineDisplayOrder.Shown(item: InvoiceLineItem(payrollLine: $0.item), shownDeclined: $0.shownDeclined)
+        }
     }
 
     private var payrollLines: [TimesheetPayrollLineItem] {
@@ -2999,14 +3011,17 @@ private struct MyTimesheetView: View {
                 sectionHeader("This period")
 
                 VStack(alignment: .leading, spacing: 0) {
-                    if invoiceRows.isEmpty && leaveLines.isEmpty {
+                    // RULEBOOK 1.74.0: the ordered rows are worked out once per render (one script call), not per row.
+                    let shownRows = invoiceRows
+                    if shownRows.isEmpty && leaveLines.isEmpty {
                         Text("No bookings found for this payment period yet. Hours from site, office, site survey and other schedule entries will appear here automatically.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .padding(14)
                     } else {
-                        ForEach(Array(invoiceRows.enumerated()), id: \.offset) { index, row in
-                        let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
+                        ForEach(Array(shownRows.enumerated()), id: \.offset) { index, shown in
+                        let row = shown.item
+                        let removed = shown.shownDeclined || TimesheetDraftAdjustments.isPayrollLineRemoved(
                             line: row.payrollLine,
                             draft: draft,
                             managerHasSigned: managerHasSigned
@@ -3066,11 +3081,11 @@ private struct MyTimesheetView: View {
                         .padding(.vertical, 10)
                         .background(row.isOverlapping ? PPColor.warningAmber.opacity(0.12) : Color.clear)
                         .opacity(removed ? 0.55 : 1)
-                        if index < invoiceRows.count - 1 { Divider().padding(.horizontal, 14) }
+                        if index < shownRows.count - 1 { Divider().padding(.horizontal, 14) }
                     }
                     }
                     if !leaveLines.isEmpty {
-                        if !invoiceRows.isEmpty { Divider().padding(.horizontal, 14) }
+                        if !shownRows.isEmpty { Divider().padding(.horizontal, 14) }
                         TimesheetLeaveInfoRows(lines: leaveLines)
                     }
                     // RULEBOOK 1.22.0 §8: every figure is `CanonicalBusinessEngine.timesheetTotals` (the invoice's rows).
@@ -4124,6 +4139,18 @@ private struct MyTimesheetView: View {
     }
 
     private func markTimesheetSigned(signatureImageData: Data) {
+        // RULEBOOK 1.74.0 §13: a signature already being saved, or a sheet already signed that is not asking to be
+        // signed again, is never signed (or notified) twice.
+        guard !signatureSaving else { return }
+        if draft.operativeSignedAt != nil && !mustSignAgain {
+            // Review of #276: an already-signed sheet whose booking check has not answered yet (bookings not loaded, or
+            // the script did not answer) is never signed again silently — say so, nothing is signed.
+            if bookingChange == nil {
+                saveErrorMessage = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+                Feedback.play(.actionRefused)
+            }
+            return
+        }
         // RULEBOOK 1.43.0 §8 (review r318): signing re-checks the period's bookings (reloads them when no server answer
         // covers the period), as the counter-signature does.
         ensurePeriodBookings()
@@ -4173,8 +4200,13 @@ private struct MyTimesheetView: View {
         if let current = userStore.displayUser {
             TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &draft, user: current)
         }
+        signatureSaving = true
         let signSave = saveDraft(rebuildSnapshot: rebuild)
         playTimesheetFeedback(signSave, success: .timesheetSigned)
+        Task { @MainActor in
+            _ = await signSave?.value
+            signatureSaving = false
+        }
         guard let current = userStore.displayUser else { return }
         guard TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: current) else { return }
         // `timesheetSubmittedRecipients(subject, roster)`: active line managers, else the admins; never the owner.
@@ -6493,8 +6525,10 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            ForEach(payrollSummary.lineItems) { row in
-                managerPayrollLineRow(row)
+            // RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder`: booking by booking, each booking's standard line then its
+            // overtime line; an all-overtime booking's empty 0h / £0 standard line is not shown. Display only.
+            ForEach(TimesheetLineDisplayOrder.payrollLines(payrollSummary.lineItems, draft: draft), id: \.item.id) { shown in
+                managerPayrollLineRow(shown.item, shownDeclined: shown.shownDeclined)
             }
             if !leaveLines.isEmpty {
                 TimesheetLeaveInfoRows(lines: leaveLines)
@@ -7025,10 +7059,12 @@ private struct OperativeTimesheetReviewView: View {
         }
     }
 
+    /// `shownDeclined` (RULEBOOK 1.74.0 `timesheetLineShownDeclined`): a £0 standard line kept beside its booking's
+    /// declined overtime line, drawn struck through.
     @ViewBuilder
-    private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem) -> some View {
+    private func managerPayrollLineRow(_ row: TimesheetPayrollLineItem, shownDeclined: Bool = false) -> some View {
         let review = TimesheetDraftAdjustments.payrollReview(in: draft, lineId: row.id, live: row)
-        let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
+        let removed = shownDeclined || TimesheetDraftAdjustments.isPayrollLineRemoved(
             line: row,
             draft: draft,
             managerHasSigned: managerHasSigned,
@@ -7143,6 +7179,8 @@ private struct OperativeTimesheetReviewView: View {
             defer { reviewBookingBusy = false }
             do {
                 let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+                // Review of #276: a copy read before 1.55.0 has no document id, so nothing could be recorded — read it.
+                await readSheetVersionIfMissing()
                 if row.isOvertimeLine {
                     var input = booking
                     input["dayKey"] = OrganizationRulebookContext.dayKey(row.date)
@@ -7158,7 +7196,16 @@ private struct OperativeTimesheetReviewView: View {
                     case .trim(let collection, let bookingId, let set, let remove, let warning):
                         pendingReviewRemoval = TimesheetReviewRemoval(
                             warning: warning,
-                            action: .trim(collection: collection, bookingId: bookingId, set: set, remove: remove)
+                            action: .trim(collection: collection, bookingId: bookingId, set: set, remove: remove),
+                            // RULEBOOK 1.74.0: the trim is recorded on this sheet in the same batch.
+                            sheetRecord: TimesheetReviewerEditRecorder.record(
+                                draft: draft,
+                                collection: collection,
+                                bookingId: bookingId,
+                                booking: booking,
+                                write: (set: set, remove: remove),
+                                editedBy: uid
+                            )
                         )
                         return
                     case .refused(let message):
@@ -7180,11 +7227,32 @@ private struct OperativeTimesheetReviewView: View {
                     reviewBookingNotice = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
                     return
                 }
-                pendingReviewRemoval = TimesheetReviewRemoval(warning: warning, action: .delete(plan))
+                pendingReviewRemoval = TimesheetReviewRemoval(
+                    warning: warning,
+                    action: .delete(plan),
+                    // RULEBOOK 1.74.0: the delete is recorded on this sheet in the same batch.
+                    sheetRecord: TimesheetReviewerEditRecorder.record(
+                        draft: draft,
+                        collection: plan.collection,
+                        bookingId: plan.bookingId,
+                        booking: nil,
+                        write: nil,
+                        editedBy: uid
+                    )
+                )
             } catch {
                 reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
             }
         }
+    }
+
+    /// Review of #276 (RULEBOOK 1.74.0): the reviewer's record needs the stored sheet's document id. A copy read before
+    /// 1.55.0 has none, so the sheet is read from the cloud first (`ensureVersionRead`); only the version it came from
+    /// and the stored reviewer edits are taken over (the reviewer's unsaved decisions on screen are kept).
+    private func readSheetVersionIfMissing() async {
+        guard draft.versionDocumentId == nil else { return }
+        let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+        TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
     }
 
     /// The confirmed ✕: the booking delete and its tombstone in one batch, or the overtime trim as a partial update.
@@ -7196,16 +7264,19 @@ private struct OperativeTimesheetReviewView: View {
             do {
                 switch pending.action {
                 case .delete(let plan):
-                    try await firebaseBackend.deleteTimesheetReviewBooking(plan)
+                    try await firebaseBackend.deleteTimesheetReviewBooking(plan, sheetRecord: pending.sheetRecord)
                 case .trim(let collection, let bookingId, let set, let remove):
                     try await firebaseBackend.applyTimesheetReviewBookingUpdate(
                         collection: collection,
                         bookingId: bookingId,
                         set: set,
-                        remove: remove
+                        remove: remove,
+                        sheetRecord: pending.sheetRecord
                     )
                 }
-                reviewBookingNotice = CanonicalBusinessEngine.timesheetReviewBookingSentBackMessage
+                // RULEBOOK 1.74.0: the local copy carries the record at once; the sheet stays with the reviewer.
+                if let record = pending.sheetRecord { TimesheetReviewerBookingEdits.adding(record.edit, to: &draft) }
+                reviewBookingNotice = TimesheetReviewerEditRecorder.notice(recorded: pending.sheetRecord != nil, draft: draft)
             } catch {
                 reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
             }
@@ -7550,7 +7621,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     /// RULEBOOK 1.72.0 §8: ⚙ writes the booking (online only).
     let firebaseBackend: FirebaseBackend
     let isOnline: Bool
-    /// `TIMESHEET_REVIEW_BOOKING_SENT_BACK_MESSAGE` after a booking change.
+    /// RULEBOOK 1.74.0: `TIMESHEET_REVIEW_BOOKING_UPDATED_MESSAGE` (or `_NOT_RECORDED_MESSAGE`) after a booking change.
     @Binding var reviewBookingNotice: String?
 
     func body(content: Content) -> some View {
@@ -7592,8 +7663,9 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
 
     /// RULEBOOK 1.72.0 §8 (decision A): a reviewer's ⚙ changes the BOOKING, never a `payrollLineReviews` entry. The
     /// live booking is read fresh, `timesheetReviewBookingEditWrites` gives the partial update (a rate only when changed,
-    /// `timesheetReviewOvertimeRate`; an unchanged Full day writes nothing) and it is written with write metadata. The
-    /// 1.47.0 rule then sends the sheet back to the person. Returns a refusal message when nothing was saved, else nil.
+    /// `timesheetReviewOvertimeRate`; an unchanged Full day writes nothing) and it is written with write metadata.
+    /// RULEBOOK 1.74.0: the edit is recorded on the sheet in the same batch, so the sheet is not sent back to the person.
+    /// Returns a refusal message when nothing was saved, else nil.
     private func saveReviewBookingEdit(row: TimesheetPayrollLineItem, input: TimesheetReviewBookingEditInput) async -> String? {
         guard isOnline else { return OfflinePolicy.onlineOnlyMessage }
         let collection = TimesheetPayrollLineBookingLookup.reviewBookingCollection(row)
@@ -7605,6 +7677,11 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
         guard !ids.isEmpty else { return CanonicalBusinessEngine.timesheetReviewBookingMissingMessage }
         do {
             let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+            // Review of #276: a copy read before 1.55.0 has no document id, so nothing could be recorded — read it first.
+            if draft.versionDocumentId == nil {
+                let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+                TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
+            }
             // An overtime line shows no break controls: the booking keeps its stored break toggle.
             let breakRemoved = row.isOvertimeLine ? (booking["isBreakRemoved"] as? Bool == true) : input.breakRemoved
             let organizationRate = CanonicalBusinessEngine.overtimeRateCreateControl(on: row.date)?.organizationMultiplier
@@ -7627,9 +7704,26 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     editingPayrollLineId = nil
                     return nil
                 }
-                try await firebaseBackend.applyTimesheetReviewBookingUpdate(collection: collection, bookingId: bookingId, set: set, remove: remove)
+                // RULEBOOK 1.74.0: the edit is recorded on this sheet in the same batch (`timesheetReviewerBookingEditRecord`),
+                // so the sheet stays with the reviewer; without a record the booking is written alone (1.72.0).
+                let record = TimesheetReviewerEditRecorder.record(
+                    draft: draft,
+                    collection: collection,
+                    bookingId: bookingId,
+                    booking: booking,
+                    write: (set: set, remove: remove),
+                    editedBy: firebaseBackend.currentUser?.uid ?? ""
+                )
+                try await firebaseBackend.applyTimesheetReviewBookingUpdate(
+                    collection: collection,
+                    bookingId: bookingId,
+                    set: set,
+                    remove: remove,
+                    sheetRecord: record
+                )
+                if let record { TimesheetReviewerBookingEdits.adding(record.edit, to: &draft) }
                 editingPayrollLineId = nil
-                reviewBookingNotice = CanonicalBusinessEngine.timesheetReviewBookingSentBackMessage
+                reviewBookingNotice = TimesheetReviewerEditRecorder.notice(recorded: record != nil, draft: draft)
                 return nil
             }
         } catch {
@@ -7769,13 +7863,19 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 // RULEBOOK 1.60.1: the counter-signature (REV and instant, read from the signed draft) keys the signed
                 // notice and the line-manager peer rows.
                 let counterSignature = TimesheetSignatureNotices.counterSigned(draft)
+                // RULEBOOK 1.74.0 §13: the person is told when the sheet carries a reviewer edit for their current
+                // signature (`timesheetSheetChangedByReviewer` on the sheet as counter-signed).
+                let changedByReviewer = CanonicalBusinessEngine.timesheetSheetChangedByReviewer(
+                    SignedTimesheetChangeInputs.sheet(draft, keys: [:])
+                )
                 Task {
                     await notificationService.notifyTimesheetCounterSigned(
                         operative: operative,
                         signedByName: signer,
                         weekStart: week.start,
                         weekTitle: week.title,
-                        signature: counterSignature
+                        signature: counterSignature,
+                        changedByReviewer: changedByReviewer
                     )
                 }
                 showingManagerSignSheet = false
@@ -8220,6 +8320,8 @@ private struct SignTimesheetView: View {
     let requiresLineManagerCounterSign: Bool
     let onApprove: (Data) -> Void
     @State private var signatureImageData: Data?
+    /// RULEBOOK 1.74.0 §13: the Sign button calls `onApprove` once (a double tap is one signature, one notice).
+    @State private var submitting = false
 
     var total: Double { hoursAmount + priceWorkAmount + expensesAmount }
 
@@ -8284,7 +8386,8 @@ private struct SignTimesheetView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
                 Button {
-                    guard let signatureImageData else { return }
+                    guard !submitting, let signatureImageData else { return }
+                    submitting = true
                     onApprove(signatureImageData)
                     dismiss()
                 } label: {
@@ -8297,7 +8400,7 @@ private struct SignTimesheetView: View {
                 }
                 .accessibilityIdentifier("timesheets.checkmark")
                 .buttonStyle(.plain)
-                .disabled(signatureImageData == nil)
+                .disabled(signatureImageData == nil || submitting)
                 .opacity(signatureImageData == nil ? 0.5 : 1)
                 // RULEBOOK §2: timesheet signing is online only.
                 .onlineOnly(isOnline: smartCache.isOnline)
@@ -8631,12 +8734,8 @@ private enum InvoicePDFGenerationSupport {
         let rows = TimesheetInvoiceRows.rows(
             for: currentUser, summary: summary, draft: draft, extrasMode: extrasMode, period: period.startDate...period.endDate
         )
-        let sorted = InvoiceLineItem.invoiceLines(rows).sorted {
-            if $0.date == $1.date {
-                return $0.projectName < $1.projectName
-            }
-            return $0.date < $1.date
-        }
+        // RULEBOOK 1.74.0 §8: the rows come in the rulebook's display order (`timesheetLineDisplayOrder`).
+        let sorted = InvoiceLineItem.invoiceLines(rows)
         // RULEBOOK 1.45.0 §8: the evidence pages of this invoice's price work and expense rows.
         let evidence = TimesheetInvoiceRows.evidencePages(
             for: currentUser, summary: summary, draft: draft, extrasMode: extrasMode, period: period.startDate...period.endDate
@@ -8795,6 +8894,9 @@ enum TimesheetInvoiceRows {
         var input: [String: Any] = [
             "sheet": sheet, "payrollLines": lines, "extrasMode": extrasMode.rawValue,
             "timeZone": OrganizationRulebookContext.timeZoneIdentifier,
+            // RULEBOOK 1.74.0 §8 (owner answer 23 Nov, choice 6): a live invoice leaves off the £0 empty standard row of a
+            // booking with an overtime line, declined or not — decided by the rulebook, never dropped in Swift.
+            "omitEmptyStandardParts": true,
         ]
         // RULEBOOK 1.45.0 §8: the loaded copy's stored-row fingerprints, handed over explicitly (`entryFingerprints`).
         let fingerprints = TimesheetDraftStore.entryFingerprints(draft)
@@ -8936,7 +9038,35 @@ enum TimesheetInvoiceRows {
                 continue
             }
         }
-        return rows
+        return displayOrdered(rows, live: liveById, key: key)
+    }
+
+    /// RULEBOOK 1.74.0 §8 `timesheetLineDisplayOrder` (web `timesheetExport.ts`): the labour rows booking by booking
+    /// (each booking's standard row then its overtime row); price work and expenses keep their order after the labour
+    /// rows. Order only: which rows exist is `timesheetInvoiceRows` (`omitEmptyStandardParts`), so nothing is dropped here.
+    private static func displayOrdered(
+        _ rows: [InvoiceLineItem],
+        live: [String: TimesheetPayrollLineItem],
+        key: (String) -> String
+    ) -> [InvoiceLineItem] {
+        func isMoney(_ row: InvoiceLineItem) -> Bool { row.lineId.hasPrefix("pw-") || row.lineId.hasPrefix("exp-") }
+        let labour = rows.filter { !isMoney($0) }
+        let ordered = TimesheetLineDisplayOrder.orderedKeepingAll(labour) { row in
+            let line = live[key(row.lineId)]
+            return TimesheetLineOrderInput(
+                id: row.lineId,
+                bookingId: row.bookingId ?? line?.bookingId,
+                bookingCollection: line?.bookingCollection,
+                date: row.date,
+                isOvertimeLine: row.isOvertimeLine,
+                paidHours: row.paidHours,
+                amount: row.amount,
+                bookingStartTime: line?.bookingStartTime,
+                bookingEndTime: line?.bookingEndTime,
+                details: row.details
+            )
+        }
+        return ordered + rows.filter(isMoney)
     }
 
     /// A price work or expense row (no hours). Not a PAYE day: `timesheetInvoiceRows` already decided it goes on.
@@ -9803,13 +9933,8 @@ private enum TimesheetExportHelper {
             relatedUsers: relatedUsers
         )
         // RULEBOOK 1.10.0 §8: an export reads decisions (`extrasMode` `decided`).
-        let rows = TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided, period: week.start...week.end)
-        return rows.sorted {
-            if $0.date == $1.date {
-                return $0.projectName < $1.projectName
-            }
-            return $0.date < $1.date
-        }
+        // RULEBOOK 1.74.0 §8: the rows come in the rulebook's display order (`timesheetLineDisplayOrder`).
+        return TimesheetInvoiceRows.rows(for: user, summary: summary, draft: draft, extrasMode: .decided, period: week.start...week.end)
     }
 
 }

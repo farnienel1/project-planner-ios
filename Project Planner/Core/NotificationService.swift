@@ -1441,13 +1441,15 @@ class NotificationService: ObservableObject {
         signedByName: String,
         weekStart: Date,
         weekTitle: String,
-        signature: TimesheetSignatureNotices.Signature
+        signature: TimesheetSignatureNotices.Signature,
+        changedByReviewer: Bool = false
     ) async {
         await notifyTimesheetSignedByManager(
             targetUserId: operative.id,
             signedByName: signedByName,
             weekStart: weekStart,
-            signature: signature
+            signature: signature,
+            changedByReviewer: changedByReviewer
         )
         let operativeName = operative.fullName.isEmpty ? operative.email : operative.fullName
         await notifyLineManagerPeerAction(
@@ -1461,11 +1463,15 @@ class NotificationService: ObservableObject {
 
     /// Sent when line manager signs off a timesheet. RULEBOOK 1.55.0: `revision` is the counter-signed version's REV
     /// number (nil / 0 the original), so the person is told when REV N is signed too.
+    /// RULEBOOK 1.74.0 §13 (owner answer 23 Nov): the title and message are `timesheetSignedNoticeText` — "Your timesheet
+    /// was updated and signed off" when `changedByReviewer` (`timesheetSheetChangedByReviewer` on the sheet as
+    /// counter-signed). Same type, recipients, id and deep link.
     func notifyTimesheetSignedByManager(
         targetUserId: String,
         signedByName: String,
         weekStart: Date,
-        signature: TimesheetSignatureNotices.Signature
+        signature: TimesheetSignatureNotices.Signature,
+        changedByReviewer: Bool = false
     ) async {
         // `timesheetSignedRecipients`: the subject's account, unless they are the signer (the signed-in user).
         guard let targetId = CanonicalBusinessEngine.timesheetSignedRecipients(
@@ -1478,12 +1484,13 @@ class NotificationService: ObservableObject {
         guard let dedupeId = TimesheetSignatureNotices.signedNoticeId(
             subjectId: targetId, weekStart: weekStart, signature: signature
         ) else { return }
+        let text = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: signedByName, changedByReviewer: changedByReviewer)
         let notification = AppNotification(
             id: dedupeId,
             organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "",
             type: .timesheetSignedByManager,
-            title: "Timesheet signed",
-            message: "\(signedByName) signed your timesheet.",
+            title: text?.title ?? "Timesheet signed",
+            message: text?.message ?? "\(signedByName) signed your timesheet.",
             userId: targetId,
             relatedId: nil,
             isRead: false,

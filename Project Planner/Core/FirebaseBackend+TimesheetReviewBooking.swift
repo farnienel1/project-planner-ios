@@ -5,8 +5,12 @@
 //  RULEBOOK 1.72.0 §8 / §16 (owner decisions 23 Nov, A and B): the line manager's ⚙ and ✕ on a timesheet line under
 //  review write the BOOKING. The writes are the rulebook's (`timesheetReviewBookingEditWrites`,
 //  `timesheetReviewOvertimeStrike`, `timesheetReviewBookingDelete`); this file only reads the live booking and sends
-//  them. Online only (an approval, §2). The sheet then goes back to the person through the 1.47.0
-//  `signedTimesheetBookingChanges` rule; nothing is written on the timesheet.
+//  them. Online only (an approval, §2).
+//
+//  RULEBOOK 1.74.0 (owner decision 23 Nov): every write also records the edit on the sheet under review in the SAME
+//  batch (`reviewerBookingEdits.{key}`, `timesheetReviewerBookingEditRecord`, plus the server `editedAt`), so the sheet
+//  stays with the reviewer. Without a record (nothing to record) the booking is written alone and the 1.47.0 rule sends
+//  the sheet back to the person, as 1.72.0.
 //
 
 import Foundation
@@ -60,34 +64,73 @@ extension FirebaseBackend {
         throw TimesheetReviewBookingWriteError(message: CanonicalBusinessEngine.timesheetReviewBookingMissingMessage)
     }
 
-    /// ⚙ (or ✕ on an overtime line that trims): the rulebook's `set` / `remove` as one partial `updateData` with write
+    /// RULEBOOK 1.74.0: adds `reviewerBookingEdits.{key}` (the record plus the server `editedAt`) and write metadata to
+    /// the sheet `settings/{sheetDocumentId}` in `batch` — a field-path update, so no other recorded edit and no other
+    /// sheet field is touched. The person never writes it (§16); only a reviewer's booking write calls this.
+    private func addReviewerBookingEdit(
+        to batch: WriteBatch,
+        org: DocumentReference,
+        record: TimesheetReviewerEditSheetRecord
+    ) {
+        var value = record.edit.value
+        value["editedAt"] = FieldValue.serverTimestamp()
+        var fields: [AnyHashable: Any] = [
+            FieldPath([CanonicalBusinessEngine.timesheetReviewerBookingEditsField, record.edit.key]): value,
+        ]
+        for (key, metadata) in WriteMetadata.fields(userId: auth.currentUser?.uid) { fields[key] = metadata }
+        batch.updateData(fields, forDocument: org.collection("settings").document(record.sheetDocumentId))
+    }
+
+    /// ⚙ (or ✕ on an overtime line that trims): the rulebook's `set` / `remove` as one partial update with write
     /// metadata. An update never re-creates a booking deleted elsewhere (not-found → the missing message).
-    func applyTimesheetReviewBookingUpdate(collection: String, bookingId: String, set: [String: Any], remove: [String]) async throws {
+    /// RULEBOOK 1.74.0: with `sheetRecord`, the sheet's `reviewerBookingEdits.{key}` is written in the same batch (both
+    /// or neither).
+    func applyTimesheetReviewBookingUpdate(
+        collection: String,
+        bookingId: String,
+        set: [String: Any],
+        remove: [String],
+        sheetRecord: TimesheetReviewerEditSheetRecord? = nil
+    ) async throws {
         let org = try reviewBookingOrganizationRef()
         var update: [String: Any] = [:]
         for (key, value) in set { update[key] = value is NSNull ? FieldValue.delete() : value }
         for key in remove { update[key] = FieldValue.delete() }
         guard !update.isEmpty else { return }
-        do {
-            try await org.collection(collection).document(bookingId)
-                .updateData(WriteMetadata.stamped(update, userId: auth.currentUser?.uid))
-        } catch {
-            throw TimesheetReviewBookingWriteError.from(error)
-        }
-    }
-
-    /// ✕: the booking delete and its tombstone (`timesheetReviewBookingDelete`, plus the server `deletedAt`) in ONE batch.
-    func deleteTimesheetReviewBooking(_ plan: RulebookTimesheetReviewBookingDelete) async throws {
-        let org = try reviewBookingOrganizationRef()
-        var tombstone = plan.tombstone
-        tombstone["deletedAt"] = FieldValue.serverTimestamp()
         let batch = db.batch()
-        batch.deleteDocument(org.collection(plan.collection).document(plan.bookingId))
-        batch.setData(tombstone, forDocument: org.collection(CanonicalBusinessEngine.bookingTombstoneCollection).document(plan.bookingId))
+        batch.updateData(WriteMetadata.stamped(update, userId: auth.currentUser?.uid), forDocument: org.collection(collection).document(bookingId))
+        if let sheetRecord { addReviewerBookingEdit(to: batch, org: org, record: sheetRecord) }
         do {
             try await batch.commit()
         } catch {
             throw TimesheetReviewBookingWriteError.from(error)
         }
     }
+
+    /// ✕: the booking delete and its tombstone (`timesheetReviewBookingDelete`, plus the server `deletedAt`) in ONE batch.
+    /// RULEBOOK 1.74.0: with `sheetRecord`, the sheet's `reviewerBookingEdits.{key}` (recorded deleted) is in that batch.
+    func deleteTimesheetReviewBooking(
+        _ plan: RulebookTimesheetReviewBookingDelete,
+        sheetRecord: TimesheetReviewerEditSheetRecord? = nil
+    ) async throws {
+        let org = try reviewBookingOrganizationRef()
+        var tombstone = plan.tombstone
+        tombstone["deletedAt"] = FieldValue.serverTimestamp()
+        let batch = db.batch()
+        batch.deleteDocument(org.collection(plan.collection).document(plan.bookingId))
+        batch.setData(tombstone, forDocument: org.collection(CanonicalBusinessEngine.bookingTombstoneCollection).document(plan.bookingId))
+        if let sheetRecord { addReviewerBookingEdit(to: batch, org: org, record: sheetRecord) }
+        do {
+            try await batch.commit()
+        } catch {
+            throw TimesheetReviewBookingWriteError.from(error)
+        }
+    }
+}
+
+/// RULEBOOK 1.74.0: the sheet a reviewer's booking write is recorded on — its stored document id (the version the review
+/// shows, `TimesheetDraft.versionDocumentId`) and the record (`timesheetReviewerBookingEditRecord`).
+nonisolated struct TimesheetReviewerEditSheetRecord {
+    var sheetDocumentId: String
+    var edit: RulebookTimesheetReviewerBookingEdit
 }
