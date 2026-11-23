@@ -11,6 +11,7 @@
 
 import Foundation
 import FirebaseFirestore
+import FirebaseAuth
 
 /// A refused review booking write, with the rulebook's message for the screen.
 nonisolated struct TimesheetReviewBookingWriteError: LocalizedError {
