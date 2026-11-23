@@ -54,6 +54,8 @@ struct ContentView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var userStore: UserStore
+    /// Review of #274: a roster publish rescans warnings only when a field the scan reads changed.
+    @State private var warningsRosterRescanGate = WarningsRosterRescanGate()
     @EnvironmentObject var taskStore: ProjectTaskStore
     @EnvironmentObject var holidayStore: HolidayStore
     @EnvironmentObject var subcontractorStore: SubcontractorStore
@@ -307,6 +309,15 @@ struct ContentView: View {
             // RULEBOOK §5: leave, people and dismissed warnings changed on another device (live listeners).
             .onReceive(NotificationCenter.default.publisher(for: .liveWarningInputsDidChange)) { _ in
                 scheduleWarningsForBookingChange()
+            }
+            // Owner report 23 Nov / review of #274: the first scan no longer waits out the 30 s launch quiet, so it can
+            // run on the roster saved on this phone. When the roster then arrives from the server, or changes in a field
+            // the scan reads (`WarningsRosterFingerprint`; never a `lastSeenAt` heartbeat or a push-token write), scan
+            // again, as leave and bookings already do; the scheduler collapses a burst into one scan.
+            .onReceive(userStore.$organizationUsers) { users in
+                if warningsRosterRescanGate.shouldRescan(for: users) {
+                    scheduleWarningsForBookingChange()
+                }
             }
     }
 
