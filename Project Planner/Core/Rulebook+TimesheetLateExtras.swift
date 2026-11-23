@@ -71,6 +71,15 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// RULEBOOK 1.76.0 `TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE` — the person's note while their line manager's
+    /// change to signed price work or expenses waits for a new sign-off.
+    nonisolated static var timesheetSignedEntriesChangedPersonMessage: String {
+        lateExtrasText(
+            "TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE",
+            fallback: "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+        )
+    }
+
     /// `TIMESHEET_LATE_EXTRAS_EXPORT_SKIPPED_MESSAGE` — why Export left a sheet out.
     nonisolated static var timesheetLateExtrasExportSkippedMessage: String {
         lateExtrasText(

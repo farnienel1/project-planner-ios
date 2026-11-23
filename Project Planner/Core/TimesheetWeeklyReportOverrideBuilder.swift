@@ -171,8 +171,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
                         approvedByName: existing.approvedByName,
                         selfSigned: existing.selfSigned,
                         lines: fresh.lines.filter { !optionPlaceIds.contains($0.id.lowercased()) },
-                        priceWork: fresh.priceWork,
-                        expenses: fresh.expenses
+                        // RULEBOOK 1.76.0 (review of #278): the repair rebuilds the labour only — the signed price work
+                        // and expense rows stay as signed (late extra rows fresh), so it never lands a Make changes
+                        // review without a new sign-off.
+                        priceWork: signedMoneyRows(existing.priceWork, fresh: fresh.priceWork, refresh: refreshSignedMoney),
+                        expenses: signedMoneyRows(existing.expenses, fresh: fresh.expenses, refresh: refreshSignedMoney)
                     )
                     return nil
                 }

@@ -191,6 +191,23 @@ final class Rulebook1760Tests: XCTestCase {
         XCTAssertEqual(total(resigned), 540, accuracy: 0.001)
     }
 
+    /// Review of #278: no clock test — a review whose device clock reads before the counter-signature still counts;
+    /// a review that matches the signed copy never reopens. The person's note is the rulebook's.
+    func testNoClockTestOnlyWhatIsPaidAgainstTheSignedRow() {
+        let skewed = signedWithEntries(reviews: [
+            "ex1": ["decision": "declined", "reviewedAmount": 40, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs - 7_200_000],
+        ])
+        XCTAssertEqual(changes(skewed)?.waitingFor, "lineManager")
+        let inStep = signedWithEntries(reviews: [
+            "ex1": ["decision": "declined", "reviewedAmount": 40, "reviewedByUserId": "lm", "reviewedAtMs": afterSignOffMs],
+        ], expenseAmount: 0)
+        XCTAssertNil(changes(inStep))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetSignedEntriesChangedPersonMessage,
+            "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+        )
+    }
+
     /// The signed copy keeps its signed price work and expense rows on every save except a signing.
     func testSignedMoneyRowsAreKeptUnlessSigningOff() {
         func line(_ id: String, _ amount: Double, late: Bool = false) -> TimesheetWeeklyReportMoneyLine {

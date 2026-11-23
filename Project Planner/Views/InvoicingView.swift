@@ -3818,7 +3818,7 @@ private struct MyTimesheetView: View {
         if !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice {
             // RULEBOOK 1.54.0 §8: no invoice while late extras wait for the line manager (`timesheetChangesWithLateExtras`).
             let message = bookingChange?.signedEntriesOnly == true
-                ? "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+                ? CanonicalBusinessEngine.timesheetSignedEntriesChangedPersonMessage
                 : bookingChange?.lateExtrasOnly == true
                 ? CanonicalBusinessEngine.timesheetLateExtraWaitingLabel
                 : CanonicalBusinessEngine.signedTimesheetChangedMessage
@@ -4204,7 +4204,9 @@ private struct MyTimesheetView: View {
             TimesheetApprovalPolicy.applySelfApprovalIfNoLineManager(draft: &draft, user: current)
         }
         signatureSaving = true
-        let signSave = saveDraft(rebuildSnapshot: rebuild)
+        // RULEBOOK 1.76.0 (review of #278): the person's signature is the signing that refreshes the signed money rows
+        // (a self-signed sheet; with a line manager the owner never writes the snapshot).
+        let signSave = saveDraft(rebuildSnapshot: rebuild, refreshSignedMoney: true)
         playTimesheetFeedback(signSave, success: .timesheetSigned)
         Task { @MainActor in
             _ = await signSave?.value
@@ -4318,7 +4320,7 @@ private struct MyTimesheetView: View {
     }
 
     @discardableResult
-    private func saveDraft(rebuildSnapshot: Bool = false) -> Task<String?, Never>? {
+    private func saveDraft(rebuildSnapshot: Bool = false, refreshSignedMoney: Bool = false) -> Task<String?, Never>? {
         // RULEBOOK 1.43.0 (review r318, 2nd round): nothing is saved while the period's sheet could not be read.
         guard !periodLoadFailed else {
             saveErrorMessage = TimesheetDraftStore.periodReadFailedMessage
@@ -4372,9 +4374,9 @@ private struct MyTimesheetView: View {
                 // RULEBOOK 1.47.0 §8 `signedTimesheetActions(change).rebuildSnapshot`: a reopened sheet's re-signature
                 // builds the snapshot fresh from the live bookings.
                 rebuildSnapshot: rebuildSnapshot && payInputsBlockMessage == nil,
-                // RULEBOOK 1.76.0: the owner writes the snapshot only on a self-signed sheet, whose own signature signs it
-                // off — its price work and expenses are taken afresh, as before 1.76.0.
-                refreshSignedMoney: true
+                // RULEBOOK 1.76.0 (web `refreshSignedMoney: sheetSelfSigned` on the person's signature): only the
+                // person's signing save takes the signed price work and expenses afresh; any other owner save keeps them.
+                refreshSignedMoney: refreshSignedMoney
             )
             if let refusal {
                 saveErrorMessage = refusal
