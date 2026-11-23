@@ -727,8 +727,9 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let detail = try source("Views/ProjectDetailView.swift")
         XCTAssertFalse(detail.contains("Task { await bookingStore.updateBooking(updated) }"))
         XCTAssertFalse(detail.contains("Task { await managerScheduleStore.saveBooking(updated) }"))
-        XCTAssertTrue(detail.contains("bookingStore.updateBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
-        XCTAssertTrue(detail.contains("managerScheduleStore.saveBookingReportingProblem(\n                                    updated,\n                                    organizationId: savingOrganizationId"))
+        let flatDetail = detail.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }.joined(separator: " ")
+        XCTAssertTrue(flatDetail.contains("bookingStore.updateBookingReportingProblem( updated, organizationId: savingOrganizationId"))
+        XCTAssertTrue(flatDetail.contains("managerScheduleStore.saveBookingReportingProblem( updated, organizationId: savingOrganizationId"))
         XCTAssertEqual(detail.components(separatedBy: "queueBookingEditSaveAlert(ScheduleBookingSaveAlert.forEdit(result))").count - 1, 2)
 
         let saved = try XCTUnwrap(ScheduleBookingSaveAlert.forEdit(.saved))
