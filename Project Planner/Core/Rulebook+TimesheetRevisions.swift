@@ -531,9 +531,13 @@ nonisolated struct TimesheetExportedVersionRow: Identifiable, @unchecked Sendabl
         let original = sorted.first { $0.revision == 0 }
         let originalId = original?.documentId ?? sorted.first?.baseDocumentId ?? ""
         let storedUserId = (original?.data["userId"] as? String) ?? (sorted.first?.data["userId"] as? String)
+        /// RULEBOOK §1 `documentInstantMs` (a Timestamp, `{seconds, nanoseconds}`, a Date, epoch ms or ISO text) —
+        /// the rulebook's own instant reader, never a Timestamp-only cast.
         func date(_ value: Any?) -> Date? {
-            if let stamp = value as? Timestamp { return stamp.dateValue() }
-            return value as? Date
+            guard let value, !(value is NSNull) else { return nil }
+            guard let ms = (CanonicalBusinessEngine.callJSON("documentInstantMs", arguments: [FirebaseBackend.firestoreJSON(value)]) as? NSNumber)?.doubleValue,
+                  ms.isFinite, ms > 0 else { return nil }
+            return Date(timeIntervalSince1970: ms / 1000)
         }
         return sorted.map { version in
             let total = CanonicalBusinessEngine.timesheetExportedTotal(version.data)

@@ -162,6 +162,7 @@ struct TimesheetExportedVersionsList: View {
                 Text("Versions of this pay run · \(rows.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(rows) { row in
                     HStack(alignment: .top, spacing: 8) {
                         VStack(alignment: .leading, spacing: 2) {
