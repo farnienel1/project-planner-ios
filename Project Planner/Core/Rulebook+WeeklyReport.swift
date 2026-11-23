@@ -184,17 +184,20 @@ extension CanonicalBusinessEngine {
 
     /// RULEBOOK 1.51.0 §7 `weeklyReportLeaveRows({ records, people, range, timeZone, nonWorkingDayKeys })`: approved
     /// leave in the range per person, matched under every id and email; nobody → "Person not found (id …)".
+    /// 1.70.0: `formerPeople` (from `parseFormerPersonDocument`) names a deleted person's leave "Former: Jane Smith".
     nonisolated static func weeklyReportLeaveRows(
         records: [[String: Any]],
         people: [[String: Any]],
         startDayKey: String,
         endDayKey: String,
         nonWorkingDayKeys: [String],
+        formerPeople: [[String: Any]] = [],
         timeZone: String = OrganizationRulebookContext.timeZoneIdentifier
     ) -> (rows: [RulebookWeeklyReportLeaveRow], total: Double)? {
         let input: [String: Any] = [
             "records": records,
             "people": people,
+            "formerPeople": formerPeople,
             "range": ["start": startDayKey, "end": endDayKey],
             "timeZone": timeZone,
             "nonWorkingDayKeys": nonWorkingDayKeys,
@@ -214,6 +217,12 @@ extension CanonicalBusinessEngine {
             },
             wrNumber(raw["total"])
         )
+    }
+
+    /// RULEBOOK 1.59.0 §11 `parseFormerPersonDocument(docId, data)`: one `deletedPeople` record (`data` JSON-safe, an
+    /// instant as epoch milliseconds). Nil when the record has no id or the script did not answer.
+    nonisolated static func parseFormerPersonDocument(docId: String, data: [String: Any]) -> [String: Any]? {
+        callJSON("parseFormerPersonDocument", arguments: [docId, data]) as? [String: Any]
     }
 
     // MARK: Warnings (Q4d)
