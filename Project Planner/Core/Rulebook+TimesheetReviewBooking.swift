@@ -70,11 +70,12 @@ extension CanonicalBusinessEngine {
     nonisolated static var timesheetReviewEditBookingNote: String {
         reviewBookingText(
             "TIMESHEET_REVIEW_EDIT_BOOKING_NOTE",
-            fallback: "Saving changes the booking itself, so scheduling, Daily Overview and the weekly report show the new hours. The timesheet then goes back to the person to review and sign again."
+            fallback: "Saving changes the booking itself, so scheduling, Daily Overview and the weekly report show the new hours. You can keep reviewing; the person sees the change when you counter-sign."
         )
     }
 
-    /// `TIMESHEET_REVIEW_BOOKING_SENT_BACK_MESSAGE`.
+    /// `TIMESHEET_REVIEW_BOOKING_SENT_BACK_MESSAGE` — 1.72.0 copy, kept for older builds only (1.74.0 screens show
+    /// `timesheetReviewBookingUpdatedMessage` / `timesheetReviewBookingNotRecordedMessage`).
     nonisolated static var timesheetReviewBookingSentBackMessage: String {
         reviewBookingText(
             "TIMESHEET_REVIEW_BOOKING_SENT_BACK_MESSAGE",

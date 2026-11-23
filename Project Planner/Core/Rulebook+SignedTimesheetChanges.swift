@@ -347,6 +347,8 @@ enum SignedTimesheetChangeInputs {
             "invoiceGeneratedAt": ms(draft.invoiceGeneratedAt),
         ]
         sheet["operativeSignedBookings"] = draft.operativeSignedBookings.map { rows in rows.map(\.storedMap) as Any } ?? NSNull()
+        // RULEBOOK 1.74.0 §8: the reviewer's own booking edits from this sheet's review (as stored, instants as ms).
+        sheet["reviewerBookingEdits"] = TimesheetReviewerBookingEdits.stored(draft)
         if let override = draft.weeklyReportOverride {
             let lines: [[String: Any]] = override.lines.map { line in
                 var row: [String: Any] = [
@@ -613,6 +615,8 @@ final class SignedTimesheetChangeContext {
             ms(draft.operativeSignedBookingsAt), ms(draft.operativeSignedBookingsSignedAt),
             ms(draft.weeklyReportOverride?.approvedAt), record.joined(separator: ","), snapshot.joined(separator: ","),
             money.joined(separator: ","), late.joined(separator: ","), draft.extraEntryReviewsJSON ?? "-",
+            // RULEBOOK 1.74.0: the reviewer's booking edits decide the answer too.
+            draft.reviewerBookingEditsJSON ?? "-",
             draft.exportedAtStored == true ? "x" : "-",
             // RULEBOOK 1.55.0: the version read (an original and its revision are different sheets).
             draft.versionDocumentId ?? "-",

@@ -173,6 +173,11 @@ struct TimesheetDraft: Codable {
     /// only by a review there (`timesheetLateExtraDecision`). Never written back by this field (reviews are written as
     /// dotted `extraEntryReviews.{id}` fields by `timesheetEntryReviewWriteFields`).
     var extraEntryReviewsJSON: String? = nil
+    /// RULEBOOK 1.74.0 §8: the reviewer's own booking edits from this sheet's review (`reviewerBookingEdits` as stored,
+    /// instants as epoch ms) as plain JSON text, read only — passed to `signedTimesheetBookingChanges` so a booking still
+    /// exactly as the reviewer left it does not send the sheet back. Never written from a draft save (reviewer-only field,
+    /// written only in the booking write's batch, `FirebaseBackend.applyTimesheetReviewBookingUpdate`).
+    var reviewerBookingEditsJSON: String? = nil
     /// RULEBOOK 1.54.0 (review of #337): the stored `exportedAt` is set as the security rules test it
     /// (`timesheetExportedFieldSet`). Read only, never written.
     var exportedAtStored: Bool? = nil

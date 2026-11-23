@@ -207,6 +207,9 @@ struct TimesheetReviewRemoval: Identifiable {
     let id = UUID()
     let warning: RulebookTimesheetReviewDeleteWarning
     let action: Action
+    /// RULEBOOK 1.74.0: what the confirmed write records on the sheet in the same batch (`timesheetReviewerBookingEditRecord`,
+    /// built from the booking read fresh); nil when nothing can be recorded (the 1.47.0 rule then applies).
+    var sheetRecord: TimesheetReviewerEditSheetRecord? = nil
 
     /// The confirm's text: what is changed, the rulebook's message, the overtime note, and (for a delete) the undo note.
     var messageText: String {
