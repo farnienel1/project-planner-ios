@@ -3007,13 +3007,15 @@ private struct MyTimesheetView: View {
                 sectionHeader("This period")
 
                 VStack(alignment: .leading, spacing: 0) {
-                    if invoiceRows.isEmpty && leaveLines.isEmpty {
+                    // RULEBOOK 1.74.0: the ordered rows are worked out once per render (one script call), not per row.
+                    let shownRows = invoiceRows
+                    if shownRows.isEmpty && leaveLines.isEmpty {
                         Text("No bookings found for this payment period yet. Hours from site, office, site survey and other schedule entries will appear here automatically.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .padding(14)
                     } else {
-                        ForEach(Array(invoiceRows.enumerated()), id: \.offset) { index, row in
+                        ForEach(Array(shownRows.enumerated()), id: \.offset) { index, row in
                         let removed = TimesheetDraftAdjustments.isPayrollLineRemoved(
                             line: row.payrollLine,
                             draft: draft,
@@ -3074,11 +3076,11 @@ private struct MyTimesheetView: View {
                         .padding(.vertical, 10)
                         .background(row.isOverlapping ? PPColor.warningAmber.opacity(0.12) : Color.clear)
                         .opacity(removed ? 0.55 : 1)
-                        if index < invoiceRows.count - 1 { Divider().padding(.horizontal, 14) }
+                        if index < shownRows.count - 1 { Divider().padding(.horizontal, 14) }
                     }
                     }
                     if !leaveLines.isEmpty {
-                        if !invoiceRows.isEmpty { Divider().padding(.horizontal, 14) }
+                        if !shownRows.isEmpty { Divider().padding(.horizontal, 14) }
                         TimesheetLeaveInfoRows(lines: leaveLines)
                     }
                     // RULEBOOK 1.22.0 §8: every figure is `CanonicalBusinessEngine.timesheetTotals` (the invoice's rows).
@@ -4135,7 +4137,15 @@ private struct MyTimesheetView: View {
         // RULEBOOK 1.74.0 §13: a signature already being saved, or a sheet already signed that is not asking to be
         // signed again, is never signed (or notified) twice.
         guard !signatureSaving else { return }
-        if draft.operativeSignedAt != nil && !mustSignAgain { return }
+        if draft.operativeSignedAt != nil && !mustSignAgain {
+            // Review of #276: an already-signed sheet whose booking check has not answered yet (bookings not loaded, or
+            // the script did not answer) is never signed again silently — say so, nothing is signed.
+            if bookingChange == nil {
+                saveErrorMessage = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+                Feedback.play(.actionRefused)
+            }
+            return
+        }
         // RULEBOOK 1.43.0 §8 (review r318): signing re-checks the period's bookings (reloads them when no server answer
         // covers the period), as the counter-signature does.
         ensurePeriodBookings()
@@ -7162,6 +7172,8 @@ private struct OperativeTimesheetReviewView: View {
             defer { reviewBookingBusy = false }
             do {
                 let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+                // Review of #276: a copy read before 1.55.0 has no document id, so nothing could be recorded — read it.
+                await readSheetVersionIfMissing()
                 if row.isOvertimeLine {
                     var input = booking
                     input["dayKey"] = OrganizationRulebookContext.dayKey(row.date)
@@ -7225,6 +7237,15 @@ private struct OperativeTimesheetReviewView: View {
                 reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
             }
         }
+    }
+
+    /// Review of #276 (RULEBOOK 1.74.0): the reviewer's record needs the stored sheet's document id. A copy read before
+    /// 1.55.0 has none, so the sheet is read from the cloud first (`ensureVersionRead`); only the version it came from
+    /// and the stored reviewer edits are taken over (the reviewer's unsaved decisions on screen are kept).
+    private func readSheetVersionIfMissing() async {
+        guard draft.versionDocumentId == nil else { return }
+        let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+        TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
     }
 
     /// The confirmed ✕: the booking delete and its tombstone in one batch, or the overtime trim as a partial update.
@@ -7649,6 +7670,11 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
         guard !ids.isEmpty else { return CanonicalBusinessEngine.timesheetReviewBookingMissingMessage }
         do {
             let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+            // Review of #276: a copy read before 1.55.0 has no document id, so nothing could be recorded — read it first.
+            if draft.versionDocumentId == nil {
+                let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+                TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
+            }
             // An overtime line shows no break controls: the booking keeps its stored break toggle.
             let breakRemoved = row.isOvertimeLine ? (booking["isBreakRemoved"] as? Bool == true) : input.breakRemoved
             let organizationRate = CanonicalBusinessEngine.overtimeRateCreateControl(on: row.date)?.organizationMultiplier

@@ -290,13 +290,22 @@ enum TimesheetReviewerEditRecorder {
         return TimesheetReviewerEditSheetRecord(sheetDocumentId: documentId, edit: edit)
     }
 
-    /// After the write: `TIMESHEET_REVIEW_BOOKING_UPDATED_MESSAGE`, or — only when nothing was recorded and the sheet
-    /// really reopens (the person has signed, the sheet is stored and not exported) —
-    /// `TIMESHEET_REVIEW_BOOKING_NOT_RECORDED_MESSAGE`.
+    /// Review of #276: a copy read before 1.55.0 (`ensureVersionRead`) gives the version it came from; only that and the
+    /// stored reviewer edits are taken over, never the rest of the read (the reviewer's unsaved decisions stay).
+    static func takeVersion(from read: TimesheetDraft, into draft: inout TimesheetDraft) {
+        guard draft.versionDocumentId == nil, let id = read.versionDocumentId, !id.isEmpty else { return }
+        draft.versionDocumentId = id
+        draft.revision = read.revision
+        draft.originalStoredUserId = draft.originalStoredUserId ?? read.originalStoredUserId
+        draft.reviewerBookingEditsJSON = read.reviewerBookingEditsJSON
+    }
+
+    /// After the write: `TIMESHEET_REVIEW_BOOKING_UPDATED_MESSAGE`, or — when nothing was recorded and the person has
+    /// signed a sheet that is not exported (review of #276: whether or not this copy knows its stored document, since a
+    /// copy read before 1.55.0 has no id) — `TIMESHEET_REVIEW_BOOKING_NOT_RECORDED_MESSAGE`.
     static func notice(recorded: Bool, draft: TimesheetDraft) -> String {
         if recorded { return CanonicalBusinessEngine.timesheetReviewBookingUpdatedMessage }
-        let stored = draft.versionDocumentId?.isEmpty == false
-        let reopens = stored && draft.operativeSignedAt != nil && !TimesheetLateExtrasSupport.exportedStored(draft)
+        let reopens = draft.operativeSignedAt != nil && !TimesheetLateExtrasSupport.exportedStored(draft)
         return reopens ? CanonicalBusinessEngine.timesheetReviewBookingNotRecordedMessage : CanonicalBusinessEngine.timesheetReviewBookingUpdatedMessage
     }
 }

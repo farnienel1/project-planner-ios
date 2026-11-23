@@ -85,7 +85,12 @@ final class Rulebook1740Tests: XCTestCase {
             draft: draft, collection: "bookings", bookingId: "B1", booking: storedBooking(),
             write: (set: ["workEndTime": "16:00"], remove: []), editedBy: "LM"
         ))
-        XCTAssertEqual(TimesheetReviewerEditRecorder.notice(recorded: false, draft: draft), CanonicalBusinessEngine.timesheetReviewBookingUpdatedMessage)
+        // Review of #276: signed and not exported, nothing recorded → it has gone back to the person (a copy read before
+        // 1.55.0 has no document id, yet the stored sheet still reopens).
+        XCTAssertEqual(TimesheetReviewerEditRecorder.notice(recorded: false, draft: draft), CanonicalBusinessEngine.timesheetReviewBookingNotRecordedMessage)
+        var unsigned = TimesheetDraft()
+        unsigned.versionDocumentId = "timesheet_OP1_1795392000"
+        XCTAssertEqual(TimesheetReviewerEditRecorder.notice(recorded: false, draft: unsigned), CanonicalBusinessEngine.timesheetReviewBookingUpdatedMessage)
 
         draft.versionDocumentId = "timesheet_OP1_1795392000"
         let record = TimesheetReviewerEditRecorder.record(
@@ -117,6 +122,146 @@ final class Rulebook1740Tests: XCTestCase {
         XCTAssertNotNil(edits?["bookings__b1"])
         // The person's (or reviewer's) draft save never writes it: it is not one of the saved fields.
         XCTAssertNil(TimesheetDraftStore.asFirestoreMap(draft)["reviewerBookingEdits"])
+    }
+
+    // MARK: Full chain (review of #276): record → SignedTimesheetChanges.change
+
+    private let dayMs = 1_795_392_000_000.0 // Mon 23 Nov 2026 00:00 London
+
+    /// Stored documents as the iPhone writes them: a labour FULL DAY on a lower/mixed-case job id, and a manager site
+    /// booking at a project with "7:00 AM" clock text and a mixed-case location id.
+    private func storedLabour(operativeId: String) -> [String: Any] {
+        [
+            "operativeId": operativeId,
+            "projectId": "j-Abc-174",
+            "date": dayMs,
+            "timeSlot": "FULL DAY",
+            "status": "Confirmed",
+            "bookedBy": "TEST-Admin",
+        ]
+    }
+
+    private func storedManager(userId: String) -> [String: Any] {
+        [
+            "userId": userId,
+            "date": dayMs + 86_400_000,
+            "timeSlot": "CUSTOM_HOURS",
+            "workStartTime": "7:00 AM",
+            "workEndTime": "4:00 PM",
+            "locationType": ManagerLocationType.project.rawValue,
+            "locationId": "J-ABC-174",
+        ]
+    }
+
+    private func labourModels(_ docs: [(String, [String: Any])]) throws -> [Booking] {
+        let parsed = try XCTUnwrap(CanonicalBusinessEngine.parseBookingDocuments(docs.map { ["id": $0.0, "data": $0.1] }))
+        return parsed.compactMap(FirebaseBackend.booking(fromCanonical:))
+    }
+
+    /// The same mapping as `FirebaseBackend.managerSiteBookingsFromFirestoreDocuments` (which needs a snapshot).
+    private func managerModels(_ docs: [(String, [String: Any])]) throws -> [ManagerSiteBooking] {
+        let parsed = try XCTUnwrap(CanonicalBusinessEngine.parseManagerSiteBookingDocuments(docs.map { ["id": $0.0, "data": $0.1] }))
+        return try parsed.map { row in
+            let key = row.locationId?.trimmingCharacters(in: .whitespacesAndNewlines)
+            var booking = ManagerSiteBooking(
+                id: UUID(uuidString: row.id) ?? UUID(),
+                userId: row.userId,
+                date: Date(timeIntervalSince1970: row.dateMs / 1000),
+                timeSlot: try XCTUnwrap(ManagerTimeSlot.fromStored(row.timeSlot)),
+                locationType: try XCTUnwrap(ManagerLocationType(rawValue: row.locationType)),
+                locationId: (key?.isEmpty == false ? key : nil).map { WorkDocumentKeys.inAppId(for: $0) },
+                customLocationName: row.customLocationName,
+                workStartTime: row.workStartTime,
+                workEndTime: row.workEndTime,
+                isBreakRemoved: row.isBreakRemoved,
+                createdAt: Date(timeIntervalSince1970: dayMs / 1000 - 86_400),
+                updatedAt: Date(timeIntervalSince1970: dayMs / 1000 - 86_400)
+            )
+            booking.documentId = row.id == booking.id.uuidString ? nil : row.id
+            booking.locationKey = key?.isEmpty == false ? key : nil
+            return booking
+        }
+    }
+
+    private func applied(_ doc: [String: Any], _ set: [String: Any], _ remove: [String]) -> [String: Any] {
+        var out = doc
+        for (key, value) in set { if value is NSNull { out.removeValue(forKey: key) } else { out[key] = value } }
+        for key in remove { out.removeValue(forKey: key) }
+        return out
+    }
+
+    private func reviewEdit(_ doc: [String: Any], id: String, collection: String, start: String, end: String, window: (start: String, end: String)?) throws -> (set: [String: Any], remove: [String]) {
+        var input = doc
+        input["id"] = id
+        input["collection"] = collection
+        guard case .write(_, _, let set, let remove, let changed)? = CanonicalBusinessEngine.timesheetReviewBookingEditWrites(
+            booking: input, startTime: start, endTime: end, isBreakRemoved: false, overtimeRate: nil, slotWindow: window
+        ) else { throw XCTSkip("script did not answer") }
+        XCTAssertTrue(changed)
+        return (set, remove)
+    }
+
+    func testReviewerEditsRecordedOnTheSheetDoNotSendItBackButWithoutThemTheyDo() throws {
+        let user = LogicFixtures.selfEmployedUser(id: "TEST-user-174", email: "test-174@example.com", dayRate: 200)
+        let operative = LogicFixtures.operative(id: UUID(), email: user.email, dayRate: 200)
+        let labourId = "lab-174-b1"
+        let managerId = "MGR-174-M1"
+        let labourV1 = storedLabour(operativeId: operative.id.uuidString)
+        let managerV1 = storedManager(userId: user.id)
+        let start = Date(timeIntervalSince1970: dayMs / 1000)
+        let period = WeekRange(start: start, end: start.addingTimeInterval(6 * 86_400), title: "TEST 174")
+        func inputs(_ labour: [String: Any], _ manager: [String: Any]) throws -> SignedTimesheetChanges.Inputs {
+            SignedTimesheetChanges.Inputs(
+                bookings: try labourModels([(labourId, labour)]),
+                managerBookings: try managerModels([(managerId, manager)]),
+                operatives: [operative],
+                projects: [],
+                smallWorks: [],
+                organization: nil,
+                users: [user],
+                liveLoaded: true
+            )
+        }
+        let before = try inputs(labourV1, managerV1)
+        XCTAssertEqual(before.bookings.first?.projectKey, "j-Abc-174")
+        XCTAssertEqual(before.managerBookings.first?.workStartTime, "07:00")
+
+        // The person signs the live bookings.
+        var draft = TimesheetDraft()
+        draft.operativeSignedAt = Date(timeIntervalSince1970: dayMs / 1000 + 7 * 86_400)
+        draft.versionDocumentId = "timesheet_TEST-user-174_1795392000"
+        let lines = SignedTimesheetChanges.liveLines(user: user, period: period, inputs: before)
+        XCTAssertFalse(lines.isEmpty)
+        XCTAssertTrue(SignedTimesheetChanges.stampSignedBookings(on: &draft, lines: lines, bookings: before.bookings, managerBookings: before.managerBookings))
+        XCTAssertEqual(SignedTimesheetChanges.change(draft: draft, user: user, period: period, inputs: before)?.changed, false)
+
+        // The line manager edits both bookings from the review (⚙): the booking writes and the sheet's records.
+        let labourEdit = try reviewEdit(labourV1, id: labourId, collection: "bookings", start: "07:00", end: "18:00", window: ("07:00", "16:00"))
+        let managerEdit = try reviewEdit(managerV1, id: managerId, collection: "managerSiteBookings", start: "08:00", end: "17:00", window: nil)
+        var recorded = draft
+        for (doc, id, collection, edit) in [
+            (labourV1, labourId, "bookings", labourEdit),
+            (managerV1, managerId, "managerSiteBookings", managerEdit),
+        ] {
+            var stored = doc
+            stored["id"] = id
+            stored["collection"] = collection
+            let record = try XCTUnwrap(TimesheetReviewerEditRecorder.record(
+                draft: recorded, collection: collection, bookingId: id, booking: stored, write: edit, editedBy: "TEST-LM"
+            ))
+            TimesheetReviewerBookingEdits.adding(record.edit, to: &recorded)
+        }
+        let after = try inputs(applied(labourV1, labourEdit.set, labourEdit.remove), applied(managerV1, managerEdit.set, managerEdit.remove))
+
+        // Recorded: still exactly as the reviewer left them → no change for the person.
+        let kept = try XCTUnwrap(SignedTimesheetChanges.change(draft: recorded, user: user, period: period, inputs: after))
+        XCTAssertFalse(kept.changed, "\(kept)")
+        XCTAssertNil(kept.waitingFor)
+
+        // Not recorded (an older build's edit): the sheet goes back to the person (1.47.0).
+        let reopened = try XCTUnwrap(SignedTimesheetChanges.change(draft: draft, user: user, period: period, inputs: after))
+        XCTAssertTrue(reopened.changed)
+        XCTAssertEqual(reopened.waitingFor, "person")
     }
 
     // MARK: Line order
