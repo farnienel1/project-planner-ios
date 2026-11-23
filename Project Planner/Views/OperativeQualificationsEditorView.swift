@@ -38,11 +38,33 @@ struct OperativeQualificationsEditorView: View {
 
     @State private var baselineQualifications: Set<Qualification>
     @State private var baselineExpiry: [String: Date]
+    /// Display only (#19): expiries the stored map holds under another spelling of the id or only on the assignment's
+    /// `endDate`, keyed by the qualification id. Never part of a write.
+    @State private var derivedExpiry: [String: Date] = [:]
+    /// Derived expiries the person switched to "No" here (display only; nothing stored is removed for them).
+    @State private var hiddenDerivedExpiry: Set<String> = []
     @State private var baselineCerts: [String: String]
 
     @State private var showingAssignQualificationsPicker = false
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
+
+    /// RULEBOOK 1.50.0 `uploadAllowedHint`: what a certificate may be ("A photo (JPEG, PNG, HEIC or WebP) or a PDF ·
+    /// up to 10 MB"); the old "PDF or JPEG only" text predates 1.50.0.
+    private static var certificateHint: String {
+        let hint = CanonicalBusinessEngine.callJSON(
+            "uploadAllowedHint",
+            arguments: [StorageUploadPolicy.uploadKind(for: .qualificationCertificate)]
+        ) as? String ?? ""
+        return hint.isEmpty ? "A photo or a PDF · up to 10 MB" : hint
+    }
+
+    /// Issue #16 (17 Nov): how long a save waits before saying so, never "Saving…" for ever. An upload of up to 10 MB
+    /// on a slow phone signal gets longer than a Firestore write.
+    static let uploadWaitSeconds: Double = 180
+    static let writeWaitSeconds: Double = 20
+    static let waitingForServerMessage =
+        "Saved on this phone, waiting for the server to confirm. Check your connection; it is sent when you are back online. A certificate not uploaded yet stays ready for the next Save."
 
     /// RULEBOOK 1.50.0: every photo type and PDF.
     private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .heif, .webP]
@@ -60,7 +82,11 @@ struct OperativeQualificationsEditorView: View {
         self.presentation = presentation
         self.usesOwnNavigationStack = usesOwnNavigationStack
         _selectedQualifications = State(initialValue: operative.qualifications)
+        // The write map is the stored map plus only what the person changes here (RULEBOOK §1: never re-save what
+        // you didn't change). Issue #19: an expiry kept only under another spelling of the id, or only on the
+        // assignment's `endDate`, is shown (`derivedExpiry`) but never written back unless the person edits it.
         _qualificationExpiryDates = State(initialValue: operative.qualificationExpiryDates)
+        _derivedExpiry = State(initialValue: PersonQualifications.derivedExpiryDates(for: operative))
         _qualificationCertificateURLs = State(initialValue: operative.qualificationCertificateURLs)
         _baselineQualifications = State(initialValue: operative.qualifications)
         _baselineExpiry = State(initialValue: operative.qualificationExpiryDates)
@@ -81,7 +107,7 @@ struct OperativeQualificationsEditorView: View {
 
     private func expiryMapsMatch(_ lhs: [String: Date], _ rhs: [String: Date]) -> Bool {
         guard lhs.keys == rhs.keys else { return false }
-        let cal = Calendar.current
+        let cal = OrganizationRulebookContext.calendar
         return lhs.allSatisfy { id, date in
             guard let other = rhs[id] else { return false }
             return cal.isDate(date, inSameDayAs: other)
@@ -351,7 +377,8 @@ struct OperativeQualificationsEditorView: View {
     @ViewBuilder
     private func qualificationRow(_ qualification: Qualification) -> some View {
         let isSelected = selectedQualifications.contains(qualification)
-        let hasExpiry = qualificationExpiryDates[qualification.id] != nil
+        let shownExpiry = displayedExpiry(for: qualification.id)
+        let hasExpiry = shownExpiry != nil
 
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -383,11 +410,13 @@ struct OperativeQualificationsEditorView: View {
                         get: { hasExpiry },
                         set: { enabled in
                             if enabled {
-                                if qualificationExpiryDates[qualification.id] == nil {
-                                    qualificationExpiryDates[qualification.id] = Calendar.current.startOfDay(for: Date())
+                                hiddenDerivedExpiry.remove(qualification.id)
+                                if displayedExpiry(for: qualification.id) == nil {
+                                    qualificationExpiryDates[qualification.id] = OrganizationRulebookContext.calendar.startOfDay(for: Date())
                                 }
                             } else {
                                 qualificationExpiryDates.removeValue(forKey: qualification.id)
+                                if derivedExpiry[qualification.id] != nil { hiddenDerivedExpiry.insert(qualification.id) }
                             }
                         }
                     )) {
@@ -401,15 +430,18 @@ struct OperativeQualificationsEditorView: View {
                     .disabled(!canEditAssignments)
                 }
 
-                if hasExpiry, let expiry = qualificationExpiryDates[qualification.id] {
+                if let expiry = shownExpiry {
                     DatePicker(
                         "Expires",
                         selection: Binding(
                             get: { expiry },
-                            set: { qualificationExpiryDates[qualification.id] = Calendar.current.startOfDay(for: $0) }
+                            set: { qualificationExpiryDates[qualification.id] = OrganizationRulebookContext.calendar.startOfDay(for: $0) }
                         ),
                         displayedComponents: .date
                     )
+                    // A business date: the organisation's calendar and zone, never the phone's (RULEBOOK §1).
+                    .environment(\.calendar, OrganizationRulebookContext.calendar)
+                    .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                     .accessibilityIdentifier("operativeQualificationsEditor.expires")
                     .disabled(!canEditAssignments)
                 }
@@ -423,7 +455,7 @@ struct OperativeQualificationsEditorView: View {
                 .font(.caption)
                 .disabled(!canEditAssignments)
 
-                Text("PDF or JPEG only · max 10MB")
+                Text(Self.certificateHint)
                     .font(.caption2)
                     .foregroundColor(.secondary)
 
@@ -440,7 +472,8 @@ struct OperativeQualificationsEditorView: View {
                         Text("Certificate uploaded")
                             .font(.caption)
                             .foregroundColor(.green)
-                        if let url = URL(string: existingURLString) {
+                        // RULEBOOK 1.50.0 §24 `safeExternalUrl`: only an https link is opened.
+                        if let url = CanonicalBusinessEngine.safeExternalURL(existingURLString) {
                             Button("View certificate") {
                                 certificateViewerURL = IdentifiableURL(url)
                             }
@@ -498,8 +531,16 @@ struct OperativeQualificationsEditorView: View {
         }
     }
 
+    /// The expiry shown for a qualification: the person's edit or the stored map entry, else the derived one (#19).
+    private func displayedExpiry(for qualificationId: String) -> Date? {
+        if let date = qualificationExpiryDates[qualificationId] { return date }
+        if hiddenDerivedExpiry.contains(qualificationId) { return nil }
+        return derivedExpiry[qualificationId]
+    }
+
     private func revertToBaseline() {
         selectedQualifications = baselineQualifications
+        hiddenDerivedExpiry = []
         qualificationExpiryDates = baselineExpiry
         qualificationCertificateURLs = baselineCerts
         certificateUploadTargets = [:]
@@ -515,6 +556,8 @@ struct OperativeQualificationsEditorView: View {
     private func applyOperativeSnapshot(_ op: Operative) {
         selectedQualifications = op.qualifications
         qualificationExpiryDates = op.qualificationExpiryDates
+        derivedExpiry = PersonQualifications.derivedExpiryDates(for: op)
+        hiddenDerivedExpiry = []
         qualificationCertificateURLs = op.qualificationCertificateURLs
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
@@ -607,7 +650,7 @@ struct OperativeQualificationsEditorView: View {
         let stored = operativeStore.allOperatives.first(where: { $0.id == operative.id }) ?? operative
         let editorExpiry = qualificationExpiryDates.filter { entry in
             selectedQualifications.contains(where: { $0.id == entry.key })
-        }.mapValues { Calendar.current.startOfDay(for: $0) }
+        }.mapValues { OrganizationRulebookContext.calendar.startOfDay(for: $0) }
         guard let assignment = OperativeQualificationPatch.mergedWrite(
             stored: OperativeQualificationPatch.Maps(
                 qualifications: Array(stored.qualifications),
@@ -634,15 +677,52 @@ struct OperativeQualificationsEditorView: View {
             from: assignment.qualifications,
             preferring: Array(selectedQualifications) + Array(stored.qualifications)
         )
-        let savedExpiry = OperativeQualificationPatch.expiryDates(from: assignment.qualificationExpiryDates)
-        var savedCertificates = assignment.qualificationCertificateURLs
+        // Review of #269: the maps change only by what the person changed in THIS editor (against what it loaded),
+        // never by a comparison with the live stored row — another device's newer expiry or certificate, and an
+        // expiry kept under another spelling of the id (#19), stay exactly as stored.
+        let selectedIds = Set(selectedQualifications.map(\.id))
+        let mapChanges = OperativeQualificationPatch.changes(
+            baselineExpiry: baselineExpiry,
+            editorExpiry: qualificationExpiryDates,
+            selectedIds: selectedIds,
+            baselineCertificates: baselineCerts,
+            editorCertificates: qualificationCertificateURLs
+        )
+        let savedExpiry = mapChanges.applied(expiry: stored.qualificationExpiryDates)
+        let savedCertificates = mapChanges.applied(certificates: stored.qualificationCertificateURLs)
+        let qualificationRows = assignment.qualifications
+
+        var updatedOperative = stored
+        updatedOperative.qualifications = Set(savedQualifications)
+        updatedOperative.qualificationExpiryDates = savedExpiry
+        updatedOperative.qualificationCertificateURLs = savedCertificates
+        updatedOperative.updatedAt = Date()
+        /// The write is on this phone (sent, or queued until the server answers): show what was saved.
+        func applySavedMaps() {
+            operativeStore.replaceOperativeInMemory(updatedOperative)
+            selectedQualifications = Set(savedQualifications)
+            qualificationExpiryDates = savedExpiry
+            qualificationCertificateURLs = savedCertificates
+        }
 
         do {
-            try await firebaseBackend.patchOperativeQualificationMaps(
-                operativeDocumentId: operative.documentId,
-                organizationId: organizationId,
-                write: assignment
-            )
+            let backend = firebaseBackend
+            let documentId = operative.documentId
+            try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
+                try await backend.patchOperativeQualificationMaps(
+                    operativeDocumentId: documentId,
+                    organizationId: organizationId,
+                    qualifications: qualificationRows,
+                    changes: mapChanges
+                )
+            }
+        } catch is BoundedWait.TimedOut {
+            // Issue #16 / review item 3: Firestore keeps the write on this phone and sends it when the server
+            // answers. Show it as saved, keep any certificate still to upload for the next Save, and say so.
+            applySavedMaps()
+            syncBaselineFromWorkingState()
+            errorMessage = Self.waitingForServerMessage
+            return false
         } catch {
             errorMessage = "Could not save qualifications. \(error.localizedDescription)"
             if let mergeRollback {
@@ -653,15 +733,7 @@ struct OperativeQualificationsEditorView: View {
             return false
         }
 
-        var updatedOperative = stored
-        updatedOperative.qualifications = Set(savedQualifications)
-        updatedOperative.qualificationExpiryDates = savedExpiry
-        updatedOperative.qualificationCertificateURLs = savedCertificates
-        updatedOperative.updatedAt = Date()
-        operativeStore.replaceOperativeInMemory(updatedOperative)
-        selectedQualifications = Set(savedQualifications)
-        qualificationExpiryDates = savedExpiry
-        qualificationCertificateURLs = savedCertificates
+        applySavedMaps()
 
         if !certificateUploadTargets.isEmpty {
             var uploaded: [String: String] = [:]
@@ -669,14 +741,18 @@ struct OperativeQualificationsEditorView: View {
                 for (qualificationId, fileURL) in certificateUploadTargets {
                     let data = try Data(contentsOf: fileURL)
                     // RULEBOOK 1.50.0 §24: no type is assumed here; the bytes decide (`uploadAllowed`).
-                    let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
-                        data: data,
-                        organizationId: organizationId,
-                        operativeId: operative.documentId,
-                        qualificationId: qualificationId,
-                        fileName: fileURL.lastPathComponent,
-                        contentType: ""
-                    )
+                    let backend = firebaseBackend
+                    let documentId = operative.documentId
+                    let uploadedURL = try await BoundedWait.run(seconds: Self.uploadWaitSeconds) {
+                        try await backend.uploadQualificationDocument(
+                            data: data,
+                            organizationId: organizationId,
+                            operativeId: documentId,
+                            qualificationId: qualificationId,
+                            fileName: fileURL.lastPathComponent,
+                            contentType: ""
+                        )
+                    }
                     uploaded[qualificationId] = uploadedURL
                 }
             } catch {
@@ -686,32 +762,50 @@ struct OperativeQualificationsEditorView: View {
                 return false
             }
 
-            guard let mergedURLs = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
-                existing: savedCertificates,
-                uploaded: uploaded
-            ) else {
-                errorMessage = "Could not save the certificate."
-                syncBaselineFromWorkingState()
-                return false
+            // Issue #16: a renewed certificate is set under its id and every OTHER spelling of that id is removed, so
+            // View certificate shows the new file on both apps. Nothing else in the maps is touched. The old file
+            // stays in Storage (each upload is a new object, §24).
+            let certificateChanges = OperativeQualificationPatch.changes(
+                baselineExpiry: [:],
+                editorExpiry: [:],
+                selectedIds: [],
+                baselineCertificates: [:],
+                editorCertificates: [:],
+                uploaded: uploaded,
+                knownCertificates: savedCertificates
+            )
+            let mergedURLs = certificateChanges.applied(certificates: savedCertificates)
+            func applyCertificates() {
+                updatedOperative.qualificationCertificateURLs = mergedURLs
+                updatedOperative.updatedAt = Date()
+                operativeStore.replaceOperativeInMemory(updatedOperative)
+                qualificationCertificateURLs = mergedURLs
             }
-            savedCertificates = mergedURLs
-            var withCertificates = assignment
-            withCertificates.qualificationCertificateURLs = mergedURLs
             do {
-                try await firebaseBackend.patchOperativeQualificationMaps(
-                    operativeDocumentId: operative.documentId,
-                    organizationId: organizationId,
-                    write: withCertificates
-                )
+                let backend = firebaseBackend
+                let documentId = operative.documentId
+                try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
+                    try await backend.patchOperativeQualificationMaps(
+                        operativeDocumentId: documentId,
+                        organizationId: organizationId,
+                        qualifications: qualificationRows,
+                        changes: certificateChanges
+                    )
+                }
+            } catch is BoundedWait.TimedOut {
+                // The file is uploaded and the link is written on this phone; Firestore sends it when the server
+                // answers. Show the new certificate, keep the screen open and say so — never "Saving…" for ever.
+                applyCertificates()
+                certificateUploadTargets = [:]
+                syncBaselineFromWorkingState()
+                errorMessage = Self.waitingForServerMessage
+                return false
             } catch {
                 errorMessage = "Could not save the certificate. \(error.localizedDescription)"
                 syncBaselineFromWorkingState()
                 return false
             }
-            updatedOperative.qualificationCertificateURLs = mergedURLs
-            updatedOperative.updatedAt = Date()
-            operativeStore.replaceOperativeInMemory(updatedOperative)
-            qualificationCertificateURLs = mergedURLs
+            applyCertificates()
         }
 
         certificateUploadTargets = [:]

@@ -3401,19 +3401,28 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
         )
-        
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+
+        // Issue #16 (17 Nov): the editor gives up on a stalled upload (`BoundedWait`); cancelling this task then stops
+        // the Storage upload too, so nothing keeps uploading behind a "try again" message. Each upload is a new object
+        // (`storedFileObjectName`, RULEBOOK §24), so a renewed certificate never overwrites the one it replaces.
+        let uploadBox = QualificationUploadTaskBox()
+        let _ = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                uploadBox.task = storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else if let metadata = metadata {
+                        continuation.resume(returning: metadata)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                    }
                 }
             }
+        } onCancel: {
+            uploadBox.cancel()
         }
-        
+        try Task.checkCancellation()
+
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
@@ -3661,15 +3670,22 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
-    /// Merges qualification maps onto the operative document. Other fields stay.
+    /// Writes one qualifications save onto the operative document. Other fields stay.
     /// `operativeDocumentId` is the stored document id (`Operative.documentId`), never the in-memory UUID.
+    ///
+    /// Review of #269: `qualifications` (the merged assignment list) is written whole, as before; the two maps are
+    /// written field by field with only this editor's changes (`OperativeQualificationPatch.changes`): a set key is
+    /// set, a removed key is deleted, and every other key — another device's, another spelling's — is left alone.
+    /// When the document does not exist on the server yet, the update fails with not-found and the save falls back to
+    /// a merge write of the set keys only (nothing to delete on a new document).
     func patchOperativeQualificationMaps(
         operativeDocumentId: String,
         organizationId: String,
-        write: CanonicalBusinessEngine.CanonicalOperativeQualificationMaps
+        qualifications rows: [CanonicalBusinessEngine.CanonicalAssignedQualificationRow],
+        changes: OperativeQualificationPatch.MapChanges
     ) async throws {
         let orgId = try await ensureReadableOrganization(organizationId)
-        let qualifications: [[String: Any]] = write.qualifications.map { row in
+        let qualifications: [[String: Any]] = rows.map { row in
             var fields: [String: Any] = [
                 "id": row.id,
                 "name": row.name,
@@ -3682,20 +3698,50 @@ class FirebaseBackend: ObservableObject {
             }
             return fields
         }
-        let expiry = write.qualificationExpiryDates.reduce(into: [String: Timestamp]()) { dates, entry in
-            if let date = CanonicalBusinessEngine.date(fromIso: entry.value) {
-                dates[entry.key] = Timestamp(date: date)
+        let ref = db.collection("organizations").document(orgId).collection("operatives").document(operativeDocumentId)
+        let fields = Self.qualificationMapUpdateFields(qualifications: qualifications, changes: changes)
+        do {
+            try await ref.updateData(fields)
+        } catch let error as NSError where error.domain == "FIRFirestoreErrorDomain" && error.code == 5 {
+            // 5 = not-found: the document does not exist on the server yet.
+            var merge: [String: Any] = [
+                "qualifications": qualifications,
+                "updatedAt": Timestamp(date: Date()),
+            ]
+            if !changes.setExpiry.isEmpty {
+                merge["qualificationExpiryDates"] = changes.setExpiry.mapValues { Timestamp(date: $0) }
             }
+            if !changes.setCertificates.isEmpty {
+                merge["qualificationCertificateURLs"] = changes.setCertificates
+            }
+            try await ref.setData(merge, merge: true)
         }
-        let payload: [String: Any] = [
+    }
+
+    /// The field-path update of one qualifications save (`patchOperativeQualificationMaps`).
+    static func qualificationMapUpdateFields(
+        qualifications: [[String: Any]],
+        changes: OperativeQualificationPatch.MapChanges
+    ) -> [AnyHashable: Any] {
+        var fields: [AnyHashable: Any] = [
             "qualifications": qualifications,
-            "qualificationExpiryDates": expiry,
-            "qualificationCertificateURLs": write.qualificationCertificateURLs,
             "updatedAt": Timestamp(date: Date()),
         ]
-        try await db.collection("organizations").document(orgId).collection("operatives").document(operativeDocumentId).setData(payload, merge: true)
+        for (key, value) in changes.setExpiry {
+            fields[FieldPath(["qualificationExpiryDates", key])] = Timestamp(date: value)
+        }
+        for key in changes.removeExpiry where changes.setExpiry[key] == nil {
+            fields[FieldPath(["qualificationExpiryDates", key])] = FieldValue.delete()
+        }
+        for (key, value) in changes.setCertificates {
+            fields[FieldPath(["qualificationCertificateURLs", key])] = value
+        }
+        for key in changes.removeCertificates where changes.setCertificates[key] == nil {
+            fields[FieldPath(["qualificationCertificateURLs", key])] = FieldValue.delete()
+        }
+        return fields
     }
-    
+
     /// `documentId` is the stored operative document id (`Operative.documentId`, stored case), never the in-memory UUID.
     func deleteOperative(documentId: String, organizationId: String) async throws {
         print("🔥🔥🔥 DEBUG: deleteOperative called for operative: \(documentId), organization: \(organizationId)")
