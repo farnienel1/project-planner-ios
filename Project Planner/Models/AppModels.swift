@@ -1193,6 +1193,9 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     var timesheetSubmission: [CanonicalBusinessEngine.CanonicalTimesheetSubmissionEntry]? = nil
     /// Earlier payment-run windows. A save merges this through `paymentRunHistoryAfterChange`.
     var paymentRunHistory: [CanonicalBusinessEngine.CanonicalPaymentRunHistoryWindow] = []
+    /// RULEBOOK 1.78.0 §4.5: `invoicing.lineManagerReminderDaysBeforePayday` read through `parseLineManagerReminderDays`
+    /// (1–3; nil until read). Saved with `lineManagerReminderWriteFields` by the screen's main Save.
+    var lineManagerReminderDaysBeforePayday: Int? = nil
 
     nonisolated init(
         paymentRunMode: PaymentRunConfigurationMode,
@@ -1324,7 +1327,7 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
     nonisolated enum InvoicingCodingKeys: String, CodingKey {
         case paymentRunMode, paymentDateMode, paymentRunDateRanges, paymentDates, noteToUsers
         case recurringPaymentRunSummary, recurringRunStartDay, recurringRunEndDay, recurringPaymentDay
-        case timesheetSubmission, paymentRunHistory
+        case timesheetSubmission, paymentRunHistory, lineManagerReminderDaysBeforePayday
     }
 
     nonisolated init(from decoder: Decoder) throws {
@@ -1346,6 +1349,7 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
             [CanonicalBusinessEngine.CanonicalPaymentRunHistoryWindow].self,
             forKey: .paymentRunHistory
         ) ?? []
+        lineManagerReminderDaysBeforePayday = try container.decodeIfPresent(Int.self, forKey: .lineManagerReminderDaysBeforePayday)
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -1361,6 +1365,7 @@ nonisolated struct OrganizationInvoicingSettings: Codable, Hashable, Sendable {
         try container.encode(recurringPaymentDay, forKey: .recurringPaymentDay)
         try container.encodeIfPresent(timesheetSubmission, forKey: .timesheetSubmission)
         try container.encode(paymentRunHistory, forKey: .paymentRunHistory)
+        try container.encodeIfPresent(lineManagerReminderDaysBeforePayday, forKey: .lineManagerReminderDaysBeforePayday)
     }
 
     func timesheetSubmissionListInput() -> CanonicalBusinessEngine.CanonicalTimesheetSubmissionListInput {
@@ -2205,7 +2210,7 @@ nonisolated enum UserNotificationToggle: String, CaseIterable, Identifiable, Sen
         case .taskCompleted, .taskCreated: return .taskAssigned
         case .holidayRequestSubmitted: return .annualLeaveRequests
         case .holidayRequestApproved, .holidayRequestDeclined, .holidayCancelledByManager, .holidayBookedForYou: return .annualLeaveDecisions
-        case .timesheetPendingManagerSignoff, .timesheetSignedByManager, .timesheetBookingsChanged, .timesheetRevisionToSign: return .timesheetSignoff
+        case .timesheetPendingManagerSignoff, .timesheetSignedByManager, .timesheetBookingsChanged, .timesheetRevisionToSign, .timesheetSignOffReminder: return .timesheetSignoff
         case .lineManagerPeerUpdate: return .lineManagerPeerUpdate
         case .materialAdded, .materialOrderPlaced: return .materialAdded
         // `notificationPreferenceKeyForType` maps hs_toolbox_reminder to the toolbox talk toggle.

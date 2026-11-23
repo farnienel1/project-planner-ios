@@ -132,8 +132,11 @@ struct OrganisationInvoicingSettingsView: View {
 
                 timesheetSubmissionSection
 
+                // RULEBOOK 1.78.0 §4.5: the line manager sign-off reminder, saved by this screen's main Save.
+                lineManagerReminderSection
+
                 numberedStep(
-                    5,
+                    6,
                     title: "Note to operatives",
                     description: "Shown on operative timesheet pages. Add anything specific, e.g. submit price work by Thursday."
                 )
@@ -147,7 +150,7 @@ struct OrganisationInvoicingSettingsView: View {
 
                 // RULEBOOK 1.32.0 §4.5: the PAYE payday is part of this screen's draft and saved by its main Save.
                 numberedStep(
-                    6,
+                    7,
                     title: "PAYE payday",
                     description: CanonicalBusinessEngine.overtimeText(
                         "PAYE_PAYDAY_HELP",
@@ -652,6 +655,55 @@ struct OrganisationInvoicingSettingsView: View {
             rows.append(row)
         }
         draft.timesheetSubmission = rows
+    }
+
+    /// RULEBOOK 1.78.0 §4.5: item 5 — days before payday (1, 2, 3) for the line manager sign-off reminder at 08:00.
+    /// A Menu of Buttons (not a Picker over a hand-made Binding, iOS #275).
+    @ViewBuilder
+    private var lineManagerReminderSection: some View {
+        let days = draft.lineManagerReminderDaysBeforePayday
+            ?? CanonicalBusinessEngine.parseLineManagerReminderDays(nil)
+        numberedStep(
+            5,
+            title: CanonicalBusinessEngine.lineManagerReminderLabel,
+            description: CanonicalBusinessEngine.lineManagerReminderHelp
+        )
+        SettingsHubChrome.card {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(CanonicalBusinessEngine.lineManagerReminderDaysLabel)
+                        .font(.body)
+                    Spacer()
+                    Menu {
+                        ForEach(CanonicalBusinessEngine.lineManagerReminderDaysOptions, id: \.self) { option in
+                            Button(option == 1 ? "1 day" : "\(option) days") {
+                                draft.lineManagerReminderDaysBeforePayday = option
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(days.map { $0 == 1 ? "1 day" : "\($0) days" } ?? "Select")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(Color.primary)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("organisationInvoicingSettings.lineManagerReminderDays")
+                }
+                if let days, let summary = CanonicalBusinessEngine.lineManagerReminderSummary(days) {
+                    Text(summary)
+                        .font(.footnote)
+                        .foregroundStyle(Color.secondary)
+                }
+                Text(CanonicalBusinessEngine.lineManagerReminderAdminNote)
+                    .font(.footnote)
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.vertical, 12)
+        }
     }
 
     @ViewBuilder

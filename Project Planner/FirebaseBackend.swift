@@ -1790,12 +1790,17 @@ class FirebaseBackend: ObservableObject {
     }
 
     private static func organizationInvoicingFromFirestore(_ data: [String: Any]) -> OrganizationInvoicingSettings {
+        // RULEBOOK 1.78.0 §4.5: the line manager sign-off reminder's days (`parseLineManagerReminderDays`).
+        let reminderDays = CanonicalBusinessEngine.parseLineManagerReminderDays(data["lineManagerReminderDaysBeforePayday"])
         if let parsed = CanonicalBusinessEngine.parseInvoicing(jsonReadyDictionary(data)),
            var settings = invoicingSettings(from: parsed) {
             settings.timesheetSubmission = parsed.timesheetSubmission
+            settings.lineManagerReminderDaysBeforePayday = reminderDays
             return settings
         }
-        return invoicingSettingsFallback(data)
+        var settings = invoicingSettingsFallback(data)
+        settings.lineManagerReminderDaysBeforePayday = reminderDays
+        return settings
     }
 
     private static func invoicingSettings(from parsed: CanonicalBusinessEngine.CanonicalInvoicingSettings) -> OrganizationInvoicingSettings? {
@@ -5674,6 +5679,22 @@ class FirebaseBackend: ObservableObject {
         } else {
             for (key, value) in written {
                 patch["invoicing.\(key)"] = value
+            }
+        }
+        // RULEBOOK 1.78.0 §4.5: the line manager sign-off reminder's days, in the same partial update (nothing when
+        // unchanged). `invoicingToFirestore` never writes it from Swift settings (they do not carry it).
+        if let days = settings.lineManagerReminderDaysBeforePayday {
+            let reminderFields = CanonicalBusinessEngine.lineManagerReminderWriteFields(
+                storedInvoicing: serverInvoicing.map { FirebaseBackend.firestoreJSON($0) as? [String: Any] ?? [:] },
+                days: days
+            ) ?? [:]
+            for (key, value) in reminderFields {
+                if var map = patch["invoicing"] as? [String: Any], key.hasPrefix("invoicing.") {
+                    map[String(key.dropFirst("invoicing.".count))] = value
+                    patch["invoicing"] = map
+                } else {
+                    patch[key] = value
+                }
             }
         }
         var paydayFields: [String: Any] = [:]
