@@ -178,7 +178,11 @@ final class FixedSampleScreenSnapshotTests: XCTestCase {
             sampleVariation(id: "vo-2", number: "VO-002", sequence: 2, heading: "Reception joinery", status: .submitted),
         ]
         assertScreenModes(
-            VariationTrackerReadOnlyView(store: store, parentName: "C746 · BPR")
+            VariationTrackerView(store: store, parentName: "C746 · BPR")
+                .environmentObject(FirebaseBackend())
+                .environmentObject(UserStore())
+                .environmentObject(SmartCacheService())
+                .environmentObject(NotificationService())
         )
     }
 

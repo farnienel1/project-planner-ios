@@ -737,6 +737,14 @@ extension UserStore {
         return CanonicalBusinessEngine.canEditJob(viewer, job: job.jobAccessFields, kind: job.jobKind, managers: JobAccessContext.managers)
     }
 
+    /// RULEBOOK 1.52.0 §22 `canRenumberVariations(role, { managesJob })` with `isJobManager`: who drags variations into
+    /// a new order in the VO tracker (admins and this job's managers; owner decision 23 Nov: the iPhone reorders too).
+    func canRenumberVariations(on job: Project) -> Bool {
+        guard let viewer = displayJobAccessViewer else { return false }
+        let managesJob = CanonicalBusinessEngine.isJobManager(viewer, job: job.jobAccessFields, managers: JobAccessContext.managers)
+        return CanonicalBusinessEngine.canRenumberVariations(viewer.role, managesJob: managesJob)
+    }
+
     /// `canChangeJobManagers`: the manager picker on a job of this kind.
     func canChangeJobManagers(kind: JobKind) -> Bool {
         guard let viewer = displayJobAccessViewer else { return false }
