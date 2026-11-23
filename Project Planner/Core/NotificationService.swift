@@ -399,28 +399,19 @@ class NotificationService: ObservableObject {
         items: [QualificationReminderItem],
         audience: QualificationExpiryReminderAudience
     ) async {
-        let cal = Calendar.current
         let now = Date()
+        // RULEBOOK §1 (one business time zone) / owner C13 (23 Nov): the reminder days and 09:00 are the
+        // organisation's, never the phone's zone.
+        let zone = OrganizationRulebookContext.timeZoneIdentifier
         // Same prefix as before: `removeQualificationExpiryReminders` (run first on every refresh) clears every pending
         // reminder with it, so reminders scheduled under the older per-row ids are removed and never doubled.
         let prefix = LocalNotificationService.qualificationExpiryIdentifierPrefix
 
         for item in items {
             let qualName = item.name.isEmpty ? "Qualification" : item.name
-            let expiryStart = cal.startOfDay(for: item.expiry)
-
-            let schedules: [(suffix: String, titleWindow: String, reminderDay: Date?)] = [
-                ("3m", "3 months", cal.date(byAdding: .month, value: -3, to: expiryStart)),
-                ("1m", "1 month", cal.date(byAdding: .month, value: -1, to: expiryStart)),
-                ("1w", "1 week", cal.date(byAdding: .day, value: -7, to: expiryStart)),
-                ("1d", "1 day", cal.date(byAdding: .day, value: -1, to: expiryStart)),
-            ]
-            for schedule in schedules {
-                guard let reminderDay = schedule.reminderDay else { continue }
-                guard let fireAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: reminderDay) else { continue }
-                guard fireAt > now else { continue }
-
-                let expiryFormatted = item.expiry.formatted(date: .abbreviated, time: .omitted)
+            let expiryFormatted = Self.qualificationExpiryDateText(item.expiry, timeZoneIdentifier: zone)
+            for schedule in Self.qualificationReminderSchedule(expiry: item.expiry, now: now, timeZoneIdentifier: zone) {
+                let fireAt = schedule.fireAt
                 let title = "Qualification expiring in \(schedule.titleWindow)"
                 let body: String
                 switch audience {
@@ -442,6 +433,57 @@ class NotificationService: ObservableObject {
         }
     }
     
+    /// One qualification expiry reminder: its identifier suffix, the window named in the title and when it fires.
+    nonisolated struct QualificationReminderFire: Equatable, Sendable {
+        let suffix: String
+        let titleWindow: String
+        let fireAt: Date
+    }
+
+    /// The organisation calendar (Gregorian, `timeZoneIdentifier`, the same shape as `OrganizationRulebookContext.calendar`).
+    static func organizationCalendar(timeZoneIdentifier: String) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timeZoneIdentifier) ?? OrganizationRulebookContext.timeZone
+        calendar.locale = Locale(identifier: "en_GB")
+        calendar.firstWeekday = 2
+        return calendar
+    }
+
+    /// Owner C13 (23 Nov), RULEBOOK §1: the reminders for one qualification expiry — 3 months, 1 month, 1 week and
+    /// 1 day before the expiry day, each at 09:00 — all in the organisation's time zone, never the phone's. The expiry
+    /// day is the organisation-zone day key of the stored expiry (`dayKeyInOrganizationZone`); reminders already past
+    /// (`fireAt <= now`) are left out.
+    static func qualificationReminderSchedule(
+        expiry: Date,
+        now: Date,
+        timeZoneIdentifier: String
+    ) -> [QualificationReminderFire] {
+        let cal = organizationCalendar(timeZoneIdentifier: timeZoneIdentifier)
+        let key = CanonicalBusinessEngine.dayKeyInOrganizationZone(expiry, timeZone: timeZoneIdentifier)
+            ?? CanonicalBusinessEngine.dayKey(for: expiry, calendar: cal)
+        let parts = key.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let expiryDay = cal.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])) else { return [] }
+        let windows: [(suffix: String, titleWindow: String, component: Calendar.Component, value: Int)] = [
+            ("3m", "3 months", .month, -3),
+            ("1m", "1 month", .month, -1),
+            ("1w", "1 week", .day, -7),
+            ("1d", "1 day", .day, -1),
+        ]
+        return windows.compactMap { window in
+            guard let day = cal.date(byAdding: window.component, value: window.value, to: expiryDay),
+                  let fireAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: day),
+                  fireAt > now else { return nil }
+            return QualificationReminderFire(suffix: window.suffix, titleWindow: window.titleWindow, fireAt: fireAt)
+        }
+    }
+
+    /// The expiry date as the reminder text shows it, on the organisation's day (never the phone's).
+    static func qualificationExpiryDateText(_ expiry: Date, timeZoneIdentifier: String) -> String {
+        let zone = TimeZone(identifier: timeZoneIdentifier) ?? OrganizationRulebookContext.timeZone
+        return expiry.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted, timeZone: zone))
+    }
+
     // MARK: - Notification Creation
     
     func notifyBookingCreated(
