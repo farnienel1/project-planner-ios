@@ -378,7 +378,18 @@ extension CanonicalBusinessEngine {
     /// `variationTrackerWriteFields(stored, { kind: 'renumbered' })` with its values: the version one up, the old
     /// 5-minute lock removed. `.some(nil)` when nothing changes; nil when the script did not answer.
     nonisolated static func variationTrackerRenumberedFields(stored: [String: Any]) -> [String: Any]?? {
-        guard let value = callJSON("variationTrackerWriteFields", arguments: [peopleDocumentJSON(stored), ["kind": "renumbered"]]) else { return nil }
+        variationTrackerActionFields(stored: stored, action: ["kind": "renumbered"])
+    }
+
+    /// `variationTrackerWriteFields(stored, { kind: 'unlockOrder' })` with its values: `orderLocked: false` and the
+    /// lock's who / when removed. `.some(nil)` when nothing changes; nil when the script did not answer.
+    nonisolated static func variationTrackerUnlockOrderFields(stored: [String: Any]) -> [String: Any]?? {
+        variationTrackerActionFields(stored: stored, action: ["kind": "unlockOrder"])
+    }
+
+    /// `variationTrackerWriteFields(stored, action)` as Firestore update fields (removed keys as `FieldValue.delete()`).
+    nonisolated private static func variationTrackerActionFields(stored: [String: Any], action: [String: Any]) -> [String: Any]?? {
+        guard let value = callJSON("variationTrackerWriteFields", arguments: [peopleDocumentJSON(stored), action]) else { return nil }
         if value is NSNull { return .some(nil) }
         guard let row = value as? [String: Any], let set = row["set"] as? [String: Any] else { return nil }
         var fields: [String: Any] = [:]

@@ -151,6 +151,40 @@ final class VariationTrackerDragTests: XCTestCase {
         XCTAssertEqual((fields?["version"] as? NSNumber)?.intValue, 5)
     }
 
+    // MARK: Owner 23 Nov: "you can still unlock it"
+
+    func testUnlockOrderClearsTheStoredLock() throws {
+        let stored: [String: Any] = ["parentId": "p", "orderLocked": true, "orderLockedByUid": "u1", "orderLockedByName": "Sam"]
+        let fields = try XCTUnwrap(try XCTUnwrap(CanonicalBusinessEngine.variationTrackerUnlockOrderFields(stored: stored)))
+        XCTAssertEqual(fields["orderLocked"] as? Bool, false)
+        XCTAssertTrue(fields["orderLockedByUid"] is FieldValue)
+        XCTAssertTrue(fields["orderLockedByName"] is FieldValue)
+        let unlocked = try XCTUnwrap(CanonicalBusinessEngine.variationTrackerUnlockOrderFields(stored: ["parentId": "p", "orderLocked": false]))
+        XCTAssertNil(unlocked, "nothing to write when the order is not locked")
+    }
+
+    func testReopenUsesTheStatusControlsWriteAndUnpins() {
+        let submitted = LogicFixtures.variation(id: "B", voNumber: "VO-002", sequence: 2, status: .submitted)
+        XCTAssertTrue(CanonicalBusinessEngine.variationIsPinned(status: submitted.status.rawValue, voNumberLocked: submitted.voNumberLocked))
+        let reopened = submitted.withStatus(.open, byUid: "u1", byName: "Sam")
+        XCTAssertEqual(reopened.status, .open)
+        XCTAssertFalse(reopened.voNumberLocked, "the number lock is cleared in the same write (1.63.0)")
+        XCTAssertEqual(reopened.statusHistory.last?.status, "open")
+        XCTAssertEqual(reopened.voNumber, "VO-002", "reopening never renumbers")
+        XCTAssertFalse(CanonicalBusinessEngine.variationIsPinned(status: reopened.status.rawValue, voNumberLocked: reopened.voNumberLocked))
+    }
+
+    func testTrackerOffersTheWayToUnlockAndShowsNoPreviousNumber() throws {
+        let view = try source("Project Planner/Views/Variations/VariationTrackerView.swift")
+        XCTAssertTrue(view.contains("withStatus(.open"))
+        XCTAssertTrue(view.contains("Button(\"Reopen\")"))
+        XCTAssertTrue(view.contains("Button(\"Unlock order\")"))
+        XCTAssertTrue(view.contains("unlockVariationTrackerOrder("))
+        XCTAssertFalse(view.contains("Text(\"was "), "owner 23 Nov: no \"was VO-003\" on the iPhone tracker")
+        XCTAssertTrue(try source("Project Planner/Views/Variations/VariationDetailView.swift").contains("opened.withStatus(status"),
+                      "the status control and Reopen write the same fields")
+    }
+
     // MARK: The save mirrors web `applyVariationOrder`
 
     func testSaveUsesTheRulebookAndWritesEveryCopy() throws {

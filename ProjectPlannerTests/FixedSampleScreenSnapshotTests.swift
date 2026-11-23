@@ -183,6 +183,7 @@ final class FixedSampleScreenSnapshotTests: XCTestCase {
                 .environmentObject(UserStore())
                 .environmentObject(SmartCacheService())
                 .environmentObject(NotificationService())
+                .environmentObject(OperativeStore())
         )
     }
 

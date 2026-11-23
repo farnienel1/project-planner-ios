@@ -568,6 +568,41 @@ extension FirebaseBackend {
         return VariationOrderSaveOutcome(changed: changed, copiesFailed: copiesFailed)
     }
 
+    /// RULEBOOK 1.52.0 §22 `variationTrackerWriteFields(stored, { kind: 'unlockOrder' })` (web `setTrackerOrderLock`
+    /// with `locked: false`): clears the tracker's stored order lock, one partial update read and written in a
+    /// transaction. Admins and the job's managers (the security rules decide); online only. Nothing when no tracker
+    /// document exists or it is not locked.
+    func unlockVariationTrackerOrder(parentId: String, organizationId: String) async throws {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !parentId.isEmpty else { return }
+        let uid = currentUser?.uid ?? ""
+        try await Self.runVariationTrackerUnlock(
+            db: db,
+            ref: variationTrackerDocument(organizationId: orgId, parentId: parentId),
+            userId: uid
+        )
+    }
+
+    nonisolated private static func runVariationTrackerUnlock(db: Firestore, ref: DocumentReference, userId: String) async throws {
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard let stored = snapshot.data() else { return nil }
+            guard let write = CanonicalBusinessEngine.variationTrackerUnlockOrderFields(stored: stored) else {
+                errorPointer?.pointee = CanonicalWriteUnavailableError(function: "variationTrackerWriteFields") as NSError
+                return nil
+            }
+            guard let fields = write else { return nil }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: userId.isEmpty ? nil : userId), forDocument: ref)
+            return nil
+        }
+    }
+
     /// One stale number lock (1.63.0): re-read the variation and clear `voNumberLocked` only while it is still Open with
     /// the lock set, so a variation submitted on another device meanwhile keeps its lock (review of web #388).
     nonisolated private static func runVariationStaleLockClear(db: Firestore, ref: DocumentReference, variationId: String, userId: String) async throws {

@@ -22,6 +22,7 @@ struct VariationTrackerView: View {
     @EnvironmentObject private var userStore: UserStore
     @EnvironmentObject private var smartCache: SmartCacheService
     @EnvironmentObject private var notificationService: NotificationService
+    @EnvironmentObject private var operativeStore: OperativeStore
 
     /// The open order on screen while dragging (nil = the stored order).
     @State private var order: [String]?
@@ -35,6 +36,8 @@ struct VariationTrackerView: View {
         enum Tone { case ok, warn, locked }
         let text: String
         let tone: Tone
+        /// A pinned variation the person may reopen from the message (owner 23 Nov: "you can still unlock it").
+        var reopenId: String? = nil
     }
 
     var body: some View {
@@ -95,6 +98,13 @@ struct VariationTrackerView: View {
     private var canReorder: Bool {
         guard let project else { return false }
         return userStore.canRenumberVariations(on: project)
+    }
+
+    /// Who may change a variation's status (the status control's rule, `canSeeVariations` via
+    /// `WorkAccess.canAccessVariations`): they get Reopen on a pinned variation.
+    private var canEditVariation: Bool {
+        guard let project else { return false }
+        return WorkAccess.canAccessVariations(project: project, userStore: userStore, operativeStore: operativeStore)
     }
 
     private var isOnline: Bool {
@@ -197,11 +207,52 @@ struct VariationTrackerView: View {
         startSave(current)
     }
 
+    /// Owner 23 Nov: the locked message says how to unlock it — reopen (status back to Open) — and offers Reopen to
+    /// people who may change the status.
     private func showPinned(_ variation: Variation) {
-        message = TrackerMessage(
-            text: CanonicalBusinessEngine.variationPinnedMoveText(voNumber: variation.voNumber, status: variation.status.rawValue),
-            tone: .locked
-        )
+        let locked = CanonicalBusinessEngine.variationPinnedMoveText(voNumber: variation.voNumber, status: variation.status.rawValue)
+        let hint = canEditVariation
+            ? "To move it, reopen it: change its status back to Open."
+            : "An admin or a manager assigned to this job can reopen it."
+        message = TrackerMessage(text: "\(locked) \(hint)", tone: .locked, reopenId: canEditVariation ? variation.id : nil)
+    }
+
+    /// Reopen: the status control's write (`Variation.withStatus(.open)`, RULEBOOK 1.63.0 `variationStatusWriteFields`:
+    /// the number lock cleared in the same write), so the variation can then be dragged.
+    private func reopen(_ variationId: String) async {
+        guard !busy, let opened = store.variations.first(where: { $0.id == variationId && !$0.isDeleted }) else { return }
+        let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
+            preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
+        )) ?? ""
+        guard !orgId.isEmpty else { return }
+        let user = userStore.displayUser
+        let uid = user?.id ?? ""
+        let name = user?.fullName.isEmpty == false ? (user?.fullName ?? "") : (user?.email ?? "")
+        let next = opened.withStatus(.open, byUid: uid, byName: name)
+        busy = true
+        defer { busy = false }
+        do {
+            try await firebaseBackend.saveVariation(next, opened: opened, organizationId: orgId)
+            store.upsert(next)
+            message = TrackerMessage(text: "\(opened.voNumber) is open again. Drag it to its new place.", tone: .ok)
+        } catch {
+            message = TrackerMessage(text: error.localizedDescription, tone: .warn)
+        }
+    }
+
+    /// Unlock order (web Lock order switch off): `variationTrackerWriteFields` `unlockOrder`. Admins and the job's
+    /// managers (`canReorder`); online only.
+    private func unlockOrder() async {
+        guard !busy, canReorder, isOnline, let project,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            try await firebaseBackend.unlockVariationTrackerOrder(parentId: project.documentId, organizationId: orgId)
+            message = TrackerMessage(text: "Order unlocked. You can drag open variations again.", tone: .ok)
+        } catch {
+            message = TrackerMessage(text: error.localizedDescription, tone: .warn)
+        }
     }
 
     // MARK: - Save
@@ -297,6 +348,14 @@ struct VariationTrackerView: View {
                         .foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier("variationTracker.locked")
+                    if canReorder {
+                        Button("Unlock order") { Task { await unlockOrder() } }
+                            .font(.footnote.weight(.semibold))
+                            .buttonStyle(.borderless)
+                            .foregroundStyle(PPColor.brand)
+                            .disabled(busy || !isOnline)
+                            .accessibilityIdentifier("variationTracker.unlockOrder")
+                    }
                 }
             }
             Spacer(minLength: 0)
@@ -316,6 +375,14 @@ struct VariationTrackerView: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
+            if let reopenId = message.reopenId {
+                Button("Reopen") { Task { await reopen(reopenId) } }
+                    .font(.footnote.weight(.semibold))
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(PPColor.brand)
+                    .disabled(busy)
+                    .accessibilityIdentifier("variationTracker.reopen")
+            }
             Button {
                 self.message = nil
             } label: {
@@ -327,7 +394,7 @@ struct VariationTrackerView: View {
         }
         .padding(12)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("variationTracker.message")
     }
 
@@ -414,7 +481,6 @@ struct VariationTrackerView: View {
     }
 
     private func rowContent(_ variation: Variation, row: RulebookVariationPlanRow, pinned: Bool, movable: Bool) -> some View {
-        let previous = CanonicalBusinessEngine.variationPreviousNumbers(voNumber: variation.voNumber, history: variation.numberHistory.map(\.from))
         let openIndex = openIds.firstIndex(of: variation.id)
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
@@ -440,15 +506,8 @@ struct VariationTrackerView: View {
                                 .accessibilityLabel("Keeps its number")
                         }
                     }
-                    if row.changed {
-                        Text("was \(row.from)")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    } else if !previous.isEmpty {
-                        Text("was " + previous.joined(separator: ", "))
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+                    // Owner 23 Nov: no "was VO-003" on the iPhone tracker — it just renumbers (display only; the number
+                    // history is stored and exported as before).
                 }
                 .frame(width: 96, alignment: .leading)
                 Text(variation.heading.isEmpty ? "Untitled" : variation.heading)
