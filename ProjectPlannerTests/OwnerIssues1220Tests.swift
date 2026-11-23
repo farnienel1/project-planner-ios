@@ -101,4 +101,34 @@ final class OwnerIssues1220Tests: XCTestCase {
         XCTAssertTrue(stand.fullName.hasPrefix(CanonicalBusinessEngine.unknownBookingPersonLabel))
         XCTAssertTrue(stand.fullName.uppercased().contains("QALPE29V"))
     }
+
+    // MARK: Review of #268
+
+    func testExportedHistoryIsCachedAndSharedByLandingAndList() throws {
+        let invoicing = try source("Project Planner/Views/InvoicingView.swift")
+        XCTAssertTrue(invoicing.contains("static let cacheSeconds: TimeInterval = 60"))
+        XCTAssertTrue(invoicing.contains("if let running = inFlight[key] { return await running.value }"))
+        // The key covers organisation, viewer, the people asked about and whether the roster had loaded.
+        XCTAssertTrue(invoicing.contains("[organizationId ?? \"-\", viewerId ?? \"-\", ids, rosterLoaded ? \"roster\" : \"noRoster\", week]"))
+        // An export never serves a cached list.
+        XCTAssertTrue(invoicing.contains("ExportedTimesheetHistoryLoader.invalidate()\n            await loadExportedHistory(forceRefresh: true)"))
+    }
+
+    func testOnlyTheLatestLoadIsShownAndNeverAnotherCompanysFigures() throws {
+        let invoicing = try source("Project Planner/Views/InvoicingView.swift")
+        XCTAssertTrue(invoicing.contains("guard generation == exportedHistoryGeneration,"))
+        XCTAssertTrue(invoicing.contains("guard generation == landingExportedGeneration,"))
+        XCTAssertTrue(invoicing.contains("resetLandingCounts()"))
+        XCTAssertTrue(invoicing.contains("guard orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else { return }"))
+    }
+
+    func testNoOrganisationShowsZeroNotADashForEver() throws {
+        let invoicing = try source("Project Planner/Views/InvoicingView.swift")
+        XCTAssertTrue(invoicing.contains("landingQueueLoaded = true\n            landingExportedCount = 0\n            return"))
+    }
+
+    func testInitialsFallbackIsReadAsInitials() throws {
+        let hub = try source("Project Planner/Views/OrganisationSettingsHubView.swift")
+        XCTAssertTrue(hub.contains("accessibilityLabel(\"Company initials, \\(orgInitials)\")"))
+    }
 }

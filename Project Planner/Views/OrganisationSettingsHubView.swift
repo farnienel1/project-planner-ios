@@ -367,12 +367,13 @@ struct OrganisationSettingsHubView: View {
                         .frame(width: 60, height: 60)
                         .background(Color.white, in: shape)
                         .overlay(shape.strokeBorder(PPColor.onNavyStroke, lineWidth: 1))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Company logo")
+                        .accessibilityIdentifier("organisationSettingsHub.logo")
                 } else {
                     orgInitialsBadge
                 }
             }
-            .accessibilityLabel("Company logo")
-            .accessibilityIdentifier("organisationSettingsHub.logo")
         } else {
             orgInitialsBadge
         }
@@ -391,6 +392,9 @@ struct OrganisationSettingsHubView: View {
                 RoundedRectangle(cornerRadius: 17, style: .continuous)
                     .strokeBorder(PPColor.onNavyStroke, lineWidth: 1)
             )
+            // Review of #268 (L-c): read as what it is when no logo is shown.
+            .accessibilityLabel("Company initials, \(orgInitials)")
+            .accessibilityIdentifier("organisationSettingsHub.initials")
     }
 
     /// "Since Oct '26" from the organisation's stored `createdAt` (`Organization.storedCreatedAt`, read with the
