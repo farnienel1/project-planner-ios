@@ -619,12 +619,17 @@ class FirebaseBackend: ObservableObject {
         }
         let orgSettings = Self.organizationSettingsFromOrgDocument(orgData)
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(orgData)
-        let organization = organizationKeepingKnownName(Organization.make(
+        var recovered = Organization.make(
             fromFirestoreId: orgId,
             data: orgData,
             settings: orgSettings,
             fallbackName: "Recovered Organization"
-        ))
+        )
+        // RULEBOOK 1.19.0 / 1.29.0 §4.5: the stored working-hours state and the PAYE payday, as every other path that
+        // builds the organisation (`buildOrganizationFromDocument`); without it the payday read as "Not set" until the
+        // next live update.
+        Self.applyPayrollPolicyFields(from: orgData, to: &recovered)
+        let organization = organizationKeepingKnownName(recovered)
         let remembered = cachedOrganizationIdString()
         var probes = [orgId: "allowed"]
         if let remembered, !remembered.isEmpty, !organizationIdsMatch(remembered, orgId),

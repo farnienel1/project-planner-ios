@@ -21,6 +21,13 @@ struct OrganisationInvoicingSettingsView: View {
 
     private var isDirty: Bool { draft != baseline || paydayPick != nil }
 
+    /// The saved PAYE payday of the open organisation (`payePayday`), nil when none is set.
+    private var savedPayePayday: Int? {
+        CanonicalBusinessEngine.payePayday(OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization))
+    }
+
+    static let payePaydayNotSavedMessage = "The PAYE payday was not saved. Check your connection and press Save again."
+
     /// `validateInvoicingSettings` on the draft, shown inline (e.g. run 1 must end by the 27th).
     private var inlineValidationError: String? {
         guard didLoad, draft != baseline else { return nil }
@@ -216,6 +223,13 @@ struct OrganisationInvoicingSettingsView: View {
             adoptTimesheetRowsFromScript()
             baseline = draft
         }
+        .onChange(of: savedPayePayday) { _, saved in
+            // The live payday now equals the unsaved pick (this Save, or another device): nothing left to save.
+            if let saved, saved == paydayPick {
+                paydayPick = nil
+                if errorMessage == Self.payePaydayNotSavedMessage { errorMessage = nil }
+            }
+        }
         .onChange(of: draft.paymentRunMode) { _, mode in
             if mode == .recurringTimeframe {
                 draft.paymentDateMode = .recurringDate
@@ -269,6 +283,16 @@ struct OrganisationInvoicingSettingsView: View {
                     .font(.body)
                 Spacer()
                 Menu {
+                    // Drops the unsaved pick: back to the saved payday, or to Not set when none is saved.
+                    if paydayPick != nil {
+                        Button {
+                            paydayPick = nil
+                        } label: {
+                            Text(saved.map { "Keep Day \($0)" } ?? "Not set")
+                        }
+                        .accessibilityIdentifier("payePayday.dropPick")
+                        Divider()
+                    }
                     ForEach(1...31, id: \.self) { day in
                         Button {
                             pickPayePayday(day, saved: saved)
@@ -997,15 +1021,10 @@ struct OrganisationInvoicingSettingsView: View {
             baseline = draft
             // Owner bug 23 Nov: the pick is cleared only once the organisation reads back that payday
             // (`payePayday`); otherwise it stays on screen with an error, never silently back to "Not set".
-            let after = Self.payePaydayPickAfterSave(
-                picked: pickedPayday,
-                readBack: CanonicalBusinessEngine.payePayday(
-                    OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization)
-                )
-            )
+            let after = Self.payePaydayPickAfterSave(picked: pickedPayday, readBack: savedPayePayday)
             paydayPick = after.pick
             if after.failed {
-                errorMessage = "The PAYE payday was not saved. Check your connection and press Save again."
+                errorMessage = Self.payePaydayNotSavedMessage
             }
         } catch {
             errorMessage = error.localizedDescription
