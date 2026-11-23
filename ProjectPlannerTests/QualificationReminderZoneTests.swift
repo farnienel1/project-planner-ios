@@ -61,6 +61,16 @@ final class QualificationReminderZoneTests: XCTestCase {
         let london = NotificationService.qualificationExpiryDateText(expiry, timeZoneIdentifier: "Europe/London")
         let newYork = NotificationService.qualificationExpiryDateText(expiry, timeZoneIdentifier: "America/New_York")
         XCTAssertNotEqual(london, newYork, "1 Jul in London is 30 Jun in New York")
+        // The actual day: the same text as midday on 1 Jul (London) and on 30 Jun (New York).
+        XCTAssertEqual(london, NotificationService.qualificationExpiryDateText(instant("2027-07-01T12:00:00Z"), timeZoneIdentifier: "Europe/London"))
+        XCTAssertEqual(newYork, NotificationService.qualificationExpiryDateText(instant("2027-06-30T16:00:00Z"), timeZoneIdentifier: "America/New_York"))
+    }
+
+    func testRemindersAcrossTheSpringClockChangeStayAtNineLocal() {
+        // BST starts 28 Mar 2027. Expiry 1 Apr (BST): "1 week" is 25 Mar at 09:00 GMT, "1 day" 31 Mar at 09:00 BST.
+        let fires = schedule("2027-03-31T23:00:00Z", zone: "Europe/London")
+        XCTAssertEqual(fires["1w"], instant("2027-03-25T09:00:00Z"))
+        XCTAssertEqual(fires["1d"], instant("2027-03-31T08:00:00Z"))
     }
 
     func testTheSchedulerNoLongerUsesThePhoneCalendar() throws {
