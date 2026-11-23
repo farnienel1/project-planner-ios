@@ -559,6 +559,10 @@ struct OperativeCustomHoursSheet: View {
     /// prices (`revisedPayrollLineAmounts`). The sheet then refuses only what `revisedPayrollLineTimesError` refuses
     /// (blank or equal times). Off for every booking flow, which keep their own rule. Set with `withAmountPreview`.
     var allowsOvernight: Bool = false
+    /// RULEBOOK 1.72.0 §8: the Save button's title and the note above it on a timesheet reviewer's ⚙ ("Save to booking",
+    /// `TIMESHEET_REVIEW_EDIT_BOOKING_NOTE`). Nil elsewhere (the usual title, no note).
+    var saveTitleOverride: String? = nil
+    var saveNote: String? = nil
     /// Owner 23 Nov ("Full day can't be chosen when editing a booking"): the slot the edited booking stores. Set with
     /// `withSlotChoice`; the sheet then shows the slots `CanonicalBusinessEngine.slotOffered` allows on the day (Full day
     /// and Custom Monday–Friday, Custom on Saturday and Sunday, a stored AM / PM keeps its own) and saves a named slot
@@ -906,8 +910,9 @@ struct OperativeCustomHoursSheet: View {
     }
 
     private var saveButtonTitle: String {
+        if let saveTitleOverride { return saveTitleOverride }
         // RULEBOOK 1.39.0 `saveHoursLabel`: "Save · 17.5 hours" (never "paid").
-        showsGlance ? (CanonicalBusinessEngine.saveHoursLabel(breakdown.totalHours) ?? "Save · \(formatHours(breakdown.totalHours)) hours") : "Save"
+        return showsGlance ? (CanonicalBusinessEngine.saveHoursLabel(breakdown.totalHours) ?? "Save · \(formatHours(breakdown.totalHours)) hours") : "Save"
     }
 
     private var customHoursForm: some View {
@@ -931,12 +936,26 @@ struct OperativeCustomHoursSheet: View {
             }
         }
         .safeAreaInset(edge: .bottom) {
-            PPBottomActionBar(
-                title: saveButtonTitle,
-                isEnabled: true,
-                accessibilityIdentifier: "operativeCustomHours.save",
-                action: { validateAndSave() }
-            )
+            VStack(spacing: 0) {
+                // RULEBOOK 1.72.0 §8: a timesheet reviewer's ⚙ says the save changes the booking itself.
+                if let saveNote {
+                    Text(saveNote)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 8)
+                        .background(PPColor.page)
+                        .accessibilityIdentifier("operativeCustomHours.saveNote")
+                }
+                PPBottomActionBar(
+                    title: saveButtonTitle,
+                    isEnabled: true,
+                    accessibilityIdentifier: "operativeCustomHours.save",
+                    action: { validateAndSave() }
+                )
+            }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.82), value: timeValidationBanner)
         .onChange(of: weekendBreakdownInput, initial: true) { _, _ in
@@ -980,7 +999,7 @@ struct OperativeCustomHoursSheet: View {
                 // Hours sheet and other create / no-delete callers (3.5 "Hours sheet"): Cancel and Save in the header,
                 // no delete. Same validateAndSave as the bottom bar.
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { validateAndSave() }
+                    Button(saveTitleOverride ?? "Save") { validateAndSave() }
                         .buttonStyle(PPOnNavyPillButtonStyle())
                         .accessibilityIdentifier("operativeCustomHours.saveTop")
                 }
@@ -1212,6 +1231,14 @@ struct OperativeCustomHoursSheet: View {
     }
 
     /// This sheet with the timesheet Edit hours revised-amount row (`amountPreview`).
+    /// RULEBOOK 1.72.0 §8: a timesheet reviewer's ⚙ saves to the booking.
+    func withSaveToBooking(title: String, note: String) -> Self {
+        var copy = self
+        copy.saveTitleOverride = title
+        copy.saveNote = note
+        return copy
+    }
+
     func withAmountPreview(
         allowsOvernight: Bool = false,
         _ preview: @escaping (_ start: String, _ end: String, _ breakRemoved: Bool, _ otMultiplier: Double?) -> String?

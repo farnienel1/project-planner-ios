@@ -819,6 +819,12 @@ enum TimesheetApprovalPolicy {
         return CanonicalBusinessEngine.isTimesheetExported(fields) == true
     }
 
+    /// RULEBOOK 1.71.0 §8 (issue 22A) `timesheetLineReviewActionsAllowed(sheet)`: no ✓ ✕ ⚙ on a line of an exported
+    /// sheet (the stored `exportedAt` and `invoiceGeneratedAt`, `resolveTimesheetExportedAtMs`).
+    static func lineReviewActionsAllowed(_ draft: TimesheetDraft) -> Bool {
+        CanonicalBusinessEngine.timesheetLineReviewActionsAllowed(TimesheetDraftStore.statusPayload(for: draft))
+    }
+
     static func isTimesheetFullyApproved(draft: TimesheetDraft, user: AppUser) -> Bool {
         guard let fields = TimesheetDraftStore.statusFields(for: draft) else { return false }
         return CanonicalBusinessEngine.isTimesheetFullySigned(fields, hasLineManager: requiresLineManagerCounterSign(for: user)) == true
@@ -6148,6 +6154,11 @@ private struct OperativeTimesheetReviewView: View {
         )
     }
     @State private var editingPayrollLineId: String?
+    /// RULEBOOK 1.72.0 §8: the message after a reviewer's ⚙ / ✕ changed or refused a booking.
+    @State private var reviewBookingNotice: String?
+    /// RULEBOOK 1.72.0 §8: the ✕ waiting for its confirm (`timesheetReviewDeleteBookingWarning` / the overtime trim).
+    @State private var pendingReviewRemoval: TimesheetReviewRemoval?
+    @State private var reviewBookingBusy = false
     @State private var editingExpenseId: UUID?
     @State private var editingPriceWorkId: UUID?
     /// RULEBOOK 1.54.0 §8: the late extra whose amount the reviewer is editing (⚙).
@@ -6194,6 +6205,8 @@ private struct OperativeTimesheetReviewView: View {
         // RULEBOOK 1.55.0 §8 / §16 ("lock all"): an exported timesheet never changes, admins included — a correction is
         // a revision (Create revision below).
         if TimesheetApprovalPolicy.isExported(draft) { return false }
+        // RULEBOOK 1.71.0 §8 (issue 22A) `timesheetLineReviewActionsAllowed`: no ✓ ✕ ⚙ on an exported sheet.
+        guard TimesheetApprovalPolicy.lineReviewActionsAllowed(draft) else { return false }
         // RULEBOOK 1.47.0 §8: while the person must sign the changed bookings again nothing is reviewed or
         // counter-signed; once they have, the line manager reviews and counter-signs again.
         if bookingChange?.waitingForPerson == true { return false }
@@ -6372,8 +6385,30 @@ private struct OperativeTimesheetReviewView: View {
                 notificationService: notificationService,
                 onSaveDraft: { saveDraft() },
                 onCounterSignSave: { saveDraft() },
-                counterSignAllowed: counterSignAllowedNow
+                counterSignAllowed: counterSignAllowedNow,
+                firebaseBackend: firebaseBackend,
+                isOnline: smartCache.isOnline,
+                reviewBookingNotice: $reviewBookingNotice
             ))
+            .alert(
+                pendingReviewRemoval?.warning.title ?? "",
+                isPresented: Binding(get: { pendingReviewRemoval != nil }, set: { if !$0 { pendingReviewRemoval = nil } }),
+                presenting: pendingReviewRemoval
+            ) { pending in
+                Button(pending.warning.confirmLabel, role: .destructive) { confirmReviewRemoval(pending) }
+                    .accessibilityIdentifier("timesheets.review.removeBooking.confirm")
+                Button(pending.warning.cancelLabel, role: .cancel) { pendingReviewRemoval = nil }
+            } message: { pending in
+                Text(pending.messageText)
+            }
+            .alert(
+                "Timesheet review",
+                isPresented: Binding(get: { reviewBookingNotice != nil }, set: { if !$0 { reviewBookingNotice = nil } })
+            ) {
+                Button("OK", role: .cancel) { reviewBookingNotice = nil }
+            } message: {
+                Text(reviewBookingNotice ?? "")
+            }
     }
 
     private var reviewScrollContent: some View {
@@ -6558,6 +6593,8 @@ private struct OperativeTimesheetReviewView: View {
     /// ignored one (its id is a signed entry's) and never while the person must sign changed bookings again.
     private func canReviewLateExtra(_ item: TimesheetLateExtra) -> Bool {
         guard viewerIsReviewer, managerHasSigned, bookingChange?.waitingForPerson != true else { return false }
+        // RULEBOOK 1.71.0 §8 (issue 22A): an exported sheet offers no ✓ ✕ ⚙, late extras included.
+        guard TimesheetApprovalPolicy.lineReviewActionsAllowed(draft) else { return false }
         return CanonicalBusinessEngine.timesheetLateExtraReviewable(
             state: item.lateState ?? "pending",
             exported: TimesheetLateExtrasSupport.exportedStored(draft)
@@ -7028,25 +7065,130 @@ private struct OperativeTimesheetReviewView: View {
                 managerHasSigned: managerHasSigned,
                 applyLiveReview: canManagerReview
             )
-            if canManagerReview {
+            // RULEBOOK 1.72.0 §8 `timesheetLabourLineReviewActions`: ✓ approves the line as it is; ✕ and ⚙ change the
+            // BOOKING (decisions A and B) and need the line to name a labour or manager site booking.
+            let actions = CanonicalBusinessEngine.timesheetLabourLineReviewActions(
+                sheet: TimesheetDraftStore.statusPayload(for: draft),
+                bookingId: row.bookingId,
+                bookingCollection: row.bookingCollection,
+                isPayeDay: row.isPayeDay,
+                isLeave: false
+            )
+            if canManagerReview, actions.approve {
                 TimesheetManagerReviewActionBar(
                     decision: review?.decision ?? .approved,
-                    canEdit: true,
+                    canEdit: actions.editBooking,
+                    canDecline: actions.removeBooking,
                     onApprove: {
                         draft.payrollLineReviews[row.id] = TimesheetPayrollLineReview(decision: .approved, revisedAmount: nil)
                         saveDraft()
                     },
-                    onDecline: {
-                        draft.payrollLineReviews[row.id] = TimesheetPayrollLineReview(decision: .declined, revisedAmount: nil)
-                        saveDraft()
-                    },
-                    onEdit: { editingPayrollLineId = row.id }
+                    onDecline: { requestReviewRemoval(row) },
+                    onEdit: {
+                        guard smartCache.isOnline else {
+                            reviewBookingNotice = OfflinePolicy.onlineOnlyMessage
+                            return
+                        }
+                        editingPayrollLineId = row.id
+                    }
                 )
+                .disabled(reviewBookingBusy)
             }
         }
         .padding(.vertical, 4)
         .background(row.isOverlapping ? PPColor.warningAmber.opacity(0.12) : Color.clear)
         .opacity(removed ? 0.55 : 1)
+    }
+
+    /// RULEBOOK 1.72.0 §8: ✕ on a labour line under review. The live booking is read fresh. On the booking's OVERTIME
+    /// line `timesheetReviewOvertimeStrike` trims it to its standard part (owner answer 23 Nov, #416 Q3), or — with no
+    /// standard part — falls back to the delete; on the standard line ✕ deletes the booking with its tombstone
+    /// (decision B). Each asks first (`timesheetReviewDeleteBookingWarning` / the trim's copy). No `declined` review.
+    private func requestReviewRemoval(_ row: TimesheetPayrollLineItem) {
+        guard smartCache.isOnline else {
+            reviewBookingNotice = OfflinePolicy.onlineOnlyMessage
+            return
+        }
+        guard !reviewBookingBusy, let uid = firebaseBackend.currentUser?.uid else { return }
+        let collection = TimesheetPayrollLineBookingLookup.reviewBookingCollection(row)
+        let ids = TimesheetPayrollLineBookingLookup.reviewBookingDocumentIds(
+            row,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings
+        )
+        let summary = TimesheetPayrollLineBookingLookup.reviewBookingSummary(row)
+        reviewBookingBusy = true
+        Task { @MainActor in
+            defer { reviewBookingBusy = false }
+            do {
+                let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+                if row.isOvertimeLine {
+                    var input = booking
+                    input["dayKey"] = OrganizationRulebookContext.dayKey(row.date)
+                    guard let strike = CanonicalBusinessEngine.timesheetReviewOvertimeStrike(
+                        booking: input,
+                        organization: OvertimeOrganizationDocument.document(firebaseBackend.currentOrganization),
+                        summary: summary
+                    ) else {
+                        reviewBookingNotice = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+                        return
+                    }
+                    switch strike {
+                    case .trim(let collection, let bookingId, let set, let remove, let warning):
+                        pendingReviewRemoval = TimesheetReviewRemoval(
+                            warning: warning,
+                            action: .trim(collection: collection, bookingId: bookingId, set: set, remove: remove)
+                        )
+                        return
+                    case .refused(let message):
+                        reviewBookingNotice = message
+                        return
+                    case .delete:
+                        break
+                    }
+                }
+                guard let warning = CanonicalBusinessEngine.timesheetReviewDeleteBookingWarning(
+                          summary: summary,
+                          overtimeLine: row.isOvertimeLine
+                      ),
+                      let plan = CanonicalBusinessEngine.timesheetReviewBookingDelete(
+                          bookingId: booking["id"] as? String ?? "",
+                          collection: collection,
+                          deletedBy: uid
+                      ) else {
+                    reviewBookingNotice = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+                    return
+                }
+                pendingReviewRemoval = TimesheetReviewRemoval(warning: warning, action: .delete(plan))
+            } catch {
+                reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
+            }
+        }
+    }
+
+    /// The confirmed ✕: the booking delete and its tombstone in one batch, or the overtime trim as a partial update.
+    private func confirmReviewRemoval(_ pending: TimesheetReviewRemoval) {
+        pendingReviewRemoval = nil
+        reviewBookingBusy = true
+        Task { @MainActor in
+            defer { reviewBookingBusy = false }
+            do {
+                switch pending.action {
+                case .delete(let plan):
+                    try await firebaseBackend.deleteTimesheetReviewBooking(plan)
+                case .trim(let collection, let bookingId, let set, let remove):
+                    try await firebaseBackend.applyTimesheetReviewBookingUpdate(
+                        collection: collection,
+                        bookingId: bookingId,
+                        set: set,
+                        remove: remove
+                    )
+                }
+                reviewBookingNotice = CanonicalBusinessEngine.timesheetReviewBookingSentBackMessage
+            } catch {
+                reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
+            }
+        }
     }
 
     @ViewBuilder
@@ -7384,6 +7526,11 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     let onCounterSignSave: () -> Task<String?, Never>?
     /// RULEBOOK 1.47.0 §8: whether the counter-signature may be saved now (the review screen's check; it shows why not).
     let counterSignAllowed: () -> Bool
+    /// RULEBOOK 1.72.0 §8: ⚙ writes the booking (online only).
+    let firebaseBackend: FirebaseBackend
+    let isOnline: Bool
+    /// `TIMESHEET_REVIEW_BOOKING_SENT_BACK_MESSAGE` after a booking change.
+    @Binding var reviewBookingNotice: String?
 
     func body(content: Content) -> some View {
         content
@@ -7422,19 +7569,51 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
         )
     }
 
-    /// RULEBOOK 1.46.0 §8: an Edit hours save stores, on each line of the booking, the review the rulebook priced
-    /// (`revisedPayrollLineAmounts` → `PayrollLineEditReviewFields`, revised amounts in pennies), exactly web's fields.
-    /// Returns a refusal message when nothing was saved, else nil.
-    private func applyPayrollReviewSave(lineId: String, edit: TimesheetPayrollLineBookingLookup.Edit) -> String? {
-        guard edit.error == nil, edit.amounts != nil else { return edit.error ?? CanonicalBusinessEngine.payrollLineEditTimesMessage }
-        // Review of #233: a line's current review the rulebook could not check refuses the edit (fail closed).
-        guard let reviews = TimesheetPayrollLineBookingLookup.reviewsAfterEdit(edit, editedLineId: lineId, draft: draft) else {
-            return TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
+    /// RULEBOOK 1.72.0 §8 (decision A): a reviewer's ⚙ changes the BOOKING, never a `payrollLineReviews` entry. The
+    /// live booking is read fresh, `timesheetReviewBookingEditWrites` gives the partial update (a rate only when changed,
+    /// `timesheetReviewOvertimeRate`; an unchanged Full day writes nothing) and it is written with write metadata. The
+    /// 1.47.0 rule then sends the sheet back to the person. Returns a refusal message when nothing was saved, else nil.
+    private func saveReviewBookingEdit(row: TimesheetPayrollLineItem, input: TimesheetReviewBookingEditInput) async -> String? {
+        guard isOnline else { return OfflinePolicy.onlineOnlyMessage }
+        let collection = TimesheetPayrollLineBookingLookup.reviewBookingCollection(row)
+        let ids = TimesheetPayrollLineBookingLookup.reviewBookingDocumentIds(
+            row,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings
+        )
+        guard !ids.isEmpty else { return CanonicalBusinessEngine.timesheetReviewBookingMissingMessage }
+        do {
+            let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
+            // An overtime line shows no break controls: the booking keeps its stored break toggle.
+            let breakRemoved = row.isOvertimeLine ? (booking["isBreakRemoved"] as? Bool == true) : input.breakRemoved
+            let organizationRate = CanonicalBusinessEngine.overtimeRateCreateControl(on: row.date)?.organizationMultiplier
+            let overtimeRate: (typed: Double?, opened: Double?, organizationMultiplier: Double?)? = row.isOvertimeLine
+                ? (typed: input.typedRate ?? organizationRate, opened: input.openedRate ?? organizationRate, organizationMultiplier: organizationRate)
+                : nil
+            guard let edit = CanonicalBusinessEngine.timesheetReviewBookingEditWrites(
+                booking: booking,
+                startTime: input.startTime,
+                endTime: input.endTime,
+                isBreakRemoved: breakRemoved,
+                overtimeRate: overtimeRate,
+                slotWindow: input.openingTimes
+            ) else { return TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage }
+            switch edit {
+            case .refused(let message):
+                return message
+            case .write(let collection, let bookingId, let set, let remove, let changed):
+                guard changed else {
+                    editingPayrollLineId = nil
+                    return nil
+                }
+                try await firebaseBackend.applyTimesheetReviewBookingUpdate(collection: collection, bookingId: bookingId, set: set, remove: remove)
+                editingPayrollLineId = nil
+                reviewBookingNotice = CanonicalBusinessEngine.timesheetReviewBookingSentBackMessage
+                return nil
+            }
+        } catch {
+            return TimesheetReviewBookingWriteError.from(error).message
         }
-        draft.payrollLineReviews = reviews
-        editingPayrollLineId = nil
-        onSaveDraft()
-        return nil
     }
 
     private func applyExtraReviewSave(
@@ -7497,8 +7676,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                 policy: linePolicy,
                 initialChoice: initialChoice,
                 employment: CanonicalBusinessEngine.timesheetPerson(operative),
-                onSave: { edit in
-                    applyPayrollReviewSave(lineId: lineId, edit: edit)
+                onSaveBooking: { input in
+                    await saveReviewBookingEdit(row: row, input: input)
                 }
             )
         }
