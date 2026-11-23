@@ -67,6 +67,8 @@ struct ContentView: View {
     /// tab's NavigationStack is rebuilt at its root. Owner bug 23 Nov: More → Settings while on Payment runs &
     /// timesheets stayed on Payment runs.
     @State private var tabRootGeneration = 0
+    /// The tab to rebuild at its root once the person agrees to discard an open settings screen's unsaved draft.
+    @State private var tabAwaitingDiscard: Int?
     @State private var showMoreMenuSheet = false
     @State private var showingMenuSignOutConfirmation = false
     @State private var previousTab: Int? = nil
@@ -245,6 +247,23 @@ struct ContentView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     showingMenuSignOutConfirmation = true
                 }
+            }
+            .alert(
+                "Discard unsaved changes?",
+                isPresented: Binding(
+                    get: { tabAwaitingDiscard != nil },
+                    set: { if !$0 { tabAwaitingDiscard = nil } }
+                )
+            ) {
+                Button("Keep editing", role: .cancel) { tabAwaitingDiscard = nil }
+                    .accessibilityIdentifier("mainTab.discard.keep")
+                Button("Discard", role: .destructive) {
+                    tabAwaitingDiscard = nil
+                    rebuildOpenTabAtRoot()
+                }
+                .accessibilityIdentifier("mainTab.discard.confirm")
+            } message: {
+                Text("You have changes that have not been saved. Leave this page and discard them?")
             }
             .signOutConfirmation(
                 isPresented: $showingMenuSignOutConfirmation,
@@ -972,10 +991,11 @@ extension ContentView {
         if selectedTab == tag && tag != 0 {
             // Already on this tab: show its main page. A tab whose screen does not pop itself is rebuilt at its root.
             if Self.tabRebuildsAtRootWhenReselected(tag) {
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) {
-                    tabRootGeneration &+= 1
+                if SettingsUnsavedDrafts.any {
+                    // Never throw an unsaved settings draft away silently: ask first (the screen's own guard).
+                    tabAwaitingDiscard = tag
+                } else {
+                    rebuildOpenTabAtRoot()
                 }
             }
             if showMoreMenuSheet {
@@ -1018,6 +1038,14 @@ extension ContentView {
         }
     }
     
+    private func rebuildOpenTabAtRoot() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            tabRootGeneration &+= 1
+        }
+    }
+
     /// Tabs whose screen does not handle `resetNavigationForTab` itself: choosing them again rebuilds them at their
     /// root (Settings, Help, Wholesalers, Annual leave, Subcontractors). Home (0) is not a navigation stack; Projects,
     /// Small works, Operatives and Managers pop themselves.

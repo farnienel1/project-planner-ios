@@ -63,3 +63,29 @@ final class PayePaydaySettingsBugTests: XCTestCase {
         }
     }
 }
+
+/// Review of #275: choosing the open Settings tab again never throws an unsaved settings draft away silently — the
+/// shell asks first while any `SettingsSwipeBackGuard` reports a dirty draft.
+@MainActor
+final class SettingsUnsavedDraftsTests: XCTestCase {
+    override func tearDown() {
+        SettingsUnsavedDrafts.reset()
+        super.tearDown()
+    }
+
+    func testADirtyGuardIsReportedUntilCleanOrRemoved() {
+        SettingsUnsavedDrafts.reset()
+        let guardController = SettingsSwipeBackGuard.Controller()
+        XCTAssertFalse(SettingsUnsavedDrafts.any)
+        guardController.disabled = true
+        guardController.apply()
+        XCTAssertTrue(SettingsUnsavedDrafts.any, "a dirty draft is reported")
+        guardController.disabled = false
+        guardController.apply()
+        XCTAssertFalse(SettingsUnsavedDrafts.any, "a clean draft is not")
+        guardController.disabled = true
+        guardController.apply()
+        SettingsSwipeBackGuard.dismantleUIViewController(guardController, coordinator: ())
+        XCTAssertFalse(SettingsUnsavedDrafts.any, "a removed screen is not")
+    }
+}
