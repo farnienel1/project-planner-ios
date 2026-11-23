@@ -60,7 +60,6 @@ final class RulebookBypassGuardTests: XCTestCase {
         "deviceCalendar": [
             "Core/BookingDay.swift": 1,
             "Core/MaterialCatalogStore.swift": 1,
-            "Core/NotificationService.swift": 1,
             "Core/ProjectStore.swift": 8,
             "Core/StaffEmailIdentity.swift": 1,
             "Core/TimesheetPayrollPolicy.swift": 10,
