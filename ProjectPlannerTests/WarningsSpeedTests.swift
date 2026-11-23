@@ -56,9 +56,42 @@ final class WarningsSpeedTests: XCTestCase {
         XCTAssertLessThan(Date(), quietUntil)
     }
 
-    func testARosterChangeAsksForARescan() throws {
+    private func rosterUser(_ id: String, email: String) -> AppUser {
+        var user = AppUser(id: id, email: email, organizationId: "TEST-org", role: .operative)
+        user.firstName = "TEST"
+        user.surname = id
+        return user
+    }
+
+    /// Review of #274: a heartbeat must not restart the scan; a change the scan reads must.
+    func testOnlyARosterChangeTheScanReadsAsksForARescan() {
+        var roster = [rosterUser("TEST-a", email: "a@example.com"), rosterUser("TEST-b", email: "b@example.com")]
+        var gate = WarningsRosterRescanGate()
+        XCTAssertTrue(gate.shouldRescan(for: roster), "the first roster seen")
+        XCTAssertFalse(gate.shouldRescan(for: roster), "the same roster published again")
+
+        roster[0].lastSeenAt = Date()
+        roster[1].profilePhotoURL = "https://example.com/p.jpg"
+        roster[1].documentUpdatedAt = Date()
+        XCTAssertFalse(gate.shouldRescan(for: roster), "lastSeenAt, a photo and the write time of a one-email person: no rescan")
+
+        roster[0].isActive = false
+        XCTAssertTrue(gate.shouldRescan(for: roster), "an active-flag change rescans")
+        roster[1].assignedManagerUserIds = ["TEST-a"]
+        XCTAssertTrue(gate.shouldRescan(for: roster), "a line-manager change rescans (the manager's warning scope)")
+        roster[1].permissions.manager.toggle()
+        XCTAssertTrue(gate.shouldRescan(for: roster), "a level change rescans (High vs Medium clashes)")
+
+        // Two documents on one email: the newer write decides the one-per-email fold, so it counts there.
+        var twins = [rosterUser("TEST-c", email: "c@example.com"), rosterUser("TEST-d", email: "C@example.com")]
+        _ = gate.shouldRescan(for: twins)
+        twins[0].documentUpdatedAt = Date()
+        XCTAssertTrue(gate.shouldRescan(for: twins))
+    }
+
+    func testTheRosterTriggerUsesTheGate() throws {
         let content = try source("ContentView.swift")
-        XCTAssertTrue(content.contains(".onReceive(userStore.$organizationUsers.dropFirst()) { _ in\n                scheduleWarningsForBookingChange()"))
+        XCTAssertTrue(content.contains("if warningsRosterRescanGate.shouldRescan(for: users) {"))
     }
 
     func testTheBookingSchedulerAsksThePolicyAndStillWaitsForEveryInput() throws {
