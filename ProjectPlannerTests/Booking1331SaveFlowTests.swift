@@ -595,6 +595,13 @@ final class Booking1331SaveFlowTests: XCTestCase {
         let stored = LogicFixtures.booking(on: monday, slot: .fullDay, start: nil, end: nil)
         let unchanged = ScheduleBookingEditSave.labourNamedSlot(stored, slot: .fullDay, isBreakRemoved: stored.isBreakRemoved, otMultiplierOverride: stored.otMultiplierOverride)
         XCTAssertEqual(BookingWritePatch.changedLabourFields(from: stored, to: unchanged), [])
+        // Review of ios-fixes-23nov: a stored Full day with "No unpaid break" saved unchanged keeps it (the sheet hands
+        // back its own break setting for FULL DAY, opened from the booking), so nothing is written for the field.
+        let storedNoBreak = LogicFixtures.booking(on: monday, slot: .fullDay, start: nil, end: nil, breakRemoved: true)
+        XCTAssertTrue(OperativeCustomHoursSheet.initialBreakIncluded(initialChoice: OperativeDayBookingChoice(from: storedNoBreak), showsBreakControls: true) == false)
+        let unchangedNoBreak = ScheduleBookingEditSave.labourNamedSlot(storedNoBreak, slot: .fullDay, isBreakRemoved: true, otMultiplierOverride: storedNoBreak.otMultiplierOverride)
+        XCTAssertTrue(unchangedNoBreak.isBreakRemoved)
+        XCTAssertEqual(BookingWritePatch.changedLabourFields(from: storedNoBreak, to: unchangedNoBreak), [])
         let manager = ManagerSiteBooking(userId: "TEST-manager", date: monday, timeSlot: .customHours, locationType: .project, locationId: UUID(), workStartTime: "07:30", workEndTime: "12:00")
         let managerFullDay = ScheduleBookingEditSave.managerSiteNamedSlot(manager, slot: .fullDay, isBreakRemoved: manager.isBreakRemoved)
         XCTAssertEqual(managerFullDay.timeSlot, .fullDay)

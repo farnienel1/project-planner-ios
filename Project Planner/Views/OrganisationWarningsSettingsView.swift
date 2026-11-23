@@ -880,12 +880,17 @@ private struct WarningExcludedUsersPickerView: View {
     @EnvironmentObject var operativeStore: OperativeStore
 
     @State private var searchText = ""
+    /// The current people (`currentPeople`), worked out once when the roster changes, never per render.
+    @State private var eligibleUsers: [AppUser] = []
+    /// Every id each listed person goes by (`personIdSet`: own, former and same-email ids), lower case, by user id.
+    @State private var personIdKeys: [String: Set<String>] = [:]
+    /// False until the first `refreshPeople`, so no stored id is shown as "Removed user" before the people are known.
+    @State private var peopleLoaded = false
 
     /// The people who can be excluded: the current people of the organisation, as the warnings read them —
     /// `listedCurrentLabourPeople` (never an anonymised deleted profile) and `rosterSegment` Active (never a pending
     /// invite or an inactive person; a ghost is Active). When the script does not answer, the active accounts.
-    private var eligibleUsers: [AppUser] {
-        let users = userStore.organizationUsers
+    private static func currentPeople(_ users: [AppUser]) -> [AppUser] {
         let current = CanonicalBusinessEngine.listedCurrentLabourPeople(users) ?? users
         return current
             .filter { user in
@@ -899,11 +904,35 @@ private struct WarningExcludedUsersPickerView: View {
             }
     }
 
-    /// Stored excluded ids that match no current person (deleted, pending, inactive or unknown). Shown as "Removed
-    /// user" rows so the admin can untick them; nothing is written until Save.
+    /// `users` is the roster as published (`@Published` sends the new value before the property changes).
+    private func refreshPeople(_ users: [AppUser]) {
+        let people = Self.currentPeople(users)
+        eligibleUsers = people
+        var keys: [String: Set<String>] = [:]
+        for user in people {
+            let ids = RulebookPeople.ownerIds(for: user, users: users)
+            keys[user.id] = Set((ids + [user.id]).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        }
+        personIdKeys = keys
+        peopleLoaded = true
+    }
+
+    private func idKey(_ id: String) -> String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    /// Whether a listed person is excluded: a stored id is any id they go by, without case.
+    private func isExcluded(_ user: AppUser) -> Bool {
+        let keys = personIdKeys[user.id] ?? [idKey(user.id)]
+        return selectedUserIds.contains { keys.contains(idKey($0)) }
+    }
+
+    /// Stored excluded ids that match no id a current person goes by (deleted, pending, inactive or unknown). Shown
+    /// as "Removed user" rows so the admin can untick them; nothing is written until Save.
     private var removedSelectedIds: [String] {
-        let currentIds = Set(eligibleUsers.map(\.id))
-        return selectedUserIds.filter { !currentIds.contains($0) }
+        guard peopleLoaded else { return [] }
+        let current = personIdKeys.values.reduce(into: Set<String>()) { $0.formUnion($1) }
+        return selectedUserIds.filter { !current.contains(idKey($0)) }
     }
 
     private func removedUserDetail(_ id: String) -> String {
@@ -956,7 +985,7 @@ private struct WarningExcludedUsersPickerView: View {
             } else {
                 ForEach(filteredUsers) { user in
                     Button {
-                        toggle(user.id)
+                        togglePerson(user)
                     } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
@@ -967,7 +996,7 @@ private struct WarningExcludedUsersPickerView: View {
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            if selectedUserIds.contains(user.id) {
+                            if isExcluded(user) {
                                 Image(systemName: "checkmark.circle.fill")
                                     .foregroundStyle(ProjectWorksRevampColors.activeGreen)
                             } else {
@@ -987,6 +1016,18 @@ private struct WarningExcludedUsersPickerView: View {
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
         .searchable(text: $searchText, prompt: "Search users")
+        .onAppear { refreshPeople(userStore.organizationUsers) }
+        .onReceive(userStore.$organizationUsers) { users in refreshPeople(users) }
+    }
+
+    /// Unticking a listed person removes every stored id they go by; ticking stores their own id.
+    private func togglePerson(_ user: AppUser) {
+        if isExcluded(user) {
+            let keys = personIdKeys[user.id] ?? [idKey(user.id)]
+            selectedUserIds.removeAll { keys.contains(idKey($0)) }
+        } else {
+            selectedUserIds.append(user.id)
+        }
     }
 
     private func toggle(_ userId: String) {

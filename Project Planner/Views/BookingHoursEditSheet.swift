@@ -1786,8 +1786,18 @@ struct OperativeCustomHoursSheet: View {
         // without the custom-hours break warning (a named slot is paid by its slot).
         if let onSaveNamedSlot, currentSlot != .customHours {
             guard let otOut = validatedOtMultiplier() else { return }
-            // A named slot never takes the booking's "No unpaid break" (RULEBOOK §4.3): written false, as web does.
-            onSaveNamedSlot(currentSlot, false, otOut)
+            // RULEBOOK §4.3: a named AM / PM never takes the unpaid break, so a newly chosen AM / PM writes false; a
+            // FULL DAY keeps the sheet's own break setting. The stored slot saved again keeps its stored value when
+            // the sheet shows no break controls, so an unchanged save writes nothing for the field.
+            let storedBreakRemoved = initialChoice?.isBreakRemoved ?? false
+            let breakRemoved: Bool
+            switch currentSlot {
+            case .fullDay:
+                breakRemoved = showsBreakControls ? !breakIncluded : storedBreakRemoved
+            default:
+                breakRemoved = currentSlot == storedNamedSlot ? storedBreakRemoved : false
+            }
+            onSaveNamedSlot(currentSlot, breakRemoved, otOut)
             return
         }
         if allowsOvernight {
@@ -2316,9 +2326,10 @@ enum ScheduleBookingEditSave {
         return updated
     }
 
-    /// The times Edit booking opened on, for a stored slot the sheet shows no chip for (Evening, Overtime, unknown):
-    /// passed as `openedTimes` so an unchanged save keeps the booking exactly as stored. Nil for custom hours and for
-    /// Full day / AM / PM, which save through the slot chips (`withSlotChoice`).
+    /// The times Edit booking opened on, for a stored slot the sheet shows no chip for (Evening, Overtime, unknown — and
+    /// every named slot when the rulebook script does not answer, `rulebookSlot` nil): passed as `openedTimes` so an
+    /// unchanged save keeps the booking exactly as stored (the 1.33.1 guard). Nil for custom hours and, while the script
+    /// answers, for Full day / AM / PM, which save through the slot chips (`withSlotChoice`).
     static func openedTimesForChiplessSlot(
         storedTimeSlot: String,
         policy: OrgPayrollTimePolicy,

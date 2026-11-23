@@ -6822,10 +6822,19 @@ private struct OperativeTimesheetReviewView: View {
                     .font(.subheadline)
                     .foregroundStyle(.primary)
                     .strikethrough(removed)
-                Text(display?.times ?? row.details)
+                Text(display.map { $0.times.isEmpty ? row.details : $0.times } ?? row.details)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .strikethrough(removed)
+                // The reviewer row has no rate line: keep the overtime calculation stored on the line
+                // ("OT 6.5h × 2 − 0.5h break = 12.5h") under the times (display only).
+                if let display, !display.times.isEmpty, display.times != row.details,
+                   let overtime = TimesheetPayrollCollector.lineOvertimeText(row.details) {
+                    Text(overtime)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .strikethrough(removed)
+                }
                 // `overlappingBookingIds`: still paid. The reviewer (line manager or admin) reads
                 // `overlappingBookingNote(reviewing: true)` (RULEBOOK 1.70.0 §8).
                 if row.isOverlapping, let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: true) {

@@ -2059,7 +2059,8 @@ struct ProjectDetailView: View {
             // booking's stored break (`OperativeCustomHoursSheet.initialBreakIncluded`), so Save keeps it.
             let options = LabourBookingEditOptions.forOperative(isPaye: isPayeOperativeBooking(booking))
             let labourChoice = OperativeDayBookingChoice(from: booking)
-            // An Evening / Overtime (chip-less) slot saved with the times it opened on stays exactly as stored.
+            // An Evening / Overtime (chip-less) slot — or any named slot when the rulebook script does not answer —
+            // saved with the times it opened on stays exactly as stored (the 1.33.1 guard).
             let labourOpened = ScheduleBookingEditSave.openedTimesForChiplessSlot(
                 storedTimeSlot: booking.timeSlot.rawValue,
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
@@ -2111,6 +2112,14 @@ struct ProjectDetailView: View {
             }
         case .manager(let booking, _, let personName):
             let managerChoice = booking.hoursEditChoice(policy: firebaseBackend.payrollPolicy(for: booking.date))
+            // 1.33.1 guard: when the rulebook script does not answer (no slot chips for the stored slot), an unchanged
+            // save keeps the stored named slot instead of becoming custom hours.
+            let managerOpened = booking.timeSlot == .customHours ? nil : ScheduleBookingEditSave.openedTimesForChiplessSlot(
+                storedTimeSlot: ScheduleBookingEditSave.labourTimeSlot(booking.timeSlot).rawValue,
+                policy: firebaseBackend.payrollPolicy(for: booking.date),
+                referenceDay: booking.date,
+                initialChoice: managerChoice
+            )
             OperativeCustomHoursSheet(
                 policy: firebaseBackend.payrollPolicy(for: booking.date),
                 referenceDay: booking.date,
@@ -2126,7 +2135,8 @@ struct ProjectDetailView: View {
                         booking,
                         start: start,
                         end: end,
-                        isBreakRemoved: isBreakRemoved
+                        isBreakRemoved: isBreakRemoved,
+                        openedTimes: managerOpened
                     )
                     saveScheduleManagerEdit(original: booking, updated: updated, personName: personName)
                 },
