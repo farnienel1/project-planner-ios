@@ -20,6 +20,7 @@ final class Rulebook1760Tests: XCTestCase {
             "operativeSignedByName": "Jo Bloggs",
             "managerSignedAt": managerSigned.timeIntervalSince1970 * 1000,
             "managerSignedByName": "Line Manager",
+            "weeklyReportOverride": ["lines": [["id": "op-B1", "bookingId": "B1", "bookingFingerprint": "fp-B1", "isLeave": false, "isPayeDay": false]]],
         ]
     }
 
@@ -77,5 +78,30 @@ final class Rulebook1760Tests: XCTestCase {
         signed["operativeSignedByName"] = "Jo"
         XCTAssertFalse(CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(sheet: signed, viewerIsReviewer: true, viewerIsSubject: false))
         XCTAssertFalse(CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(sheet: [:], viewerIsReviewer: true, viewerIsSubject: false))
+    }
+
+    /// Review of #427 (finding 1): a signed copy from before 1.46.0 (no `bookingFingerprint`) gets no button, only a line.
+    func testOldSignedCopyGetsNoButtonButAHelpLine() {
+        var old = counterSigned()
+        old["weeklyReportOverride"] = ["lines": [["id": "op-B1", "bookingId": "B1", "isLeave": false, "isPayeDay": false]]]
+        XCTAssertNil(action(old))
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(sheet: old, viewerIsReviewer: true, viewerIsSubject: false, selfSigned: false, reopened: false),
+            CanonicalBusinessEngine.timesheetMakeChangesOldSheetHelp
+        )
+        XCTAssertEqual(
+            CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(sheet: counterSigned(), viewerIsReviewer: true, viewerIsSubject: false, selfSigned: false, reopened: false),
+            ""
+        )
+        // Exported, it is corrected in a revision as any other.
+        old["exportedAt"] = Date(timeIntervalSince1970: 1_795_600_000).timeIntervalSince1970 * 1000
+        XCTAssertEqual(action(old, revisionAllowed: true), .createRevision)
+    }
+
+    /// Review of #427 (finding 9): a revision known only by `revisionOf` counts too.
+    func testRevisionKnownByRevisionOf() {
+        XCTAssertTrue(CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(
+            sheet: ["revisionOf": "timesheet_OP1_1795392000"], viewerIsReviewer: true, viewerIsSubject: false
+        ))
     }
 }

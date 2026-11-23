@@ -47,8 +47,34 @@ extension CanonicalBusinessEngine {
         )
     }
 
+    /// `TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP` (review of #427, finding 1).
+    nonisolated static var timesheetMakeChangesOldSheetHelp: String {
+        makeChangesText(
+            "TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP",
+            fallback: "This timesheet was signed before 14 Nov. Export it, then use Make changes to correct it in a revision."
+        )
+    }
+
+    private nonisolated static func makeChangesInput(
+        viewerIsReviewer: Bool,
+        viewerIsSubject: Bool,
+        selfSigned: Bool,
+        reopened: Bool,
+        revisionAllowed: Bool
+    ) -> [String: Any] {
+        [
+            "viewerIsReviewer": viewerIsReviewer,
+            "viewerIsSubject": viewerIsSubject,
+            "selfSigned": selfSigned,
+            "change": ["reopened": reopened],
+            "revisionAllowed": revisionAllowed,
+        ]
+    }
+
     /// RULEBOOK 1.76.0 `timesheetMakeChangesAction(sheet, input)`. `sheet` is `TimesheetDraftStore.statusPayload(for:)`
-    /// (signatures, `exportedAt`, `invoiceGeneratedAt`). Nil when the script did not answer (no button; fail closed).
+    /// (signatures, `exportedAt`, `invoiceGeneratedAt`) plus the signed copy (`weeklyReportOverride.lines` with
+    /// `bookingFingerprint`, `isLeave`, `isPayeDay`, `reviewPartOf`; review of #427). Nil when the script did not answer
+    /// (no button; fail closed).
     nonisolated static func timesheetMakeChangesAction(
         sheet: [String: Any],
         viewerIsReviewer: Bool,
@@ -57,13 +83,10 @@ extension CanonicalBusinessEngine {
         reopened: Bool,
         revisionAllowed: Bool
     ) -> RulebookTimesheetMakeChangesAction? {
-        let input: [String: Any] = [
-            "viewerIsReviewer": viewerIsReviewer,
-            "viewerIsSubject": viewerIsSubject,
-            "selfSigned": selfSigned,
-            "change": ["reopened": reopened],
-            "revisionAllowed": revisionAllowed,
-        ]
+        let input = makeChangesInput(
+            viewerIsReviewer: viewerIsReviewer, viewerIsSubject: viewerIsSubject, selfSigned: selfSigned,
+            reopened: reopened, revisionAllowed: revisionAllowed
+        )
         guard let raw = callJSON("timesheetMakeChangesAction", arguments: [sheet, input]) as? String else { return nil }
         return RulebookTimesheetMakeChangesAction(rawValue: raw)
     }
@@ -74,8 +97,24 @@ extension CanonicalBusinessEngine {
         return callJSON("timesheetMakeChangesHelp", arguments: [action.rawValue]) as? String ?? ""
     }
 
+    /// RULEBOOK 1.76.0 `timesheetMakeChangesHelp(null, sheet, input)` (review of #427, finding 1): on a signed-off sheet
+    /// whose signed copy cannot tell a changed booking, `TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP`; otherwise ''.
+    nonisolated static func timesheetMakeChangesHelpWithoutAction(
+        sheet: [String: Any],
+        viewerIsReviewer: Bool,
+        viewerIsSubject: Bool,
+        selfSigned: Bool,
+        reopened: Bool
+    ) -> String {
+        let input = makeChangesInput(
+            viewerIsReviewer: viewerIsReviewer, viewerIsSubject: viewerIsSubject, selfSigned: selfSigned,
+            reopened: reopened, revisionAllowed: false
+        )
+        return callJSON("timesheetMakeChangesHelp", arguments: [NSNull(), sheet, input]) as? String ?? ""
+    }
+
     /// RULEBOOK 1.76.0 `timesheetRevisionReviewerMayEditBookings(sheet, input)`: `sheet` is the status payload plus
-    /// `revision` / `revisionOf`. False when the script did not answer.
+    /// `revision` and `revisionOf` (review of #427, finding 9). False when the script did not answer.
     nonisolated static func timesheetRevisionReviewerMayEditBookings(
         sheet: [String: Any],
         viewerIsReviewer: Bool,

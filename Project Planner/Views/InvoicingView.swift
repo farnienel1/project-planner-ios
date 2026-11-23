@@ -6208,8 +6208,14 @@ private struct OperativeTimesheetReviewView: View {
     }
     @State private var editingPayrollLineId: String?
     /// RULEBOOK 1.76.0 §8 (A1): the reviewer pressed "Make changes" on a signed-off sheet (nothing is written until they
-    /// change a booking).
-    @State private var makingChanges = false
+    /// change a booking). Review of #427 (finding 2): held as the counter-signature it was pressed on, so it ends by itself
+    /// once that sheet reopens (first change), is signed off again, is exported or another sheet opens.
+    @State private var makingChangesFor: Date?
+
+    private var makingChanges: Bool {
+        guard makeChangesAction == .reopenReview, let pressed = makingChangesFor, let signed = draft.managerSignedAt else { return false }
+        return pressed == signed
+    }
     /// RULEBOOK 1.72.0 §8: the message after a reviewer's ⚙ / ✕ changed or refused a booking.
     @State private var reviewBookingNotice: String?
     /// RULEBOOK 1.72.0 §8: the ✕ waiting for its confirm (`timesheetReviewDeleteBookingWarning` / the overtime trim).
@@ -6282,7 +6288,7 @@ private struct OperativeTimesheetReviewView: View {
         // Wait for the booking-change check on a signed sheet (a reopened sheet is already in review).
         if !TimesheetApprovalPolicy.isExported(draft), !bookingCheckReady { return nil }
         return CanonicalBusinessEngine.timesheetMakeChangesAction(
-            sheet: TimesheetDraftStore.statusPayload(for: draft),
+            sheet: makeChangesSheet,
             viewerIsReviewer: true,
             viewerIsSubject: false,
             selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
@@ -6296,10 +6302,48 @@ private struct OperativeTimesheetReviewView: View {
     /// (`timesheetRevisionReviewerMayEditBookings`).
     private var reviewerBookingEditsOpen: Bool {
         guard viewerIsReviewer, !canManagerReview else { return false }
-        if makingChanges, makeChangesAction == .reopenReview { return true }
+        if makingChanges { return true }
+        return CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(sheet: makeChangesSheet, viewerIsReviewer: true, viewerIsSubject: false)
+    }
+
+    /// RULEBOOK 1.76.0 §8: the sheet as `timesheetMakeChangesAction` reads it — signatures and export
+    /// (`statusPayload`), `revision` / `revisionOf` (finding 9) and the signed copy's lines (finding 1: a copy signed
+    /// before 1.46.0 has no `bookingFingerprint`).
+    private var makeChangesSheet: [String: Any] {
         var sheet = TimesheetDraftStore.statusPayload(for: draft)
         if let revision = draft.revision, revision > 0 { sheet["revision"] = revision }
-        return CanonicalBusinessEngine.timesheetRevisionReviewerMayEditBookings(sheet: sheet, viewerIsReviewer: true, viewerIsSubject: false)
+        if let ref = CanonicalBusinessEngine.parseTimesheetRevisionDocId(draft.versionDocumentId), ref.revision > 0 {
+            sheet["revisionOf"] = ref.baseDocumentId
+        }
+        if let copy = draft.weeklyReportOverride {
+            sheet["weeklyReportOverride"] = [
+                "lines": copy.lines.map { line -> [String: Any] in
+                    var row: [String: Any] = [
+                        "id": line.id,
+                        "bookingId": line.bookingId ?? "",
+                        "isPayeDay": line.isPayeDay == true,
+                        "isLeave": line.isLeave == true,
+                    ]
+                    if let fingerprint = line.bookingFingerprint, !fingerprint.isEmpty { row["bookingFingerprint"] = fingerprint }
+                    if let part = line.reviewPartOf, !part.isEmpty { row["reviewPartOf"] = part }
+                    return row
+                },
+            ]
+        }
+        return sheet
+    }
+
+    /// Review of #427 (finding 1): a signed-off sheet whose signed copy cannot tell a changed booking gets this line in
+    /// place of the button ('' otherwise).
+    private var makeChangesOldSheetHelp: String {
+        guard viewerIsReviewer, makeChangesAction == nil, !TimesheetApprovalPolicy.isExported(draft), bookingCheckReady else { return "" }
+        return CanonicalBusinessEngine.timesheetMakeChangesHelpWithoutAction(
+            sheet: makeChangesSheet,
+            viewerIsReviewer: true,
+            viewerIsSubject: false,
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
+            reopened: bookingChange?.reopened == true
+        )
     }
 
     /// RULEBOOK 1.47.0 §8 `signedTimesheetBookingChanges` for the subject's sheet (nil until the pay run's bookings
@@ -6944,11 +6988,20 @@ private struct OperativeTimesheetReviewView: View {
                     .background(Color.green.opacity(0.14))
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 // RULEBOOK 1.55.0 §8: once exported a timesheet never changes; a correction is a revision.
-                Text(TimesheetApprovalPolicy.isExported(draft)
-                     ? "Exported timesheets never change. A correction is made as a revision (REV 1, REV 2 …), signed again by the person and you."
-                     : "Signed off. Once exported it never changes; a later correction is made as a revision.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Review of #427 (finding 5): not while Make changes (or its old-sheet line) speaks for the sheet, as web.
+                if makeChangesAction != .reopenReview, makeChangesOldSheetHelp.isEmpty {
+                    Text(TimesheetApprovalPolicy.isExported(draft)
+                         ? "Exported timesheets never change. A correction is made as a revision (REV 1, REV 2 …), signed again by the person and you."
+                         : "Signed off. Once exported it never changes; a later correction is made as a revision.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if !makeChangesOldSheetHelp.isEmpty {
+                    Text(makeChangesOldSheetHelp)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("operativeTimesheetReview.makeChangesOldSheet")
+                }
                 if makeChangesAction == .reopenReview {
                     // RULEBOOK 1.76.0 §8 (A1): reopen the review on this screen; nothing is written until a booking
                     // is changed (then the sheet waits for the line manager to sign it off again).
@@ -6956,11 +7009,11 @@ private struct OperativeTimesheetReviewView: View {
                         Text(CanonicalBusinessEngine.timesheetMakeChangesActiveNote)
                             .font(.caption)
                             .foregroundStyle(.orange)
-                        Button(CanonicalBusinessEngine.timesheetMakeChangesCancelLabel) { makingChanges = false }
+                        Button(CanonicalBusinessEngine.timesheetMakeChangesCancelLabel) { makingChangesFor = nil }
                             .frame(maxWidth: .infinity)
                             .accessibilityIdentifier("operativeTimesheetReview.stopMakingChanges")
                     } else {
-                        Button(action: { makingChanges = true }) {
+                        Button(action: { makingChangesFor = draft.managerSignedAt }) {
                             Label(CanonicalBusinessEngine.timesheetMakeChangesLabel, systemImage: "pencil")
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 12)
@@ -7927,6 +7980,8 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
                     return
                 }
                 let counterSignSave = onCounterSignSave()
+                // Review of #427 (finding 2): signed off again — Make changes starts closed.
+                makingChangesFor = nil
                 let signer = draft.managerSignedByName ?? "Line manager"
                 // RULEBOOK 1.60.1: the counter-signature (REV and instant, read from the signed draft) keys the signed
                 // notice and the line-manager peer rows.
