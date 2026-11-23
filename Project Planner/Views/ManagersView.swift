@@ -91,9 +91,10 @@ struct ManagersView: View {
             .background(PPColor.page.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationBarBackButtonHidden(true)
+            // Owner issue #17 (17 Nov): a row opens the person's profile summary; its Edit profile opens Edit user.
             .sheet(item: $selectedUser) { user in
                 NavigationStack {
-                    EditUserView(user: user)
+                    UserProfileSummaryView(user: user)
                 }
                 .environmentObject(userStore)
                 .environmentObject(bookingStore)

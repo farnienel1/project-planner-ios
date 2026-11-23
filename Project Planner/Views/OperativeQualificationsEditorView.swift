@@ -44,6 +44,23 @@ struct OperativeQualificationsEditorView: View {
     @State private var showingListFilters = false
     @State private var qualificationSearchText = ""
 
+    /// RULEBOOK 1.50.0 `uploadAllowedHint`: what a certificate may be ("A photo (JPEG, PNG, HEIC or WebP) or a PDF ·
+    /// up to 10 MB"); the old "PDF or JPEG only" text predates 1.50.0.
+    private static var certificateHint: String {
+        let hint = CanonicalBusinessEngine.callJSON(
+            "uploadAllowedHint",
+            arguments: [StorageUploadPolicy.uploadKind(for: .qualificationCertificate)]
+        ) as? String ?? ""
+        return hint.isEmpty ? "A photo or a PDF · up to 10 MB" : hint
+    }
+
+    /// Issue #16 (17 Nov): how long a save waits before saying so, never "Saving…" for ever. An upload of up to 10 MB
+    /// on a slow phone signal gets longer than a Firestore write.
+    static let uploadWaitSeconds: Double = 180
+    static let writeWaitSeconds: Double = 20
+    static let waitingForServerMessage =
+        "Certificate uploaded and saved on this phone, waiting for the server to confirm. Check your connection; it is sent when you are back online."
+
     /// RULEBOOK 1.50.0: every photo type and PDF.
     private static let allowedCertificateTypes: [UTType] = [.pdf, .jpeg, .png, .heic, .heif, .webP]
 
@@ -60,10 +77,13 @@ struct OperativeQualificationsEditorView: View {
         self.presentation = presentation
         self.usesOwnNavigationStack = usesOwnNavigationStack
         _selectedQualifications = State(initialValue: operative.qualifications)
-        _qualificationExpiryDates = State(initialValue: operative.qualificationExpiryDates)
+        // Issue #19 (17 Nov): an expiry kept only under another spelling of the id, or only on the assignment row's
+        // `endDate`, shows as its date — never "No" (`PersonQualifications.editorExpiryDates`, the profile's reader).
+        let startingExpiry = PersonQualifications.editorExpiryDates(for: operative)
+        _qualificationExpiryDates = State(initialValue: startingExpiry)
         _qualificationCertificateURLs = State(initialValue: operative.qualificationCertificateURLs)
         _baselineQualifications = State(initialValue: operative.qualifications)
-        _baselineExpiry = State(initialValue: operative.qualificationExpiryDates)
+        _baselineExpiry = State(initialValue: startingExpiry)
         _baselineCerts = State(initialValue: operative.qualificationCertificateURLs)
     }
 
@@ -423,7 +443,7 @@ struct OperativeQualificationsEditorView: View {
                 .font(.caption)
                 .disabled(!canEditAssignments)
 
-                Text("PDF or JPEG only · max 10MB")
+                Text(Self.certificateHint)
                     .font(.caption2)
                     .foregroundColor(.secondary)
 
@@ -440,7 +460,8 @@ struct OperativeQualificationsEditorView: View {
                         Text("Certificate uploaded")
                             .font(.caption)
                             .foregroundColor(.green)
-                        if let url = URL(string: existingURLString) {
+                        // RULEBOOK 1.50.0 §24 `safeExternalUrl`: only an https link is opened.
+                        if let url = CanonicalBusinessEngine.safeExternalURL(existingURLString) {
                             Button("View certificate") {
                                 certificateViewerURL = IdentifiableURL(url)
                             }
@@ -514,7 +535,7 @@ struct OperativeQualificationsEditorView: View {
 
     private func applyOperativeSnapshot(_ op: Operative) {
         selectedQualifications = op.qualifications
-        qualificationExpiryDates = op.qualificationExpiryDates
+        qualificationExpiryDates = PersonQualifications.editorExpiryDates(for: op)
         qualificationCertificateURLs = op.qualificationCertificateURLs
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
@@ -638,11 +659,15 @@ struct OperativeQualificationsEditorView: View {
         var savedCertificates = assignment.qualificationCertificateURLs
 
         do {
-            try await firebaseBackend.patchOperativeQualificationMaps(
-                operativeDocumentId: operative.documentId,
-                organizationId: organizationId,
-                write: assignment
-            )
+            let backend = firebaseBackend
+            let documentId = operative.documentId
+            try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
+                try await backend.patchOperativeQualificationMaps(
+                    operativeDocumentId: documentId,
+                    organizationId: organizationId,
+                    write: assignment
+                )
+            }
         } catch {
             errorMessage = "Could not save qualifications. \(error.localizedDescription)"
             if let mergeRollback {
@@ -669,14 +694,18 @@ struct OperativeQualificationsEditorView: View {
                 for (qualificationId, fileURL) in certificateUploadTargets {
                     let data = try Data(contentsOf: fileURL)
                     // RULEBOOK 1.50.0 §24: no type is assumed here; the bytes decide (`uploadAllowed`).
-                    let uploadedURL = try await firebaseBackend.uploadQualificationDocument(
-                        data: data,
-                        organizationId: organizationId,
-                        operativeId: operative.documentId,
-                        qualificationId: qualificationId,
-                        fileName: fileURL.lastPathComponent,
-                        contentType: ""
-                    )
+                    let backend = firebaseBackend
+                    let documentId = operative.documentId
+                    let uploadedURL = try await BoundedWait.run(seconds: Self.uploadWaitSeconds) {
+                        try await backend.uploadQualificationDocument(
+                            data: data,
+                            organizationId: organizationId,
+                            operativeId: documentId,
+                            qualificationId: qualificationId,
+                            fileName: fileURL.lastPathComponent,
+                            contentType: ""
+                        )
+                    }
                     uploaded[qualificationId] = uploadedURL
                 }
             } catch {
@@ -686,8 +715,16 @@ struct OperativeQualificationsEditorView: View {
                 return false
             }
 
-            guard let mergedURLs = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
+            // Issue #16: a renewed certificate replaces the old link under every spelling of the qualification id
+            // (RULEBOOK `mergeQualificationCertificateUrls` with `removedIds`, then the new link), so View certificate
+            // shows the new file on both apps. The old file stays in Storage (each upload is a new object, §24).
+            guard let withoutRenewed = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
                 existing: savedCertificates,
+                uploaded: [:],
+                removedIds: Array(uploaded.keys)
+            ),
+            let mergedURLs = CanonicalBusinessEngine.mergeQualificationCertificateUrls(
+                existing: withoutRenewed,
                 uploaded: uploaded
             ) else {
                 errorMessage = "Could not save the certificate."
@@ -698,11 +735,27 @@ struct OperativeQualificationsEditorView: View {
             var withCertificates = assignment
             withCertificates.qualificationCertificateURLs = mergedURLs
             do {
-                try await firebaseBackend.patchOperativeQualificationMaps(
-                    operativeDocumentId: operative.documentId,
-                    organizationId: organizationId,
-                    write: withCertificates
-                )
+                let backend = firebaseBackend
+                let documentId = operative.documentId
+                let certificateWrite = withCertificates
+                try await BoundedWait.run(seconds: Self.writeWaitSeconds) {
+                    try await backend.patchOperativeQualificationMaps(
+                        operativeDocumentId: documentId,
+                        organizationId: organizationId,
+                        write: certificateWrite
+                    )
+                }
+            } catch is BoundedWait.TimedOut {
+                // The file is uploaded and the link is written on this phone; Firestore sends it when the server
+                // answers. Show the new certificate, keep the screen open and say so — never "Saving…" for ever.
+                updatedOperative.qualificationCertificateURLs = mergedURLs
+                updatedOperative.updatedAt = Date()
+                operativeStore.replaceOperativeInMemory(updatedOperative)
+                qualificationCertificateURLs = mergedURLs
+                certificateUploadTargets = [:]
+                syncBaselineFromWorkingState()
+                errorMessage = Self.waitingForServerMessage
+                return false
             } catch {
                 errorMessage = "Could not save the certificate. \(error.localizedDescription)"
                 syncBaselineFromWorkingState()

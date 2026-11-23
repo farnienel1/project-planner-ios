@@ -3401,19 +3401,28 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
         )
-        
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+
+        // Issue #16 (17 Nov): the editor gives up on a stalled upload (`BoundedWait`); cancelling this task then stops
+        // the Storage upload too, so nothing keeps uploading behind a "try again" message. Each upload is a new object
+        // (`storedFileObjectName`, RULEBOOK §24), so a renewed certificate never overwrites the one it replaces.
+        let uploadBox = QualificationUploadTaskBox()
+        let _ = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                uploadBox.task = storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else if let metadata = metadata {
+                        continuation.resume(returning: metadata)
+                    } else {
+                        continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                    }
                 }
             }
+        } onCancel: {
+            uploadBox.cancel()
         }
-        
+        try Task.checkCancellation()
+
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
