@@ -423,12 +423,12 @@ enum WarningsRefreshHelper {
             firebaseBackend: inputs.firebaseBackend
         )
         if !readiness.storeInputsReady { return false }
-        // Owner report 23 Nov: the launch quiet (30 s) held the first scan, so Home said "Checking…" for about
-        // 30 seconds even once every input had loaded. It now holds only rescans after a list has been published.
+        // Owner report 23 Nov: the launch quiet (30 s) held every scan, so Home said "Checking…" for about
+        // 30 seconds even once every input had loaded. Inside it, a scan now waits only for the clash approvals.
         if WarningsFirstOpenPolicy.launchQuietHoldsScan(
             quietUntil: inputs.firebaseBackend.launchQuietUntil,
             now: Date(),
-            hasCompletedLiveDetection: WarningsService.shared.hasCompletedLiveDetection
+            clashApprovalsLoaded: WarningResolutionStore.shared.clashApprovalsLoaded
         ) {
             return false
         }
@@ -474,11 +474,9 @@ enum WarningsRefreshHelper {
         // Re-read the organisation document so exclusion and the scan window match Firestore.
         // Owner report 23 Nov: the dismissed-qualification read no longer waits for the organisation read and the
         // material reads (it was the last of four server reads made one after the other). Same document, same keys.
-        let dismissedKeysRead = Task { @MainActor in
-            await firebaseBackend.loadDismissedQualificationKeys(
-                organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
-            )
-        }
+        // `async let`: cancelled with the scan.
+        let dismissedKeysOrganizationId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+        async let dismissedKeysRead = firebaseBackend.loadDismissedQualificationKeys(organizationId: dismissedKeysOrganizationId)
         let livePaymentRuns = await firebaseBackend.refreshWarningDetectionFromServer()
         if Task.isCancelled { return false }
         // Returns false whenever nothing was published, so no caller reports "Updated · 0 active" for a
@@ -596,7 +594,7 @@ enum WarningsRefreshHelper {
         let liveHolidays = holidayStore.bookings.filter { holiday in
             holiday.endDayKey >= holidayWindowStartKey && holiday.startDayKey <= holidayWindowEndKey
         }
-        let dismissedQualificationKeys = await dismissedKeysRead.value
+        let dismissedQualificationKeys = await dismissedKeysRead
         print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count) dismissedQualifications=\(dismissedQualificationKeys.count)")
 
         await Task.yield()

@@ -284,6 +284,12 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: .liveWarningInputsDidChange)) { _ in
                 scheduleWarningsForBookingChange()
             }
+            // Owner report 23 Nov / review of #274: the first scan no longer waits out the 30 s launch quiet, so it can
+            // run on the roster saved on this phone. When the roster then arrives from the server (or changes), scan
+            // again, as leave and bookings already do; the scheduler collapses a burst into one scan.
+            .onReceive(userStore.$organizationUsers.dropFirst()) { _ in
+                scheduleWarningsForBookingChange()
+            }
     }
 
     /// Debounced warning scan for booking changes on every tab. Home only updates its badge.

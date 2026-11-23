@@ -23,8 +23,8 @@ enum WarningsMaterialCutOffLoad {
     }
 
     /// Every job's lines, then (only when its lines were read) its send records, for all jobs at once. The rows come
-    /// back in `projectIds` order, exactly as the one-after-the-other read returned them. Stops early when the
-    /// calling task is cancelled (the caller then publishes nothing).
+    /// back in `projectIds` order, exactly as the one-after-the-other read returned them. The reads are child tasks of
+    /// the caller, so cancelling the scan cancels them (the caller then publishes nothing).
     @MainActor
     static func load<Line, Record>(
         projectIds: [UUID],
@@ -32,26 +32,24 @@ enum WarningsMaterialCutOffLoad {
         records: @escaping @MainActor @Sendable (UUID) async -> [Record]?
     ) async -> (lines: [Line], records: [Record], loadedProjectIds: Set<UUID>) {
         let results = projectIds.map { _ in JobResult<Line, Record>() }
-        let tasks: [Task<Void, Never>] = zip(projectIds, results).map { projectId, result in
-            Task { @MainActor in
-                guard let loaded = await lines(projectId) else { return }
-                result.lines = loaded
-                result.records = await records(projectId)
+        await withTaskGroup(of: Void.self) { group in
+            for (projectId, result) in zip(projectIds, results) {
+                group.addTask { @MainActor in
+                    guard let loaded = await lines(projectId) else { return }
+                    result.lines = loaded
+                    result.records = await records(projectId)
+                }
             }
+            await group.waitForAll()
         }
         var outLines: [Line] = []
         var outRecords: [Record] = []
         var loaded = Set<UUID>()
-        for index in tasks.indices {
-            if Task.isCancelled {
-                for remaining in tasks[index...] { remaining.cancel() }
-                break
-            }
-            await tasks[index].value
-            guard let jobLines = results[index].lines else { continue }
+        for (projectId, result) in zip(projectIds, results) {
+            guard let jobLines = result.lines else { continue }
             outLines.append(contentsOf: jobLines)
-            loaded.insert(projectIds[index])
-            if let sent = results[index].records { outRecords.append(contentsOf: sent) }
+            loaded.insert(projectId)
+            if let sent = result.records { outRecords.append(contentsOf: sent) }
         }
         return (outLines, outRecords, loaded)
     }

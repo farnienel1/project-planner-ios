@@ -16,20 +16,55 @@ final class WarningsSpeedTests: XCTestCase {
 
     // MARK: Launch quiet
 
-    func testLaunchQuietNeverHoldsTheFirstScan() {
+    func testLaunchQuietHoldsAScanOnlyUntilTheClashApprovalsHaveLoaded() {
         let now = Date()
         let quiet = now.addingTimeInterval(30)
-        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: quiet, now: now, hasCompletedLiveDetection: false),
-                       "no list yet: the first scan waits for its inputs, not for the 30 s launch quiet")
-        XCTAssertTrue(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: quiet, now: now, hasCompletedLiveDetection: true),
-                      "rescans after the first list still wait for the quiet, as before")
-        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: now.addingTimeInterval(-1), now: now, hasCompletedLiveDetection: true))
-        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: nil, now: now, hasCompletedLiveDetection: true))
+        XCTAssertTrue(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: quiet, now: now, clashApprovalsLoaded: false),
+                      "inside the quiet a scan waits for both clash-approval listeners (an approved clash is never counted open)")
+        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: quiet, now: now, clashApprovalsLoaded: true),
+                       "with the approvals loaded the scan runs: it no longer waits out the 30 s")
+        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: now.addingTimeInterval(-1), now: now, clashApprovalsLoaded: false),
+                       "after the quiet nothing waits, as before")
+        XCTAssertFalse(WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: nil, now: now, clashApprovalsLoaded: false))
+    }
+
+    /// Review of #274 (blocking): after a first list is published inside the quiet, an input change inside the quiet
+    /// (leave arriving from the server after a cache snapshot, a roster answer, a booking edit) rescans at once.
+    func testAnInputChangeInsideTheQuietRescansAfterTheFirstList() async {
+        let quietUntil = Date().addingTimeInterval(30)
+        var approvalsLoaded = false
+        let scheduler = WarningsBookingScanScheduler()
+        scheduler.debounceNanoseconds = 5_000_000
+        scheduler.readinessRetryNanoseconds = 5_000_000
+        scheduler.isReadyToScan = {
+            !WarningsFirstOpenPolicy.launchQuietHoldsScan(quietUntil: quietUntil, now: Date(), clashApprovalsLoaded: approvalsLoaded)
+        }
+        var scans = 0
+        scheduler.onScan = { scans += 1 }
+
+        scheduler.noteBookingChange()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(scans, 0, "approvals not loaded yet: no list")
+
+        approvalsLoaded = true
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(scans, 1, "the first list, inside the quiet")
+
+        scheduler.noteBookingChange()
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(scans, 2, "an input change inside the quiet rescans (it waited for the quiet before)")
+        XCTAssertLessThan(Date(), quietUntil)
+    }
+
+    func testARosterChangeAsksForARescan() throws {
+        let content = try source("ContentView.swift")
+        XCTAssertTrue(content.contains(".onReceive(userStore.$organizationUsers.dropFirst()) { _ in\n                scheduleWarningsForBookingChange()"))
     }
 
     func testTheBookingSchedulerAsksThePolicyAndStillWaitsForEveryInput() throws {
         let helper = try source("Core/WarningsRefreshHelper.swift")
         XCTAssertTrue(helper.contains("WarningsFirstOpenPolicy.launchQuietHoldsScan("))
+        XCTAssertTrue(helper.contains("clashApprovalsLoaded: WarningResolutionStore.shared.clashApprovalsLoaded"))
         XCTAssertFalse(helper.contains("if let quietUntil = inputs.firebaseBackend.launchQuietUntil, Date() < quietUntil {"))
         // The readiness gate is untouched: a scan of inputs that have not loaded is never published.
         XCTAssertTrue(helper.contains("if !readiness.storeInputsReady { return false }"))
@@ -99,28 +134,55 @@ final class WarningsSpeedTests: XCTestCase {
         XCTAssertTrue(result.loadedProjectIds.isEmpty)
     }
 
+    /// Deterministic: each read waits at a gate that opens when every job's read is in flight at once (or, if they
+    /// were read one after the other, only when the test's fallback opens it). The count of reads in flight decides.
     func testTheJobsAreReadAtTheSameTime() async {
         let ids = (0..<5).map { _ in UUID() }
-        let started = Date()
-        _ = await WarningsMaterialCutOffLoad.load(
+        let gate = ReadGate(expected: ids.count)
+        let fallback = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            gate.open()
+        }
+        let result = await WarningsMaterialCutOffLoad.load(
             projectIds: ids,
             lines: { _ -> [String]? in
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                await gate.enter()
+                gate.leave()
                 return ["line"]
             },
-            records: { _ -> [String]? in
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                return ["sent"]
-            }
+            records: { _ -> [String]? in ["sent"] }
         )
-        // One after the other this is 5 × 0.4 s = 2 s; at the same time about 0.4 s.
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        fallback.cancel()
+        XCTAssertEqual(gate.maxInFlight, ids.count, "every job's lines were being read at the same time")
+        XCTAssertEqual(result.lines.count, ids.count)
+    }
+
+    func testCancellingTheScanCancelsTheReads() async {
+        let ids = (0..<3).map { _ in UUID() }
+        let seen = RecordReadLog()
+        let scan = Task { @MainActor in
+            await WarningsMaterialCutOffLoad.load(
+                projectIds: ids,
+                lines: { id -> [String]? in
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    if Task.isCancelled { seen.ids.append(id) }
+                    return nil
+                },
+                records: { _ -> [String]? in nil }
+            )
+        }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        scan.cancel()
+        let result = await scan.value
+        XCTAssertEqual(Set(seen.ids), Set(ids), "each job's read saw the scan's cancellation")
+        XCTAssertTrue(result.loadedProjectIds.isEmpty)
     }
 
     func testTheScanUsesTheConcurrentReads() throws {
         let helper = try source("Core/WarningsRefreshHelper.swift")
         XCTAssertTrue(helper.contains("WarningsMaterialCutOffLoad.load("))
-        XCTAssertTrue(helper.contains("let dismissedQualificationKeys = await dismissedKeysRead.value"))
+        XCTAssertTrue(helper.contains("async let dismissedKeysRead = firebaseBackend.loadDismissedQualificationKeys("))
+        XCTAssertTrue(helper.contains("let dismissedQualificationKeys = await dismissedKeysRead"))
         XCTAssertFalse(helper.contains("for projectId in projectIds {"), "no one-after-the-other material loop is left")
     }
 }
@@ -128,4 +190,35 @@ final class WarningsSpeedTests: XCTestCase {
 @MainActor
 private final class RecordReadLog {
     var ids: [UUID] = []
+}
+
+/// Counts reads in flight; lets them through once `expected` are in flight together (or when `open()` is called).
+@MainActor
+private final class ReadGate {
+    let expected: Int
+    private(set) var inFlight = 0
+    private(set) var maxInFlight = 0
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(expected: Int) { self.expected = expected }
+
+    func enter() async {
+        inFlight += 1
+        maxInFlight = max(maxInFlight, inFlight)
+        if inFlight >= expected { open() }
+        if isOpen { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            if isOpen { continuation.resume() } else { waiters.append(continuation) }
+        }
+    }
+
+    func leave() { inFlight -= 1 }
+
+    func open() {
+        isOpen = true
+        let pending = waiters
+        waiters = []
+        for waiter in pending { waiter.resume() }
+    }
 }
