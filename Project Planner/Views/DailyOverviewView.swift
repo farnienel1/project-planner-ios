@@ -76,6 +76,15 @@ struct DailyOverviewView: View {
     private var payrollTimePolicy: OrgPayrollTimePolicy {
         firebaseBackend.payrollPolicy(for: overviewDate)
     }
+
+    /// The standard-hours figure's label for the day shown (`dailyOverviewStandardHoursLabel`, the policy state with
+    /// its history; `loaded: false` until the organisation's settings have loaded).
+    private var standardHoursLabel: RulebookStandardHoursLabel? {
+        CanonicalBusinessEngine.dailyOverviewStandardHoursLabel(
+            policyState: firebaseBackend.currentOrganization == nil ? nil : CanonicalBusinessEngine.openOrganizationPayrollPolicyState,
+            dayKey: OrganizationRulebookContext.dayKey(overviewDate)
+        )
+    }
     
     /// Staff open Book Labour; which jobs they may book onto is `canWriteBooking` per job (RULEBOOK 1.10.0 §16).
     /// RULEBOOK §2 `canScheduleOperatives` (`UserStore.canOpenJobScheduling`): Book labour and editing bookings here
@@ -462,7 +471,7 @@ struct DailyOverviewView: View {
                             .padding(.top, 20)
                     }
 
-                    // RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day leave not covered" rows, as Warnings.
+                    // RULEBOOK 1.60.0 (owner report 17 Nov): the day's "Half-day unbooked" rows, as Warnings.
                     if !JobAccessContext.viewerPending, !leaveCoverRows.isEmpty {
                         leaveCoverRevampCard
                             .padding(.top, 20)
@@ -649,7 +658,13 @@ struct DailyOverviewView: View {
             }
 
             HStack(alignment: .top, spacing: 12) {
-                PPStat(value: overviewFormatHours(dayJobSiteStandardPortionHours), label: "Standard hrs")
+                // RULEBOOK 1.73.0 §6 `dailyOverviewStandardHoursLabel` (owner 23 Nov item 31): "Weekend window hrs" and
+                // its hint on a set-window weekend day under the working hours in effect that day. Figure unchanged.
+                PPStat(
+                    value: overviewFormatHours(dayJobSiteStandardPortionHours),
+                    label: standardHoursLabel?.label ?? CanonicalBusinessEngine.dailyOverviewStandardHoursText,
+                    hint: standardHoursLabel?.hint
+                )
                 PPStatDivider()
                 PPStat(value: dayJobSiteOvertimeText, label: "Overtime")
                 PPStatDivider()
@@ -825,7 +840,8 @@ struct DailyOverviewView: View {
             HStack(spacing: 13) {
                 PPIconTile(symbol: "sun.max.fill", family: .trade, size: PPMetrics.menuIcon)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Half-day leave not covered")
+                    // RULEBOOK 1.73.0 `LEAVE_COVER_WARNING_TITLE` ("Half-day unbooked"), the Warnings card's title.
+                    Text(CanonicalBusinessEngine.leaveCoverWarningTitle)
                         .font(.headline)
                         .foregroundStyle(.primary)
                     Text("\(rows.count) \(rows.count == 1 ? "person" : "people") with half a day not booked")

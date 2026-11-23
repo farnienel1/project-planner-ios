@@ -38,11 +38,6 @@ struct OperativeQualificationsEditorView: View {
 
     @State private var baselineQualifications: Set<Qualification>
     @State private var baselineExpiry: [String: Date]
-    /// Display only (#19): expiries the stored map holds under another spelling of the id or only on the assignment's
-    /// `endDate`, keyed by the qualification id. Never part of a write.
-    @State private var derivedExpiry: [String: Date] = [:]
-    /// Derived expiries the person switched to "No" here (display only; nothing stored is removed for them).
-    @State private var hiddenDerivedExpiry: Set<String> = []
     @State private var baselineCerts: [String: String]
 
     @State private var showingAssignQualificationsPicker = false
@@ -83,10 +78,11 @@ struct OperativeQualificationsEditorView: View {
         self.usesOwnNavigationStack = usesOwnNavigationStack
         _selectedQualifications = State(initialValue: operative.qualifications)
         // The write map is the stored map plus only what the person changes here (RULEBOOK §1: never re-save what
-        // you didn't change). Issue #19: an expiry kept only under another spelling of the id, or only on the
-        // assignment's `endDate`, is shown (`derivedExpiry`) but never written back unless the person edits it.
+        // you didn't change). RULEBOOK 1.73.0: the expiry shown is `qualificationExpiryDate` (an expiry kept under
+        // another spelling of the id is shown as it is stored); setting or clearing one goes through
+        // `withQualificationExpiry`, which removes the other spellings of that id. The assignment's `endDate` is
+        // never an expiry.
         _qualificationExpiryDates = State(initialValue: operative.qualificationExpiryDates)
-        _derivedExpiry = State(initialValue: PersonQualifications.derivedExpiryDates(for: operative))
         _qualificationCertificateURLs = State(initialValue: operative.qualificationCertificateURLs)
         _baselineQualifications = State(initialValue: operative.qualifications)
         _baselineExpiry = State(initialValue: operative.qualificationExpiryDates)
@@ -377,7 +373,9 @@ struct OperativeQualificationsEditorView: View {
     @ViewBuilder
     private func qualificationRow(_ qualification: Qualification) -> some View {
         let isSelected = selectedQualifications.contains(qualification)
-        let shownExpiry = displayedExpiry(for: qualification.id)
+        // Nil = the shared rules did not answer: the expiry controls are not shown (never "No" for a stored date).
+        let expiryLookup = PersonQualifications.expiryLookup(qualificationId: qualification.id, expiryDates: qualificationExpiryDates)
+        let shownExpiry = expiryLookup?.date
         let hasExpiry = shownExpiry != nil
 
         VStack(alignment: .leading, spacing: 10) {
@@ -401,7 +399,12 @@ struct OperativeQualificationsEditorView: View {
                 .accessibilityLabel(isSelected ? "Remove qualification" : "Keep qualification")
             }
 
-            if isSelected {
+            if isSelected, expiryLookup == nil {
+                Text(PersonQualifications.unavailableMessage)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("operativeQualificationsEditor.expiryUnavailable")
+            } else if isSelected {
                 HStack {
                     Text("Expiry date")
                         .font(.subheadline)
@@ -410,13 +413,11 @@ struct OperativeQualificationsEditorView: View {
                         get: { hasExpiry },
                         set: { enabled in
                             if enabled {
-                                hiddenDerivedExpiry.remove(qualification.id)
                                 if displayedExpiry(for: qualification.id) == nil {
-                                    qualificationExpiryDates[qualification.id] = OrganizationRulebookContext.calendar.startOfDay(for: Date())
+                                    _ = setExpiry(Date(), for: qualification.id)
                                 }
                             } else {
-                                qualificationExpiryDates.removeValue(forKey: qualification.id)
-                                if derivedExpiry[qualification.id] != nil { hiddenDerivedExpiry.insert(qualification.id) }
+                                _ = setExpiry(nil, for: qualification.id)
                             }
                         }
                     )) {
@@ -435,7 +436,7 @@ struct OperativeQualificationsEditorView: View {
                         "Expires",
                         selection: Binding(
                             get: { expiry },
-                            set: { qualificationExpiryDates[qualification.id] = OrganizationRulebookContext.calendar.startOfDay(for: $0) }
+                            set: { _ = setExpiry($0, for: qualification.id) }
                         ),
                         displayedComponents: .date
                     )
@@ -523,7 +524,7 @@ struct OperativeQualificationsEditorView: View {
     private func toggleQualification(_ qualification: Qualification) {
         if selectedQualifications.contains(qualification) {
             selectedQualifications.remove(qualification)
-            qualificationExpiryDates.removeValue(forKey: qualification.id)
+            _ = setExpiry(nil, for: qualification.id)
             qualificationCertificateURLs.removeValue(forKey: qualification.id)
             certificateUploadTargets.removeValue(forKey: qualification.id)
         } else {
@@ -531,16 +532,26 @@ struct OperativeQualificationsEditorView: View {
         }
     }
 
-    /// The expiry shown for a qualification: the person's edit or the stored map entry, else the derived one (#19).
+    /// The expiry shown for a qualification (`qualificationExpiryDate`: the exact key, else another spelling). Nil
+    /// for no expiry and when the rules did not answer (the row then hides the controls, see `qualificationRow`).
     private func displayedExpiry(for qualificationId: String) -> Date? {
-        if let date = qualificationExpiryDates[qualificationId] { return date }
-        if hiddenDerivedExpiry.contains(qualificationId) { return nil }
-        return derivedExpiry[qualificationId]
+        PersonQualifications.expiryLookup(qualificationId: qualificationId, expiryDates: qualificationExpiryDates)?.date
+    }
+
+    /// Sets (or, with nil, clears) one qualification's expiry on the organisation day (`withQualificationExpiry`).
+    /// False when the rules did not answer: nothing changes and the editor says so.
+    @discardableResult
+    private func setExpiry(_ date: Date?, for qualificationId: String) -> Bool {
+        guard let next = PersonQualifications.settingExpiry(date, qualificationId: qualificationId, in: qualificationExpiryDates) else {
+            errorMessage = PersonQualifications.unavailableMessage
+            return false
+        }
+        qualificationExpiryDates = next
+        return true
     }
 
     private func revertToBaseline() {
         selectedQualifications = baselineQualifications
-        hiddenDerivedExpiry = []
         qualificationExpiryDates = baselineExpiry
         qualificationCertificateURLs = baselineCerts
         certificateUploadTargets = [:]
@@ -556,8 +567,6 @@ struct OperativeQualificationsEditorView: View {
     private func applyOperativeSnapshot(_ op: Operative) {
         selectedQualifications = op.qualifications
         qualificationExpiryDates = op.qualificationExpiryDates
-        derivedExpiry = PersonQualifications.derivedExpiryDates(for: op)
-        hiddenDerivedExpiry = []
         qualificationCertificateURLs = op.qualificationCertificateURLs
         certificateUploadTargets = [:]
         syncBaselineFromWorkingState()
@@ -633,8 +642,11 @@ struct OperativeQualificationsEditorView: View {
             let (added, newExpiries, newPending) = mergeAdditions
             mergeRollback = (selectedQualifications, qualificationExpiryDates, certificateUploadTargets)
             selectedQualifications.formUnion(added)
-            for (id, date) in newExpiries {
-                qualificationExpiryDates[id] = date
+            for (id, date) in newExpiries where !setExpiry(date, for: id) {
+                selectedQualifications = mergeRollback?.quals ?? selectedQualifications
+                qualificationExpiryDates = mergeRollback?.expiry ?? qualificationExpiryDates
+                certificateUploadTargets = mergeRollback?.pending ?? certificateUploadTargets
+                return false
             }
             for (id, url) in newPending {
                 certificateUploadTargets[id] = url

@@ -334,24 +334,25 @@ class NotificationService: ObservableObject {
         let myIds = myIdKeys
 
         if currentUser.permissions.operativeMode {
-            let email = Self.normalizedEmail(currentUser.email)
-            guard !email.isEmpty,
-                  let op = operativeStore.allOperatives.first(where: { Self.normalizedEmail($0.email) == email }) else {
-                return
+            if let own = qualificationReminderItems(for: currentUser, operatives: operativeStore.allOperatives, roster: orgUsers) {
+                await scheduleQualificationExpiryReminders(
+                    personKey: own.personKey, personName: currentUser.fullName, items: own.items, audience: .operative
+                )
             }
-            await scheduleQualificationExpiryReminders(for: op, audience: .operative)
             return
         }
 
-        for op in operativeStore.allOperatives {
-            let opEmail = Self.normalizedEmail(op.email)
-            guard let linked = orgUsers.first(where: { Self.normalizedEmail($0.email) == opEmail }) else { continue }
-            guard linked.hasLineManager else { continue }
+        var seenPeople: Set<String> = []
+        for linked in orgUsers where linked.isActive && linked.hasLineManager {
             // `lineManagerIds(user, roster)`: active line managers with alias ids resolved to the roster row.
             let managers = RulebookRosterSnapshot.lineManagerIds(linked) ?? linked.lineManagerUserIds
             let isMyDirectReport = managers.contains { myIds.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
-            guard isMyDirectReport else { continue }
-            await scheduleQualificationExpiryReminders(for: op, audience: .lineManager)
+            guard isMyDirectReport,
+                  let report = qualificationReminderItems(for: linked, operatives: operativeStore.allOperatives, roster: orgUsers),
+                  seenPeople.insert(report.personKey).inserted else { continue }
+            await scheduleQualificationExpiryReminders(
+                personKey: report.personKey, personName: linked.fullName.isEmpty ? linked.email : linked.fullName, items: report.items, audience: .lineManager
+            )
         }
     }
 
@@ -360,21 +361,53 @@ class NotificationService: ObservableObject {
         case lineManager
     }
 
-    private static func normalizedEmail(_ raw: String) -> String {
-        raw.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    /// One qualification reminder: the qualification id, its name and its expiry.
+    private struct QualificationReminderItem {
+        let qualificationId: String
+        let name: String
+        let expiry: Date
+    }
+
+    /// The person's qualifications with an expiry, once per qualification id (RULEBOOK 1.73.0): their `operatives`
+    /// rows (`operativeRowsForPerson`), active rows only, folded by `personQualifications` (active first, then the
+    /// fullest). `personKey` names the person by their rows (two users documents of one person share it), so one
+    /// qualification is reminded once. Nil when the person has no active row or the script did not answer.
+    private func qualificationReminderItems(
+        for person: AppUser,
+        operatives: [Operative],
+        roster: [AppUser]
+    ) -> (personKey: String, items: [QualificationReminderItem])? {
+        guard let rows = CanonicalBusinessEngine.operativeRowsForPerson(person: person, operatives: operatives, roster: roster) else {
+            return nil
+        }
+        let active = rows.filter(\.isActive)
+        guard !active.isEmpty,
+              let qualifications = CanonicalBusinessEngine.personQualifications(rows: active, preferredRowId: nil) else {
+            return nil
+        }
+        let personKey = active.map { $0.documentId.lowercased() }.sorted().joined(separator: "+")
+        let items = qualifications.compactMap { item -> QualificationReminderItem? in
+            guard let expiry = item.expiry else { return nil }
+            return QualificationReminderItem(qualificationId: item.id, name: item.name, expiry: expiry)
+        }
+        return (personKey, items)
     }
 
     private func scheduleQualificationExpiryReminders(
-        for operative: Operative,
+        personKey: String,
+        personName: String,
+        items: [QualificationReminderItem],
         audience: QualificationExpiryReminderAudience
     ) async {
         let cal = Calendar.current
         let now = Date()
+        // Same prefix as before: `removeQualificationExpiryReminders` (run first on every refresh) clears every pending
+        // reminder with it, so reminders scheduled under the older per-row ids are removed and never doubled.
         let prefix = LocalNotificationService.qualificationExpiryIdentifierPrefix
 
-        for (qualId, expiryDate) in operative.qualificationExpiryDates {
-            let qualName = operative.qualifications.first(where: { $0.id == qualId })?.name ?? "Qualification"
-            let expiryStart = cal.startOfDay(for: expiryDate)
+        for item in items {
+            let qualName = item.name.isEmpty ? "Qualification" : item.name
+            let expiryStart = cal.startOfDay(for: item.expiry)
 
             let schedules: [(suffix: String, titleWindow: String, reminderDay: Date?)] = [
                 ("3m", "3 months", cal.date(byAdding: .month, value: -3, to: expiryStart)),
@@ -387,17 +420,18 @@ class NotificationService: ObservableObject {
                 guard let fireAt = cal.date(bySettingHour: 9, minute: 0, second: 0, of: reminderDay) else { continue }
                 guard fireAt > now else { continue }
 
-                let expiryFormatted = expiryDate.formatted(date: .abbreviated, time: .omitted)
+                let expiryFormatted = item.expiry.formatted(date: .abbreviated, time: .omitted)
                 let title = "Qualification expiring in \(schedule.titleWindow)"
                 let body: String
                 switch audience {
                 case .operative:
                     body = "\(qualName) expires on \(expiryFormatted). Please renew before the expiry date."
                 case .lineManager:
-                    body = "\(operative.name): \(qualName) expires on \(expiryFormatted)."
+                    body = "\(personName): \(qualName) expires on \(expiryFormatted)."
                 }
                 let roleTag = audience == .operative ? "op" : "lm"
-                let ident = "\(prefix)\(operative.id.uuidString)-\(qualId)-\(schedule.suffix)-\(roleTag)"
+                // Keyed by the person and the qualification id (one set per qualification, whichever row holds it).
+                let ident = "\(prefix)\(personKey)-\(item.qualificationId.lowercased())-\(schedule.suffix)-\(roleTag)"
                 await LocalNotificationService.shared.scheduleQualificationExpiryOneShot(
                     identifier: ident,
                     title: title,

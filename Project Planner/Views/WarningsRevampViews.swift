@@ -62,7 +62,7 @@ struct WarningsHeroCard: View {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 18)
 
-            Text("High: operative booking clashes, unbooked labour, and bookings during annual leave (approve clashes for the weekly report) · Medium: manager/admin overlaps and a half day of leave that is not covered · Low: materials and qualifications")
+            Text("High: operative booking clashes, unbooked labour, and bookings during annual leave (approve clashes for the weekly report) · Medium: manager/admin overlaps and \(CanonicalBusinessEngine.leaveCoverWarningTitle.lowercased()) · Low: materials and qualifications")
                 .font(.caption)
                 .foregroundStyle(PPColor.onNavyCaption)
                 .lineSpacing(2)

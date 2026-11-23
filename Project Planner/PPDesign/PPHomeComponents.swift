@@ -192,6 +192,8 @@ struct PPStat: View {
     let value: String
     let label: String
     var highlight: Bool = false   // true for Warnings
+    /// A second line under the label (e.g. Daily Overview's "07:30–14:00 counts as a full day"). Nil shows none.
+    var hint: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -205,6 +207,13 @@ struct PPStat: View {
                 .foregroundStyle(PPColor.onNavyCaption)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+            if let hint, !hint.isEmpty {
+                Text(hint)
+                    .font(.caption2)
+                    .foregroundStyle(PPColor.onNavyCaption)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

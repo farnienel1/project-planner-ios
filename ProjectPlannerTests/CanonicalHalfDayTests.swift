@@ -289,7 +289,7 @@ final class CanonicalHalfDayTests: XCTestCase {
         XCTAssertEqual(row.missingHours, 2.25, accuracy: 0.001)
         XCTAssertEqual(row.bookedHours, 2, accuracy: 0.001)
         XCTAssertEqual(row.severity, "medium")
-        XCTAssertEqual(row.title, "Half-day leave not covered")
+        XCTAssertEqual(row.title, "Half-day unbooked")
     }
 
     func testFullDayBookingAgainstAfternoonLeaveIsAClash() throws {

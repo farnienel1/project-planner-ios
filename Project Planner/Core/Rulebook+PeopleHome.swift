@@ -211,22 +211,16 @@ extension CanonicalBusinessEngine {
 }
 
 extension Operative {
-    /// This operative as a `qualificationExpiryRows` row (CanonicalBusinessEngine `qualificationExpiryCount`). Each
-    /// expiry carries the qualification's name when the catalogue row has it, else its id.
+    /// This operative as a `qualificationExpiryRows` row (CanonicalBusinessEngine `qualificationExpiryCount`). The
+    /// expiries are RULEBOOK 1.73.0 `assignedQualificationExpiries(row)`: assigned qualifications only, one per id
+    /// without case, the expiry read by `qualificationExpiryDate`.
     var rulebookQualificationRow: [String: Any] {
         [
             "id": documentId,
             "isActive": isActive,
             "email": email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             "name": "\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces),
-            "expiries": qualificationExpiryDates.sorted { $0.key < $1.key }.map { id, date in
-                let name = qualifications.first(where: { $0.id == id })?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return [
-                    "qualificationId": id,
-                    "name": name.isEmpty ? id : name,
-                    "expiryIso": CanonicalBusinessEngine.isoString(from: date),
-                ] as [String: Any]
-            },
+            "expiries": rulebookAssignedQualificationExpiries,
         ]
     }
 }

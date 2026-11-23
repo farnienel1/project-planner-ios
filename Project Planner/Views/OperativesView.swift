@@ -771,7 +771,16 @@ struct OperativeDetailRowView: View {
                                     .background(Color(.systemGray5))
                                     .cornerRadius(4)
                                 
-                                if qualification.hasEndDate, let endDate = qualification.endDate {
+                                // RULEBOOK 1.73.0 `qualificationExpiryDate`: the expiry map, never the assignment's `endDate`.
+                                let lookup = PersonQualifications.expiryLookup(
+                                    qualificationId: qualification.id,
+                                    expiryDates: operative.qualificationExpiryDates
+                                )
+                                if lookup == nil {
+                                    Text(PersonQualifications.unavailableMessage)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                } else if let endDate = lookup?.date {
                                     Text("Expires: \(endDate, style: .date)")
                                         .font(.caption2)
                                         .foregroundColor(.orange)

@@ -137,6 +137,12 @@ final class RulebookSweepTests: XCTestCase {
     func testQualificationBannerRowsIncludeExpiredAndUseTheRulebookWindow() {
         let reference = orgDay("2026-11-04")
         var operative = LogicFixtures.operative(id: UUID(), email: "ada@example.com")
+        // RULEBOOK 1.73.0 `assignedQualificationExpiries`: only assigned qualifications have an expiry.
+        operative.qualifications = [
+            Qualification(id: "EXPIRED", name: "EXPIRED"),
+            Qualification(id: "SOON", name: "SOON"),
+            Qualification(id: "LATER", name: "LATER"),
+        ]
         operative.qualificationExpiryDates = [
             "EXPIRED": orgDay("2026-11-01"),
             "SOON": orgDay("2026-11-14"),
