@@ -116,7 +116,8 @@ final class OwnerIssues1220Tests: XCTestCase {
 
     func testOnlyTheLatestLoadIsShownAndNeverAnotherCompanysFigures() throws {
         let invoicing = try source("Project Planner/Views/InvoicingView.swift")
-        XCTAssertTrue(invoicing.contains("guard generation == exportedHistoryGeneration,"))
+        XCTAssertTrue(invoicing.contains("guard generation == exportedHistoryGeneration else { return }"))
+        XCTAssertTrue(invoicing.contains("if inFlight[key] == task {\n            inFlight[key] = nil\n            cache[key] = Entry(rows: rows, at: Date())"))
         XCTAssertTrue(invoicing.contains("guard generation == landingExportedGeneration,"))
         XCTAssertTrue(invoicing.contains("resetLandingCounts()"))
         XCTAssertTrue(invoicing.contains("guard orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else { return }"))

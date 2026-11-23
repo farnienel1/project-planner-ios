@@ -5689,8 +5689,12 @@ struct OperativeTimesheetsView: View {
             extraWeekStart: week.start,
             forceRefresh: forceRefresh
         )
-        guard generation == exportedHistoryGeneration,
-              orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard generation == exportedHistoryGeneration else { return }
+        guard orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            // The organisation changed while loading: drop the answer, never leave the list stuck on loading.
+            isLoadingExportedHistory = false
+            return
+        }
         exportedHistory = rows
         exportedHistoryLoadedOnce = true
         isLoadingExportedHistory = false
@@ -5787,6 +5791,7 @@ private enum ExportedTimesheetHistoryLoader {
     /// Drops every cached answer (after an export, which adds rows).
     static func invalidate() {
         cache.removeAll()
+        inFlight.removeAll()
     }
 
     /// `users` is `UserStore.exportedTimesheetHistoryUsers(viewer:)`; `extraWeekStart` a pay run this device's own copies
@@ -5829,8 +5834,12 @@ private enum ExportedTimesheetHistoryLoader {
         }
         inFlight[key] = task
         let rows = await task.value
-        if inFlight[key] == task { inFlight[key] = nil }
-        cache[key] = Entry(rows: rows, at: Date())
+        // Only the load still registered for this key may store its answer, so an older load that finishes after a
+        // forced one (or after `invalidate()`) never puts a stale list back in the cache.
+        if inFlight[key] == task {
+            inFlight[key] = nil
+            cache[key] = Entry(rows: rows, at: Date())
+        }
         return rows
     }
 
