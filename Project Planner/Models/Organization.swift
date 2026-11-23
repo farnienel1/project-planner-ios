@@ -62,6 +62,11 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     /// 1–3 character abbreviation shown on site audits, toolbox talks, and org badges.
     var documentAbbreviation: String?
     var createdAt: Date
+    /// `organizations/{id}.createdAt` as stored, read with the rulebook's `documentInstantMs` (§1 document readers).
+    /// Nil when the document has none or it has not been read yet. `createdAt` above is only the in-memory default
+    /// (`Date()`), so screens that show when the company started ("Since Oct '26") read this one and show nothing
+    /// when it is nil — never today's date.
+    var storedCreatedAt: Date? = nil
     var updatedAt: Date
     /// Firebase Auth UID of the organization creator. Only this user may be super admin.
     var creatorUserId: String?
@@ -149,6 +154,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
         case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON, payePaydayJSON
+        case storedCreatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -178,6 +184,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         deletionJSON = try c.decodeIfPresent(String.self, forKey: .deletionJSON)
         payrollPolicyStateJSON = try c.decodeIfPresent(String.self, forKey: .payrollPolicyStateJSON)
         payePaydayJSON = try c.decodeIfPresent(String.self, forKey: .payePaydayJSON)
+        storedCreatedAt = try c.decodeIfPresent(Date.self, forKey: .storedCreatedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -207,6 +214,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(deletionJSON, forKey: .deletionJSON)
         try c.encodeIfPresent(payrollPolicyStateJSON, forKey: .payrollPolicyStateJSON)
         try c.encodeIfPresent(payePaydayJSON, forKey: .payePaydayJSON)
+        try c.encodeIfPresent(storedCreatedAt, forKey: .storedCreatedAt)
     }
 
     /// Script result for this company's nested billing map. A missing map stays open. A script failure stays open.
@@ -259,7 +267,22 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             billingResolved: true,
             deletionJSON: OrganizationBillingMap.storedJSON(field: "deletion", from: data)
         )
-        return organization
+        var withCreated = organization
+        if let created = Organization.storedCreatedAt(fromJSON: raw) {
+            withCreated.storedCreatedAt = created
+            withCreated.createdAt = created
+        }
+        return withCreated
+    }
+
+    /// `organizations/{id}.createdAt` read with the rulebook's `documentInstantMs` (RULEBOOK §1: a Timestamp,
+    /// `{seconds, nanoseconds}`, epoch ms or an ISO string). `raw` is the document as `FirebaseBackend.firestoreJSON`
+    /// made it. Nil when missing, unreadable, or the script did not answer — never "now".
+    nonisolated static func storedCreatedAt(fromJSON raw: [String: Any]) -> Date? {
+        guard let value = raw["createdAt"], !(value is NSNull) else { return nil }
+        guard let ms = (CanonicalBusinessEngine.callJSON("documentInstantMs", arguments: [value]) as? NSNumber)?.doubleValue,
+              ms.isFinite, ms > 0 else { return nil }
+        return Date(timeIntervalSince1970: ms / 1000)
     }
 
     /// String fields `parseOrganizationName` reads. Firestore timestamps are left out so the script can run.

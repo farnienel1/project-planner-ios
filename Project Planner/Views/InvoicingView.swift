@@ -23,6 +23,14 @@ struct InvoicingView: View {
     /// RULEBOOK 1.66.0 §8 (web User Timesheets load error): the every-age sheet load failed; the counts are from this
     /// device's cache until a reload works.
     @State private var landingQueueLoadError: String?
+    /// Issue 20: true once the every-age sheet load (`UserTimesheetQueueRulebook.refreshFromCloud`) has answered. Until
+    /// then the landing shows "–", never 0 / 0 / 0.
+    @State private var landingQueueLoaded = false
+    /// Issue 20: the Exported figure — the number of rows User Timesheets → Exported lists
+    /// (`ExportedTimesheetHistoryLoader`, every run, an admin's "Unknown person" sheets included). Nil while loading.
+    @State private var landingExportedCount: Int?
+    /// Review of #268 (M2): the latest landing Exported load; an older one's answer is dropped.
+    @State private var landingExportedGeneration = 0
     @State private var pendingReviewUserId: String?
     @State private var pendingReviewWeek: WeekRange?
     @State private var didConsumeDeepLink = false
@@ -185,6 +193,14 @@ struct InvoicingView: View {
                     managerScheduleStore.loadData(force: true)
                 }
                 await syncLandingDraftsFromCloud()
+            }
+            // Web `rosterLoaded`: an admin's "Unknown person" exported sheets count only once the roster has loaded.
+            .onChange(of: userStore.organizationUsersFinishedLoadOrganizationId) { _, _ in
+                Task { await refreshLandingExportedCount() }
+            }
+            .onChange(of: firebaseBackend.currentOrganization?.firestoreDocumentId) { _, _ in
+                resetLandingCounts()
+                Task { await syncLandingDraftsFromCloud() }
             }
             // The first sync can run on an empty or cached roster. Fetch again for the people who arrive later.
             .task(id: usersForManagerTimesheetScope.map(\.id)) {
@@ -410,9 +426,11 @@ struct InvoicingView: View {
             // RULEBOOK 1.47.0 §8: a sheet reopened by a booking change is not signed off (`timesheetListBucket` with it).
             return TimesheetApprovalPolicy.listBucket(draft: draft, user: $0, period: openWeek) == "signed"
         }.count
-        let exported = reviewUsers.filter {
-            TimesheetApprovalPolicy.isExported(TimesheetDraftStore.load(userId: $0.id, weekStart: openWeek.start))
-        }.count
+        // Issue 20: the figures say "–" until they have loaded (the landing read 0 / 0 / 0 while the sheets loaded), and
+        // Exported is the Exported list's own row count, every run (before, only the current pay run's sheets).
+        let awaitingText = landingQueueLoaded ? "\(awaiting)" : "–"
+        let signedText = landingQueueLoaded ? "\(signed)" : "–"
+        let exportedText = landingExportedCount.map { "\($0)" } ?? "–"
 
         VStack(alignment: .leading, spacing: 14) {
             if let landingQueueLoadError {
@@ -492,19 +510,19 @@ struct InvoicingView: View {
             .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
 
             HStack(alignment: .top, spacing: 0) {
-                statMiniCard(value: "\(awaiting)", label: "Awaiting sign-off", color: PPFamily.trade.bottom)
+                statMiniCard(value: awaitingText, label: "Awaiting sign-off", color: PPFamily.trade.bottom)
                 Rectangle()
                     .fill(Color(.separator))
                     .frame(width: 0.5)
                     .padding(.vertical, 12)
                     .accessibilityHidden(true)
-                statMiniCard(value: "\(signed)", label: "Signed off", color: PPFamily.sites.bottom)
+                statMiniCard(value: signedText, label: "Signed off", color: PPFamily.sites.bottom)
                 Rectangle()
                     .fill(Color(.separator))
                     .frame(width: 0.5)
                     .padding(.vertical, 12)
                     .accessibilityHidden(true)
-                statMiniCard(value: "\(exported)", label: "Exported", color: .secondary)
+                statMiniCard(value: exportedText, label: "Exported", color: .secondary)
             }
             .fixedSize(horizontal: false, vertical: true)
             .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
@@ -615,7 +633,12 @@ struct InvoicingView: View {
     }
 
     private func syncLandingDraftsFromCloud() async {
-        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            // Review of #268 (L-a): with no organisation open there is nothing to load — show 0, never "–" for ever.
+            landingQueueLoaded = true
+            landingExportedCount = 0
+            return
+        }
         var ids = Set(usersForManagerTimesheetScope.map(\.id) + (userStore.displayUser.map { [$0.id] } ?? []))
         if let pendingReviewUserId, !pendingReviewUserId.isEmpty {
             ids.insert(pendingReviewUserId)
@@ -651,10 +674,42 @@ struct InvoicingView: View {
         } catch {
             loadError = UserTimesheetQueueRulebook.loadFailedMessage
         }
-        await MainActor.run {
-            landingQueueLoadError = loadError
-            landingVersion += 1
-        }
+        // Review of #268 (L-b): an answer for a company that is no longer open is dropped.
+        guard orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        landingQueueLoadError = loadError
+        landingQueueLoaded = true
+        landingVersion += 1
+        await refreshLandingExportedCount()
+    }
+
+    /// Issue 20: the landing's Exported figure is the row count of User Timesheets → Exported, read the same way
+    /// (`ExportedTimesheetHistoryLoader`; web's hub tile counts `loadExportedTimesheetHistory` rows).
+    private func refreshLandingExportedCount() async {
+        guard canShowOperativeTimesheets, let viewer = userStore.displayUser else { return }
+        // Review of #268 (M2): only the latest load's answer is shown, and never one from another organisation.
+        landingExportedGeneration += 1
+        let generation = landingExportedGeneration
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        let rows = await ExportedTimesheetHistoryLoader.load(
+            users: userStore.exportedTimesheetHistoryUsers(viewer: viewer),
+            viewer: viewer,
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            settings: settings,
+            // The same key as User Timesheets (its open period), so the two share one cached answer (review of #268, M1).
+            extraWeekStart: (pendingReviewWeek ?? WeekRange.current(settings: settings)).start
+        )
+        guard generation == landingExportedGeneration,
+              orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        landingExportedCount = rows.count
+    }
+
+    /// Review of #268 (L-b): a switch of organisation clears the figures, so the old company's counts never show.
+    private func resetLandingCounts() {
+        landingQueueLoaded = false
+        landingExportedCount = nil
+        landingQueueLoadError = nil
+        landingExportedGeneration += 1
     }
 
     private func captureTimesheetDeepLink() {
@@ -4476,6 +4531,11 @@ struct OperativeTimesheetsView: View {
     @State private var exportedShareFile: ExportedPDFShareFile?
     @State private var rebuiltExportConfirmRow: ExportedTimesheetHistoryRow?
     @State private var isLoadingExportedHistory = false
+    /// Issue 20: the header's figures show "–" until their first load answers, never 0 while loading.
+    @State private var exportedHistoryLoadedOnce = false
+    /// Review of #268 (M2): the latest Exported load; an older one's answer is dropped.
+    @State private var exportedHistoryGeneration = 0
+    @State private var queueLoadedOnce = false
     @State private var exportedSearch = ""
     @State private var exportedSort = "dateNewest"
     @State private var exportedRunKey = "all"
@@ -4910,6 +4970,11 @@ struct OperativeTimesheetsView: View {
                 Task { await loadExportedHistory() }
             }
         }
+        // Review of #259 (S5) / web `rosterLoaded`: "Unknown person" rows are listed only once the roster has loaded, so
+        // the list is read again when it arrives (before, a list read first stayed without them — issue 20: 5 vs web 9).
+        .onChange(of: userStore.organizationUsersFinishedLoadOrganizationId) { _, _ in
+            Task { await loadExportedHistory() }
+        }
         .task(id: selectedTab) {
             await refreshOwnSheetExportNotice()
         }
@@ -5019,11 +5084,14 @@ struct OperativeTimesheetsView: View {
             PPNavyPageTitle(eyebrow: "Pay period", title: week.title)
 
             HStack(alignment: .top, spacing: 12) {
-                PPStat(value: "\(directReports.count)", label: "People")
+                // Issue 20 (owner 17 Nov): the same three figures as web's User timesheets tile and the Timesheets
+                // landing — Awaiting sign-off and Signed off from `userTimesheetQueue` (every run, RULEBOOK 1.66.0),
+                // Exported the rows of the Exported tab (`ExportedTimesheetHistoryLoader`). "–" until each has loaded.
+                PPStat(value: queueLoadedOnce ? "\(awaitingRows.count)" : "–", label: "Awaiting sign-off", highlight: !awaitingRows.isEmpty)
                 PPStatDivider()
-                PPStat(value: "\(awaitingRows.count)", label: "Awaiting sign-off", highlight: !awaitingRows.isEmpty)
+                PPStat(value: queueLoadedOnce ? "\(signedRows.count)" : "–", label: "Signed off")
                 PPStatDivider()
-                PPStat(value: "\(exportedHistory.count)", label: "Exported, all runs")
+                PPStat(value: exportedHistoryLoadedOnce ? "\(exportedHistory.count)" : "–", label: "Exported")
             }
             .fixedSize(horizontal: false, vertical: true)
             .padding(.top, 18)
@@ -5132,6 +5200,7 @@ struct OperativeTimesheetsView: View {
         }
         await MainActor.run {
             queueLoadError = loadError
+            queueLoadedOnce = true
             rebuildAwaitingRows()
             refreshVersion += 1
         }
@@ -5470,7 +5539,9 @@ struct OperativeTimesheetsView: View {
             }
             refreshVersion += 1
             rebuildAwaitingRows()
-            await loadExportedHistory()
+            // An export adds rows: never serve the cached list (the landing reads it again too).
+            ExportedTimesheetHistoryLoader.invalidate()
+            await loadExportedHistory(forceRefresh: true)
             selectedTab = .exported
         }
         exportMessage = TimesheetExportMessages.summaryMessage(
@@ -5611,21 +5682,188 @@ struct OperativeTimesheetsView: View {
     }
 
     /// Keep exported timesheets discoverable across many pay periods (not just the current filter week).
-    private func loadExportedHistory() async {
-        await MainActor.run { isLoadingExportedHistory = true }
+    private func loadExportedHistory(forceRefresh: Bool = false) async {
+        // Review of #268 (M2): several loads can overlap (.task, the tab, the roster arriving); only the latest one's
+        // answer is shown, so an older read made before the roster loaded never replaces a newer one.
+        exportedHistoryGeneration += 1
+        let generation = exportedHistoryGeneration
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        isLoadingExportedHistory = true
+        let rows = await ExportedTimesheetHistoryLoader.load(
+            users: usersForExportedHistory(),
+            viewer: userStore.displayUser,
+            firebaseBackend: firebaseBackend,
+            userStore: userStore,
+            settings: settings,
+            extraWeekStart: week.start,
+            forceRefresh: forceRefresh
+        )
+        guard generation == exportedHistoryGeneration else { return }
+        guard orgId == firebaseBackend.currentOrganization?.firestoreDocumentId else {
+            // The organisation changed while loading: drop the answer, never leave the list stuck on loading.
+            isLoadingExportedHistory = false
+            return
+        }
+        exportedHistory = rows
+        exportedHistoryLoadedOnce = true
+        isLoadingExportedHistory = false
+    }
 
-        let users = usersForExportedHistory()
-        let viewer = userStore.displayUser
+    /// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects`: User Timesheets people, the viewer's own exported sheets
+    /// (read-only: `timesheetWriterIsReviewer` still refuses a review of one's own sheet) and inactive or deleted people
+    /// in scope. The Exported list and its count both read this.
+    private func usersForExportedHistory() -> [AppUser] {
+        guard let currentUser = userStore.displayUser else { return [] }
+        return userStore.exportedTimesheetHistoryUsers(viewer: currentUser)
+    }
+
+    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
+    /// (a declined expense never counts). Nil when the script did not answer.
+    /// RULEBOOK §8 (review of #240): a person kept on a row, as the roster holds them now (pay laid over).
+    private func live(_ user: AppUser) -> AppUser { UserStore.livePerson(user, in: userStore.organizationUsers) }
+
+    private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
+        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
+        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
+        let range = reviewWeek ?? week
+        let summary = TimesheetPayrollCollector.collect(
+            for: user,
+            week: range,
+            bookings: bookingStore.bookings,
+            managerBookings: managerScheduleStore.managerSiteBookings,
+            operatives: operativeStore.allOperatives,
+            projects: projectStore.projects,
+            smallWorks: projectStore.smallWorks,
+            history: dayRateHistoryCollection,
+            policy: policy,
+            organization: firebaseBackend.currentOrganization,
+            scheduleOptions: scheduleOptions,
+            relatedUsers: userStore.organizationUsers
+        )
+        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: user, period: range.start...range.end)
+    }
+
+    private func formatHours(_ value: Double) -> String {
+        let rounded = (value * 2).rounded() / 2
+        if abs(rounded - rounded.rounded()) < 0.001 {
+            return String(format: "%.0f", rounded)
+        }
+        return String(format: "%.1f", rounded)
+    }
+
+    private func lineManagerName(for user: AppUser) -> String {
+        guard let id = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+            return "Unassigned"
+        }
+        if let manager = userStore.organizationUsers.first(where: { $0.id == id }) {
+            let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? manager.email : name
+        }
+        return "Unknown"
+    }
+}
+
+/// A PDF to share from the Exported tab.
+private struct ExportedPDFShareFile: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects` (web `loadExportedTimesheetHistory`): the rows of User Timesheets →
+/// Exported. Shared by that list and the Timesheets landing's "Exported" figure, so the two always count the same rows —
+/// before, the landing counted only the current pay run's sheets (issue 20: it read 0 while the list held 5). An admin
+/// also gets the sheets whose stored person is nobody in the organisation ("Unknown person · <hint>"), once the roster
+/// has loaded (web `includeUnresolved` + `rosterLoaded`).
+private enum ExportedTimesheetHistoryLoader {
+    /// Review of #268 (M1): how long a result is reused. The landing and User Timesheets both ask for the list (and a line
+    /// manager whose organisation-wide read is refused falls back to up to 400 sheets per person), so one answer serves
+    /// both for a short while instead of reading everything twice.
+    static let cacheSeconds: TimeInterval = 60
+
+    private struct Entry {
+        let rows: [ExportedTimesheetHistoryRow]
+        let at: Date
+    }
+
+    private static var cache: [String: Entry] = [:]
+    /// A load already running for a key; a second caller waits for it rather than starting its own.
+    private static var inFlight: [String: Task<[ExportedTimesheetHistoryRow], Never>] = [:]
+
+    /// The cache key: organisation, viewer, the people asked about and whether the roster had loaded (an admin's
+    /// "Unknown person" rows depend on it). A roster or scope change is a new key, so it is never served a stale answer.
+    static func cacheKey(organizationId: String?, viewerId: String?, userIds: [String], rosterLoaded: Bool, extraWeekStart: Date?) -> String {
+        let ids = userIds.map { $0.lowercased() }.sorted().joined(separator: ",")
+        let week = extraWeekStart.map { String(Int($0.timeIntervalSince1970)) } ?? "-"
+        return [organizationId ?? "-", viewerId ?? "-", ids, rosterLoaded ? "roster" : "noRoster", week].joined(separator: "|")
+    }
+
+    /// Drops every cached answer (after an export, which adds rows).
+    static func invalidate() {
+        cache.removeAll()
+        inFlight.removeAll()
+    }
+
+    /// `users` is `UserStore.exportedTimesheetHistoryUsers(viewer:)`; `extraWeekStart` a pay run this device's own copies
+    /// are also looked for under (the list's open period). `forceRefresh` skips a cached answer (it still joins a load
+    /// that is already running only when not forced).
+    static func load(
+        users: [AppUser],
+        viewer: AppUser?,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
+        settings: OrganizationInvoicingSettings,
+        extraWeekStart: Date?,
+        forceRefresh: Bool = false,
+        now: Date = Date()
+    ) async -> [ExportedTimesheetHistoryRow] {
+        let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
+        let rosterLoaded = orgId.map { org in
+            (userStore.organizationUsersFinishedLoadOrganizationId ?? "").caseInsensitiveCompare(org) == .orderedSame
+        } ?? false
+        let key = cacheKey(
+            organizationId: orgId,
+            viewerId: viewer?.id,
+            userIds: users.map(\.id),
+            rosterLoaded: rosterLoaded,
+            extraWeekStart: extraWeekStart
+        )
+        if !forceRefresh {
+            if let entry = cache[key], now.timeIntervalSince(entry.at) < cacheSeconds { return entry.rows }
+            if let running = inFlight[key] { return await running.value }
+        }
+        let task = Task { @MainActor in
+            await loadUncached(
+                users: users,
+                viewer: viewer,
+                firebaseBackend: firebaseBackend,
+                userStore: userStore,
+                settings: settings,
+                extraWeekStart: extraWeekStart
+            )
+        }
+        inFlight[key] = task
+        let rows = await task.value
+        // Only the load still registered for this key may store its answer, so an older load that finishes after a
+        // forced one (or after `invalidate()`) never puts a stale list back in the cache.
+        if inFlight[key] == task {
+            inFlight[key] = nil
+            cache[key] = Entry(rows: rows, at: Date())
+        }
+        return rows
+    }
+
+    private static func loadUncached(
+        users: [AppUser],
+        viewer: AppUser?,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore,
+        settings: OrganizationInvoicingSettings,
+        extraWeekStart: Date?
+    ) async -> [ExportedTimesheetHistoryRow] {
         // Web `includeUnresolved` (17 Nov follow-up): an admin also sees exported sheets whose stored person is nobody in
         // the organisation (a deleted person) as "Unknown person · <hint>", never dropped.
         let viewerIsAdmin = viewer?.isRosterAdmin == true
-        guard !users.isEmpty || viewerIsAdmin else {
-            await MainActor.run {
-                exportedHistory = []
-                isLoadingExportedHistory = false
-            }
-            return
-        }
+        guard !users.isEmpty || viewerIsAdmin else { return [] }
 
         let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId
         let roster = userStore.organizationUsers
@@ -5733,7 +5971,7 @@ struct OperativeTimesheetsView: View {
                         TimesheetDraftStore.save(decoded, userId: user.id, weekStart: day, weekEnd: end)
                     }
                 }
-                let period = exportedRowPeriod(row: row, day: day, user: user, local: opens)
+                let period = rowPeriod(row: row, day: day, user: user, local: opens, settings: settings)
                 let rowId = "\(user.id)|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.start) ?? "")|\(CanonicalBusinessEngine.dayKeyInOrganizationZone(period.end) ?? "")"
                 // N5: rows filed under the person's own id come last in the plan, so they win their pay run.
                 byId[rowId] = ExportedTimesheetHistoryRow(
@@ -5751,7 +5989,7 @@ struct OperativeTimesheetsView: View {
         // This device's own copies (a sheet exported here before the server answered), under every id of each listed
         // person (final review of #259: a sheet saved locally under a second users document of the person still lists).
         var candidateStarts = Set(TimesheetPayrollPolicy.previousPayPeriods(count: 260, settings: settings).map(\.start))
-        candidateStarts.insert(week.start)
+        if let extraWeekStart { candidateStarts.insert(extraWeekStart) }
         for person in people {
             var copyIds: [String] = []
             let sameRecords = users.filter { owner($0.id)?.user.id == person.id }.map(\.id)
@@ -5789,15 +6027,12 @@ struct OperativeTimesheetsView: View {
             if l != r { return l > r }
             return lhs.user.fullName.localizedCaseInsensitiveCompare(rhs.user.fullName) == .orderedAscending
         }
-        await MainActor.run {
-            exportedHistory = sorted
-            isLoadingExportedHistory = false
-        }
+        return sorted
     }
 
     /// The pay run an exported row shows: its stored start and end (`weekStartKey` / `weekEndKey`, else `weekEnd`)
     /// matched to a payment run (`periodMatchingStoredStart`). A row saved locally reads the bounds remembered for it.
-    private func exportedRowPeriod(row: [String: Any], day: Date, user: AppUser, local: Bool) -> WeekRange {
+    static func rowPeriod(row: [String: Any], day: Date, user: AppUser, local: Bool, settings: OrganizationInvoicingSettings) -> WeekRange {
         if local {
             let end = TimesheetDraftStore.storedPeriodEnd(userId: user.id, weekStart: day)
             return TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: end, settings: settings)
@@ -5808,64 +6043,6 @@ struct OperativeTimesheetsView: View {
         return TimesheetPayrollPolicy.periodMatchingStoredStart(day, storedEnd: storedEnd, settings: settings)
     }
 
-    /// RULEBOOK 1.31.0 §8 `exportedTimesheetHistorySubjects`: User Timesheets people, the viewer's own exported sheets
-    /// (read-only: `timesheetWriterIsReviewer` still refuses a review of one's own sheet) and inactive or deleted people
-    /// in scope. The Exported list and its "Exported, all runs" count both read this.
-    private func usersForExportedHistory() -> [AppUser] {
-        guard let currentUser = userStore.displayUser else { return [] }
-        return userStore.exportedTimesheetHistoryUsers(viewer: currentUser)
-    }
-
-    /// RULEBOOK 1.22.0 §8 `CanonicalBusinessEngine.timesheetTotals` for a list row: decided, as the export invoice
-    /// (a declined expense never counts). Nil when the script did not answer.
-    /// RULEBOOK §8 (review of #240): a person kept on a row, as the roster holds them now (pay laid over).
-    private func live(_ user: AppUser) -> AppUser { UserStore.livePerson(user, in: userStore.organizationUsers) }
-
-    private func operativeSummary(for user: AppUser, draft: TimesheetDraft, week reviewWeek: WeekRange? = nil) -> RulebookTimesheetTotals? {
-        let policy = firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default
-        let scheduleOptions = firebaseBackend.currentOrganization?.settings.myScheduleOptions ?? MyScheduleOptions()
-        let range = reviewWeek ?? week
-        let summary = TimesheetPayrollCollector.collect(
-            for: user,
-            week: range,
-            bookings: bookingStore.bookings,
-            managerBookings: managerScheduleStore.managerSiteBookings,
-            operatives: operativeStore.allOperatives,
-            projects: projectStore.projects,
-            smallWorks: projectStore.smallWorks,
-            history: dayRateHistoryCollection,
-            policy: policy,
-            organization: firebaseBackend.currentOrganization,
-            scheduleOptions: scheduleOptions,
-            relatedUsers: userStore.organizationUsers
-        )
-        return TimesheetTotalsSource.totals(lines: summary.lineItems, draft: draft, decided: true, subject: user, period: range.start...range.end)
-    }
-
-    private func formatHours(_ value: Double) -> String {
-        let rounded = (value * 2).rounded() / 2
-        if abs(rounded - rounded.rounded()) < 0.001 {
-            return String(format: "%.0f", rounded)
-        }
-        return String(format: "%.1f", rounded)
-    }
-
-    private func lineManagerName(for user: AppUser) -> String {
-        guard let id = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
-            return "Unassigned"
-        }
-        if let manager = userStore.organizationUsers.first(where: { $0.id == id }) {
-            let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? manager.email : name
-        }
-        return "Unknown"
-    }
-}
-
-/// A PDF to share from the Exported tab.
-private struct ExportedPDFShareFile: Identifiable {
-    let id = UUID()
-    let url: URL
 }
 
 private struct ExportedTimesheetHistoryRow: Identifiable {

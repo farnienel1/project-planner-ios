@@ -91,8 +91,12 @@ struct WarningsDetailView: View {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
     }
 
+    /// RULEBOOK §2 `canScheduleOperatives` (`UserStore.canOpenJobScheduling`), the rule Book labour itself checks. Before,
+    /// this was its own role test (admin access or the stored manager flag), so a manager with no level flag — manager
+    /// level by the rulebook (§11, 1.23.1) — got no "Book labour" / "Book the AM / PM" on Warnings (owner 17 Nov: "iOS
+    /// managers with no level flag get the Book labour button: yes").
     private var canBookLabourFromWarning: Bool {
-        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
+        userStore.canOpenJobScheduling()
     }
 
     init(

@@ -102,8 +102,9 @@ class UserStore: ObservableObject {
     private(set) var revision = 0
     private var organizationUsersLoadInProgress = false
     /// The organisation whose roster load last finished (read or failed). Warnings wait for it
-    /// (`WarningInputsReadiness`).
-    private(set) var organizationUsersFinishedLoadOrganizationId: String?
+    /// (`WarningInputsReadiness`). Published so a screen that waits for the roster (User Timesheets → Exported lists
+    /// "Unknown person" rows only once it has loaded, web `rosterLoaded`) reloads when it arrives.
+    @Published private(set) var organizationUsersFinishedLoadOrganizationId: String?
     private var organizationUsersLoadGeneration = 0
     private var organizationUsersLoadOrganizationId: String?
     private var lastOrganizationUsersLoadAt: Date?
