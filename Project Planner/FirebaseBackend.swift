@@ -7069,10 +7069,15 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Sign-out token cleanup could not list same-email users: \(error.localizedDescription)")
             }
         }
+        // This device's previous token for the account too, when it is still remembered and differs.
+        let tokens = PushTokenDeviceMemory.tokensToRemoveOnSignOut(
+            current: token,
+            previous: PushTokenDeviceMemory.shared.lastWrittenToken(uid: uid)
+        )
         for docId in docIds {
             do {
                 try await db.collection("users").document(docId).updateData([
-                    "pushTokens": FieldValue.arrayRemove([token])
+                    "pushTokens": FieldValue.arrayRemove(tokens)
                 ])
             } catch {
                 print("🔥🔥🔥 DEBUG: Sign-out token cleanup failed for a users document: \(error.localizedDescription)")
@@ -7089,17 +7094,29 @@ class FirebaseBackend: ObservableObject {
         // A failed read is not an empty list. Replacing pushTokens then would delete tokens this client never received.
         let snap = try await ref.getDocument(source: .server)
         let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
+        // The token this device wrote before for this account (FCM refresh, reinstall) is replaced, never kept beside
+        // the new one: two live tokens for one phone delivered every push twice (owner report 23 Nov).
+        let memory = PushTokenDeviceMemory.shared
+        let replaced = PushTokenDeviceMemory.tokensReplacedBy(
+            current: currentDeviceToken,
+            previous: memory.lastWrittenToken(uid: userId)
+        )
         let next = LaunchStartupPolicy.nextStoredPushTokens(
             existing: existing,
             currentDeviceToken: currentDeviceToken,
             // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
-            failedTokens: []
+            // What it does know is its own previous token, dropped here.
+            failedTokens: replaced
         )
-        guard next != existing else { return }
+        guard next != existing else {
+            memory.recordWritten(token: currentDeviceToken, uid: userId)
+            return
+        }
         try await ref.setData([
             "pushTokens": next,
             "pushTokenUpdatedAt": Timestamp(date: Date())
         ], merge: true)
+        memory.recordWritten(token: currentDeviceToken, uid: userId)
     }
 
     func forceRefreshAndRegisterPushToken() async -> String {
