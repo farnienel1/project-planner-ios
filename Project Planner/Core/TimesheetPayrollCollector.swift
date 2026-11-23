@@ -457,6 +457,18 @@ enum TimesheetPayrollCollector {
     /// RULEBOOK 1.43.0 §8: what a timesheet line shows beside its rate line — `timesheetLineClockText(details)`, the clock
     /// part only, so the multiplied text (which the rate line shows) is never printed twice. Nil when nothing is left, or
     /// when the details are only the multiplied text (an older line stored as "OT 6.5h × 2 − 0.5h break = 12.5h").
+    /// The overtime calculation part of a line's stored text — the parts after the first " · " that carry the overtime
+    /// ("OT 6.5h × 2 − 0.5h break = 12.5h", read by `parseMultipliedHoursText`) — for a row with no separate rate line.
+    /// Display only; nil when the line has none.
+    nonisolated static func lineOvertimeText(_ details: String) -> String? {
+        let parts = details.components(separatedBy: " · ")
+        guard parts.count > 1 else { return nil }
+        let overtime = parts.dropFirst().filter { part in
+            part.contains("OT") || CanonicalBusinessEngine.parseMultipliedHoursText(part) != nil
+        }
+        return overtime.isEmpty ? nil : overtime.joined(separator: " · ")
+    }
+
     nonisolated static func lineClockLabel(_ details: String) -> String? {
         let clock = CanonicalBusinessEngine.timesheetLineClockText(details)
         guard !clock.isEmpty, CanonicalBusinessEngine.parseMultipliedHoursText(clock) == nil else { return nil }

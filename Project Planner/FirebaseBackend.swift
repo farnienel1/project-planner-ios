@@ -9189,6 +9189,32 @@ class FirebaseBackend: ObservableObject {
     /// may see, merged by document id. 1.27.0: plus one `operativeId ==` + `userId == ''` query per catalogue operative
     /// in the plan's `operativeIds`. Each query stands alone: a refused one is skipped and the others still load; only
     /// when every query failed is the first error thrown.
+    /// RULEBOOK 1.59.0 §11 / 1.70.0 §7: the organisation's former-person records (`deletedPeople`, staff only, may load on
+    /// open), each read through the rulebook's `parseFormerPersonDocument`, for `weeklyReportLeaveRows` `formerPeople`.
+    /// A refused or failed read is an empty list (the leave then reads "Person not found", as before 1.70.0).
+    func loadFormerPeople(organizationId: String) async -> [[String: Any]] {
+        do {
+            let snapshot = try await db.collection("organizations").document(organizationId)
+                .collection("deletedPeople").getDocuments()
+            return snapshot.documents.compactMap { doc in
+                let data = doc.data()
+                // Only the record's own fields, JSON-safe (a Timestamp as epoch milliseconds).
+                var row: [String: Any] = [:]
+                if let name = data["displayName"] as? String { row["displayName"] = name }
+                if let email = data["email"] as? String { row["email"] = email }
+                if let ids = data["personIds"] as? [Any] { row["personIds"] = ids.compactMap { $0 as? String } }
+                if let deletedBy = data["deletedBy"] as? String { row["deletedBy"] = deletedBy }
+                if let deletedAt = data["deletedAt"] as? Timestamp {
+                    row["deletedAt"] = deletedAt.dateValue().timeIntervalSince1970 * 1000
+                }
+                return CanonicalBusinessEngine.parseFormerPersonDocument(docId: doc.documentID, data: row)
+            }
+        } catch {
+            NSLog("FORMER_PEOPLE_LOAD_FAILED org=%@ %@", organizationId, error.localizedDescription)
+            return []
+        }
+    }
+
     func loadOperativeDayRateHistory(organizationId: String) async throws -> OperativeDayRateHistoryCollection {
         let orgRef = db.collection("organizations").document(organizationId)
         let collection = orgRef.collection("operativeDayRateHistory")

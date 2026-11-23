@@ -133,10 +133,33 @@ extension CanonicalBusinessEngine {
 
     // MARK: - Timesheet lines (§6)
 
-    /// `OVERLAPPING_BOOKING_NOTE`.
-    nonisolated static var overlappingBookingNote: String {
-        constant("OVERLAPPING_BOOKING_NOTE", as: String.self)
-            ?? "Overlaps another booking — check with your manager"
+    /// RULEBOOK 1.70.0 §8 `overlappingBookingNote({ reviewing })`: the amber note on an overlapping timesheet line —
+    /// `OVERLAPPING_BOOKING_NOTE` on the person's own sheet, `OVERLAPPING_BOOKING_REVIEWER_NOTE` when the viewer reviews
+    /// someone else's (line manager or admin). Nil when the script did not answer.
+    nonisolated static func overlappingBookingNote(reviewing: Bool) -> String? {
+        let text = callJSON("overlappingBookingNote", arguments: [["reviewing": reviewing]]) as? String
+        return text?.isEmpty == false ? text : nil
+    }
+
+    /// RULEBOOK 1.70.0 `timesheetLineDisplay(line, day)`: a booking line's title ("J-1042 · Site", or the place) and its
+    /// times (clock times, or a named slot with its window under the working hours in effect that day). Display only.
+    /// Nil when the script did not answer.
+    nonisolated static func timesheetLineDisplay(
+        jobNumber: String,
+        projectName: String,
+        details: String,
+        date: Date
+    ) -> (title: String, times: String)? {
+        let line: [String: Any] = [
+            "jobNumber": jobNumber,
+            "projectName": projectName,
+            "details": details,
+            "dayKey": bookingDayKey(date),
+        ]
+        let day: Any = openOrganizationPayrollPolicyState ?? NSNull()
+        guard let row = callJSON("timesheetLineDisplay", arguments: [line, day]) as? [String: Any],
+              let title = row["title"] as? String else { return nil }
+        return (title, row["times"] as? String ?? "")
     }
 
     /// `overlappingBookingIds(bookings, day)`: ids of bookings that overlap another booking on the

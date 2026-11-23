@@ -59,7 +59,7 @@ final class Rulebook1410Tests: XCTestCase {
         let detail = try source("Project Planner/Views/ProjectDetailView.swift")
         XCTAssertTrue(detail.contains("CanonicalBusinessEngine.scheduleDayCell(bookings: figures, onLeave: leave != nil)"))
         XCTAssertTrue(detail.contains("if day.allBookings.count > 1 {"), "several bookings open a chooser")
-        XCTAssertTrue(detail.contains("openSchedulingBooking(row: chooser.row, day: picked)"))
+        XCTAssertTrue(detail.contains("openSchedulingBooking(row: pick.row, day: pick.day)"), "the picked booking opens once the chooser sheet has closed")
         XCTAssertFalse(detail.contains("if hours >= bestPaid {"), "never only the longest booking")
     }
 
