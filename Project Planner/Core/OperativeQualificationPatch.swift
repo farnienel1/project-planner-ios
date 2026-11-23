@@ -53,6 +53,75 @@ enum OperativeQualificationPatch {
         )
     }
 
+    /// What one save changes in `qualificationExpiryDates` and `qualificationCertificateURLs` (review of #269):
+    /// only what the person changed in this editor, judged against the maps the editor LOADED (`baseline*`), never
+    /// against the live stored row — so an expiry or certificate saved on another device after this phone loaded,
+    /// and an expiry kept under another spelling of the id (#19), are never overwritten or deleted.
+    struct MapChanges: Equatable {
+        var setExpiry: [String: Date] = [:]
+        var removeExpiry: [String] = []
+        var setCertificates: [String: String] = [:]
+        var removeCertificates: [String] = []
+
+        /// The maps after this save: `current` (the stored row) less the removed keys plus the set ones.
+        func applied(expiry current: [String: Date]) -> [String: Date] {
+            var out = current
+            for key in removeExpiry { out.removeValue(forKey: key) }
+            for (key, value) in setExpiry { out[key] = value }
+            return out
+        }
+
+        func applied(certificates current: [String: String]) -> [String: String] {
+            var out = current
+            for key in removeCertificates { out.removeValue(forKey: key) }
+            for (key, value) in setCertificates { out[key] = value }
+            return out
+        }
+    }
+
+    /// The editor's own changes:
+    /// - expiry set: an entry the editor holds for a selected qualification that is new or on another day than when
+    ///   loaded; expiry removed: a key the editor loaded that it no longer holds (the person switched it off or
+    ///   removed the qualification). A key under another spelling stays in the editor's map, so it is never removed.
+    /// - certificate set: a link the editor holds that differs from when loaded; certificate removed: a key the
+    ///   editor loaded that it no longer holds (Remove Certificate, or the qualification removed).
+    /// - `uploaded`: new certificates this save uploaded — each set under its id, and every OTHER spelling of that id
+    ///   in `knownCertificates` (what this phone holds, stored row included) removed, so the server keeps one link.
+    static func changes(
+        baselineExpiry: [String: Date],
+        editorExpiry: [String: Date],
+        selectedIds: Set<String>,
+        baselineCertificates: [String: String],
+        editorCertificates: [String: String],
+        uploaded: [String: String] = [:],
+        knownCertificates: [String: String] = [:],
+        calendar: Calendar = OrganizationRulebookContext.calendar
+    ) -> MapChanges {
+        var changes = MapChanges()
+        for (key, date) in editorExpiry where selectedIds.contains(key) {
+            let day = calendar.startOfDay(for: date)
+            if let loaded = baselineExpiry[key], calendar.isDate(loaded, inSameDayAs: day) { continue }
+            changes.setExpiry[key] = day
+        }
+        changes.removeExpiry = baselineExpiry.keys.filter { editorExpiry[$0] == nil }.sorted()
+        for (key, url) in editorCertificates where baselineCertificates[key] != url {
+            changes.setCertificates[key] = url
+        }
+        var removedCertificates = Set(baselineCertificates.keys.filter { editorCertificates[$0] == nil })
+        for (id, url) in uploaded {
+            changes.setCertificates[id] = url
+            removedCertificates.remove(id)
+            let target = id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let spellings = Set(knownCertificates.keys).union(baselineCertificates.keys).union(editorCertificates.keys)
+            for key in spellings where key != id
+                && key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == target {
+                removedCertificates.insert(key)
+            }
+        }
+        changes.removeCertificates = removedCertificates.filter { changes.setCertificates[$0] == nil }.sorted()
+        return changes
+    }
+
     static func qualifications(
         from rows: [CanonicalBusinessEngine.CanonicalAssignedQualificationRow],
         preferring existing: [Qualification]

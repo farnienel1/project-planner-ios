@@ -124,9 +124,10 @@ struct OperativesView: View {
                 .environmentObject(userStore)
                 .environmentObject(firebaseBackend)
         }
+        // Owner issue #17 (17 Nov): a row opens the person's profile summary; its Edit profile opens Edit user.
         .sheet(item: $selectedUserForProfile) { user in
             NavigationStack {
-                EditUserView(user: user)
+                UserProfileSummaryView(user: user)
             }
             .environmentObject(userStore)
             .environmentObject(bookingStore)

@@ -22,6 +22,8 @@ struct ManageUsersView: View {
     
     @State private var showingAddUser = false
     @State private var selectedUser: AppUser?
+    /// Fix-it lists and deep links open Edit user straight away (row taps open the profile summary).
+    @State private var directEditUser: AppUser?
     @State private var showingEditUser = false
     @State private var userToDelete: AppUser?
     @State private var showingDeleteConfirmation = false
@@ -53,7 +55,7 @@ struct ManageUsersView: View {
         guard let user = userStore.organizationUsers.first(where: { $0.id == userId })
                 ?? (userStore.currentUser?.id == userId ? userStore.currentUser : nil) else { return }
         WorkCatalogueDeepLink.pendingEditUserId = nil
-        selectedUser = user
+        directEditUser = user
     }
     
     /// Always a pushed full page in the caller's navigation stack, with the system back button
@@ -124,7 +126,21 @@ struct ManageUsersView: View {
             .onChange(of: userStore.organizationUsers.count) { _, _ in
                 openPendingUserEdit()
             }
+            // Owner issue #17 (17 Nov): a row opens the person's profile summary; its Edit profile opens Edit user.
             .sheet(item: $selectedUser) { user in
+                NavigationStack {
+                    UserProfileSummaryView(user: user)
+                }
+                .environmentObject(userStore)
+                .environmentObject(bookingStore)
+                .environmentObject(operativeStore)
+                .environmentObject(holidayStore)
+                .environmentObject(firebaseBackend)
+                .environmentObject(notificationService)
+                .environmentObject(smartCache)
+            }
+            // Fix-it lists and deep links (pending edit, highlighted user) still open Edit user directly.
+            .sheet(item: $directEditUser) { user in
                 NavigationStack {
                     EditUserView(user: user)
                 }
@@ -212,7 +228,7 @@ struct ManageUsersView: View {
                 selectedTab = initialTab
             }
             if let userToHighlight, userToHighlight.isStoredUserDocument {
-                selectedUser = userToHighlight
+                directEditUser = userToHighlight
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
         }
@@ -311,7 +327,7 @@ struct ManageUsersView: View {
                 .foregroundStyle(.secondary)
             ForEach(usersMissingPayRate, id: \.id) { person in
                 Button {
-                    selectedUser = person
+                    directEditUser = person
                 } label: {
                     Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
                         .font(.footnote)
@@ -356,7 +372,7 @@ struct ManageUsersView: View {
                 .foregroundStyle(.secondary)
             ForEach(usersMissingLevel, id: \.id) { person in
                 Button {
-                    selectedUser = person
+                    directEditUser = person
                 } label: {
                     Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
                         .font(.footnote)
@@ -380,7 +396,7 @@ struct ManageUsersView: View {
                 .font(.subheadline.weight(.semibold))
             ForEach(usersWithAccountTypeOutOfSync, id: \.id) { person in
                 Button {
-                    selectedUser = person
+                    directEditUser = person
                 } label: {
                     Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
                         .font(.footnote)
@@ -409,7 +425,7 @@ struct ManageUsersView: View {
             .font(.subheadline.weight(.semibold))
             ForEach(usersMissingLineManager, id: \.id) { person in
                 Button {
-                    selectedUser = person
+                    directEditUser = person
                 } label: {
                     Text(person.fullName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? person.email : person.fullName)
                         .font(.footnote)
@@ -1680,8 +1696,8 @@ struct EditUserView: View {
     private var canEditPermissionsMatrix: Bool {
         // RULEBOOK 1.31.0: the Super Admin edits their own profile (photo, name, contact); their permissions stay
         // locked (the save skips them on a Super Admin profile). Nobody else edits the Super Admin.
-        if isViewingSuperAdminProfile { return viewerIsEditedPerson && userStore.canEditTargetUserPermissions(displayedUser) }
-        return userStore.canEditTargetUserPermissions(displayedUser)
+        // One test with the profile summary's "Edit profile" button (`UserStore.canOpenEditProfile`).
+        userStore.canOpenEditProfile(displayedUser, opened: user)
     }
 
     /// Super Admin profile: the flag, or the organisation creator when those ids have drifted apart.

@@ -1970,6 +1970,21 @@ class UserStore: ObservableObject {
     }
     
     /// Whether the signed-in user may change permissions for `target` in **Manage / edit user**.
+    /// Owner issue #17 (17 Nov): whether the profile summary offers "Edit profile" — the same test Edit user uses to
+    /// make its fields editable (`EditUserView.canEditPermissionsMatrix`), so the button never opens a read-only form.
+    /// The Super Admin's (or the creator's) profile is edited only by that person; everyone else follows
+    /// `canEditTargetUserPermissions` (admins; an Operatives manager for operatives). `opened` is the row the screen
+    /// was opened with when it can differ from the live roster row.
+    func canOpenEditProfile(_ target: AppUser, opened: AppUser? = nil) -> Bool {
+        let openedRow = opened ?? target
+        let isSuperAdminProfile = openedRow.isSuperAdmin || target.isSuperAdmin || isOrganizationCreator(userId: openedRow.id)
+        if isSuperAdminProfile {
+            guard let viewer = currentUser, viewer.id == openedRow.id else { return false }
+            return canEditTargetUserPermissions(target)
+        }
+        return canEditTargetUserPermissions(target)
+    }
+
     func canEditTargetUserPermissions(_ target: AppUser) -> Bool {
         guard let acting = currentUser else { return false }
         if target.isSuperAdmin || isOrganizationCreator(userId: target.id) {
