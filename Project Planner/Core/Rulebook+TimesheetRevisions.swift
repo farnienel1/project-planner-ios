@@ -500,3 +500,67 @@ nonisolated enum TimesheetVersionSaveGuard {
         return draft == server ? nil : newerVersionMessage
     }
 }
+
+/// Owner item 23 (23 Nov, display only) — web `exportedVersionRows` (`lib/timesheets/timesheetRevisionCopy.ts`): every
+/// exported version of one pay run, oldest first (Original, REV 1, REV 2), each with its invoice number, when it was
+/// signed, its total and the difference from the version before it. Every figure and word is the rulebook's
+/// (`timesheetExportedTotal` over that version's own stored signed copy, never re-priced; `TimesheetRevisionCopy` over
+/// `timesheetRevisionDifference` and the invoice numbers; `timesheetRevisionLabel`, `TIMESHEET_ORIGINAL_VERSION_LABEL`).
+nonisolated struct TimesheetExportedVersionRow: Identifiable, @unchecked Sendable {
+    var id: String { "\(version.documentId)|\(version.revision)" }
+    let version: TimesheetVersionInfo
+    /// "Original", "REV 1", …
+    let label: String
+    /// "TS-…" or "TS-…-REV1"; "" when it cannot be built.
+    let invoiceNumber: String
+    /// The line manager's signature, else the person's; nil when not stored.
+    let signedAt: Date?
+    /// "£1,250.00", or "Total not available (older export)" for a version exported without a signed copy.
+    let totalText: String
+    /// "+£44.12" from the previous version, the rulebook's "not available" wording, or nil for the original.
+    let differenceText: String?
+    /// The newest version listed (the one the row above shows).
+    let latest: Bool
+
+    static func rows(versions: [TimesheetVersionInfo], currency: String) -> [TimesheetExportedVersionRow] {
+        var seen = Set<String>()
+        let sorted = versions
+            .filter { seen.insert("\($0.documentId)|\($0.revision)").inserted }
+            .sorted { $0.revision < $1.revision }
+        let newest = sorted.last?.revision ?? 0
+        let original = sorted.first { $0.revision == 0 }
+        let originalId = original?.documentId ?? sorted.first?.baseDocumentId ?? ""
+        let storedUserId = (original?.data["userId"] as? String) ?? (sorted.first?.data["userId"] as? String)
+        func date(_ value: Any?) -> Date? {
+            if let stamp = value as? Timestamp { return stamp.dateValue() }
+            return value as? Date
+        }
+        return sorted.map { version in
+            let total = CanonicalBusinessEngine.timesheetExportedTotal(version.data)
+            let previous = sorted.first { $0.revision == version.revision - 1 }
+            let copy = TimesheetRevisionCopy.make(
+                originalDocumentId: originalId,
+                storedUserId: storedUserId,
+                revision: version.revision,
+                total: total,
+                previousExportedTotal: previous.flatMap { CanonicalBusinessEngine.timesheetExportedTotal($0.data) },
+                // A previous version that was not read still reads "not available", never nothing (guardrail 3).
+                previousKnown: true,
+                currency: currency
+            )
+            let unknown = CanonicalBusinessEngine.timesheetRevisionDifferenceUnknown
+            return TimesheetExportedVersionRow(
+                version: version,
+                label: version.revision == 0
+                    ? CanonicalBusinessEngine.timesheetOriginalVersionLabel
+                    : CanonicalBusinessEngine.timesheetRevisionLabel(version.revision),
+                invoiceNumber: copy.invoiceNumber,
+                signedAt: date(version.data["managerSignedAt"]) ?? date(version.data["operativeSignedAt"]),
+                totalText: total.map { OrgMoney.format($0, currencyCode: currency) }
+                    ?? unknown.replacingOccurrences(of: "Difference", with: "Total"),
+                differenceText: version.revision == 0 ? nil : copy.differenceText,
+                latest: version.revision == newest
+            )
+        }
+    }
+}

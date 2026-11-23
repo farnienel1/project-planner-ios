@@ -141,6 +141,83 @@ struct TimesheetEarlierVersionsList: View {
     }
 }
 
+/// Owner item 23 (23 Nov): on User Timesheets → Exported, every exported version of a pay run, oldest first — Original,
+/// REV 1, REV 2 — each with its invoice number, signed date, total, the difference from the version before it and its
+/// own Download PDF (`TimesheetExportedVersionRow.rows`, web `exportedVersionRows`). Layout only: every figure and word
+/// is the rulebook's; each PDF is drawn from that version's stored signed copy.
+struct TimesheetExportedVersionsList: View {
+    let rows: [TimesheetExportedVersionRow]
+    var onDownload: ((TimesheetExportedVersionRow) -> Void)? = nil
+
+    /// The signed date in the organisation's business time zone (never the device's).
+    private func signedText(_ row: TimesheetExportedVersionRow) -> String? {
+        guard let signedAt = row.signedAt else { return nil }
+        let style = Date.FormatStyle(date: .abbreviated, time: .shortened, timeZone: OrganizationRulebookContext.timeZone)
+        return "Signed \(signedAt.formatted(style))"
+    }
+
+    var body: some View {
+        if rows.count > 1 {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Versions of this pay run · \(rows.count)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                ForEach(rows) { row in
+                    HStack(alignment: .top, spacing: 8) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(row.label)
+                                    .font(.footnote.weight(.semibold))
+                                if row.latest {
+                                    Text("Latest")
+                                        .font(.caption2.weight(.semibold))
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 1)
+                                        .foregroundStyle(.green)
+                                        .background(Color.green.opacity(0.14), in: Capsule())
+                                }
+                            }
+                            if !row.invoiceNumber.isEmpty {
+                                Text(row.invoiceNumber)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if let signed = signedText(row) {
+                                Text(signed)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            HStack(spacing: 6) {
+                                Text(row.totalText)
+                                    .font(.caption.weight(.semibold))
+                                if let difference = row.differenceText {
+                                    Text(difference)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        Spacer(minLength: 8)
+                        if let onDownload {
+                            Button {
+                                onDownload(row)
+                            } label: {
+                                Label("Download PDF", systemImage: "arrow.down.doc")
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Download PDF of \(row.label)")
+                            .accessibilityIdentifier("timesheets.exportedVersion.\(row.version.revision).downloadPDF")
+                        }
+                    }
+                }
+            }
+            .accessibilityIdentifier("timesheets.exportedVersions")
+        }
+    }
+}
+
 /// Hands the screen's stores to `SignedTimesheetChangeContext`, so list rows, counts and the My Timesheets entry can
 /// ask the rulebook whether a signed sheet's bookings changed. Plumbing only.
 private struct SignedTimesheetChangeAttachment: ViewModifier {
