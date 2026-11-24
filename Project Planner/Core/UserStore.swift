@@ -350,6 +350,7 @@ class UserStore: ObservableObject {
 
     private func applyMemberNames(_ names: [String: [String: String]]) {
         memberNames = names
+        firebaseBackend?.memberNameEntryIds = Set(names.keys)
         if let named = MemberNameOverlay.apply(organizationUsers, names: names) { organizationUsers = named }
         if let user = currentUser, let named = MemberNameOverlay.apply([user], names: names)?.first { currentUser = named }
     }
@@ -357,6 +358,44 @@ class UserStore: ObservableObject {
     /// The open organisation's own name entry for this person, if any (lower-case users id).
     func hasOrganizationName(for userId: String) -> Bool {
         memberNames[userId.lowercased()] != nil
+    }
+
+    /// RULEBOOK 1.81.0 §11 (`memberNameEditTarget`): whether a name edit of `user` in the open organisation is this
+    /// company's own name for them (`organization`) rather than their users document's (`account`).
+    func nameEditIsOrganizations(_ user: AppUser) -> Bool {
+        CanonicalBusinessEngine.memberNameEditTarget(
+            organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId,
+            homeOrganizationId: user.storedOrganizationId ?? (user.id == Auth.auth().currentUser?.uid ? firebaseBackend?.sharedUserOrganizationId : nil)
+        ) == "organization"
+    }
+
+    /// The local copy after a saved name edit (review of #287): for this company's own name the users document's
+    /// name stays under it (`orgNameOverlay`, the account name is the one before the edit), so it never takes the
+    /// company's name and never survives an organisation switch; for the users document the plain new name.
+    static func withSavedName(_ user: AppUser, firstName: String, surname: String, organizationName: Bool) -> AppUser {
+        var copy = user
+        if organizationName {
+            let account = MemberNameOverlay.accountName(user)
+            copy.firstName = firstName
+            copy.surname = surname
+            copy.orgNameOverlay = OrgNameOverlay(firstName: firstName, surname: surname, accountFirstName: account.firstName, accountSurname: account.surname)
+        } else {
+            copy.firstName = firstName
+            copy.surname = surname
+            copy.orgNameOverlay = nil
+        }
+        return copy
+    }
+
+    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same):
+    /// always in the person's home organisation (the existing identity rules apply), else only themself or an admin.
+    func canEditName(of user: AppUser) -> Bool {
+        guard nameEditIsOrganizations(user) else { return true }
+        return CanonicalBusinessEngine.canWriteMemberName(
+            writerUserId: Auth.auth().currentUser?.uid,
+            subjectUserId: user.id,
+            writerIsAdmin: hasAdminAccess()
+        )
     }
 
     /// The open organisation is known: the own read and a roster overlay left loading with no organisation start now.
@@ -2741,8 +2780,8 @@ class UserStore: ObservableObject {
         }
         let savedEmail = pendingSelfEmail == nil ? trimmedEmail : oldEmailNorm
 
-        updated.firstName = trimmedFirst
-        updated.surname = trimmedSurname
+        let organizationName = nameEditIsOrganizations(updated)
+        updated = Self.withSavedName(updated, firstName: trimmedFirst, surname: trimmedSurname, organizationName: organizationName)
         updated.email = savedEmail
         updated.mobileNumber = mobileOut
 
@@ -2821,8 +2860,7 @@ class UserStore: ObservableObject {
 
             var people = organizationUsers
             for offset in people.indices where idsToPatch.contains(people[offset].id) {
-                people[offset].firstName = trimmedFirst
-                people[offset].surname = trimmedSurname
+                people[offset] = Self.withSavedName(people[offset], firstName: trimmedFirst, surname: trimmedSurname, organizationName: nameEditIsOrganizations(people[offset]))
                 people[offset].email = savedEmail
                 people[offset].mobileNumber = mobileOut
             }
@@ -2844,8 +2882,7 @@ class UserStore: ObservableObject {
                 RosterRetention.save(organizationUsers, organizationId: orgForRoster)
             }
             if var cu = currentUser, cu.id == userId {
-                cu.firstName = trimmedFirst
-                cu.surname = trimmedSurname
+                cu = Self.withSavedName(cu, firstName: trimmedFirst, surname: trimmedSurname, organizationName: organizationName)
                 cu.email = savedEmail
                 cu.mobileNumber = mobileOut
                 currentUser = cu
@@ -2908,9 +2945,7 @@ class UserStore: ObservableObject {
                 await opStore.updateOperative(op)
             }
         }
-        var updated = previous
-        updated.firstName = firstName
-        updated.surname = surname
+        var updated = Self.withSavedName(previous, firstName: firstName, surname: surname, organizationName: nameEditIsOrganizations(previous))
         updated.mobileNumber = mobileNumber
         if organizationUsers.indices.contains(index), organizationUsers[index].id == previous.id {
             organizationUsers[index] = updated

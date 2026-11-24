@@ -3305,13 +3305,14 @@ struct EditUserView: View {
                 VStack(spacing: 0) {
                     if canEditIdentityDetails {
                         ManageUserNameEditRow(firstName: $editFirstName, surname: $editSurname)
+                            // RULEBOOK 1.81.0 §11 (`canWriteMemberName`): locked for writers the rules refuse.
+                            .disabled(!userStore.canEditName(of: displayedUser))
                         // RULEBOOK 1.81.0 §11 (`memberNameEditTarget`): outside the person's home company the name
                         // edited here is this company's own name for them.
-                        if CanonicalBusinessEngine.memberNameEditTarget(
-                            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
-                            homeOrganizationId: displayedUser.storedOrganizationId
-                        ) == "organization" {
-                            Text("The name \(firebaseBackend.currentOrganization?.name ?? "this company") uses for them. Their other companies keep their own.")
+                        if userStore.nameEditIsOrganizations(displayedUser) {
+                            Text(userStore.canEditName(of: displayedUser)
+                                 ? "The name \(firebaseBackend.currentOrganization?.name ?? "this company") uses for them. Their other companies keep their own."
+                                 : CanonicalBusinessEngine.memberNameRefusedMessage)
                                 .font(.system(size: 11))
                                 .foregroundStyle(ManageUserProfilePalette.textSecondary)
                                 .padding(.horizontal, 14)

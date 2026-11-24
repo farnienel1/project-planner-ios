@@ -43,4 +43,20 @@ final class MemberNamesTests: XCTestCase {
         XCTAssertTrue(CanonicalBusinessEngine.canWriteMemberName(writerUserId: "U1", subjectUserId: "u1", writerIsAdmin: false))
         XCTAssertFalse(CanonicalBusinessEngine.canWriteMemberName(writerUserId: "mgr", subjectUserId: "u1", writerIsAdmin: false))
     }
+
+    /// Review of #287: a saved company name keeps the users document's name under it, and an org switch (no entries)
+    /// puts the account name back.
+    func testSavedCompanyNameNeverBecomesTheAccountName() {
+        let farnie = person("u1", first: "Farnie", last: "Nel")
+        let saved = UserStore.withSavedName(farnie, firstName: "Farns", surname: "Nel", organizationName: true)
+        XCTAssertEqual(saved.firstName, "Farns")
+        XCTAssertEqual(MemberNameOverlay.accountName(saved).firstName, "Farnie")
+        let resaved = UserStore.withSavedName(saved, firstName: "Fanie", surname: "Nel", organizationName: true)
+        XCTAssertEqual(MemberNameOverlay.accountName(resaved).firstName, "Farnie")
+        let switched = MemberNameOverlay.apply([resaved], names: [:])
+        XCTAssertEqual(switched?.first?.firstName, "Farnie")
+        let home = UserStore.withSavedName(saved, firstName: "Fanie", surname: "Nel", organizationName: false)
+        XCTAssertEqual(home.firstName, "Fanie")
+        XCTAssertNil(home.orgNameOverlay)
+    }
 }
