@@ -2939,7 +2939,7 @@ private struct MyTimesheetView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(currentUser, period: week.start...week.end),
@@ -2981,7 +2981,7 @@ private struct MyTimesheetView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: lateExtrasPermission.allowed,
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
         )
     }
@@ -4835,6 +4835,14 @@ struct OperativeTimesheetsView: View {
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(1)
                                                 .minimumScaleFactor(0.85)
+                                            // Owner 24 Nov (parity with web #451): admins see the line manager,
+                                            // named by the rulebook's `lineManagerSummary` like Awaiting / Signed off.
+                                            if isAdminViewer {
+                                                Text("Line manager: \(row.unresolvedPerson ? "—" : lineManagerName(for: live(row.user)))")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
+                                            }
                                         }
                                         Spacer()
                                         statusPill(for: row.draft, user: live(row.user), period: row.week)
@@ -6470,7 +6478,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(operative, period: week.start...week.end),
@@ -6494,7 +6502,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: false,
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
         )
     }

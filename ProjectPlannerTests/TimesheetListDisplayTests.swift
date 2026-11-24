@@ -74,3 +74,31 @@ final class TimesheetListDisplayTests: XCTestCase {
         XCTAssertEqual(cache.label(for: op, roster: [op, manager]), "Mia Test")
     }
 }
+
+@MainActor
+final class TimesheetWhoseTurnNameTests: XCTestCase {
+    private func person(_ id: String, email: String, first: String, passwordSet: Bool = true, managers: [String] = []) -> AppUser {
+        AppUser(
+            id: id,
+            email: email,
+            organizationId: "org-a",
+            role: .manager,
+            firstName: first,
+            surname: "Test",
+            isActive: true,
+            passwordSet: passwordSet,
+            permissions: UserPermissions(manager: true),
+            assignedManagerUserId: managers.first,
+            assignedManagerUserIds: managers
+        )
+    }
+
+    /// Over the unfolded roster the whose-turn line names the live document, never the email (web `soleLineManagerName`).
+    func testWhoseTurnNamesTheLineManagerStoredUnderAFoldedAwayDocument() {
+        let live = person("MGR-LIVE", email: "jo@example.com", first: "Jo")
+        let stale = person("MGR-OLD", email: "JO@example.com", first: "Stale", passwordSet: false)
+        let luke = person("LUKE", email: "luke@example.com", first: "Luke", managers: ["MGR-OLD"])
+        XCTAssertEqual(TimesheetClarityNames.lineManagerName(for: luke, roster: [live, stale, luke]), "Jo Test")
+        XCTAssertNil(TimesheetClarityNames.lineManagerName(for: luke, roster: [live, luke]), "the folded roster alone cannot name them")
+    }
+}
