@@ -42,6 +42,74 @@ enum OfflineSyncCoordinator {
         postDeleteRestored(entry: queued.entry, payload: queued.payload)
     }
 
+    /// RULEBOOK 1.86.0 (owner decision 24 Nov): Undo of a queued offline Replace from the sync list. The item leaves the
+    /// queue unsent: the new booking leaves this device and the replaced bookings come back.
+    static func undoReplace(entryId: UUID, outbox: OfflineOutboxStore? = nil) {
+        let outbox = outbox ?? OfflineOutboxStore.shared
+        guard let queued = outbox.queuedReplace(entryId: entryId) else { return }
+        outbox.removeEntry(id: entryId)
+        postReplaceUndone(entry: queued.entry, payload: queued.payload, outbox: outbox)
+    }
+
+    /// A queued Replace that left the queue unsent (undo, discard, `dropLocal`, or refused): the new booking leaves this
+    /// device and each replaced booking comes back. A replaced booking whose own create or edit was still queued is
+    /// queued again (a create as a create, an edit with its baseline), so nothing the person did offline is lost.
+    static func postReplaceUndone(entry: OfflineOutboxEntry, payload: OfflineReplaceBookingPayload, outbox: OfflineOutboxStore) {
+        if let id = payload.newBookingId {
+            NotificationCenter.default.post(
+                name: .offlineBookingReplayRefused,
+                object: nil,
+                userInfo: [
+                    "bookingId": id.uuidString,
+                    "collection": payload.collection,
+                    "operation": (payload.collection == "bookings"
+                        ? OfflineOutboxEntry.Operation.saveBooking
+                        : OfflineOutboxEntry.Operation.saveManagerSiteBooking).rawValue,
+                ]
+            )
+        }
+        for row in payload.replaced {
+            if row.createdOffline || row.queuedEditFields != nil {
+                // A create still queued goes back as a create; a queued edit goes back with its own baseline.
+                let fields = row.createdOffline ? nil : row.queuedEditFields.map { Set($0) }
+                let baseline = row.createdOffline ? nil : row.fingerprint
+                if let booking = row.labourBooking {
+                    outbox.enqueueSaveBooking(
+                        booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline,
+                        previous: row.createdOffline ? nil : row.queuedEditPreviousLabour
+                    )
+                } else if let booking = row.managerBooking {
+                    outbox.enqueueSaveManagerSiteBooking(
+                        booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline,
+                        previous: row.createdOffline ? nil : row.queuedEditPreviousManager
+                    )
+                }
+            }
+            var info: [String: Any] = [
+                "bookingId": row.bookingId.uuidString,
+                "collection": row.collection,
+                "organizationId": entry.organizationId,
+            ]
+            if let booking = row.labourBooking { info["labourBooking"] = booking }
+            if let booking = row.managerBooking { info["managerBooking"] = booking }
+            NotificationCenter.default.post(name: .offlineBookingDeleteRestored, object: nil, userInfo: info)
+        }
+    }
+
+    /// RULEBOOK 1.86.0: a queued Replace that was not written — resolved with nothing to send (`alreadyApplied`,
+    /// `dropLocal`), or refused with a message (`refuseChanged`, `refusePermission`: both bookings as the server has them).
+    private enum OfflineReplaceOutcome: Error {
+        case resolved
+        /// `dropLocal`: nothing was sent; the replaced bookings (and any taken create or edit) come back.
+        case dropped
+        case refused(message: String)
+    }
+
+    /// Review of #293: the script did not answer (or could not build the batch). Not a refusal: the item stays queued.
+    struct OfflineReplaceNotDecided: LocalizedError {
+        var errorDescription: String? { "Could not check this replace yet. It will be tried again." }
+    }
+
     /// The outcome of a queued delete that was not written (`offlineDeleteReplayDecision`): resolved with nothing to
     /// send (`alreadyGone`), or refused with a message (the booking is put back).
     private enum OfflineDeleteOutcome: Error {
@@ -121,6 +189,25 @@ enum OfflineSyncCoordinator {
                 synced += 1
                 // The server confirmed this change: follow-ups that wait for it (leave approver notices) run now.
                 NotificationCenter.default.post(name: .offlineOutboxEntrySynced, object: nil, userInfo: entryInfo(entry))
+            } catch let outcome as OfflineReplaceOutcome {
+                switch outcome {
+                case .resolved:
+                    outbox.removeEntry(id: entry.id)
+                    synced += 1
+                case .dropped:
+                    outbox.removeEntry(id: entry.id)
+                    if let payload = try? JSONDecoder().decode(OfflineReplaceBookingPayload.self, from: entry.payload) {
+                        postReplaceUndone(entry: entry, payload: payload, outbox: outbox)
+                    }
+                    synced += 1
+                case .refused(let message):
+                    outbox.removeRefused(id: entry.id, message: message)
+                    NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
+                    if let payload = try? JSONDecoder().decode(OfflineReplaceBookingPayload.self, from: entry.payload) {
+                        postReplaceUndone(entry: entry, payload: payload, outbox: outbox)
+                    }
+                    failed += 1
+                }
             } catch let outcome as OfflineDeleteOutcome {
                 // RULEBOOK 1.33.0: a queued delete that was not written leaves the queue: gone already (nothing to do),
                 // or refused — the booking comes back with the rulebook's message.
@@ -170,6 +257,7 @@ enum OfflineSyncCoordinator {
                 if replayIsFinal(error, entry: entry) {
                     // RULEBOOK §2: a refused replay is final (`bookingReplayRefusedIsFinal`). The booking
                     // was deleted (tombstone) or cancelled elsewhere, or the area is online only.
+                    recordEditRefused(entry: entry, error: error)
                     handleRefused(entry: entry, outbox: outbox)
                     failed += 1
                     print("🔥🔥🔥 DEBUG: [OfflineSync] Refused for good \(entry.operation.rawValue) \(entry.entityId)")
@@ -184,6 +272,8 @@ enum OfflineSyncCoordinator {
         if synced > 0 {
             NotificationCenter.default.post(name: .offlineSyncDidComplete, object: nil)
         }
+        // RULEBOOK 1.86.0 "Not synced": one local notification (or the banner) for what this pass could not save.
+        await OfflineSyncResultStore.shared.announceNew()
 
         print("🔥🔥🔥 DEBUG: [OfflineSync] Done — synced: \(synced), failed: \(failed), remaining: \(outbox.pendingCount)")
         return (synced, failed)
@@ -205,7 +295,7 @@ enum OfflineSyncCoordinator {
         switch entry.operation {
         case .saveBooking, .saveManagerSiteBooking:
             return BookingWritePatch.isRefusedFinal(error, isCreate: bookingSaveIsCreate(entry))
-        case .deleteBooking, .deleteManagerSiteBooking:
+        case .deleteBooking, .deleteManagerSiteBooking, .replaceBooking:
             return false
         default:
             guard let code = BookingWritePatch.firestoreErrorCode(error) else { return false }
@@ -272,6 +362,9 @@ enum OfflineSyncCoordinator {
 
         case .deleteBooking, .deleteManagerSiteBooking:
             try await replayDelete(entry: entry, firebaseBackend: firebaseBackend)
+
+        case .replaceBooking:
+            try await replayReplace(entry: entry, firebaseBackend: firebaseBackend)
 
         case .saveManagerSiteBooking:
             let payload = try decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload)
@@ -394,6 +487,7 @@ enum OfflineSyncCoordinator {
                     organizationId: entry.organizationId
                 )
                 if stillLive == false { throw OfflineDeleteOutcome.resolved }
+                await recordDeleteRefused(entry: entry, payload: payload, reason: "permission", firebaseBackend: firebaseBackend)
                 throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
             default: throw error
             }
@@ -410,10 +504,158 @@ enum OfflineSyncCoordinator {
         case "alreadyGone", "dropLocal":
             throw OfflineDeleteOutcome.resolved
         case "refuseChanged":
+            await recordDeleteRefused(entry: entry, payload: payload, reason: "changed", firebaseBackend: firebaseBackend)
             throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteChangedMessage)
         default:
+            await recordDeleteRefused(entry: entry, payload: payload, reason: "permission", firebaseBackend: firebaseBackend)
             throw OfflineDeleteOutcome.refused(message: CanonicalBusinessEngine.offlineDeleteRefusedMessage)
         }
+    }
+
+    /// RULEBOOK 1.86.0 §2 / §5: replays a queued offline Replace (`FirebaseBackend.replayOfflineBookingReplace`, one
+    /// transaction through `offlineReplaceReplayDecision`). A server refusal is read with `offlineReplaceRefusalDecision`:
+    /// not-found or permission-denied → read again and decide once more; a second permission-denied is final; anything
+    /// else retries (the item stays queued).
+    private static func replayReplace(entry: OfflineOutboxEntry, firebaseBackend: FirebaseBackend) async throws {
+        let payload = try JSONDecoder().decode(OfflineReplaceBookingPayload.self, from: entry.payload)
+        var result: RulebookOfflineReplaceResult?
+        var attempt = 0
+        while result == nil {
+            attempt += 1
+            do {
+                result = try await firebaseBackend.replayOfflineBookingReplace(payload, organizationId: entry.organizationId)
+            } catch {
+                guard let code = BookingWritePatch.firestoreErrorCode(error) else { throw error }
+                switch CanonicalBusinessEngine.offlineReplaceRefusalDecision(code: code) {
+                case "alreadyGone" where attempt < 2, "refusePermission" where attempt < 2:
+                    continue
+                case "refusePermission":
+                    recordReplaceRefused(entry: entry, payload: payload, reason: "permission", live: nil)
+                    throw OfflineReplaceOutcome.refused(message: CanonicalBusinessEngine.offlineReplaceRefusedMessage)
+                default:
+                    throw error
+                }
+            }
+        }
+        guard let result else { return }
+        switch result.decision {
+        case "apply", "createOnly":
+            // RULEBOOK 1.33.0 §25 reopen: each replaced booking that was deleted now (best effort, after the write).
+            let deleted = Set(result.deletes.map { "\($0.collection)/\($0.bookingId.lowercased())" })
+            for row in payload.replaced where deleted.contains("\(row.collection)/\(row.documentId.lowercased())") {
+                if let booking = row.labourBooking {
+                    OvertimeReopenNotice.labour(before: booking, after: nil, organizationId: entry.organizationId)
+                } else if let booking = row.managerBooking {
+                    OvertimeReopenNotice.managerSite(before: booking, after: nil, organizationId: entry.organizationId)
+                }
+            }
+            return
+        case "alreadyApplied":
+            throw OfflineReplaceOutcome.resolved
+        case "dropLocal":
+            throw OfflineReplaceOutcome.dropped
+        case "refusePermission":
+            recordReplaceRefused(entry: entry, payload: payload, reason: "permission", live: nil)
+            throw OfflineReplaceOutcome.refused(message: result.message ?? CanonicalBusinessEngine.offlineReplaceRefusedMessage)
+        case "refuseChanged":
+            // What changed while offline, from the first changed replaced booking as the server has it now.
+            var live: (read: Bool, data: OfflineSyncSummaryBooking?)?
+            if let changedId = result.changedBookingIds.first,
+               let row = payload.replaced.first(where: { $0.documentId.caseInsensitiveCompare(changedId) == .orderedSame }) {
+                let read = await firebaseBackend.offlineSyncLiveBooking(
+                    collection: row.collection, documentId: row.documentId, organizationId: entry.organizationId
+                )
+                live = (read.read, read.data.map { OfflineSyncSummary.stored($0, collection: row.collection) })
+            }
+            recordReplaceRefused(entry: entry, payload: payload, reason: "changed", live: live)
+            throw OfflineReplaceOutcome.refused(message: result.message ?? CanonicalBusinessEngine.offlineReplaceChangedMessage)
+        default:
+            // `unanswered` or a word this build does not know: never removed on a guess, retried.
+            throw OfflineReplaceNotDecided()
+        }
+    }
+
+    // MARK: - "Not synced" records (RULEBOOK 1.86.0 §2, owner decision 24 Nov)
+
+    private static func recordReplaceRefused(
+        entry: OfflineOutboxEntry,
+        payload: OfflineReplaceBookingPayload,
+        reason: String,
+        live: (read: Bool, data: OfflineSyncSummaryBooking?)?
+    ) {
+        let attempted = payload.labourBooking.map { OfflineSyncSummary.booking($0) } ?? payload.managerBooking.map { OfflineSyncSummary.booking($0) }
+        let replaced = payload.replaced.compactMap { row in
+            row.labourBooking.map { OfflineSyncSummary.booking($0) } ?? row.managerBooking.map { OfflineSyncSummary.booking($0) }
+        }
+        OfflineSyncResultStore.shared.record(OfflineSyncResultRecord(
+            id: entry.id.uuidString,
+            organizationId: entry.organizationId,
+            userId: entry.userId,
+            kind: "replace",
+            reason: reason,
+            attempted: attempted,
+            replaced: replaced,
+            live: live?.data,
+            liveRead: live?.read ?? false,
+            atMs: Date().timeIntervalSince1970 * 1000
+        ))
+    }
+
+    private static func recordDeleteRefused(
+        entry: OfflineOutboxEntry,
+        payload: OfflineDeleteBookingPayload,
+        reason: String,
+        firebaseBackend: FirebaseBackend
+    ) async {
+        let collection = payload.collection ?? (entry.operation == .deleteManagerSiteBooking ? "managerSiteBookings" : "bookings")
+        var live: (read: Bool, data: [String: Any]?) = (false, nil)
+        if reason == "changed" {
+            live = await firebaseBackend.offlineSyncLiveBooking(
+                collection: collection,
+                documentId: payload.documentId ?? payload.bookingId.uuidString,
+                organizationId: entry.organizationId
+            )
+        }
+        OfflineSyncResultStore.shared.record(OfflineSyncResultRecord(
+            id: entry.id.uuidString,
+            organizationId: entry.organizationId,
+            userId: entry.userId,
+            kind: "delete",
+            reason: reason,
+            attempted: payload.labourBooking.map { OfflineSyncSummary.booking($0) } ?? payload.managerBooking.map { OfflineSyncSummary.booking($0) },
+            live: live.data.map { OfflineSyncSummary.stored($0, collection: collection) },
+            liveRead: live.read,
+            atMs: Date().timeIntervalSince1970 * 1000
+        ))
+    }
+
+    /// A queued edit refused for good: not-found → the booking is gone; permission-denied → no longer allowed.
+    private static func recordEditRefused(entry: OfflineOutboxEntry, error: Error) {
+        guard bookingSaveIsCreate(entry) == false, let code = BookingWritePatch.firestoreErrorCode(error) else { return }
+        let reason: String
+        switch code {
+        case 5: reason = "missing"
+        case 7: reason = "permission"
+        default: return
+        }
+        let decoder = JSONDecoder()
+        var attempted: OfflineSyncSummaryBooking?
+        if entry.operation == .saveBooking, let payload = try? decoder.decode(OfflineSaveBookingPayload.self, from: entry.payload) {
+            attempted = OfflineSyncSummary.booking(payload.booking)
+        } else if entry.operation == .saveManagerSiteBooking,
+                  let payload = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: entry.payload) {
+            attempted = OfflineSyncSummary.booking(payload.booking)
+        }
+        guard let attempted else { return }
+        OfflineSyncResultStore.shared.record(OfflineSyncResultRecord(
+            id: entry.id.uuidString,
+            organizationId: entry.organizationId,
+            userId: entry.userId,
+            kind: "edit",
+            reason: reason,
+            attempted: attempted,
+            atMs: Date().timeIntervalSince1970 * 1000
+        ))
     }
 
     /// A refused delete: the booking reappears on this device (the server still has it; its listener confirms).
@@ -454,6 +696,11 @@ enum OfflineSyncCoordinator {
     /// Tells the stores an entry left the queue unsynced, so they drop its local pending copy.
     private static func postDropped(entry: OfflineOutboxEntry) {
         NotificationCenter.default.post(name: .offlineOutboxEntryRefused, object: nil, userInfo: entryInfo(entry))
+        // RULEBOOK 1.86.0: a discarded or dropped Replace was never sent: the new booking leaves, the replaced ones return.
+        if entry.operation == .replaceBooking,
+           let payload = try? JSONDecoder().decode(OfflineReplaceBookingPayload.self, from: entry.payload) {
+            postReplaceUndone(entry: entry, payload: payload, outbox: OfflineOutboxStore.shared)
+        }
         // A discarded or dropped delete was never sent: the booking is still on the server, so it comes back here.
         if entry.operation == .deleteBooking || entry.operation == .deleteManagerSiteBooking,
            let payload = try? JSONDecoder().decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
@@ -487,6 +734,9 @@ extension Notification.Name {
     /// userInfo: `bookingId`, `collection`, `organizationId` (Strings) and `labourBooking` (`Booking`) or
     /// `managerBooking` (`ManagerSiteBooking`) when the item carried the copy.
     static let offlineBookingDeleteRestored = Notification.Name("offlineBookingDeleteRestored")
+    /// RULEBOOK 1.86.0: a Replace was queued offline; the bookings it removes leave this device. userInfo:
+    /// `organizationId` (String), `labourBookingIds` and `managerBookingIds` ([String] UUIDs).
+    static let offlineReplaceHidBookings = Notification.Name("offlineReplaceHidBookings")
     /// One outbox entry was written and confirmed by the server. userInfo: `operation`, `entityId`,
     /// `organizationId` (Strings).
     static let offlineOutboxEntrySynced = Notification.Name("offlineOutboxEntrySynced")
