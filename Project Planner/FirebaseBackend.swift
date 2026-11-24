@@ -6220,7 +6220,119 @@ class FirebaseBackend: ObservableObject {
     /// - Never `organizationId` or `createdAt` (`userProfileWriteFields` create-only), and never a `profilePhotoURL`
     ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
+    /// RULEBOOK 1.81.0 §11: this organisation's `memberNames` entries (lower-case users ids), kept by `UserStore`
+    /// from its live listener, so a home-company edit removes an entry only when one exists.
+    var memberNameEntryIds: Set<String> = []
+
+    /// One name edit routed by `memberNameEditTarget` (RULEBOOK 1.81.0 §11 "Names per organisation"): the names the
+    /// users document write carries (outside the home organisation: the users document's own, so it never takes the
+    /// company's name) and the `memberNames` write to make with it (`set` / `delete`), if any.
+    struct NameEditPlan {
+        var accountFirstName: String
+        var accountSurname: String
+        var entryRef: DocumentReference?
+        var entryFields: [String: Any]?
+        var deleteEntry: Bool
+        var target: String
+    }
+
+    /// The plan for one name edit. Outside the person's home organisation (the one their users document names) the
+    /// name is this company's own entry (`memberNameWriteFields`) and the users document keeps its name; in the home
+    /// organisation the users document takes the edit (as before) and this company's entry, if one exists, is removed.
+    /// Without `previous` (a profile being created) the users document takes the name as before.
+    func nameEditPlan(
+        subjectUserId: String,
+        firstName: String,
+        surname: String,
+        previous: AppUser?,
+        homeOrganizationId: String?
+    ) throws -> NameEditPlan {
+        let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let asBefore = NameEditPlan(accountFirstName: trimmedFirst, accountSurname: trimmedSurname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "account")
+        let organizationId = currentOrganization?.firestoreDocumentId ?? ""
+        guard let previous, !organizationId.isEmpty,
+              let target = CanonicalBusinessEngine.memberNameEditTarget(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
+        else { return asBefore }
+        let changed = previous.firstName != trimmedFirst || previous.surname != trimmedSurname
+        let ref = db.collection("organizations").document(organizationId)
+            .collection(CanonicalBusinessEngine.memberNamesCollection).document(subjectUserId)
+        if target == "organization" {
+            let account = MemberNameOverlay.accountName(previous)
+            var plan = NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: target)
+            guard changed else { return plan }
+            if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
+                throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
+                throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
+            }
+            fields["updatedAt"] = FieldValue.serverTimestamp()
+            plan.entryRef = ref
+            plan.entryFields = fields
+            return plan
+        }
+        var plan = asBefore
+        if changed, memberNameEntryIds.contains(subjectUserId.lowercased()) {
+            plan.entryRef = ref
+            plan.deleteEntry = true
+        }
+        return plan
+    }
+
+    /// A refused `memberNames` write reads as the rulebook's message; any other error (offline, network) is kept.
+    static func memberNameWriteError(_ error: Error) -> Error {
+        let ns = error as NSError
+        if ns.domain == FirestoreErrorDomain, ns.code == FirestoreErrorCode.permissionDenied.rawValue {
+            return NSError(domain: "MemberNames", code: 2, userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.memberNameRefusedMessage])
+        }
+        return error
+    }
+
+    /// Commits a plan's entry write on its own (`saveUser`, whose users write is its own batch with the pay profile):
+    /// after the users write, which never carries the company's name, so a refusal leaves both as they were.
+    func commitNameEntry(_ plan: NameEditPlan) async throws {
+        guard let ref = plan.entryRef else { return }
+        do {
+            if let fields = plan.entryFields {
+                try await ref.setData(fields)
+            } else if plan.deleteEntry {
+                try await ref.delete()
+            }
+        } catch {
+            // A home edit's entry removal by someone the rules refuse leaves the company's entry in place.
+            if plan.deleteEntry { return }
+            throw Self.memberNameWriteError(error)
+        }
+    }
+
     func saveUser(_ user: AppUser, previous: AppUser? = nil) async throws {
+        // RULEBOOK 1.81.0 §11: outside the home organisation the name goes to this company's entry; the users document
+        // write below keeps the users document's own name.
+        var user = user
+        let namePlan = try nameEditPlan(
+            subjectUserId: user.id,
+            firstName: user.firstName,
+            surname: user.surname,
+            previous: previous,
+            homeOrganizationId: user.storedOrganizationId ?? (user.id == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+        )
+        user.firstName = namePlan.accountFirstName
+        user.surname = namePlan.accountSurname
+        let previousAccount: AppUser? = previous.map { row in
+            var copy = row
+            let base = MemberNameOverlay.accountName(row)
+            copy.firstName = base.firstName
+            copy.surname = base.surname
+            return copy
+        }
+        try await saveUserDocument(user, previous: previousAccount)
+        // The users document write never carries this company's name, so writing the entry after it is safe on its
+        // own (its batch holds the pay profile; the entry cannot join it).
+        try await commitNameEntry(namePlan)
+    }
+
+    private func saveUserDocument(_ user: AppUser, previous: AppUser?) async throws {
         // The leave figures this editor changed are the person's own even while the defaults were pending.
         var editedLeave: [String] = []
         if let previous, previous.id == user.id {
@@ -6296,7 +6408,8 @@ class FirebaseBackend: ObservableObject {
             firstName: user.firstName,
             surname: user.surname,
             email: user.email,
-            mobileNumber: user.mobileNumber
+            mobileNumber: user.mobileNumber,
+            nameAlreadyRouted: true
         )
         // RULEBOOK 1.10.0 §14: the person never rewrites their own membership (role and permissions are an admin's,
         // `orgMembershipWriteFields`); only the identity fields above are saved.
@@ -6358,20 +6471,67 @@ class FirebaseBackend: ObservableObject {
         surname: String,
         email: String,
         mobileNumber: String?,
-        previous: AppUser? = nil
+        previous: AppUser? = nil,
+        nameAlreadyRouted: Bool = false
     ) async throws {
+        // RULEBOOK 1.81.0 §11 (`nameEditPlan`): outside the home organisation the users document keeps its name and
+        // this company's entry is written in the same batch.
+        var plan: NameEditPlan? = nil
+        var names = (firstName: firstName, surname: surname)
+        if !nameAlreadyRouted {
+            let routed = try nameEditPlan(
+                subjectUserId: userId,
+                firstName: firstName,
+                surname: surname,
+                previous: previous,
+                homeOrganizationId: previous?.storedOrganizationId ?? (userId == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+            )
+            plan = routed
+            names = (routed.accountFirstName, routed.accountSurname)
+        }
+        let previous: AppUser? = previous.map { row in
+            var copy = row
+            let base = MemberNameOverlay.accountName(row)
+            copy.firstName = base.firstName
+            copy.surname = base.surname
+            return copy
+        }
         guard let changes = Self.userIdentityChanges(
-            firstName: firstName,
-            surname: surname,
+            firstName: names.firstName,
+            surname: names.surname,
             email: email,
             mobileNumber: mobileNumber,
             previous: previous
         ) else {
             throw CanonicalWriteUnavailableError(function: "userProfileWriteFields")
         }
-        guard !changes.isEmpty else { return }
-        try await db.collection("users").document(userId)
-            .updateData(WriteMetadata.stamped(changes, userId: auth.currentUser?.uid))
+        let batch = db.batch()
+        var writes = 0
+        if !changes.isEmpty {
+            batch.updateData(WriteMetadata.stamped(changes, userId: auth.currentUser?.uid), forDocument: db.collection("users").document(userId))
+            writes += 1
+        }
+        if let plan, let ref = plan.entryRef {
+            if let fields = plan.entryFields {
+                batch.setData(fields, forDocument: ref)
+                writes += 1
+            } else if plan.deleteEntry {
+                batch.deleteDocument(ref)
+                writes += 1
+            }
+        }
+        guard writes > 0 else { return }
+        do {
+            try await batch.commit()
+        } catch {
+            // A refused home-company entry removal must not lose the users document edit: retry without it.
+            if let plan, plan.deleteEntry, !changes.isEmpty {
+                try await db.collection("users").document(userId)
+                    .updateData(WriteMetadata.stamped(changes, userId: auth.currentUser?.uid))
+                return
+            }
+            throw plan?.entryFields != nil ? Self.memberNameWriteError(error) : error
+        }
     }
 
     // MARK: - Sensitive profile (users/{uid}/private/taxIds)

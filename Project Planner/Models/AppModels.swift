@@ -519,6 +519,9 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// `users/{uid}.formerUserIds` from `parseFormerUserIds`: invite placeholder ids this account replaced.
     /// Bookings stored under one still belong to this person. Append-only in Firestore; a user save does not write it.
     var formerUserIds: [String] = []
+    /// RULEBOOK 1.81.0 §11: set while the open organisation's own name (`memberNames`) is laid over `firstName` /
+    /// `surname` (`MemberNameOverlay`), with the users document's own name under it. Not written or encoded.
+    var orgNameOverlay: OrgNameOverlay? = nil
     /// `users/{uid}.status` as stored (`pending` until sign-up finishes). `unbookedLabourRows` skips pending users (RULEBOOK §5).
     var status: String? = nil
     /// `users/{uid}.payBasis`: `day` or `hourly` (RULEBOOK §8). A rate save writes exactly one basis.

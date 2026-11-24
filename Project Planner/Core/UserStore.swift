@@ -17,6 +17,10 @@ class UserStore: ObservableObject {
     @Published var currentUser: AppUser? {
         // RULEBOOK 1.10.0 §17: the job and booking read plans follow the signed-in profile.
         didSet {
+            // RULEBOOK 1.81.0 §11: the signed-in person's name in the open organisation (`memberNames`).
+            if let user = currentUser, let named = MemberNameOverlay.apply([user], names: memberNames)?.first {
+                currentUser = named
+            }
             refreshJobAccessContext()
             // RULEBOOK §8: the signed-in person's own pay profile (`currentUserWithPay`, `OwnPayOverlay.swift`).
             scheduleOwnPayOverlay()
@@ -26,6 +30,10 @@ class UserStore: ObservableObject {
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
         didSet {
+            // RULEBOOK 1.81.0 §11: every person's name in the open organisation (`memberNames`), laid over once here so
+            // every screen, PDF and notice that takes names from the roster shows it. (A set inside didSet does not
+            // run didSet again.)
+            if let named = MemberNameOverlay.apply(organizationUsers, names: memberNames) { organizationUsers = named }
             revision &+= 1
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
@@ -58,6 +66,11 @@ class UserStore: ObservableObject {
     private var onlineCancellable: AnyCancellable?
     /// Starts the pay overlays when the open organisation becomes known (review of #240: `.loading` with no organisation).
     private var organizationCancellable: AnyCancellable?
+    /// RULEBOOK 1.81.0 §11: the open organisation's `memberNames` entries (lower-case users id → name), live.
+    private(set) var memberNames: [String: [String: String]] = [:]
+    private var memberNamesOrganizationId = ""
+    private var memberNamesListener: ListenerRegistration?
+    private var memberNamesCancellable: AnyCancellable?
     /// True while a roster pay-profile read is running (the foreground retry never starts a second one).
     private var rosterPayReadInFlight = false
     /// The pay this store laid over each roster row (raw → shown), so the next overlay starts from the raw rows.
@@ -296,6 +309,13 @@ class UserStore: ObservableObject {
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         self.firebaseBackend = firebaseBackend
+        memberNamesCancellable = firebaseBackend.$currentOrganization
+            .map { $0?.firestoreDocumentId ?? "" }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] organizationId in
+                Task { @MainActor [weak self] in self?.listenToMemberNames(organizationId: organizationId) }
+            }
         organizationCancellable = firebaseBackend.$currentOrganization
             .map { $0?.firestoreDocumentId ?? "" }
             .removeDuplicates()
@@ -304,6 +324,78 @@ class UserStore: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.organizationDidLoadForPay() }
             }
+    }
+
+    /// RULEBOOK 1.81.0 §11: listens to `organizations/{orgId}/memberNames` for the open organisation and lays the
+    /// entries over the roster and the signed-in user. A refused or failed read keeps the users-document names.
+    private func listenToMemberNames(organizationId: String) {
+        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard org != memberNamesOrganizationId || memberNamesListener == nil else { return }
+        memberNamesListener?.remove()
+        memberNamesListener = nil
+        memberNamesOrganizationId = org
+        applyMemberNames([:])
+        guard !org.isEmpty else { return }
+        memberNamesListener = Firestore.firestore()
+            .collection("organizations").document(org).collection(CanonicalBusinessEngine.memberNamesCollection)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let snapshot, error == nil else { return }
+                let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                Task { @MainActor [weak self] in
+                    guard let self, self.memberNamesOrganizationId == org else { return }
+                    self.applyMemberNames(CanonicalBusinessEngine.parseMemberNames(docs))
+                }
+            }
+    }
+
+    private func applyMemberNames(_ names: [String: [String: String]]) {
+        memberNames = names
+        firebaseBackend?.memberNameEntryIds = Set(names.keys)
+        if let named = MemberNameOverlay.apply(organizationUsers, names: names) { organizationUsers = named }
+        if let user = currentUser, let named = MemberNameOverlay.apply([user], names: names)?.first { currentUser = named }
+    }
+
+    /// The open organisation's own name entry for this person, if any (lower-case users id).
+    func hasOrganizationName(for userId: String) -> Bool {
+        memberNames[userId.lowercased()] != nil
+    }
+
+    /// RULEBOOK 1.81.0 §11 (`memberNameEditTarget`): whether a name edit of `user` in the open organisation is this
+    /// company's own name for them (`organization`) rather than their users document's (`account`).
+    func nameEditIsOrganizations(_ user: AppUser) -> Bool {
+        CanonicalBusinessEngine.memberNameEditTarget(
+            organizationId: firebaseBackend?.currentOrganization?.firestoreDocumentId,
+            homeOrganizationId: user.storedOrganizationId ?? (user.id == Auth.auth().currentUser?.uid ? firebaseBackend?.sharedUserOrganizationId : nil)
+        ) == "organization"
+    }
+
+    /// The local copy after a saved name edit (review of #287): for this company's own name the users document's
+    /// name stays under it (`orgNameOverlay`, the account name is the one before the edit), so it never takes the
+    /// company's name and never survives an organisation switch; for the users document the plain new name.
+    static func withSavedName(_ user: AppUser, firstName: String, surname: String, organizationName: Bool) -> AppUser {
+        var copy = user
+        if organizationName {
+            let account = MemberNameOverlay.accountName(user)
+            copy.firstName = firstName
+            copy.surname = surname
+            copy.orgNameOverlay = OrgNameOverlay(firstName: firstName, surname: surname, accountFirstName: account.firstName, accountSurname: account.surname)
+        } else {
+            copy.firstName = firstName
+            copy.surname = surname
+            copy.orgNameOverlay = nil
+        }
+        return copy
+    }
+
+    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same):
+    /// always in the person's home organisation (the existing identity rules apply), else only themself or an admin.
+    func canEditName(of user: AppUser) -> Bool {
+        guard nameEditIsOrganizations(user) else { return true }
+        return CanonicalBusinessEngine.canWriteMemberName(
+            writerUserId: Auth.auth().currentUser?.uid,
+            subjectUserId: user.id,
+            writerIsAdmin: hasAdminAccess()
+        )
     }
 
     /// The open organisation is known: the own read and a roster overlay left loading with no organisation start now.
@@ -2686,8 +2778,8 @@ class UserStore: ObservableObject {
         }
         let savedEmail = pendingSelfEmail == nil ? trimmedEmail : oldEmailNorm
 
-        updated.firstName = trimmedFirst
-        updated.surname = trimmedSurname
+        let organizationName = nameEditIsOrganizations(updated)
+        updated = Self.withSavedName(updated, firstName: trimmedFirst, surname: trimmedSurname, organizationName: organizationName)
         updated.email = savedEmail
         updated.mobileNumber = mobileOut
 
@@ -2766,8 +2858,7 @@ class UserStore: ObservableObject {
 
             var people = organizationUsers
             for offset in people.indices where idsToPatch.contains(people[offset].id) {
-                people[offset].firstName = trimmedFirst
-                people[offset].surname = trimmedSurname
+                people[offset] = Self.withSavedName(people[offset], firstName: trimmedFirst, surname: trimmedSurname, organizationName: nameEditIsOrganizations(people[offset]))
                 people[offset].email = savedEmail
                 people[offset].mobileNumber = mobileOut
             }
@@ -2789,8 +2880,7 @@ class UserStore: ObservableObject {
                 RosterRetention.save(organizationUsers, organizationId: orgForRoster)
             }
             if var cu = currentUser, cu.id == userId {
-                cu.firstName = trimmedFirst
-                cu.surname = trimmedSurname
+                cu = Self.withSavedName(cu, firstName: trimmedFirst, surname: trimmedSurname, organizationName: organizationName)
                 cu.email = savedEmail
                 cu.mobileNumber = mobileOut
                 currentUser = cu
@@ -2853,9 +2943,7 @@ class UserStore: ObservableObject {
                 await opStore.updateOperative(op)
             }
         }
-        var updated = previous
-        updated.firstName = firstName
-        updated.surname = surname
+        var updated = Self.withSavedName(previous, firstName: firstName, surname: surname, organizationName: nameEditIsOrganizations(previous))
         updated.mobileNumber = mobileNumber
         if organizationUsers.indices.contains(index), organizationUsers[index].id == previous.id {
             organizationUsers[index] = updated
