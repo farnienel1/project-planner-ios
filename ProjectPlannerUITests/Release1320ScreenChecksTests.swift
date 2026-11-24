@@ -122,7 +122,11 @@ final class Release1320ScreenChecksTests: PPUITestCase {
     /// picker must be clear of the tab bar and the sticky Save bar (`isFullyOnScreen`), or the tap lands on the
     /// bar and no menu opens (A04 on #285). A tap that still opens no menu is retried once, recorded as a retry.
     private func openPaydayMenu(offering label: String) -> XCUIElement {
-        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        openPaydayMenu(revealing: app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch, name: label)
+    }
+
+    /// Opens the payday menu until `item` shows (see `openPaydayMenu(offering:)`), and returns it (check `exists`).
+    private func openPaydayMenu(revealing item: XCUIElement, name label: String) -> XCUIElement {
         let picker = element("payePayday.picker")
         for attempt in 1...2 {
             scrollTo("payePayday.picker", timeout: 30)
@@ -152,10 +156,10 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         pickPayday("Day 3")
         assertPaydayShows("Day 3", "A4b banner path")
         shot("A4b payday picked from the banner path")
-        // A pick can be dropped before saving.
-        element("payePayday.picker").tap()
-        let drop = element("payePayday.dropPick")
-        XCTAssertTrue(drop.waitForExistence(timeout: 3), "A4b: no way to drop the pick")
+        // A pick can be dropped before saving. Opened like the day items (clear of the sticky Save bar, one retry):
+        // a plain tap here landed on the Save bar on iPhone 16e and no menu opened (#291).
+        let drop = openPaydayMenu(revealing: element("payePayday.dropPick"), name: "payePayday.dropPick")
+        XCTAssertTrue(drop.exists, "A4b: no way to drop the pick")
         if drop.exists { drop.tap() }
         assertPaydayShows("Not set", "A4b dropped pick")
     }
