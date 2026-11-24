@@ -712,6 +712,8 @@ struct HomeView: View {
 
     private var homeLightSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // RULEBOOK 1.85.0 §32: admins' Getting started checklist for a new company (hidden once done or dismissed).
+            GettingStartedHomeCard()
             quickActionsHeaderRow
             quickActionsIconGrid
             // RULEBOOK 1.83.0 §31: admins' insurance & accreditations reminder (nothing for anyone else).
