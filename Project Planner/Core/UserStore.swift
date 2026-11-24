@@ -347,9 +347,9 @@ class UserStore: ObservableObject {
                 cu.lastSeenAt = now
                 currentUser = cu
             }
-            if let idx = organizationUsers.firstIndex(where: { $0.id == uid }) {
-                organizationUsers[idx].lastSeenAt = now
-            }
+            // The roster is not republished here (review of #284): a whole-roster publish re-runs every roster
+            // consumer (pay overlay read, job access). The live users listener brings the stored value, and the
+            // warnings rescan gate (`WarningsRosterFingerprint`) ignores `lastSeenAt`.
         } catch {
             print("🔥🔥🔥 DEBUG: lastSeenAt heartbeat failed: \(error.localizedDescription)")
         }

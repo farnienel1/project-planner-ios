@@ -8,7 +8,7 @@
 //  No samples and no melody from anywhere else: a plain D major 9 chord. Platform-specific feedback, not a business
 //  rule (rulebook §15); nothing here reads or writes Firestore.
 //
-//  When: once, right after a successful sign-in on this phone (the iOS app signs in with a password only — it has no
+//  When: once, after a successful sign-in on this phone, when Home first draws (the session is usable) (the iOS app signs in with a password only — it has no
 //  emailed code or passkey step), never when the app opens an existing session, and only while the Sounds setting
 //  (`pp.feedback.sounds`) is on. No haptic.
 //
@@ -125,7 +125,8 @@ final class WelcomeChordPlayer {
         self.node = node
         generation += 1
         let playing = generation
-        node.scheduleBuffer(buffer, at: nil, options: []) {
+        // The completion runs on an audio thread: hop to the main actor before touching the player (review of #284).
+        node.scheduleBuffer(buffer, at: nil, options: []) { @Sendable in
             Task { @MainActor in
                 // Let the last samples drain, then release the engine.
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -171,14 +172,20 @@ nonisolated struct SignInWelcomeGate: Equatable {
     }
 }
 
-/// The one entry point: `SignInWelcome.signedIn()` after a successful interactive sign-in.
+/// The two calls: `SignInWelcome.signedIn()` after a successful interactive sign-in marks it; `sessionReady()` when the
+/// signed-in app is usable (Home drew — never on the deactivated, deleted-company or lapsed-subscription screens, which
+/// replace Home) plays the chord, once, if that mark is under `SignInWelcomeGate.maxAge` old and sounds are on.
 @MainActor
 enum SignInWelcome {
     private static var gate = SignInWelcomeGate()
 
-    /// Call only after a sign-in the person made on this phone has succeeded. Plays the chord once if sounds are on.
-    static func signedIn(defaults: UserDefaults = .standard, now: Date = Date()) {
+    /// Call only after a sign-in the person made on this phone has succeeded.
+    static func signedIn(now: Date = Date()) {
         gate.markSignedIn(now: now)
+    }
+
+    /// Call when the signed-in session is usable. Does nothing without a fresh sign-in mark.
+    static func sessionReady(defaults: UserDefaults = .standard, now: Date = Date()) {
         guard gate.take(now: now, soundsOn: FeedbackCenter.soundsEnabled(defaults)) else { return }
         WelcomeChordPlayer.shared.play()
     }

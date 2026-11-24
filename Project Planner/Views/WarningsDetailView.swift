@@ -1424,8 +1424,13 @@ struct WarningsDetailView: View {
                 hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection
             ), !weakSignalWaiting {
                 weakSignalWaiting = true
-                // The last complete scan saved on this device, labelled with its time; the loop keeps trying.
-                warningsService.showSavedWarningsWhileWaiting()
+                // The last complete scan saved on this device for this account and organisation, rebuilt for
+                // today's window with today's approvals and dismissals, labelled with its time; the loop keeps trying.
+                warningsService.showSavedWarningsWhileWaiting(
+                    signedInUserId: WarningsService.currentUserIdProvider(),
+                    detection: firebaseBackend.currentOrganization?.settings.warningDetection,
+                    invoicing: firebaseBackend.currentOrganization?.settings.invoicing
+                )
             }
             if readiness.storeInputsReady, !isRefreshingWarnings {
                 let published = await WarningsRefreshHelper.refreshSharedWarnings(

@@ -403,38 +403,47 @@ struct OrgSitesMapView: View {
         return candidates.filter { ids.contains($0.documentId) }
     }
 
-    /// The people booked on this job that day who are on annual leave that day (a half day of leave beside a booking),
-    /// each person matched under every id they go by (`personIdSet`, an `operatives` row and its account by email),
-    /// without case. Names as the schedule shows them.
+    /// The people booked on this job that day who are on annual leave that day (a half day of leave beside a booking).
+    /// Who a booked id is comes from the rulebook only (guardrail 1): `personIdSet` over the unfolded roster plus the
+    /// `operatives` rows (every users document, former and same-email ids, rows on the same email), then
+    /// `leaveRecordsForAccount` decides which records are theirs (ids without case, the email as `userId`). An
+    /// operatives row linked to an account speaks for that account. Names as the schedule shows them.
     private func peopleOnLeave(bookedPeople: [(id: String, name: String)], leave: [HolidayBooking]) -> [String] {
         guard !leave.isEmpty else { return [] }
-        let users = userStore.organizationUsers
+        let users = userStore.unfoldedOrganizationUsers
         let operatives = operativeStore.allOperatives
+        let operativeRows = operatives.map {
+            CanonicalBusinessEngine.CanonicalBookingPersonOperative(
+                id: $0.documentId,
+                email: $0.email.isEmpty ? nil : $0.email
+            )
+        }
+        let roster = userStore.unfoldedRosterRows
+            + operatives.map { ["id": $0.documentId, "email": $0.email] as [String: Any] }
+        let records = leave.map { (userId: $0.userId, operativeId: $0.operativeIdRaw) }
         var names: [String] = []
         var seen = Set<String>()
         for (personId, name) in bookedPeople {
-            let key = personId.lowercased()
-            guard !key.isEmpty, !seen.contains(key) else { continue }
-            var ids: Set<String> = [key]
-            var emails = Set<String>()
-            if let row = operatives.first(where: { $0.documentId.caseInsensitiveCompare(personId) == .orderedSame }) {
-                if !row.email.isEmpty { emails.insert(row.email.lowercased()) }
-                if let linked = row.linkedUserId, !linked.isEmpty { ids.insert(linked.lowercased()) }
-            }
-            for user in users where ids.contains(user.id.lowercased())
-                || (!user.email.isEmpty && emails.contains(user.email.lowercased())) {
-                ids.formUnion(RulebookPeople.ownerIds(for: user, users: users).map { $0.lowercased() })
-                if !user.email.isEmpty { emails.insert(user.email.lowercased()) }
-            }
-            for row in operatives where !row.email.isEmpty && emails.contains(row.email.lowercased()) {
-                ids.insert(row.documentId.lowercased())
-            }
-            seen.formUnion(ids)
-            let onLeave = leave.contains { record in
-                [record.userId, record.operativeIdRaw].compactMap { $0?.lowercased() }.contains { ids.contains($0) }
-                    || (record.userId.map { emails.contains($0.lowercased()) } ?? false)
-            }
-            guard onLeave else { continue }
+            let trimmed = personId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, !seen.contains(trimmed.lowercased()) else { continue }
+            let row = operatives.first { $0.documentId.caseInsensitiveCompare(trimmed) == .orderedSame }
+            let accountId = row?.linkedUserId.flatMap { $0.isEmpty ? nil : $0 } ?? trimmed
+            let user = users.first { $0.id.caseInsensitiveCompare(accountId) == .orderedSame }
+            let email = user.map(\.email) ?? row?.email ?? ""
+            let person: [String: Any] = user.map(RulebookPeople.person) ?? ["id": accountId, "email": email]
+            guard let ids = CanonicalBusinessEngine.personIdSet(person: person, roster: roster) else { continue }
+            let allIds = Array(Set(ids + [trimmed]))
+            seen.formUnion(allIds.map { $0.lowercased() })
+            guard let matched = CanonicalBusinessEngine.leaveRecordsForAccount(
+                records: records,
+                account: CanonicalBusinessEngine.CanonicalBookingPersonAccount(
+                    id: accountId,
+                    email: email.isEmpty ? nil : email,
+                    formerIds: user?.formerUserIds,
+                    aliasIds: allIds
+                ),
+                operatives: operativeRows
+            ), !matched.isEmpty else { continue }
             names.append(name)
         }
         return names

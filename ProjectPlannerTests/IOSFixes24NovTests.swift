@@ -125,6 +125,37 @@ final class IOSFixes24NovTests: XCTestCase {
         XCTAssertEqual(WarningsWeakSignal.savedNote(lastUpdated: nil), "Weak signal — showing saved warnings.")
     }
 
+    /// Review of #284: saved rows are never shown as they were. With no window to rebuild against, rows dated
+    /// before today go; undated rows (qualifications) and tomorrow's materials row stay.
+    func testSavedRowsDropDaysBeforeTodayWithoutAWindow() {
+        let cal = CanonicalBusinessEngine.businessCalendar
+        let today = cal.startOfDay(for: Date())
+        let yesterday = cal.date(byAdding: .day, value: -1, to: today)!
+        func row(_ key: String, _ type: Warning.WarningType, _ date: Date?) -> Warning {
+            Warning(resolutionKey: key, type: type, title: "TEST", message: "TEST", severity: .high, occurrenceDate: date)
+        }
+        let rows = [
+            row("old", .unbookedLabour, yesterday),
+            row("today", .unbookedLabour, today),
+            row("qual", .qualificationExpiry, yesterday),
+            row("mat", .materialsCutoff, yesterday),
+        ]
+        let kept = WarningsService.savedRowsForCurrentWindow(rows, detection: nil, invoicing: nil, now: Date())
+        XCTAssertEqual(kept.map(\.resolutionKey), ["today", "qual", "mat"])
+    }
+
+    /// A cache written before 24 Nov has no account on it and is never shown again.
+    func testSavedCacheWithoutAnAccountDecodesWithNoUser() throws {
+        let data = try JSONEncoder().encode(WarningsDiskCache.empty)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json.removeValue(forKey: "userId")
+        let decoded = try JSONDecoder().decode(
+            WarningsDiskCache.self,
+            from: JSONSerialization.data(withJSONObject: json)
+        )
+        XCTAssertNil(decoded.userId)
+    }
+
     // MARK: 5. Last active: newest heartbeat across the person's users documents
 
     func testNewestLastSeenAcrossThePersonsDocuments() {
@@ -150,7 +181,7 @@ final class IOSFixes24NovTests: XCTestCase {
     }
 
     func testForegroundHeartbeatInterval() {
-        XCTAssertEqual(LastSeenHeartbeat.intervalSeconds, 300)
+        XCTAssertEqual(LastSeenHeartbeat.intervalSeconds, 900)
     }
 
     // MARK: 7. Site map job summary only adds up the rulebook's per-booking answers

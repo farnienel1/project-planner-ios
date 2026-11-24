@@ -5,6 +5,7 @@
 
 import Foundation
 import Combine
+import FirebaseAuth
 
 // Disk cache lives in this file (not a separate source) so Xcode always compiles it
 // with WarningsService — avoids "Cannot find WarningsDiskCacheStore in scope".
@@ -19,6 +20,9 @@ nonisolated struct WarningsDiskCache: Codable, Sendable {
     var highCount: Int
     var mediumCount: Int
     var lowCount: Int
+    /// The signed-in account that ran the scan. Saved results are shown again only to that same account
+    /// (owner report 24 Nov, weak signal). Missing on caches written before 24 Nov: those are never shown again.
+    var userId: String? = nil
 
     static let empty = WarningsDiskCache(
         organizationId: "",
@@ -219,21 +223,83 @@ class WarningsService: ObservableObject {
         scheduleLivePublish()
     }
 
+    /// The signed-in account, recorded on the saved scan so it is never shown to another person on this phone.
+    /// Overridden in tests.
+    nonisolated(unsafe) static var currentUserIdProvider: () -> String? = { Auth.auth().currentUser?.uid }
+
     /// Puts this organisation's last complete scan saved on this device on screen while the first live scan is still
-    /// waiting for its inputs. Nothing is shown when no complete scan was saved, a live scan has published, or it is
-    /// already shown. The live scan replaces it when it publishes. Returns whether saved results are shown.
+    /// waiting for its inputs (weak signal, after `WarningsWeakSignal.waitSeconds`). Never the saved list as it was:
+    /// its rows are rebuilt for today's scan window (`warningScanWindow` → `warningsInsideCoverageWindow`) and the
+    /// approvals and dismissals held now are applied again (`uniqueActive`). Without a window (the script did not
+    /// answer) only rows dated before today are dropped. Shown only when the scan was saved for the same signed-in
+    /// account and organisation; nothing when none was saved, a live scan has published, or it is already shown.
+    /// The live scan replaces it when it publishes. Returns whether saved results are shown.
     @discardableResult
-    func showSavedWarningsWhileWaiting() -> Bool {
+    func showSavedWarningsWhileWaiting(
+        signedInUserId: String?,
+        detection: OrgWarningDetectionSettings?,
+        invoicing: OrganizationInvoicingSettings?,
+        now: Date = Date()
+    ) -> Bool {
         guard self === WarningsService.shared, !hasCompletedLiveDetection else { return false }
         if savedResultsShownAt != nil { return true }
         guard let organizationId = cacheOrganizationId, !organizationId.isEmpty else { return false }
+        let userId = signedInUserId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !userId.isEmpty else { return false }
         let cache = WarningsDiskCacheStore.load(organizationId: organizationId)
         guard cache.organizationId == organizationId,
+              cache.userId == userId,
               cache.hasCompletedLiveDetection,
               cache.savedAt > .distantPast else { return false }
+        let rows = Self.savedRowsForCurrentWindow(
+            cache.allGeneratedWarnings,
+            detection: detection,
+            invoicing: invoicing,
+            now: now
+        )
         savedResultsShownAt = cache.savedAt
-        applyLiveWarnings(generated: cache.allGeneratedWarnings, active: cache.activeWarnings, completed: false)
+        // Not persisted: the saved file keeps the last real scan; the live scan overwrites it.
+        applyLiveWarnings(generated: rows, active: uniqueActive(rows), completed: false)
         return true
+    }
+
+    /// The saved rows that still belong on screen today: inside today's scan window (the clash days from the
+    /// saved clash rows' own days, as a booked weekend joins them), else, with no window, not dated before today.
+    static func savedRowsForCurrentWindow(
+        _ rows: [Warning],
+        detection: OrgWarningDetectionSettings?,
+        invoicing: OrganizationInvoicingSettings?,
+        now: Date = Date(),
+        calendar: Calendar = CanonicalBusinessEngine.businessCalendar
+    ) -> [Warning] {
+        if let detection, let invoicing {
+            let bookedDayKeys = Set(rows.compactMap { warning -> String? in
+                guard warning.type == .operativeBookingClash || warning.type == .managerLocationClash,
+                      let date = warning.clashDate else { return nil }
+                return CanonicalBusinessEngine.dayKey(for: date, calendar: calendar)
+            }).sorted()
+            if let window = CanonicalBusinessEngine.warningScanWindow(
+                detection: detection,
+                invoicing: invoicing,
+                reference: now,
+                bookedDayKeys: bookedDayKeys
+            ) {
+                return warningsInsideCoverageWindow(
+                    rows,
+                    start: calendar.startOfDay(for: window.start),
+                    end: calendar.startOfDay(for: window.end),
+                    unbookedEnd: calendar.startOfDay(for: window.unbookedEnd),
+                    clashEnd: calendar.startOfDay(for: window.clashEnd),
+                    calendar: calendar
+                )
+            }
+        }
+        let todayKey = CanonicalBusinessEngine.dayKey(for: now, calendar: calendar)
+        return rows.filter { warning in
+            guard warning.isCorePriorityWarning, warning.type != .materialsCutoff,
+                  let date = warning.occurrenceDate ?? warning.clashDate else { return true }
+            return CanonicalBusinessEngine.dayKey(for: date, calendar: calendar) >= todayKey
+        }
     }
 
     /// Drops schedule rows whose organisation day is outside the scan window. Qualification and
@@ -289,7 +355,8 @@ class WarningsService: ObservableObject {
                 warningCount: counts.total,
                 highCount: counts.high,
                 mediumCount: counts.medium,
-                lowCount: counts.low
+                lowCount: counts.low,
+                userId: Self.currentUserIdProvider()
             )
         )
     }

@@ -46,6 +46,11 @@ struct CompanyDetailsEditView: View {
     @State private var baselineCountry = "GB"
     @State private var baselineRegionId = ""
     @State private var didLoad = false
+    /// True once the company details have not arrived within `CompanyDetailsLoadTimeout.seconds` (no saved copy, weak
+    /// signal): the overlay says so and offers Retry instead of loading forever.
+    @State private var loadTimedOut = false
+    /// Bumped by Retry so the wait starts again.
+    @State private var loadAttempt = 0
 
     private var isDirty: Bool {
         organizationName != baselineName
@@ -272,10 +277,28 @@ struct CompanyDetailsEditView: View {
             .overlay {
                 if !didLoad {
                     VStack(spacing: 10) {
-                        ProgressView()
-                        Text("Loading company details…")
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(Color.secondary)
+                        if loadTimedOut {
+                            Image(systemName: "wifi.exclamationmark")
+                                .font(.title3)
+                                .foregroundStyle(PPColor.danger)
+                                .accessibilityHidden(true)
+                            Text(CompanyDetailsLoadTimeout.message)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.primary)
+                                .multilineTextAlignment(.center)
+                            Button("Retry") {
+                                loadTimedOut = false
+                                firebaseBackend.ensureOrganizationDocumentListener()
+                                loadAttempt += 1
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("companyDetailsEdit.retry")
+                        } else {
+                            ProgressView()
+                            Text("Loading company details…")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.secondary)
+                        }
                     }
                     .padding(20)
                     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -331,6 +354,12 @@ struct CompanyDetailsEditView: View {
             .onAppear {
                 loadFormIfDetailsAreKnown()
                 if !didLoad { firebaseBackend.ensureOrganizationDocumentListener() }
+            }
+            .task(id: loadAttempt) {
+                guard !didLoad else { return }
+                try? await Task.sleep(nanoseconds: CompanyDetailsLoadTimeout.nanoseconds)
+                guard !Task.isCancelled, !didLoad else { return }
+                loadTimedOut = true
             }
             .onChange(of: serverCompanyDetailsFingerprint) { _, _ in
                 guard didLoad else {
@@ -486,6 +515,7 @@ struct CompanyDetailsEditView: View {
         guard !didLoad, firebaseBackend.currentOrganization?.companyDetailsLoaded == true else { return }
         applyOrganizationToForm()
         didLoad = true
+        loadTimedOut = false
     }
 
     private func applyOrganizationToForm() {
@@ -652,6 +682,13 @@ enum CompanyDetailsFormSeed {
     static func abbreviation(stored: String?) -> String {
         OrganizationDocumentAbbreviation.normalized(stored) ?? ""
     }
+}
+
+/// Company details with nothing saved on this phone and no server answer yet (review of #284).
+enum CompanyDetailsLoadTimeout {
+    static let seconds: TimeInterval = 10
+    static var nanoseconds: UInt64 { UInt64(seconds * 1_000_000_000) }
+    static let message = "Couldn't load company details — check your signal"
 }
 
 /// How the saved company logo is previewed.

@@ -1197,6 +1197,7 @@ extension ContentView {
 }
 /// How often an open app records `users/{uid}.lastSeenAt` while it stays in the foreground.
 enum LastSeenHeartbeat {
-    static let intervalSeconds: TimeInterval = 5 * 60
+    /// 15 minutes, as web (review of #284).
+    static let intervalSeconds: TimeInterval = 15 * 60
     static var intervalNanoseconds: UInt64 { UInt64(intervalSeconds * 1_000_000_000) }
 }
