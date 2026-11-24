@@ -1,7 +1,7 @@
 import XCTest
 @testable import Project_Planner
 
-/// RULEBOOK 1.84.0 §32 (D7): anonymous error reports. The fields, sanitiser, id and throttle are the packed rulebook's;
+/// RULEBOOK 1.84.0 §32 (D7): pseudonymous error reports with no message text. The fields, sanitiser, id and throttle are the packed rulebook's;
 /// the phone only hashes (CryptoKit) — the hash must be the lower-case hex SHA-256 the security rules recompute.
 final class ClientErrorReporterTests: XCTestCase {
     func testHashMatchesTheRulesHash() {
@@ -15,21 +15,29 @@ final class ClientErrorReporterTests: XCTestCase {
         XCTAssertNil(CanonicalBusinessEngine.callJSON("clientErrorDocId", arguments: [hex, 20]) as? String)
     }
 
-    func testCreateFieldsStripPersonalData() {
+    func testCreateFieldsHoldNoMessageText() {
+        let message = "❌ Error saving material: Order is locked by Jane Smith (jane@example.com)"
         let fields = CanonicalBusinessEngine.callJSON("clientErrorCreateFields", arguments: [[
             "platform": "ios",
             "source": "caught",
-            "message": "❌ Error saving for jane@example.com doc 123e4567-e89b-12d3-a456-426614174000",
+            "name": "LoggedError",
+            "message": message,
+            "messageHash": ClientErrorReporter.sha256Hex(message),
+            "file": "Project_Planner/MaterialsView.swift",
+            "function": "saveMaterial(_:for:)",
             "route": "/ios",
             "build": "1.84 (12)",
             "organizationId": "org_1",
             "nowMs": 1_764_000_000_000.0,
-        ]]) as? [String: Any]
-        let message = fields?["message"] as? String ?? ""
-        XCTAssertFalse(message.contains("@"))
-        XCTAssertFalse(message.contains("123e4567"))
-        XCTAssertEqual(fields?["platform"] as? String, "ios")
-        XCTAssertEqual(fields?["organizationId"] as? String, "org_1")
+        ] as [String: Any]]) as? [String: Any]
+        let text = String(describing: fields ?? [:])
+        XCTAssertFalse(text.contains("Jane"))
+        XCTAssertFalse(text.contains("@"))
+        XCTAssertEqual(fields?["messageKey"] as? String, "other")
+        XCTAssertEqual(fields?["where"] as? String, "MaterialsView.swift saveMaterial")
+        XCTAssertEqual(fields?["kind"] as? String, "LoggedError")
+        XCTAssertEqual(fields?["messageHash"] as? String, ClientErrorReporter.sha256Hex(message))
+        XCTAssertEqual(CanonicalBusinessEngine.callJSON("clientErrorNextSlot", arguments: [19]) as? NSNumber, nil)
     }
 
     func testThrottleCapsAtTwentyADay() {
