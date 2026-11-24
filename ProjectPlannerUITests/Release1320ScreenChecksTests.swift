@@ -91,17 +91,18 @@ final class Release1320ScreenChecksTests: PPUITestCase {
     func test_A04_adminPaydayPickIsAnUnsavedChange() {
         start("admin")
         openPaymentRunsFromBanner()
-        scrollTo("payePayday.picker", timeout: 10)
+        scrollTo("payePayday.picker", timeout: 30)
         shot("A4 admin payday picker before")
-        element("payePayday.picker").tap()
         // The picker opens a 31-day menu; "Day 1" is always on screen, "Day 25" may need scrolling.
-        let day1 = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Day 1")).firstMatch
-        if day1.waitForExistence(timeout: 3) {
+        let day1 = openPaydayMenu(offering: "Day 1")
+        if day1.exists {
             day1.tap()
         } else {
             XCTFail("A4: the payday picker did not offer 'Day 1'")
         }
-        let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Press Save")).firstMatch
+        assertPaydayShows("Day 1", "A4 unsaved pick")
+        // The payday's own note, not the Save bar's "…when you press Save." line.
+        let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Press Save to apply it")).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 3), "A4: no 'Press Save to apply it…' line after picking a day")
         shot("A4 admin payday picked, not saved")
     }
@@ -110,12 +111,30 @@ final class Release1320ScreenChecksTests: PPUITestCase {
 
     /// Picks `day` from the PAYE payday menu (Payment runs & timesheets is open).
     private func pickPayday(_ label: String) {
-        scrollTo("payePayday.picker", timeout: 10)
-        element("payePayday.picker").tap()
         // Early days are always on screen in the 31-day menu (a swipe would close it).
-        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
-        XCTAssertTrue(item.waitForExistence(timeout: 3), "the payday menu did not offer '\(label)'")
+        let item = openPaydayMenu(offering: label)
+        XCTAssertTrue(item.exists, "the payday menu did not offer '\(label)'")
         if item.exists { item.tap() }
+    }
+
+    /// Scrolls to the PAYE payday picker, opens its menu and returns the item `label` (check `exists`). Payment
+    /// runs is a long page (1.78 added the line manager reminder above the payday), so the scroll gets 30 s; the
+    /// picker must be clear of the tab bar and the sticky Save bar (`isFullyOnScreen`), or the tap lands on the
+    /// bar and no menu opens (A04 on #285). A tap that still opens no menu is retried once, recorded as a retry.
+    private func openPaydayMenu(offering label: String) -> XCUIElement {
+        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+        let picker = element("payePayday.picker")
+        for attempt in 1...2 {
+            scrollTo("payePayday.picker", timeout: 30)
+            guard picker.exists else { break }
+            waitUntilSettled(picker)
+            if attempt > 1 {
+                recordRetry("Retry tap 2 of 2 on 'payePayday.picker': the first tap opened no menu offering '\(label)'")
+            }
+            picker.tap()
+            if item.waitForExistence(timeout: 3) { return item }
+        }
+        return item
     }
 
     private func assertPaydayShows(_ text: String, _ message: String) {
@@ -151,7 +170,8 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         element("organisationSettingsHub.docTextFill").tap()
         pickPayday("Day 2")
         assertPaydayShows("Day 2", "A4c hub path")
-        let note = app.staticTexts.matching(NSPredicate(format: "label CONTAINS[c] %@", "Press Save")).firstMatch
+        // The payday's own note, not the Save bar's "…when you press Save." line.
+        let note = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Press Save to apply it")).firstMatch
         XCTAssertTrue(note.waitForExistence(timeout: 3), "A4c: no 'Press Save…' line after picking a day")
         shot("A4c payday picked from the hub path")
     }
