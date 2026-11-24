@@ -74,7 +74,7 @@ final class NotificationInboxUnreadTests: XCTestCase {
         )
         service.setUserStore(store)
         service.notifications = [notification(userId: "u1"), notification(userId: "u1")]
-        service.hasLoadedNotificationsThisSession = true
+        service.markInboxLoadedForTesting()
         service.setUnreadCount(from: service.notifications)
         let before = service.unreadCount
 

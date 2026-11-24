@@ -49,7 +49,10 @@ class NotificationService: ObservableObject {
     /// Deadline reminder/due docs whose `createdAt` is still in the future (inbox hides them until fire time).
     private var pendingScheduledDeadlineNotifications: [AppNotification] = []
     /// True once the inbox has loaded this session; the app-icon number follows the unread count only then (RULEBOOK 1.79.0).
-    var hasLoadedNotificationsThisSession = false
+    private(set) var hasLoadedNotificationsThisSession = false
+
+    /// Test hook only (unit tests): marks the inbox as loaded this session.
+    func markInboxLoadedForTesting() { hasLoadedNotificationsThisSession = true }
     private var notificationAuthorizationTask: Task<Bool, Never>?
     private var didLogNotificationAuthorization = false
     /// Sets the app-icon badge to the unread inbox count when the app leaves the foreground (§13).
@@ -82,7 +85,8 @@ class NotificationService: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.resetInbox()
+                // Signed out: nobody's unread count belongs on the icon any more.
+                self?.resetInbox(clearIconBadge: true)
             }
         }
     }
@@ -1816,7 +1820,9 @@ class NotificationService: ObservableObject {
     /// The inbox for no session (sign-out, organisation switch): listener removed, pending retry cancelled, rows and
     /// count cleared, the next listen starts from the ordered query again. Another company or account never shows
     /// the previous inbox's rows (web `notificationStore.reset`).
-    func resetInbox() {
+    /// `clearIconBadge` only on sign-out (review of #285); an organisation switch leaves the icon until the next inbox
+    /// loads.
+    func resetInbox(clearIconBadge: Bool = false) {
         notificationsListenerRetryTask?.cancel()
         notificationsListenerRetryTask = nil
         notificationsListener?.remove()
@@ -1828,6 +1834,7 @@ class NotificationService: ObservableObject {
         hasLoadedNotificationsThisSession = false
         notifications = []
         unreadCount = 0
+        if clearIconBadge { setAppIconBadge(0) }
     }
 
     /// Attaches the inbox listener so the bell badge and list follow notification documents.
@@ -1893,7 +1900,6 @@ class NotificationService: ObservableObject {
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId,
               let currentUser = userStore?.currentUser else { return }
 
-        hasLoadedNotificationsThisSession = true
         removeLegacyLocalInboxState(userId: currentUser.id)
         let fetched = try? await firebaseBackend.loadNotifications(
             organizationId: organizationId,
@@ -1911,6 +1917,8 @@ class NotificationService: ObservableObject {
         
         await MainActor.run {
             self.notifications = listed
+            // Only a fetch that answered counts as loaded (review of #285): a failed fetch never sets the icon to 0.
+            if fetched != nil { self.hasLoadedNotificationsThisSession = true }
             self.setUnreadCount(from: self.notifications)
             // Catch-up path: if app was closed/backgrounded and new notifications arrived,
             // alert once for notifications newer than the last processed timestamp.
