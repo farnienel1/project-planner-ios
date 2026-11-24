@@ -139,6 +139,10 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
             "waitingFor": RulebookJSON.orNull(waitingFor),
             "snapshotGapOnly": snapshotGapOnly,
             "lateExtrasWaiting": lateExtrasWaiting,
+            // RULEBOOK 1.77.0 (point 6, owner chose (a)): `timesheetReportWaiting` — "Awaiting re-sign" when the sheet is
+            // back with the person (`waitingFor`), "Awaiting line manager approval…" when only late extras or signed
+            // price work / expenses wait (`bookingsChanged` false).
+            "bookingsChanged": bookingsChanged,
         ]
     }
 

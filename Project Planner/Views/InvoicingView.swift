@@ -2744,6 +2744,8 @@ private struct MyTimesheetView: View {
     @State private var periodLoadFailed = false
     /// RULEBOOK 1.55.0 §8: "Review and sign again" is creating the revision.
     @State private var isCreatingRevision = false
+    /// RULEBOOK 1.77.0 point 1: "Correct this timesheet" on a counter-signed sheet asks which kind of late extra.
+    @State private var showCorrectionExtraChoice = false
 
     /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue`: this exported sheet's bookings changed since — the person signs an
     /// update (a revision). Before export nothing changes from 1.47.0.
@@ -2896,7 +2898,12 @@ private struct MyTimesheetView: View {
     /// signed (only once the whole pay run's bookings have loaded — never from a partial load).
     private var bookingChange: RulebookSignedTimesheetChange? {
         guard let currentUser = userStore.displayUser, SignedTimesheetChanges.isSigned(draft) else { return nil }
-        let inputs = SignedTimesheetChanges.Inputs(
+        return SignedTimesheetChanges.change(draft: draft, user: currentUser, period: week, inputs: changeInputs, lines: payrollLines)
+    }
+
+    /// The inputs of the 1.47.0 booking comparison (and the 1.77.0 change details, which run the same comparison).
+    private var changeInputs: SignedTimesheetChanges.Inputs {
+        SignedTimesheetChanges.Inputs(
             bookings: bookingStore.bookings,
             managerBookings: managerScheduleStore.managerSiteBookings,
             operatives: operativeStore.allOperatives,
@@ -2907,7 +2914,86 @@ private struct MyTimesheetView: View {
             // The person's ids come from the operatives list too (web third review #325): wait for it.
             liveLoaded: periodBookingsState.loaded && operativesLoaded
         )
-        return SignedTimesheetChanges.change(draft: draft, user: currentUser, period: week, inputs: inputs, lines: payrollLines)
+    }
+
+    // MARK: RULEBOOK 1.77.0 §8 (owner 23 Nov, points 1, 2, 3, 5)
+
+    /// Point 3: what changed since the person signed (`signedTimesheetChangeDetails`).
+    private var clarityChangeDetails: RulebookTimesheetChangeDetails {
+        guard let currentUser = userStore.displayUser else { return .empty }
+        return SignedTimesheetChanges.changeDetails(
+            draft: draft, user: currentUser, period: week, inputs: changeInputs, lines: payrollLines,
+            currency: OrganizationRulebookContext.currencyCode, viewerIsReviewer: false
+        )
+    }
+
+    /// Point 2 / 5: whose turn (`timesheetNextStep`).
+    private func clarityNextStep(details: RulebookTimesheetChangeDetails) -> RulebookTimesheetNextStep? {
+        guard let currentUser = userStore.displayUser else { return nil }
+        return CanonicalBusinessEngine.timesheetNextStep(
+            sheet: TimesheetDraftStore.statusPayload(for: draft),
+            viewerRole: "person",
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
+            change: bookingChange?.scriptJSON,
+            revisionDue: revisionDue.due,
+            revisionDueLabel: revisionDue.label,
+            revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
+            personName: TimesheetClarityNames.personName(currentUser),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            changedDayLabel: details.firstDayLabel,
+            changedBookingCount: details.bookingRows,
+            hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(currentUser, period: week.start...week.end),
+            hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
+        )
+    }
+
+    /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision` with `writerIsSubject` — the person's own revision of this pay run
+    /// (review of 1.77.0: the same check web passes as `revisionAllowed`, and its `nextRevision` names it). Nil when the
+    /// sheet is not exported or the script did not answer.
+    private var personRevisionCheck: RulebookTimesheetRevisionCheck? {
+        guard TimesheetApprovalPolicy.isExported(draft), let currentUser = userStore.displayUser else { return nil }
+        let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: currentUser.id, weekStart: week.start)
+        let reviewerInput: [String: Any] = [
+            "writerUserId": Auth.auth().currentUser?.uid ?? currentUser.id,
+            "subjectUserId": currentUser.id,
+            "writerIsAdmin": currentUser.isRosterAdmin,
+            "writerFormerIds": currentUser.formerUserIds,
+            "writerAliasIds": currentUser.sameEmailUserIds,
+            "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(currentUser) ?? [],
+            "roster": RulebookRosterSnapshot.roster,
+        ]
+        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: true)
+    }
+
+    /// Point 1: the one "Correct this timesheet" entry (`timesheetCorrectionOption`).
+    private var clarityCorrection: RulebookTimesheetCorrectionOption {
+        guard let currentUser = userStore.displayUser else { return .none }
+        let revisionCheck = personRevisionCheck
+        return CanonicalBusinessEngine.timesheetCorrectionOption(
+            sheet: TimesheetDraftStore.statusPayload(for: draft),
+            viewerIsSubject: true,
+            viewerIsReviewer: false,
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser),
+            reopened: bookingChange?.reopened == true,
+            // Review of 1.77.0: `canCreateTimesheetRevision(...).allowed` with `writerIsSubject`, as web.
+            revisionAllowed: revisionCheck?.allowed == true,
+            nextRevisionLabel: revisionCheck?.nextRevision.map { CanonicalBusinessEngine.timesheetRevisionLabel($0) } ?? revisionDue.label,
+            revisionDue: revisionDue.due,
+            lateExtrasAllowed: lateExtrasPermission.allowed,
+            personName: TimesheetClarityNames.personName(currentUser),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
+        )
+    }
+
+    /// Point 5: Generate Invoice in the whose-turn line — the existing action, under the same test as the button lower
+    /// down; nil when it may not be offered now.
+    private var invoiceNextStepAction: (() -> Void)? {
+        guard let currentUser = userStore.displayUser,
+              TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: currentUser),
+              CanonicalBusinessEngine.signedTimesheetActions(bookingChange).mayGenerateInvoice,
+              bookingCheckReady else { return nil }
+        return { beginInvoiceGeneration(for: currentUser) }
     }
 
     /// The person must review and sign again (1.47.0 §8).
@@ -2998,6 +3084,19 @@ private struct MyTimesheetView: View {
                         .background(Color.red.opacity(0.08))
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                         .accessibilityIdentifier("timesheets.saveError")
+                }
+
+                // RULEBOOK 1.77.0 §8 (owner 23 Nov, points 2, 3, 5): whose turn, what changed since signing.
+                let clarityDetails = clarityChangeDetails
+                if let step = clarityNextStep(details: clarityDetails) {
+                    TimesheetNextStepCard(
+                        step: step,
+                        generateInvoice: invoiceNextStepAction,
+                        generateInvoiceBusy: isGeneratingInvoice
+                    )
+                }
+                if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                    TimesheetChangesCard(details: clarityDetails)
                 }
 
                 if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
@@ -3318,23 +3417,26 @@ private struct MyTimesheetView: View {
                 // person signs an update (a revision).
                 if revisionDue.due {
                     SignedTimesheetChangedBanner(message: revisionDue.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage)
-                    Button(action: createRevisionAndOpen) {
-                        Label(
-                            isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetReviewAndSignRevisionLabel,
-                            systemImage: "pencil.and.scribble"
-                        )
-                        .frame(maxWidth: .infinity)
-                        .fontWeight(.semibold)
-                        .padding(.vertical, 14)
-                        .background(Color.blue)
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                // RULEBOOK 1.77.0 §8 (owner 23 Nov, point 1): one "Correct this timesheet" entry; it only runs the
+                // existing actions (revision → `createRevisionAndOpen`, late extras → `beginAddingExtra`).
+                let correction = clarityCorrection
+                TimesheetCorrectionEntryView(option: correction, busy: isCreatingRevision) {
+                    switch correction.action {
+                    case "reviewAndSignAgain", "createRevision":
+                        createRevisionAndOpen()
+                    case "addLateExtras":
+                        showCorrectionExtraChoice = true
+                    default:
+                        break
                     }
-                    .accessibilityIdentifier("timesheets.reviewAndSignRevision")
-                    .buttonStyle(.plain)
-                    .disabled(isCreatingRevision)
-                    // RULEBOOK §2: signing is online only.
-                    .onlineOnly(isOnline: smartCache.isOnline)
+                }
+                // RULEBOOK §2: signing is online only.
+                .onlineOnly(isOnline: smartCache.isOnline)
+                .confirmationDialog(correction.label, isPresented: $showCorrectionExtraChoice, titleVisibility: .visible) {
+                    Button("Add price work") { beginAddingExtra(.priceWork) }
+                    Button("Add expense") { beginAddingExtra(.expense) }
+                    Button("Cancel", role: .cancel) {}
                 }
                 if !earlierVersions.isEmpty {
                     TimesheetEarlierVersionsList(versions: earlierVersions)
@@ -6305,6 +6407,58 @@ private struct OperativeTimesheetReviewView: View {
         )
     }
 
+    // MARK: RULEBOOK 1.77.0 §8 (owner 23 Nov, points 1, 2, 3)
+
+    /// Point 3: what changed since the person signed, worded for the reviewer (`signedTimesheetChangeDetails`).
+    private var reviewerChangeDetails: RulebookTimesheetChangeDetails {
+        SignedTimesheetChanges.changeDetails(
+            draft: draft, user: operative, period: week, inputs: reviewerChangeInputs, lines: payrollSummary.lineItems,
+            currency: OrganizationRulebookContext.currencyCode, viewerIsReviewer: true
+        )
+    }
+
+    /// Point 2: whose turn (`timesheetNextStep`), as the reviewer (an admin reads "ready to export").
+    private func reviewerNextStep(details: RulebookTimesheetChangeDetails) -> RulebookTimesheetNextStep? {
+        guard let viewer = userStore.displayUser else { return nil }
+        let viewerIsAdmin = CanonicalBusinessEngine.seesEveryUserTimesheet(UserStore.staffAccountRole(for: viewer)) == true
+        return CanonicalBusinessEngine.timesheetNextStep(
+            sheet: makeChangesSheet,
+            viewerRole: viewerIsAdmin ? "admin" : "reviewer",
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
+            change: bookingChange?.scriptJSON,
+            revisionDue: revisionDue.due,
+            revisionDueLabel: revisionDue.label,
+            revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
+            personName: TimesheetClarityNames.personName(operative),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            changedDayLabel: details.firstDayLabel,
+            changedBookingCount: details.bookingRows,
+            hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(operative, period: week.start...week.end),
+            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
+        )
+    }
+
+    /// Point 1: the reviewer's one "Correct this timesheet" entry (`timesheetCorrectionOption`); its action is
+    /// `timesheetMakeChangesAction` (reopen the review / create the next revision).
+    private var reviewerCorrection: RulebookTimesheetCorrectionOption {
+        CanonicalBusinessEngine.timesheetCorrectionOption(
+            sheet: makeChangesSheet,
+            viewerIsSubject: false,
+            viewerIsReviewer: viewerIsReviewer,
+            selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
+            reopened: bookingChange?.reopened == true,
+            revisionAllowed: reviewerMayCreateRevision,
+            // Review of 1.77.0 (fix 1): the next revision's label from `canCreateTimesheetRevision(...).nextRevision`, as
+            // web (`revisionCheck.nextRevision`) — `revisionDue.label` is empty unless a revision is due.
+            nextRevisionLabel: reviewerRevisionCheck?.nextRevision.map { CanonicalBusinessEngine.timesheetRevisionLabel($0) },
+            revisionDue: revisionDue.due,
+            lateExtrasAllowed: false,
+            personName: TimesheetClarityNames.personName(operative),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
+        )
+    }
+
     /// RULEBOOK 1.76.0 §8: ⚙ / ✕ (no ✓) on the labour lines — A1 after "Make changes" until the first booking change
     /// reopens the review, B1 on an open revision the person has not signed yet
     /// (`timesheetRevisionReviewerMayEditBookings`).
@@ -6367,7 +6521,14 @@ private struct OperativeTimesheetReviewView: View {
     /// have loaded).
     private var bookingChange: RulebookSignedTimesheetChange? {
         guard SignedTimesheetChanges.isSigned(draft) else { return nil }
-        let inputs = SignedTimesheetChanges.Inputs(
+        return SignedTimesheetChanges.change(
+            draft: draft, user: operative, period: week, inputs: reviewerChangeInputs, lines: payrollSummary.lineItems
+        )
+    }
+
+    /// The inputs of the 1.47.0 booking comparison (and the 1.77.0 change details, the same comparison).
+    private var reviewerChangeInputs: SignedTimesheetChanges.Inputs {
+        SignedTimesheetChanges.Inputs(
             bookings: bookingStore.bookings,
             managerBookings: managerScheduleStore.managerSiteBookings,
             operatives: operativeStore.allOperatives,
@@ -6377,9 +6538,6 @@ private struct OperativeTimesheetReviewView: View {
             users: userStore.organizationUsers,
             // The person's ids come from the operatives list too (web third review #325): wait for it.
             liveLoaded: periodBookingsState.loaded && operativesLoaded
-        )
-        return SignedTimesheetChanges.change(
-            draft: draft, user: operative, period: week, inputs: inputs, lines: payrollSummary.lineItems
         )
     }
 
@@ -6558,10 +6716,24 @@ private struct OperativeTimesheetReviewView: View {
             }
     }
 
+    /// RULEBOOK 1.77.0 §8 (owner 23 Nov, points 2, 3): whose turn, and — while the sheet waits for this reviewer (or an
+    /// update is due) — what changed since it was signed.
+    @ViewBuilder
+    private var reviewClaritySection: some View {
+        let details = reviewerChangeDetails
+        if let step = reviewerNextStep(details: details) {
+            TimesheetNextStepCard(step: step)
+        }
+        if (revisionDue.due || bookingChange?.waitingForLineManager == true), !details.rows.isEmpty {
+            TimesheetChangesCard(details: details)
+        }
+    }
+
     private var reviewScrollContent: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 reviewHeaderCard
+                reviewClaritySection
                 reviewBreakdownCard
                 reviewExpensesCard
                 reviewPriceWorkCard
@@ -6884,7 +7056,13 @@ private struct OperativeTimesheetReviewView: View {
     /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision`: this viewer (an admin or the person's line manager,
     /// `timesheetWriterIsReviewer`) may create the next revision of this exported latest version ("Create revision").
     private var reviewerMayCreateRevision: Bool {
-        guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return false }
+        reviewerRevisionCheck?.allowed == true
+    }
+
+    /// The `canCreateTimesheetRevision` answer behind `reviewerMayCreateRevision` (its `nextRevision` names the revision
+    /// in the correction help). Nil when not a reviewer, not exported, or the script did not answer.
+    private var reviewerRevisionCheck: RulebookTimesheetRevisionCheck? {
+        guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return nil }
         let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: operative.id, weekStart: week.start)
         let reviewerInput: [String: Any] = [
             "writerUserId": viewer.id,
@@ -6895,7 +7073,7 @@ private struct OperativeTimesheetReviewView: View {
             "subjectLineManagerIds": RulebookRosterSnapshot.lineManagerIds(operative) ?? [],
             "roster": RulebookRosterSnapshot.roster,
         ]
-        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)?.allowed == true
+        return CanonicalBusinessEngine.canCreateTimesheetRevision(reviewer: reviewerInput, chain: chain, writerIsSubject: false)
     }
 
     @State private var isCreatingRevision = false
@@ -6948,25 +7126,23 @@ private struct OperativeTimesheetReviewView: View {
         } else if let note = bookingChange?.reviewerMessage {
             SignedTimesheetChangedBanner(message: note)
         }
-        if reviewerMayCreateRevision {
-            VStack(alignment: .leading, spacing: 6) {
-                // RULEBOOK 1.76.0 §8 (B1): the reviewer's "Create revision" is "Make changes".
-                Button(action: createRevisionForPerson) {
-                    Label(isCreatingRevision ? "Creating revision…" : CanonicalBusinessEngine.timesheetMakeChangesLabel, systemImage: "doc.badge.plus")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .foregroundStyle(.white)
-                        .background(Color.blue)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // RULEBOOK 1.77.0 §8 (owner 23 Nov, point 1): one "Correct this timesheet" entry wrapping the existing actions —
+        // reopen the review (1.76.0 A1, `makingChangesFor`) or create the next revision (B1, `createRevisionForPerson`).
+        if makeChangesAction != nil, !makingChanges {
+            let correction = reviewerCorrection
+            TimesheetCorrectionEntryView(
+                option: correction,
+                busy: isCreatingRevision,
+                disabled: correction.action == "makeChanges" && payInputsBlockMessage != nil
+            ) {
+                switch correction.action {
+                case "makeChanges": makingChangesFor = draft.managerSignedAt
+                case "createRevision": createRevisionForPerson()
+                default: break
                 }
-                .accessibilityIdentifier("operativeTimesheetReview.createRevision")
-                .buttonStyle(.plain)
-                .disabled(isCreatingRevision)
-                .onlineOnly(isOnline: smartCache.isOnline)
-                Text(CanonicalBusinessEngine.timesheetMakeChangesHelp(.createRevision))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
+            .onlineOnly(isOnline: smartCache.isOnline)
+            .accessibilityIdentifier("operativeTimesheetReview.correct")
         }
         if reviewerBookingEditsOpen, makeChangesAction != .reopenReview {
             // RULEBOOK 1.76.0 §8 (B1): the reviewer may change an open revision's bookings before the person signs it.
@@ -7034,22 +7210,6 @@ private struct OperativeTimesheetReviewView: View {
                         Button(CanonicalBusinessEngine.timesheetMakeChangesCancelLabel) { makingChangesFor = nil }
                             .frame(maxWidth: .infinity)
                             .accessibilityIdentifier("operativeTimesheetReview.stopMakingChanges")
-                    } else {
-                        Button(action: { makingChangesFor = draft.managerSignedAt }) {
-                            Label(CanonicalBusinessEngine.timesheetMakeChangesLabel, systemImage: "pencil")
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .foregroundStyle(.white)
-                                .background(Color.blue)
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        }
-                        .accessibilityIdentifier("operativeTimesheetReview.makeChanges")
-                        .buttonStyle(.plain)
-                        .disabled(payInputsBlockMessage != nil)
-                        .onlineOnly(isOnline: smartCache.isOnline)
-                        Text(CanonicalBusinessEngine.timesheetMakeChangesHelp(.reopenReview))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
                 }
             }

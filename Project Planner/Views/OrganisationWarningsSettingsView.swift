@@ -26,6 +26,9 @@ struct OrganisationWarningsSettingsView: View {
     @State private var draft = OrgWarningDetectionSettings.default
     @State private var baseline = OrgWarningDetectionSettings.default
     @State private var isSaving = false
+    /// "Set up payment runs" opens Payment runs & timesheets from this stable page, not from the link inside the
+    /// not-configured box (that box goes once runs are saved, and a removed link pops its screen).
+    @State private var showingPaymentRunsSetUp = false
     @State private var errorMessage: String?
     @State private var saveSucceeded = false
     @State private var excludedExpanded = false
@@ -133,6 +136,10 @@ struct OrganisationWarningsSettingsView: View {
         .navigationTitle("Warnings")
         .navigationBarTitleDisplayMode(.inline)
         .ppNavyNavigationBar()
+        .navigationDestination(isPresented: $showingPaymentRunsSetUp) {
+            OrganisationInvoicingSettingsView()
+                .environmentObject(firebaseBackend)
+        }
         .navigationBarBackButtonHidden(true)
         .background(SettingsSwipeBackGuard(disabled: isDirty))
         .safeAreaInset(edge: .bottom) {
@@ -366,9 +373,8 @@ struct OrganisationWarningsSettingsView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        NavigationLink {
-                            OrganisationInvoicingSettingsView()
-                                .environmentObject(firebaseBackend)
+                        Button {
+                            showingPaymentRunsSetUp = true
                         } label: {
                             Text("Set up payment runs")
                                 .font(.subheadline.weight(.semibold))

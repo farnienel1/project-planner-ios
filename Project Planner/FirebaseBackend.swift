@@ -619,12 +619,17 @@ class FirebaseBackend: ObservableObject {
         }
         let orgSettings = Self.organizationSettingsFromOrgDocument(orgData)
         organizationHasFirestoreMyScheduleOptions = Self.organizationHasMyScheduleOptionsInDocument(orgData)
-        let organization = organizationKeepingKnownName(Organization.make(
+        var recovered = Organization.make(
             fromFirestoreId: orgId,
             data: orgData,
             settings: orgSettings,
             fallbackName: "Recovered Organization"
-        ))
+        )
+        // RULEBOOK 1.19.0 / 1.29.0 §4.5: the stored working-hours state and the PAYE payday, as every other path that
+        // builds the organisation (`buildOrganizationFromDocument`); without it the payday read as "Not set" until the
+        // next live update.
+        Self.applyPayrollPolicyFields(from: orgData, to: &recovered)
+        let organization = organizationKeepingKnownName(recovered)
         let remembered = cachedOrganizationIdString()
         var probes = [orgId: "allowed"]
         if let remembered, !remembered.isEmpty, !organizationIdsMatch(remembered, orgId),
@@ -3708,18 +3713,17 @@ class FirebaseBackend: ObservableObject {
         do {
             try await ref.updateData(fields)
         } catch let error as NSError where error.domain == "FIRFirestoreErrorDomain" && error.code == 5 {
-            // 5 = not-found: the document does not exist on the server yet.
-            var merge: [String: Any] = [
-                "qualifications": qualifications,
-                "updatedAt": Timestamp(date: Date()),
-            ]
-            if !changes.setExpiry.isEmpty {
-                merge["qualificationExpiryDates"] = changes.setExpiry.mapValues { Timestamp(date: $0) }
+            // 5 = not-found: the operative was deleted elsewhere while this editor was open. RULEBOOK §1
+            // (`editOfMissingDocumentIsRefused`): an edit of a missing document is refused, never re-created (a
+            // merge-set here brought a deleted operative back as a nameless row). Same message as web.
+            if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
+                throw NSError(
+                    domain: "FIRFirestoreErrorDomain",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.editOfMissingDocumentMessage]
+                )
             }
-            if !changes.setCertificates.isEmpty {
-                merge["qualificationCertificateURLs"] = changes.setCertificates
-            }
-            try await ref.setData(merge, merge: true)
+            throw error
         }
     }
 
@@ -7090,10 +7094,15 @@ class FirebaseBackend: ObservableObject {
                 print("🔥🔥🔥 DEBUG: Sign-out token cleanup could not list same-email users: \(error.localizedDescription)")
             }
         }
+        // This device's previous token for the account too, when it is still remembered and differs.
+        let tokens = PushTokenDeviceMemory.tokensToRemoveOnSignOut(
+            current: token,
+            previous: PushTokenDeviceMemory.shared.lastWrittenToken(uid: uid)
+        )
         for docId in docIds {
             do {
                 try await db.collection("users").document(docId).updateData([
-                    "pushTokens": FieldValue.arrayRemove([token])
+                    "pushTokens": FieldValue.arrayRemove(tokens)
                 ])
             } catch {
                 print("🔥🔥🔥 DEBUG: Sign-out token cleanup failed for a users document: \(error.localizedDescription)")
@@ -7107,20 +7116,39 @@ class FirebaseBackend: ObservableObject {
         // document — never a same-email copy, an invite placeholder (`isPushTokenPlaceholderUserId`) or another company's.
         guard let authUid = auth.currentUser?.uid, !authUid.isEmpty, authUid == userId else { return }
         let ref = db.collection("users").document(userId)
-        // A failed read is not an empty list. Replacing pushTokens then would delete tokens this client never received.
-        let snap = try await ref.getDocument(source: .server)
-        let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
-        let next = LaunchStartupPolicy.nextStoredPushTokens(
-            existing: existing,
-            currentDeviceToken: currentDeviceToken,
-            // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
-            failedTokens: []
+        // The token this device wrote before for this account (FCM refresh, reinstall) is replaced, never kept beside
+        // the new one: two live tokens for one phone delivered every push twice (owner report 23 Nov).
+        let memory = PushTokenDeviceMemory.shared
+        let replaced = PushTokenDeviceMemory.tokensReplacedBy(
+            current: currentDeviceToken,
+            previous: memory.lastWrittenToken(uid: userId)
         )
-        guard next != existing else { return }
-        try await ref.setData([
-            "pushTokens": next,
-            "pushTokenUpdatedAt": Timestamp(date: Date())
-        ], merge: true)
+        // A transaction (server read, then write): a token the push function pruned between the read and the write is
+        // never written back, and a failed read is never taken for an empty list.
+        _ = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snap: DocumentSnapshot
+            do {
+                snap = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            let existing = (snap.data()?["pushTokens"] as? [String]) ?? []
+            let next = LaunchStartupPolicy.nextStoredPushTokens(
+                existing: existing,
+                currentDeviceToken: currentDeviceToken,
+                // The phone never sees send results; the push Cloud Function prunes dead tokens (prunePushTokens.js).
+                // What it does know is its own previous token, dropped here.
+                failedTokens: replaced
+            )
+            guard next != existing else { return nil }
+            transaction.setData([
+                "pushTokens": next,
+                "pushTokenUpdatedAt": Timestamp(date: Date())
+            ], forDocument: ref, merge: true)
+            return nil
+        }
+        memory.recordWritten(token: currentDeviceToken, uid: userId)
     }
 
     func forceRefreshAndRegisterPushToken() async -> String {

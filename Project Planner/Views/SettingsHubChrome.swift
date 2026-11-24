@@ -184,6 +184,22 @@ struct SettingsStickySaveBar: View {
     }
 }
 
+/// Settings screens open with an unsaved draft (each one's `SettingsSwipeBackGuard` reports itself). Read by the shell
+/// before it rebuilds a tab at its root (choosing the open tab again), so an unsaved draft is never thrown away silently.
+@MainActor
+enum SettingsUnsavedDrafts {
+    private(set) static var open: Set<ObjectIdentifier> = []
+
+    static var any: Bool { !open.isEmpty }
+
+    static func set(_ id: ObjectIdentifier, dirty: Bool) {
+        if dirty { open.insert(id) } else { open.remove(id) }
+    }
+
+    /// Tests only.
+    static func reset() { open.removeAll() }
+}
+
 struct SettingsSwipeBackGuard: UIViewControllerRepresentable {
     var disabled: Bool
 
@@ -194,13 +210,12 @@ struct SettingsSwipeBackGuard: UIViewControllerRepresentable {
         controller.apply()
     }
 
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) {
+        SettingsUnsavedDrafts.set(ObjectIdentifier(controller), dirty: false)
+    }
+
     final class Controller: UIViewController {
         var disabled = false
-
-        override func didMove(toParent parent: UIViewController?) {
-            super.didMove(toParent: parent)
-            apply()
-        }
 
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
@@ -212,8 +227,18 @@ struct SettingsSwipeBackGuard: UIViewControllerRepresentable {
             navigationController?.interactivePopGestureRecognizer?.isEnabled = true
         }
 
+        override func didMove(toParent parent: UIViewController?) {
+            super.didMove(toParent: parent)
+            if parent == nil {
+                SettingsUnsavedDrafts.set(ObjectIdentifier(self), dirty: false)
+            } else {
+                apply()
+            }
+        }
+
         func apply() {
             navigationController?.interactivePopGestureRecognizer?.isEnabled = !disabled
+            SettingsUnsavedDrafts.set(ObjectIdentifier(self), dirty: disabled)
         }
     }
 }

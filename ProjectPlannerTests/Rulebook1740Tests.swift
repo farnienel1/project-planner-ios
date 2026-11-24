@@ -335,7 +335,7 @@ final class Rulebook1740Tests: XCTestCase {
         let updated = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Lee", changedByReviewer: true)
         XCTAssertEqual(updated?.title, CanonicalBusinessEngine.constant("TIMESHEET_SIGNED_UPDATED_NOTICE_TITLE", as: String.self))
         // The message names the signer the iOS notice already passes (no generic "line manager" wording).
-        XCTAssertEqual(updated?.message, "Lee changed your timesheet and signed it off. Open it to check the changes.")
+        XCTAssertEqual(updated?.message, "Lee changed your timesheet and signed it off. Open it to check the changes. Next: generate your invoice.")
         let plain = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Lee", changedByReviewer: false)
         XCTAssertEqual(plain?.title, CanonicalBusinessEngine.constant("TIMESHEET_SIGNED_NOTICE_TITLE", as: String.self))
         XCTAssertNotEqual(plain?.title, updated?.title)
