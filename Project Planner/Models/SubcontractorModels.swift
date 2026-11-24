@@ -58,6 +58,8 @@ struct Subcontractor: Identifiable, Codable, Hashable {
     /// `organizations/{org}/subcontractors/{id}` as stored (RULEBOOK 1.6.0 §1: stored case, a non-UUID id is kept).
     /// Nil on a firm made in this app before it was saved: its id is `id.uuidString`. Use `documentId`.
     var firestoreDocumentId: String? = nil
+    /// RULEBOOK 1.80.0 §30: insurance and RAMS documents (`parseSubcontractorDocuments`). Never written by a firm save.
+    var documents: RulebookSubcontractorDocuments? = nil
 
     /// The Firestore document id every write and lookup addresses.
     var documentId: String {
@@ -74,7 +76,8 @@ struct Subcontractor: Identifiable, Codable, Hashable {
         contacts: [SubcontractorContact] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date(),
-        firestoreDocumentId: String? = nil
+        firestoreDocumentId: String? = nil,
+        documents: RulebookSubcontractorDocuments? = nil
     ) {
         self.id = id
         self.name = name
@@ -85,6 +88,7 @@ struct Subcontractor: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.firestoreDocumentId = firestoreDocumentId
+        self.documents = documents
     }
 }
 
