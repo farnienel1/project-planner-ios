@@ -22,7 +22,10 @@ nonisolated struct RulebookLateExtrasSummary: Equatable, Hashable, Sendable {
     let declined: Int
     let snapshotInStep: Bool
     let exported: Bool
-    /// Not exported, and a late extra waits or the snapshot's late rows are out of step.
+    /// RULEBOOK 1.76.0 (owner answer 23 Nov, b): a signed price work or expense entry was changed or removed after the
+    /// counter-signature (`timesheetSignedEntriesChangedSinceSignOff`) — the line manager signs it off again.
+    let signedEntriesChanged: Bool
+    /// Not exported, and a late extra waits, the snapshot's late rows are out of step, or signed entries changed.
     let waitingForLineManager: Bool
 
     init?(json: Any?) {
@@ -32,6 +35,7 @@ nonisolated struct RulebookLateExtrasSummary: Equatable, Hashable, Sendable {
         declined = (row["declined"] as? NSNumber)?.intValue ?? 0
         snapshotInStep = row["snapshotInStep"] as? Bool ?? true
         exported = row["exported"] as? Bool ?? false
+        signedEntriesChanged = row["signedEntriesChanged"] as? Bool ?? false
         waitingForLineManager = waiting
     }
 
@@ -39,7 +43,7 @@ nonisolated struct RulebookLateExtrasSummary: Equatable, Hashable, Sendable {
     var json: [String: Any] {
         [
             "pending": pending, "approved": approved, "declined": declined, "snapshotInStep": snapshotInStep,
-            "exported": exported, "waitingForLineManager": waitingForLineManager,
+            "exported": exported, "signedEntriesChanged": signedEntriesChanged, "waitingForLineManager": waitingForLineManager,
         ]
     }
 }
@@ -64,6 +68,15 @@ extension CanonicalBusinessEngine {
         lateExtrasText(
             "TIMESHEET_LATE_EXTRAS_REVIEWER_MESSAGE",
             fallback: "Price work or expenses were added after this timesheet was signed. Approve or decline each one — only what you approve is paid."
+        )
+    }
+
+    /// RULEBOOK 1.76.0 `TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE` — the person's note while their line manager's
+    /// change to signed price work or expenses waits for a new sign-off.
+    nonisolated static var timesheetSignedEntriesChangedPersonMessage: String {
+        lateExtrasText(
+            "TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE",
+            fallback: "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
         )
     }
 
@@ -437,9 +450,15 @@ enum TimesheetLateExtrasSupport {
     /// script did not answer).
     static func summary(_ draft: TimesheetDraft, sheetDocId: String? = nil) -> RulebookLateExtrasSummary? {
         let hasLateRows = (draft.weeklyReportOverride.map { ($0.priceWork + $0.expenses).contains { $0.lateExtra == true } }) ?? false
-        guard !(draft.lateExtras ?? []).isEmpty || hasLateRows else { return nil }
+        let reviews = storedReviews(draft)
+        // RULEBOOK 1.76.0 (owner answer 23 Nov, b): a counter-signed sheet with entry reviews is read too — a review of a
+        // signed entry after sign-off waits for the line manager (`timesheetSignedEntriesChangedSinceSignOff`).
+        let signedEntryReviews = draft.managerSignedAt != nil && draft.weeklyReportOverride != nil && !(reviews is NSNull)
+        guard !(draft.lateExtras ?? []).isEmpty || hasLateRows || signedEntryReviews else { return nil }
+        var sheet = rulebookSheet(draft)
+        if sheet["extraEntryReviews"] == nil, !(reviews is NSNull) { sheet["extraEntryReviews"] = reviews }
         return CanonicalBusinessEngine.timesheetLateExtrasSummary(
-            sheet: rulebookSheet(draft),
+            sheet: sheet,
             entryFingerprints: fingerprints(draft),
             exportedAtStored: exportedStored(draft),
             sheetDocId: sheetDocId

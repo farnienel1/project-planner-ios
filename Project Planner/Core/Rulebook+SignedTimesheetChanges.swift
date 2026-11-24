@@ -83,6 +83,9 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
     /// RULEBOOK 1.57.0 §8: the only change is that snapshot gap. Reports keep the signed figures for it (J1,
     /// `signedTimesheetChangeForReports`); the sheet itself is still flagged (counter-sign again / revision due).
     let snapshotGapOnly: Bool
+    /// RULEBOOK 1.76.0 (owner answer 23 Nov, b): signed price work or expenses changed after sign-off (Make changes); the
+    /// line manager signs it off again — nobody else signs, and it is not a late extra.
+    let signedEntriesChanged: Bool
 
     init?(json: Any?) {
         guard let row = json as? [String: Any], let changed = row["changed"] as? Bool else { return nil }
@@ -100,6 +103,7 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
         self.bookingsChanged = row["bookingsChanged"] as? Bool ?? changed
         self.snapshotGapBookingIds = row["snapshotGapBookingIds"] as? [String] ?? []
         self.snapshotGapOnly = row["snapshotGapOnly"] as? Bool ?? false
+        self.signedEntriesChanged = row["signedEntriesChanged"] as? Bool ?? false
     }
 
     /// The whole answer as script JSON (every field the rulebook returns), for rules that take a change back
@@ -120,6 +124,7 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
             "bookingsChanged": bookingsChanged,
             "snapshotGapBookingIds": snapshotGapBookingIds,
             "snapshotGapOnly": snapshotGapOnly,
+            "signedEntriesChanged": signedEntriesChanged,
         ]
     }
 
@@ -134,11 +139,19 @@ nonisolated struct RulebookSignedTimesheetChange: Equatable, Hashable, Sendable 
             "waitingFor": RulebookJSON.orNull(waitingFor),
             "snapshotGapOnly": snapshotGapOnly,
             "lateExtrasWaiting": lateExtrasWaiting,
+            // RULEBOOK 1.77.0 (point 6, owner chose (a)): `timesheetReportWaiting` — "Awaiting re-sign" when the sheet is
+            // back with the person (`waitingFor`), "Awaiting line manager approval…" when only late extras or signed
+            // price work / expenses wait (`bookingsChanged` false).
+            "bookingsChanged": bookingsChanged,
         ]
     }
 
     /// RULEBOOK 1.54.0: only late extras wait (no booking change) — the reviewer decides them; nobody signs again.
-    var lateExtrasOnly: Bool { reopened && lateExtrasWaiting && !bookingsChanged }
+    /// 1.76.0: not when signed price work or expenses changed after sign-off (`signedEntriesOnly`).
+    var lateExtrasOnly: Bool { reopened && lateExtrasWaiting && !bookingsChanged && !signedEntriesChanged }
+    /// RULEBOOK 1.76.0: only signed price work or expenses changed after sign-off (no booking change) — the line manager
+    /// signs it off again; the signed labour stands.
+    var signedEntriesOnly: Bool { reopened && signedEntriesChanged && !bookingsChanged }
 
     /// The person must review and sign again (the yellow triangle and popup on My Timesheets).
     var waitingForPerson: Bool { reopened && waitingFor == "person" }
