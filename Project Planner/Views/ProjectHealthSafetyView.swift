@@ -259,11 +259,16 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 title: "Toolbox Talk Reminder",
                 message: "\(talkTitle) is still awaiting your signature.",
                 userId: userId,
-                // `notificationRelatedId`: `hs_toolbox_reminder` names the health & safety issue.
-                relatedKey: issueId,
+                // RULEBOOK 1.79.0 `notificationRelatedId`: `hs_toolbox_reminder` names the job the talk is on (its stored
+                // id) with the job's collection, so the reminder opens that job's Health & safety.
+                relatedKey: CanonicalBusinessEngine.callJSON(
+                    "notificationRelatedIdFor",
+                    arguments: ["hs_toolbox_reminder", project.documentId]
+                ) as? String ?? project.documentId,
                 isRead: false,
                 createdAt: Date(),
-                requiresPermission: nil
+                requiresPermission: nil,
+                catalogue: project.isSmallWorksDocument ? "smallWorks" : "projects"
             )
             try? await firebaseBackend.saveNotification(notification, organizationId: orgId, actorUserId: senderUid)
         }
@@ -890,7 +895,9 @@ struct ProjectHealthSafetyView: View {
                         issuedByName: rawIssuer.isEmpty ? "Someone" : rawIssuer,
                         issuedByUserId: userStore.currentUser?.id,
                         recipientUserIds: recipients,
-                        issueId: vm.lastIssuedIssueId
+                        issueId: vm.lastIssuedIssueId,
+                        jobDocumentId: project.documentId,
+                        isSmallWorks: project.isSmallWorksDocument
                     )
                 }
             }

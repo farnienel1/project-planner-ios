@@ -48,8 +48,8 @@ class NotificationService: ObservableObject {
     private var materialCutoffRefreshTask: Task<Void, Never>?
     /// Deadline reminder/due docs whose `createdAt` is still in the future (inbox hides them until fire time).
     private var pendingScheduledDeadlineNotifications: [AppNotification] = []
-    /// True after a launch-time badge warm or an explicit inbox load.
-    private var hasLoadedNotificationsThisSession = false
+    /// True once the inbox has loaded this session; the app-icon number follows the unread count only then (RULEBOOK 1.79.0).
+    var hasLoadedNotificationsThisSession = false
     private var notificationAuthorizationTask: Task<Bool, Never>?
     private var didLogNotificationAuthorization = false
     /// Sets the app-icon badge to the unread inbox count when the app leaves the foreground (§13).
@@ -794,7 +794,9 @@ class NotificationService: ObservableObject {
                 userId: userId,
                 // RULEBOOK 1.10.0 §13: `variation_added` carries the variation id (`notificationRelatedIdFor`).
                 relatedKey: CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["variation_added", variationId ?? parentId.uuidString]) as? String,
-                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue
+                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue,
+                // RULEBOOK 1.79.0: the job's collection rides along (`notificationDestination` passes it on).
+                catalogue: isSmallWorks ? "smallWorks" : "projects"
             )
             await saveNotification(notification)
         }
@@ -839,7 +841,8 @@ class NotificationService: ObservableObject {
                 message: "Variation numbers updated on \(name) by \(actorName)",
                 userId: userId,
                 relatedKey: CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["variation_renumbered", parentDocumentId]) as? String,
-                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue
+                deepLinkUserId: isSmallWorks ? VariationParentType.smallWork.rawValue : VariationParentType.project.rawValue,
+                catalogue: isSmallWorks ? "smallWorks" : "projects"
             )
             await saveNotification(notification)
         }
@@ -852,7 +855,8 @@ class NotificationService: ObservableObject {
         addedByName: String,
         addedByUserId: String?,
         extraRecipientUserIds: [String],
-        rulebookRecipientUserIds: [String]? = nil
+        rulebookRecipientUserIds: [String]? = nil,
+        isSmallWorks: Bool? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -873,7 +877,9 @@ class NotificationService: ObservableObject {
                 title: "Material added",
                 message: "\(addedByName) added \(detail) on \(siteName).",
                 userId: userId,
-                relatedId: projectId
+                // RULEBOOK 1.79.0: the job's stored id and collection — the notice opens that job's Materials.
+                relatedKey: JobKeys.storedJobId(for: projectId),
+                catalogue: isSmallWorks.map { $0 ? "smallWorks" : "projects" }
             )
             await saveNotification(notification)
         }
@@ -888,7 +894,9 @@ class NotificationService: ObservableObject {
         issuedByName: String,
         issuedByUserId: String?,
         recipientUserIds: [String],
-        issueId: String? = nil
+        issueId: String? = nil,
+        jobDocumentId: String? = nil,
+        isSmallWorks: Bool? = nil
     ) async {
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
@@ -906,6 +914,9 @@ class NotificationService: ObservableObject {
         let detail = trimmedTitle.isEmpty ? "a toolbox talk" : trimmedTitle
         let site = siteName.trimmingCharacters(in: .whitespacesAndNewlines)
         let place = site.isEmpty ? "a job" : site
+        // RULEBOOK 1.79.0: the row names the job (its stored id), not the talk's issue id.
+        let passedJobId = jobDocumentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedJobId = passedJobId.isEmpty ? JobKeys.storedJobId(for: projectId) : passedJobId
         for userId in recipientIds {
             let notification = AppNotification(
                 organizationId: organizationId,
@@ -913,9 +924,11 @@ class NotificationService: ObservableObject {
                 title: "Toolbox talk issued",
                 message: "\(issuedByName) issued \(detail) on \(place).",
                 userId: userId,
-                // RULEBOOK 1.10.0 §13: `toolbox_talk_issued` carries the issue id (`notificationRelatedIdFor`).
-                relatedKey: issueId.flatMap { CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["toolbox_talk_issued", $0]) as? String }
-                    ?? projectId.uuidString
+                // RULEBOOK 1.79.0 §13: `toolbox_talk_issued` names the job the talk is on — its stored id — with the
+                // job's collection, so the notice opens that job's Health & safety (`notificationRelatedIdFor`).
+                relatedKey: CanonicalBusinessEngine.callJSON("notificationRelatedIdFor", arguments: ["toolbox_talk_issued", storedJobId]) as? String
+                    ?? storedJobId,
+                catalogue: isSmallWorks.map { $0 ? "smallWorks" : "projects" }
             )
             await saveNotification(notification)
         }
@@ -2144,8 +2157,9 @@ class NotificationService: ObservableObject {
                     let merged = parsed
                     let listed = self.listedInbox(merged, userId: currentUser.id)
                     self.notifications = listed
-                    self.setUnreadCount(from: listed)
+                    // Set first: the icon follows the unread count only once the inbox has loaded (RULEBOOK 1.79.0).
                     self.hasLoadedNotificationsThisSession = true
+                    self.setUnreadCount(from: listed)
                     if !self.didPrimeNotificationStream {
                         if let cutoff = self.lastProcessedNotificationAt {
                             let catchUp = merged.filter { $0.createdAt > cutoff }
@@ -2485,19 +2499,21 @@ class NotificationService: ObservableObject {
         return [.banner, .sound, .list]
     }
 
-    /// Home-screen icon on foreground. The script's `NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND` (true)
-    /// clears it while the app is open; the in-app number stays until the listed rows are read. When the
-    /// script says it does not clear, the icon shows the unread inbox count.
+    /// Home-screen icon on foreground. RULEBOOK 1.79.0 §13 (owner decision 24 Nov): the script's
+    /// `NOTIFICATION_ICON_BADGE_CLEARS_ON_FOREGROUND` is false — the icon is the unread inbox count, always, and goes
+    /// down only when rows are read. Before the inbox has loaded this session the icon is left as it is (the count the
+    /// push function set), so a cold launch never shows 0 and then the count again. If the script ever says it clears,
+    /// it is set to 0 while the app is open.
     func clearAppIconBadgeIfNeeded() {
         if CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true {
             setAppIconBadge(0)
-        } else {
+        } else if hasLoadedNotificationsThisSession {
             setAppIconBadge(unreadCount)
         }
     }
 
-    /// The app-icon badge counts the same unread inbox rows (§13). While the app is open and the script
-    /// clears the icon on foreground, it stays clear.
+    /// The app-icon badge counts the same unread inbox rows (§13): set whenever the unread count changes (a row read,
+    /// a new row) and when the app leaves the foreground, once the inbox has loaded this session.
     func syncAppIconBadgeToUnreadCount() {
         #if canImport(UIKit)
         let isActive = UIApplication.shared.applicationState == .active
@@ -2505,6 +2521,7 @@ class NotificationService: ObservableObject {
         let isActive = false
         #endif
         if isActive, CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground == true { return }
+        guard hasLoadedNotificationsThisSession else { return }
         setAppIconBadge(unreadCount)
     }
 
@@ -2658,6 +2675,3 @@ class NotificationService: ObservableObject {
 extension Notification.Name {
     static let qualificationExpiryScheduleRefresh = Notification.Name("qualificationExpiryScheduleRefresh")
 }
-
-
-
