@@ -14,10 +14,10 @@ struct GettingStartedHomeCard: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
     @EnvironmentObject var projectStore: ProjectStore
-    @StateObject private var complianceStore = OrgComplianceStore()
+    /// Shared with `OrgComplianceHomeReminderCard` (one listener on Home; that card starts and stops it).
+    @ObservedObject var complianceStore: OrgComplianceStore
     @State private var openDestination: String?
     @State private var confirmingHide = false
-    @State private var hiding = false
     @State private var hideError: String?
 
     private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
@@ -32,8 +32,12 @@ struct GettingStartedHomeCard: View {
         let rosterLoaded = organizationIdsMatch(userStore.organizationUsersFinishedLoadOrganizationId, org.firestoreDocumentId)
         let jobsLoaded = organizationIdsMatch(projectStore.finishedLoadOrganizationId, org.firestoreDocumentId)
         let creator = (org.creatorUserId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // `organizationUsers` is the folded roster (one row per person, `rosterPeople`), as web Home's `users`; the
+        // creator is left out under any id their row goes by.
         let people = rosterLoaded
-            ? userStore.organizationUsers.filter { $0.id.lowercased() != creator }.count
+            ? userStore.organizationUsers.filter { user in
+                !([user.id] + user.formerUserIds + user.sameEmailUserIds).contains { $0.lowercased() == creator }
+            }.count
             : nil
         let documents = complianceStore.documents.map {
             CanonicalBusinessEngine.orgComplianceCounts($0, todayKey: CanonicalBusinessEngine.orgComplianceTodayKey()).total
@@ -42,7 +46,8 @@ struct GettingStartedHomeCard: View {
             organization: OnboardingOrganizationDocument.document(json: org.onboardingDocumentJSON),
             people: people,
             pendingInvites: rosterLoaded ? 0 : nil,
-            jobs: jobsLoaded ? projectStore.projects.count + projectStore.smallWorks.count : nil,
+            // `projects` already holds every job, small works included (`smallWorks` is derived from it), as Home's count.
+            jobs: jobsLoaded ? projectStore.projects.count : nil,
             complianceDocuments: documents,
             viewerIsAdmin: true
         )
@@ -54,22 +59,11 @@ struct GettingStartedHomeCard: View {
                 card(checklist)
             }
         }
-        .onAppear { startOrStop() }
-        .onChange(of: organizationId) { _, _ in startOrStop() }
-        .onChange(of: viewerIsAdmin) { _, _ in startOrStop() }
-        .onDisappear { complianceStore.stop() }
         .sheet(item: Binding(get: { openDestination.map { DestinationID(id: $0) } }, set: { openDestination = $0?.id })) { destination in
-            NavigationStack {
-                destinationView(destination.id)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { openDestination = nil }
-                        }
-                    }
-            }
-            .environmentObject(firebaseBackend)
-            .environmentObject(userStore)
-            .environmentObject(projectStore)
+            sheetContent(destination.id)
+                .environmentObject(firebaseBackend)
+                .environmentObject(userStore)
+                .environmentObject(projectStore)
         }
         .confirmationDialog(
             CanonicalBusinessEngine.onboardingText("ONBOARDING_DISMISS_CONFIRM", fallback: "Hide the Getting started card? You can still do every step from Settings."),
@@ -90,11 +84,10 @@ struct GettingStartedHomeCard: View {
                 Text(checklist.title)
                     .font(.headline)
                 Spacer()
-                Button(hiding ? "Hiding…" : CanonicalBusinessEngine.onboardingText("ONBOARDING_DISMISS_LABEL", fallback: "Hide")) {
+                Button(CanonicalBusinessEngine.onboardingText("ONBOARDING_DISMISS_LABEL", fallback: "Hide")) {
                     confirmingHide = true
                 }
                 .font(.subheadline.weight(.semibold))
-                .disabled(hiding)
                 .accessibilityIdentifier("home.gettingStarted.hide")
             }
             Text(checklist.subtitle)
@@ -148,38 +141,40 @@ struct GettingStartedHomeCard: View {
         .accessibilityIdentifier("home.gettingStarted")
     }
 
+    /// `ProjectsView` and `CompanyDetailsEditView` own their NavigationStack (wrapping them again crashes on open,
+    /// ContentView); they are presented as they are, as the Organisation hub does. The others get one with Done.
+    @ViewBuilder
+    private func sheetContent(_ destination: String) -> some View {
+        switch destination {
+        case "companyDetails": CompanyDetailsEditView()
+        case "projects": ProjectsView()
+        default:
+            NavigationStack {
+                destinationView(destination)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { openDestination = nil }
+                        }
+                    }
+            }
+        }
+    }
+
     @ViewBuilder
     private func destinationView(_ destination: String) -> some View {
         switch destination {
-        case "companyDetails": CompanyDetailsEditView()
         case "workingHours": OrganisationWorkingHoursView(showsHistory: true)
         case "paymentRuns": OrganisationInvoicingSettingsView()
         case "manageUsers": ManageUsersView()
-        case "projects": ProjectsView()
         case "insuranceAccreditations": InsuranceAccreditationsView(store: complianceStore)
         default: EmptyView()
         }
     }
 
-    private func startOrStop() {
-        guard viewerIsAdmin, !organizationId.isEmpty else {
-            complianceStore.stop()
-            return
-        }
-        complianceStore.start(organizationId: organizationId, db: firebaseBackend.db)
-    }
-
     private func hide() {
-        let orgId = organizationId
-        hiding = true
         hideError = nil
-        Task {
-            do {
-                try await firebaseBackend.dismissOnboardingChecklist(organizationId: orgId)
-            } catch {
-                hideError = "Could not hide the card. Check the connection and try again."
-            }
-            hiding = false
+        firebaseBackend.dismissOnboardingChecklist(organizationId: organizationId) { _ in
+            hideError = "Could not hide the card. Try again."
         }
     }
 }
