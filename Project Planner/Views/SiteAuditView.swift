@@ -1280,7 +1280,7 @@ struct SiteAuditCreateFlowView: View {
         // counted with the photos that could not be added.
         let refusal = await MainActor.run { StorageUploadPolicy.photoPrepareRefusal(data: data) }
         if let refusal {
-            print("⚠️ [SiteAudit] photo refused: \(refusal)")
+            logAndReportError("⚠️ [SiteAudit] photo refused: \(refusal)")
             return nil
         }
         return await Task.detached(priority: .userInitiated) {

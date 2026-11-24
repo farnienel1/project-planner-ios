@@ -309,6 +309,8 @@ struct Project_PlannerApp: App {
 
     init() {
         _ = FirebaseStartup.configureIfNeeded()
+        // RULEBOOK 1.84.0 §32: anonymous error reports (an uncaught exception is sent on the next launch).
+        ClientErrorReporter.install()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
         print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host")

@@ -85,6 +85,17 @@ var ProjectPlannerCanonical = (() => {
     CLAIM_EVIDENCE_NONE_TEXT: () => CLAIM_EVIDENCE_NONE_TEXT,
     CLAIM_EVIDENCE_SITE_AUDIT_NOTE: () => CLAIM_EVIDENCE_SITE_AUDIT_NOTE,
     CLAIM_EVIDENCE_TAKE_PHOTO_LABEL: () => CLAIM_EVIDENCE_TAKE_PHOTO_LABEL,
+    CLIENT_ERRORS_COLLECTION: () => CLIENT_ERRORS_COLLECTION,
+    CLIENT_ERRORS_PER_DAY: () => CLIENT_ERRORS_PER_DAY,
+    CLIENT_ERROR_BUILD_MAX: () => CLIENT_ERROR_BUILD_MAX,
+    CLIENT_ERROR_DAY_MS: () => CLIENT_ERROR_DAY_MS,
+    CLIENT_ERROR_FIELDS: () => CLIENT_ERROR_FIELDS,
+    CLIENT_ERROR_MESSAGE_MAX: () => CLIENT_ERROR_MESSAGE_MAX,
+    CLIENT_ERROR_ORGANIZATION_ID_MAX: () => CLIENT_ERROR_ORGANIZATION_ID_MAX,
+    CLIENT_ERROR_PLATFORMS: () => CLIENT_ERROR_PLATFORMS,
+    CLIENT_ERROR_ROUTE_MAX: () => CLIENT_ERROR_ROUTE_MAX,
+    CLIENT_ERROR_SOURCES: () => CLIENT_ERROR_SOURCES,
+    CLIENT_ERROR_TTL_DAYS: () => CLIENT_ERROR_TTL_DAYS,
     COMPANY_ACTIVITY_NOTICE_TYPES: () => COMPANY_ACTIVITY_NOTICE_TYPES,
     COMPANY_EXPORT_REFUSED_MESSAGE: () => COMPANY_EXPORT_REFUSED_MESSAGE,
     CROSS_PLATFORM_CONTRACT_READERS: () => CROSS_PLATFORM_CONTRACT_READERS,
@@ -344,6 +355,7 @@ var ProjectPlannerCanonical = (() => {
     ORGANIZATION_DELETE_TITLE: () => ORGANIZATION_DELETE_TITLE,
     ORGANIZATION_DOCUMENT_FIELDS: () => ORGANIZATION_DOCUMENT_FIELDS,
     ORGANIZATION_RESTORED_MESSAGE: () => ORGANIZATION_RESTORED_MESSAGE,
+    ORG_COMPLIANCE_AUDIT_COLLECTION: () => ORG_COMPLIANCE_AUDIT_COLLECTION,
     ORG_COMPLIANCE_COLLECTION: () => ORG_COMPLIANCE_COLLECTION,
     ORG_COMPLIANCE_COVER_MAX: () => ORG_COMPLIANCE_COVER_MAX,
     ORG_COMPLIANCE_DOCUMENT_ID: () => ORG_COMPLIANCE_DOCUMENT_ID,
@@ -354,11 +366,20 @@ var ProjectPlannerCanonical = (() => {
     ORG_COMPLIANCE_MAX_PER_SECTION: () => ORG_COMPLIANCE_MAX_PER_SECTION,
     ORG_COMPLIANCE_MAX_YEARS_AHEAD: () => ORG_COMPLIANCE_MAX_YEARS_AHEAD,
     ORG_COMPLIANCE_MESSAGES: () => ORG_COMPLIANCE_MESSAGES,
+    ORG_COMPLIANCE_ORG_ID_PATTERN: () => ORG_COMPLIANCE_ORG_ID_PATTERN,
     ORG_COMPLIANCE_PAGE_SUBTITLE: () => ORG_COMPLIANCE_PAGE_SUBTITLE,
     ORG_COMPLIANCE_PAGE_TITLE: () => ORG_COMPLIANCE_PAGE_TITLE,
     ORG_COMPLIANCE_SECTIONS: () => ORG_COMPLIANCE_SECTIONS,
     ORG_COMPLIANCE_SECTION_KEYS: () => ORG_COMPLIANCE_SECTION_KEYS,
+    ORG_COMPLIANCE_SHARE_LINKS_COLLECTION: () => ORG_COMPLIANCE_SHARE_LINKS_COLLECTION,
+    ORG_COMPLIANCE_SHARE_LINK_DAYS: () => ORG_COMPLIANCE_SHARE_LINK_DAYS,
+    ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS: () => ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS,
+    ORG_COMPLIANCE_SHARE_MESSAGES: () => ORG_COMPLIANCE_SHARE_MESSAGES,
+    ORG_COMPLIANCE_SIGNED_URL_SECONDS: () => ORG_COMPLIANCE_SIGNED_URL_SECONDS,
     ORG_COMPLIANCE_STATUS_ORDER: () => ORG_COMPLIANCE_STATUS_ORDER,
+    ORG_COMPLIANCE_ZIP_MAX_BYTES: () => ORG_COMPLIANCE_ZIP_MAX_BYTES,
+    ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS: () => ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS,
+    ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE: () => ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE,
     ORG_MEMBERSHIP_ADMIN_FIELDS: () => ORG_MEMBERSHIP_ADMIN_FIELDS,
     ORG_MEMBERSHIP_DEFAULT_ON: () => ORG_MEMBERSHIP_DEFAULT_ON,
     ORG_MEMBERSHIP_PERMISSION_KEYS: () => ORG_MEMBERSHIP_PERMISSION_KEYS,
@@ -963,6 +984,13 @@ var ProjectPlannerCanonical = (() => {
     clashPairKey: () => clashPairKey,
     clashResolutionKey: () => clashResolutionKey,
     clashScanDays: () => clashScanDays,
+    clientErrorCreateFields: () => clientErrorCreateFields,
+    clientErrorDayIndex: () => clientErrorDayIndex,
+    clientErrorDocId: () => clientErrorDocId,
+    clientErrorGroups: () => clientErrorGroups,
+    clientErrorHashInput: () => clientErrorHashInput,
+    clientErrorSignature: () => clientErrorSignature,
+    clientErrorThrottle: () => clientErrorThrottle,
     clientWriteFields: () => clientWriteFields,
     clockMinutesFromDeliveryInstant: () => clockMinutesFromDeliveryInstant,
     coalesceOrganizationName: () => coalesceOrganizationName,
@@ -1095,6 +1123,7 @@ var ProjectPlannerCanonical = (() => {
     healthSafetyDocumentId: () => healthSafetyDocumentId,
     healthSafetyDocumentIds: () => healthSafetyDocumentIds,
     healthSafetyDocumentWriteFields: () => healthSafetyDocumentWriteFields,
+    healthSafetyIssueJob: () => healthSafetyIssueJob,
     healthSafetyIssueStatus: () => healthSafetyIssueStatus,
     healthSafetySignatureKey: () => healthSafetySignatureKey,
     healthSafetySignatureRemovalWrites: () => healthSafetySignatureRemovalWrites,
@@ -1324,11 +1353,16 @@ var ProjectPlannerCanonical = (() => {
     materialSendStatusWriteFields: () => materialSendStatusWriteFields,
     materialSizeText: () => materialSizeText,
     materialWhatsAppRows: () => materialWhatsAppRows,
+    memberNameBackfillEntries: () => memberNameBackfillEntries,
+    memberNameEditPlan: () => memberNameEditPlan,
     memberNameEditTarget: () => memberNameEditTarget,
+    memberNameEntryMissing: () => memberNameEntryMissing,
     memberNameFor: () => memberNameFor,
+    memberNameJoinEntry: () => memberNameJoinEntry,
     memberNamePath: () => memberNamePath,
     memberNameValidationError: () => memberNameValidationError,
     memberNameWriteFields: () => memberNameWriteFields,
+    memberNameWriterManagesOperative: () => memberNameWriterManagesOperative,
     mergeBookingPaySlice: () => mergeBookingPaySlice,
     mergeHealthSafetyRowCopies: () => mergeHealthSafetyRowCopies,
     mergeJobTypeCatalogues: () => mergeJobTypeCatalogues,
@@ -1431,18 +1465,33 @@ var ProjectPlannerCanonical = (() => {
     orgComplianceDetailsError: () => orgComplianceDetailsError,
     orgComplianceDocTypeLabel: () => orgComplianceDocTypeLabel,
     orgComplianceDocumentPath: () => orgComplianceDocumentPath,
+    orgComplianceDocumentRefKey: () => orgComplianceDocumentRefKey,
     orgComplianceExpiryStatus: () => orgComplianceExpiryStatus,
+    orgComplianceFileName: () => orgComplianceFileName,
     orgComplianceFolder: () => orgComplianceFolder,
     orgComplianceHubSubtitle: () => orgComplianceHubSubtitle,
     orgComplianceMergePayload: () => orgComplianceMergePayload,
+    orgComplianceOrganizationId: () => orgComplianceOrganizationId,
     orgCompliancePathBelongsTo: () => orgCompliancePathBelongsTo,
+    orgCompliancePathLinked: () => orgCompliancePathLinked,
+    orgCompliancePublicDocuments: () => orgCompliancePublicDocuments,
+    orgComplianceReminder: () => orgComplianceReminder,
     orgComplianceRemoveWriteFields: () => orgComplianceRemoveWriteFields,
     orgComplianceReplaceWriteFields: () => orgComplianceReplaceWriteFields,
     orgComplianceSection: () => orgComplianceSection,
+    orgComplianceShareCreatorActive: () => orgComplianceShareCreatorActive,
+    orgComplianceShareLinkCreateFields: () => orgComplianceShareLinkCreateFields,
+    orgComplianceShareLinkState: () => orgComplianceShareLinkState,
+    orgComplianceShareOpen: () => orgComplianceShareOpen,
+    orgComplianceSharePath: () => orgComplianceSharePath,
+    orgComplianceShareSelection: () => orgComplianceShareSelection,
+    orgComplianceSharedEntry: () => orgComplianceSharedEntry,
     orgComplianceSortedEntries: () => orgComplianceSortedEntries,
     orgComplianceStoragePath: () => orgComplianceStoragePath,
     orgComplianceTodayKey: () => orgComplianceTodayKey,
     orgComplianceUpdateWriteFields: () => orgComplianceUpdateWriteFields,
+    orgComplianceZipEntryNames: () => orgComplianceZipEntryNames,
+    orgComplianceZipFileName: () => orgComplianceZipFileName,
     orgDayHours: () => orgDayHours,
     orgMembershipWriteFields: () => orgMembershipWriteFields,
     organizationCreateFields: () => organizationCreateFields,
@@ -1543,6 +1592,7 @@ var ProjectPlannerCanonical = (() => {
     parseAuthClaims: () => parseAuthClaims,
     parseBookingDocument: () => parseBookingDocument,
     parseClientDocument: () => parseClientDocument,
+    parseClientErrorDocument: () => parseClientErrorDocument,
     parseClockMinutes: () => parseClockMinutes,
     parseCompanyDetails: () => parseCompanyDetails,
     parseDeadlineAssignments: () => parseDeadlineAssignments,
@@ -1576,7 +1626,9 @@ var ProjectPlannerCanonical = (() => {
     parseNotificationDocument: () => parseNotificationDocument,
     parseOperativeDocument: () => parseOperativeDocument,
     parseOperativeProfileDocument: () => parseOperativeProfileDocument,
+    parseOrgComplianceDocumentRef: () => parseOrgComplianceDocumentRef,
     parseOrgComplianceDocuments: () => parseOrgComplianceDocuments,
+    parseOrgComplianceShareLink: () => parseOrgComplianceShareLink,
     parseOrgMembershipDocument: () => parseOrgMembershipDocument,
     parseOrganizationDeletion: () => parseOrganizationDeletion,
     parseOrganizationName: () => parseOrganizationName,
@@ -1807,6 +1859,8 @@ var ProjectPlannerCanonical = (() => {
     rulebookVersionLabel: () => rulebookVersionLabel,
     safeExternalUrl: () => safeExternalUrl,
     sameNamePersonContactLabel: () => sameNamePersonContactLabel,
+    sanitizeClientErrorRoute: () => sanitizeClientErrorRoute,
+    sanitizeClientErrorText: () => sanitizeClientErrorText,
     saveHoursLabel: () => saveHoursLabel,
     scheduleCellHours: () => scheduleCellHours,
     scheduleCellKind: () => scheduleCellKind,
@@ -1860,6 +1914,7 @@ var ProjectPlannerCanonical = (() => {
     siteAuditReportTextLines: () => siteAuditReportTextLines,
     siteAuditReportTextWidth: () => siteAuditReportTextWidth,
     siteAuditWriteFields: () => siteAuditWriteFields,
+    siteMapLeaveSummary: () => siteMapLeaveSummary,
     siteMapPins: () => siteMapPins,
     skillsCatalogueWrites: () => skillsCatalogueWrites,
     slotInterval: () => slotInterval,
@@ -2237,8 +2292,8 @@ var ProjectPlannerCanonical = (() => {
     const { y, m, d } = partsInZone(date, timeZone);
     return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
-  function zoneOffsetMs(instantMs5, timeZone) {
-    const floored = Math.floor(instantMs5 / 6e4) * 6e4;
+  function zoneOffsetMs(instantMs6, timeZone) {
+    const floored = Math.floor(instantMs6 / 6e4) * 6e4;
     const p = partsInZone(new Date(floored), timeZone);
     return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - floored;
   }
@@ -2903,14 +2958,14 @@ var ProjectPlannerCanonical = (() => {
     const value = String(timeZone || "").trim();
     return value || LONDON_TIME_ZONE;
   }
-  function eachDayKey(startKey, endKey, timeZone, cap = 400) {
+  function eachDayKey(startKey, endKey, timeZone, cap2 = 400) {
     if (!startKey || !endKey || startKey > endKey) return [];
     const keys = [];
     let cursor = dateFromDayKeyInZone(startKey, timeZone);
     while (dayKeyInZone(cursor, timeZone) <= endKey) {
       keys.push(dayKeyInZone(cursor, timeZone));
       cursor = addDaysInZone(cursor, 1, timeZone);
-      if (keys.length > cap) break;
+      if (keys.length > cap2) break;
     }
     return keys;
   }
@@ -6721,9 +6776,9 @@ var ProjectPlannerCanonical = (() => {
   }
   var WEEKEND_COUNTS_AS_STEP_HOURS = 0.5;
   function weekendCountsAsError(policy, previous) {
-    const cap = weekdayPaidHours(policy);
-    const capText = `${Math.round(cap * 100) / 100}h`;
-    const weekdayChanged = previous != null && Math.abs(weekdayPaidHours(previous) - cap) > 1e-9;
+    const cap2 = weekdayPaidHours(policy);
+    const capText = `${Math.round(cap2 * 100) / 100}h`;
+    const weekdayChanged = previous != null && Math.abs(weekdayPaidHours(previous) - cap2) > 1e-9;
     const days = [["Saturday", "saturday"]];
     if (!policy.sunday?.sameAsSaturday) days.push(["Sunday", "sunday"]);
     for (const [name, key8] of days) {
@@ -6733,14 +6788,14 @@ var ProjectPlannerCanonical = (() => {
       const before = previous?.[key8];
       const unchanged = before != null && before.countsAsFollowsWeekday !== true && Math.abs(weekendCountsAsHours(before) - value) < 1e-9;
       if (unchanged) {
-        if (weekdayChanged && value > cap + 1e-9) {
+        if (weekdayChanged && value > cap2 + 1e-9) {
           return `${name} counts as ${Math.round(value * 100) / 100}h, more than the new Monday\u2013Friday day of ${capText}. Lower ${name}'s Counts as or turn on Same as Monday\u2013Friday.`;
         }
         continue;
       }
       const steps = value / WEEKEND_COUNTS_AS_STEP_HOURS;
       if (Math.abs(steps - Math.round(steps)) > 1e-9) return `${name} counts-as hours use half-hour steps (e.g. 7.5).`;
-      if (value > cap + 1e-9) {
+      if (value > cap2 + 1e-9) {
         return `${name} counts-as hours can't be more than the Monday\u2013Friday paid day (${capText}).`;
       }
     }
@@ -8206,9 +8261,9 @@ var ProjectPlannerCanonical = (() => {
         employment ? inWindow(prior.window) : void 0
       );
       carriedForward = prior.window ? Math.max(0, snapLeaveDays(prior.allowance - prevTaken)) : 0;
-      const cap = input.maxCarryOverDays;
-      if (cap != null && Number.isFinite(Number(cap)) && Number(cap) >= 0) {
-        carriedForward = Math.min(carriedForward, snapLeaveDays(Number(cap)));
+      const cap2 = input.maxCarryOverDays;
+      if (cap2 != null && Number.isFinite(Number(cap2)) && Number(cap2) >= 0) {
+        carriedForward = Math.min(carriedForward, snapLeaveDays(Number(cap2)));
       }
     }
     const yearAllowance = overrideApplies ? snapLeaveDays(input.yearAllowance) : null;
@@ -8421,8 +8476,8 @@ var ProjectPlannerCanonical = (() => {
         return left.localeCompare(right);
       });
     }
-    const cap = Number(limit);
-    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    const cap2 = Number(limit);
+    if (Number.isFinite(cap2) && cap2 > 0) return hits.slice(0, cap2);
     return hits;
   }
   function catalogueRecordFromItem(item) {
@@ -8586,8 +8641,8 @@ var ProjectPlannerCanonical = (() => {
         return left.localeCompare(right);
       });
     }
-    const cap = Number(limit);
-    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    const cap2 = Number(limit);
+    if (Number.isFinite(cap2) && cap2 > 0) return hits.slice(0, cap2);
     return hits;
   }
   function qualificationSearchRecordFromItem(item) {
@@ -17316,8 +17371,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.83.0" : "",
-      sha256: true ? "2a45782f5051d454f3e365e47340f5b1666065388096fd8b3ff76238033079cb" : ""
+      version: true ? "1.84.0" : "",
+      sha256: true ? "4011c0aab51bad5a9f995a93facd6e462ca7d4a8662d157712e4af28676969a3" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -20793,6 +20848,20 @@ var ProjectPlannerCanonical = (() => {
     }
     return writes.sort((a, b) => a.documentId.localeCompare(b.documentId));
   }
+  function healthSafetyIssueJob(input) {
+    const wanted = normalizeDocumentId(input.issueId);
+    if (!wanted) return null;
+    for (const candidate of input.candidates || []) {
+      if (!candidate || !text29(candidate.jobId)) continue;
+      for (const data of candidate.documents || []) {
+        const issues = rows2(record9(data).issues);
+        if (issues.some((issue) => normalizeDocumentId(issue.id) === wanted)) {
+          return { jobId: candidate.jobId, collection: candidate.collection };
+        }
+      }
+    }
+    return null;
+  }
 
   // lib/canonical/liveSources.ts
   var LIVE_COLLECTIONS = [
@@ -20846,7 +20915,8 @@ var ProjectPlannerCanonical = (() => {
     { id: "orgCompliance", path: "organizations/{orgId}/orgCompliance/documents", scope: "organization", listen: true, note: "1.83.0 \xA731: insurance & accreditations (parseOrgComplianceDocuments); admins only, while Settings \u203A Organisation or its Compliance page is open." },
     { id: "reportChecks", path: "organizations/{orgId}/reportChecks", scope: "organization", listen: false, note: "1.65.0: one server check per saved overtime / price work / expenses report (parseReportCheckDocument); written by the server only, admins read them when Data health opens." },
     { id: "materialContacts", path: "organizations/{orgId}/materialContacts", scope: "organization", listen: false, note: "1.59.0: addresses the organisation has emailed a quote or order to (the safe-sender box); read by id and written once by the send route and the email function, never shown." },
-    { id: "deletedBookings", path: "organizations/{orgId}/deletedBookings", scope: "organization", listen: false, note: "Write-only tombstones; never shown." }
+    { id: "deletedBookings", path: "organizations/{orgId}/deletedBookings", scope: "organization", listen: false, note: "Write-only tombstones; never shown." },
+    { id: "clientErrors", path: "clientErrors", scope: "platform", listen: false, note: "1.84.0 \xA732 (D7): anonymous error reports, created by a signed-in device (clientErrorCreateFields), read only by the platform owner (owner console Errors, parseClientErrorDocument); 30-day TTL." }
   ];
   function liveCollection(id2) {
     const key8 = typeof id2 === "string" ? id2.trim() : "";
@@ -21073,6 +21143,7 @@ var ProjectPlannerCanonical = (() => {
       { op: "delete", path: `users/${uid}/orgMemberships/${org}` }
     ];
     if (email && !email.includes("/")) account.push({ op: "delete", path: `organizations/${org}/userEmails/${email}` });
+    account.push({ op: "delete", path: `organizations/${org}/memberNames/${uid}`, optional: true });
     if (input.listedInMembers !== false) account.push({ op: "update", path: `organizations/${org}`, deleteFields: [`members.${uid}`] });
     const formerWrite = input.formerPerson ? {
       op: "set",
@@ -22036,8 +22107,8 @@ var ProjectPlannerCanonical = (() => {
   function memberNameEditTarget(input) {
     const org = key5(input?.organizationId);
     const home = key5(documentOrganizationId(input?.homeOrganizationId));
-    if (!org || !home) return "account";
-    return org === home ? "account" : "organization";
+    if (!org) return "account";
+    return home && org === home ? "account" : "organization";
   }
   function memberNameValidationError(input) {
     const firstName = text36(input?.firstName);
@@ -22057,7 +22128,43 @@ var ProjectPlannerCanonical = (() => {
   function canWriteMemberName(input) {
     const writer = key5(input?.writerUserId);
     if (!writer) return false;
-    return writer === key5(input?.subjectUserId) || input?.writerIsAdmin === true;
+    return writer === key5(input?.subjectUserId) || input?.writerIsAdmin === true || input?.writerManagesOperative === true;
+  }
+  function memberNameEditPlan(input) {
+    const org = key5(input?.organizationId);
+    const home = key5(documentOrganizationId(input?.homeOrganizationId));
+    return { writeEntry: Boolean(org), writeAccount: Boolean(org && home && org === home) };
+  }
+  function memberNameWriterManagesOperative(input) {
+    if (!input?.writer || !input?.subject) return false;
+    return canManageOperatives(input.writer) && permissionLevelOf(input.subject) === "operative";
+  }
+  function memberNameJoinEntry(candidates) {
+    for (const candidate of candidates || []) {
+      if (!candidate) continue;
+      const name = accountName(candidate);
+      if (!memberNameValidationError(name)) return { firstName: name.firstName, surname: name.surname };
+    }
+    return null;
+  }
+  function memberNameEntryMissing(input) {
+    if (!input?.serverRead || !input.person || !key5(input.person.id)) return false;
+    return !memberNameFor(input.person, input.names);
+  }
+  function memberNameBackfillEntries(input) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const person of input?.people || []) {
+      const userId = text36(person?.id);
+      if (!userId || seen.has(key5(userId))) continue;
+      seen.add(key5(userId));
+      const shown = accountName(person);
+      if (!text36(person?.email) && shown.displayName === "Deleted user") continue;
+      if (memberNameFor(person, input?.names)) continue;
+      const name = memberNameJoinEntry([person]);
+      if (name) out.push({ userId, ...name });
+    }
+    return out;
   }
 
   // lib/canonical/orgRoster.ts
@@ -24752,6 +24859,55 @@ var ProjectPlannerCanonical = (() => {
     return (records || []).filter(
       (record20) => Boolean(record20) && normalizeHolidayStatus(record20.status) === "approved" && leaveRecordDayKeys(record20, timeZone, nonWorkingDayKeys).includes(dayKey)
     );
+  }
+
+  // lib/canonical/siteMapLeave.ts
+  function siteMapLeaveSummary(input) {
+    const onDay = dailyOverviewLeaveRows(input.records, input.dayKey, input.timeZone, input.nonWorkingDayKeys);
+    const roster = (input.roster || []).filter((row3) => row3 && idKey(row3.id));
+    const byId = /* @__PURE__ */ new Map();
+    const byEmail = /* @__PURE__ */ new Map();
+    for (const row3 of roster) {
+      const owner = { key: `person:${idKey(row3.id)}`, name: (row3.name ?? "").trim() || null };
+      for (const id2 of personIdSet(row3, roster)) {
+        const k = idKey(id2);
+        if (k && !byId.has(k)) byId.set(k, owner);
+      }
+      const email = idKey(row3.email);
+      if (email && !byEmail.has(email)) byEmail.set(email, owner);
+    }
+    const operativeById = /* @__PURE__ */ new Map();
+    for (const row3 of input.operatives || []) if (row3 && idKey(row3.id)) operativeById.set(idKey(row3.id), row3);
+    const resolve = (record20) => {
+      for (const raw of [record20.userId, record20.operativeId]) {
+        const k = idKey(raw);
+        if (!k) continue;
+        const hit = byId.get(k) ?? byEmail.get(k);
+        if (hit) return hit;
+        const operative = operativeById.get(k);
+        if (operative) {
+          const viaEmail = byEmail.get(idKey(operative.email));
+          if (viaEmail) return viaEmail;
+          return { key: `operative:${k}`, name: (operative.name ?? "").trim() || null };
+        }
+      }
+      const fallback = idKey(record20.userId) || idKey(record20.operativeId);
+      return fallback ? { key: `id:${fallback}`, name: null } : null;
+    };
+    const people = [];
+    const index = /* @__PURE__ */ new Map();
+    onDay.forEach((record20, position) => {
+      const owner = resolve(record20) ?? { key: `record:${String(record20.id ?? position)}`, name: null };
+      const recordId = String(record20.id ?? "").trim();
+      const at = index.get(owner.key);
+      if (at === void 0) {
+        index.set(owner.key, people.length);
+        people.push({ key: owner.key, name: owner.name, recordIds: recordId ? [recordId] : [] });
+      } else if (recordId) {
+        people[at].recordIds.push(recordId);
+      }
+    });
+    return { onAnnualLeave: people.length, people };
   }
 
   // lib/canonical/jobScheduleLeave.ts
@@ -30620,8 +30776,8 @@ var ProjectPlannerCanonical = (() => {
   function dataParityLogAppend(log, entry, limit = DATA_PARITY_LOG_LIMIT) {
     const kept = Array.isArray(log) ? log.filter((row3) => row3 && typeof row3.atMs === "number") : [];
     const next = [...kept, entry];
-    const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DATA_PARITY_LOG_LIMIT;
-    return next.slice(Math.max(0, next.length - cap));
+    const cap2 = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DATA_PARITY_LOG_LIMIT;
+    return next.slice(Math.max(0, next.length - cap2));
   }
   function clock4(atMs, timeZone) {
     const parts3 = partsInZone(new Date(atMs), zoneOrLondon(timeZone));
@@ -32416,15 +32572,20 @@ var ProjectPlannerCanonical = (() => {
     if (!user || typeof user !== "object") return false;
     return permissionLevelOf(user) === "admin";
   }
-  function orgComplianceDocumentPath(organizationId) {
+  var ORG_COMPLIANCE_ORG_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+  function orgComplianceOrganizationId(organizationId) {
     const org = text57(organizationId);
-    if (!org || org.includes("/")) return null;
-    return `organizations/${org}/${ORG_COMPLIANCE_COLLECTION}/${ORG_COMPLIANCE_DOCUMENT_ID}`;
+    return ORG_COMPLIANCE_ORG_ID_PATTERN.test(org) ? org : null;
+  }
+  function orgComplianceDocumentPath(organizationId) {
+    const org = orgComplianceOrganizationId(organizationId);
+    if (!org) return null;
+    return `organizations/${encodeURIComponent(org)}/${ORG_COMPLIANCE_COLLECTION}/${ORG_COMPLIANCE_DOCUMENT_ID}`;
   }
   function orgComplianceFolder(organizationId) {
-    const org = text57(organizationId);
-    if (!org || org.includes("/")) return null;
-    return `organizations/${org}/compliance`;
+    const org = orgComplianceOrganizationId(organizationId);
+    if (!org) return null;
+    return `organizations/${encodeURIComponent(org)}/compliance`;
   }
   function orgComplianceStoragePath(input) {
     const folder = orgComplianceFolder(input.organizationId);
@@ -32440,6 +32601,7 @@ var ProjectPlannerCanonical = (() => {
     if (!value || value.includes("..") || value.includes("//")) return false;
     const parts3 = value.split("/");
     if (parts3.length !== 4 || parts3[0] !== "organizations" || parts3[2] !== "compliance" || !parts3[3]) return false;
+    if (!ORG_COMPLIANCE_ORG_ID_PATTERN.test(parts3[1])) return false;
     const org = text57(organizationId);
     return !org || normalizeDocumentId(parts3[1]) === normalizeDocumentId(org);
   }
@@ -32663,6 +32825,383 @@ var ProjectPlannerCanonical = (() => {
   }
   function orgComplianceCoverText(amount, currency) {
     return typeof amount === "number" && Number.isFinite(amount) ? formatMoney(amount, currency, { decimals: 0 }) : "";
+  }
+  function orgComplianceFileName(pickedName, storedPath) {
+    const objectName = text57(storedPath).split("/").pop() || "Document";
+    const picked = text57(pickedName).split(/[\\/]/).pop()?.trim() ?? "";
+    if (!picked) return objectName;
+    const ext = (name2) => {
+      const dot = name2.lastIndexOf(".");
+      return dot > 0 ? name2.slice(dot + 1).toLowerCase() : "";
+    };
+    const storedExt = ext(objectName);
+    const ownExt = ext(picked);
+    const norm = (e) => e === "jpeg" ? "jpg" : e;
+    let name = picked;
+    if (storedExt && norm(ownExt) !== norm(storedExt)) {
+      const base = ownExt ? picked.slice(0, picked.length - ownExt.length - 1) : picked;
+      name = `${base}.${storedExt}`;
+    }
+    return Array.from(name).slice(0, 200).join("");
+  }
+  function orgComplianceReminder(counts) {
+    const expired = counts?.expired ?? 0;
+    const expiringSoon = counts?.expiringSoon ?? 0;
+    const count = expired + expiringSoon;
+    if (!count) return null;
+    const parts3 = [
+      expired ? `${expired} expired` : "",
+      expiringSoon ? `${expiringSoon} expiring within ${ORG_COMPLIANCE_EXPIRING_SOON_DAYS} days` : ""
+    ].filter(Boolean);
+    return {
+      count,
+      expired,
+      expiringSoon,
+      title: `${count} insurance or accreditation certificate${count === 1 ? "" : "s"} need${count === 1 ? "s" : ""} attention`,
+      detail: parts3.join(" \xB7 ")
+    };
+  }
+  var ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS = 50;
+  var ORG_COMPLIANCE_ZIP_MAX_BYTES = 200 * 1024 * 1024;
+  var ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE = "These documents are too large for one zip (200 MB). Choose fewer.";
+  function orgComplianceZipEntryNames(entries) {
+    const used = /* @__PURE__ */ new Set();
+    return entries.map((entry) => {
+      const raw = text57(entry.fileName) || text57(entry.title) || "Document";
+      const safe = raw.replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, "_").replace(/^\.+/, "_").slice(0, 150) || "Document";
+      const dot = safe.lastIndexOf(".");
+      const base = dot > 0 ? safe.slice(0, dot) : safe;
+      const ext = dot > 0 ? safe.slice(dot) : "";
+      let name = safe;
+      for (let n = 2; used.has(name.toLowerCase()); n += 1) name = `${base} (${n})${ext}`;
+      used.add(name.toLowerCase());
+      return name;
+    });
+  }
+  function orgComplianceZipFileName(todayKey4) {
+    return `Insurance-and-accreditations-${validDayKey4(todayKey4) ? todayKey4 : "documents"}.zip`;
+  }
+  var ORG_COMPLIANCE_SHARE_LINK_DAYS = 7;
+  var ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS = 20;
+  var ORG_COMPLIANCE_SHARE_LINKS_COLLECTION = "complianceShareLinks";
+  var ORG_COMPLIANCE_AUDIT_COLLECTION = "complianceAudit";
+  var ORG_COMPLIANCE_SIGNED_URL_SECONDS = 60;
+  var ORG_COMPLIANCE_SHARE_MESSAGES = {
+    none: "Choose at least one document to share.",
+    tooMany: `Share up to ${ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS} documents in one link.`,
+    gone: "This link has expired or been turned off. Ask the company for a new one.",
+    helper: `Anyone with the link can view and download the chosen documents for ${ORG_COMPLIANCE_SHARE_LINK_DAYS} days, or until you turn the link off.`
+  };
+  function parseOrgComplianceDocumentRef(value) {
+    if (value && typeof value === "object") {
+      const row3 = value;
+      if (isOrgComplianceSectionKey(row3.section) && text57(row3.id) && !text57(row3.id).includes("/")) return { section: row3.section, id: text57(row3.id) };
+      return null;
+    }
+    const raw = text57(value);
+    const at = raw.indexOf(":");
+    if (at < 0) return null;
+    const section = raw.slice(0, at);
+    const id2 = raw.slice(at + 1);
+    return isOrgComplianceSectionKey(section) && id2 && !id2.includes("/") && id2.length <= 200 ? { section, id: id2 } : null;
+  }
+  function orgComplianceDocumentRefKey(ref) {
+    return `${ref.section}:${ref.id}`;
+  }
+  function findEntry(documents, ref) {
+    return documents[ref.section].find((entry) => normalizeDocumentId(entry.id) === normalizeDocumentId(ref.id)) ?? null;
+  }
+  function orgComplianceShareSelection(documents, refs) {
+    if (refs.length > ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS) return { refs: [], error: ORG_COMPLIANCE_SHARE_MESSAGES.tooMany };
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const value of refs) {
+      const ref = parseOrgComplianceDocumentRef(value);
+      const entry = ref ? findEntry(documents, ref) : null;
+      if (!ref || !entry) continue;
+      const key8 = orgComplianceDocumentRefKey({ section: ref.section, id: entry.id });
+      if (seen.has(key8)) continue;
+      seen.add(key8);
+      out.push({ section: ref.section, id: entry.id });
+    }
+    return { refs: out, error: out.length ? null : ORG_COMPLIANCE_SHARE_MESSAGES.none };
+  }
+  function parseOrgComplianceShareLink(id2, data) {
+    const row3 = record19(data);
+    const org = text57(row3.organizationId);
+    if (!text57(id2) || !org) return null;
+    const docs = Array.isArray(row3.documents) ? row3.documents.map(parseOrgComplianceDocumentRef).filter((r) => r !== null) : [];
+    const num2 = (value) => typeof value === "number" && Number.isFinite(value) ? value : documentInstantMs(value);
+    return {
+      id: text57(id2),
+      organizationId: org,
+      documents: docs,
+      createdBy: text57(row3.createdBy),
+      createdAtMs: num2(row3.createdAtMs),
+      expiresAtMs: num2(row3.expiresAtMs),
+      revokedAtMs: num2(row3.revokedAtMs),
+      openCount: Number.isFinite(Number(row3.openCount)) ? Math.max(0, Math.floor(Number(row3.openCount))) : 0,
+      lastOpenedAtMs: num2(row3.lastOpenedAtMs)
+    };
+  }
+  function orgComplianceShareLinkState(link, nowMs2) {
+    if (!link || link.expiresAtMs == null) return "expired";
+    if (link.revokedAtMs != null) return "revoked";
+    return nowMs2 < link.expiresAtMs ? "active" : "expired";
+  }
+  function orgComplianceShareLinkCreateFields(input) {
+    const expiresAtMs = input.nowMs + ORG_COMPLIANCE_SHARE_LINK_DAYS * 24 * 60 * 60 * 1e3;
+    return {
+      organizationId: input.organizationId,
+      documents: input.documents.map(orgComplianceDocumentRefKey),
+      createdBy: input.createdBy,
+      createdAtMs: input.nowMs,
+      expiresAtMs,
+      revokedAtMs: null,
+      openCount: 0,
+      lastOpenedAtMs: null
+    };
+  }
+  function orgComplianceSharePath(token) {
+    return `/shared/compliance/${encodeURIComponent(token)}`;
+  }
+  function orgCompliancePublicDocuments(documents, refs, todayKey4, currency) {
+    const out = [];
+    for (const ref of refs) {
+      const entry = findEntry(documents, ref);
+      const section = orgComplianceSection(ref.section);
+      if (!entry || !section) continue;
+      const status = orgComplianceExpiryStatus(entry.expiresOn, todayKey4);
+      out.push({
+        key: orgComplianceDocumentRefKey({ section: section.key, id: entry.id }),
+        sectionTitle: section.title,
+        typeLabel: orgComplianceDocTypeLabel(section.key, entry.docType),
+        title: entry.title,
+        issuer: entry.issuer,
+        issuerLabel: section.issuerLabel,
+        reference: entry.reference,
+        referenceLabel: section.referenceLabel,
+        cover: section.coverLabel ? orgComplianceCoverText(entry.coverAmount, currency) : "",
+        coverLabel: section.coverLabel,
+        statusLabel: status.label,
+        tone: status.tone,
+        contentType: entry.contentType
+      });
+    }
+    return out;
+  }
+  function orgComplianceSharedEntry(documents, link, key8) {
+    const ref = parseOrgComplianceDocumentRef(key8);
+    if (!ref) return null;
+    const shared = link.documents.some(
+      (item) => item.section === ref.section && normalizeDocumentId(item.id) === normalizeDocumentId(ref.id)
+    );
+    return shared ? findEntry(documents, ref) : null;
+  }
+  function orgCompliancePathLinked(stored, path) {
+    const target = text57(path);
+    if (!target) return false;
+    const documents = record19(record19(stored).documents);
+    return ORG_COMPLIANCE_SECTION_KEYS.some((key8) => {
+      const list = documents[key8];
+      return Array.isArray(list) && list.some((row3) => text57(record19(row3).path) === target);
+    });
+  }
+  function orgComplianceShareOpen(org, nowMs2) {
+    if (!org || typeof org !== "object") return false;
+    if (organizationDeletionState(org, nowMs2).state !== "active") return false;
+    const raw = org.billing;
+    const billing = record19(raw);
+    if (raw && typeof raw === "object" && !hasAccess(billing, nowMs2)) return false;
+    if (billing.accessOpen === false) return false;
+    const closes = documentInstantMs(billing.accessClosesAt);
+    return !(closes != null && nowMs2 >= closes);
+  }
+  function orgComplianceShareCreatorActive(input) {
+    const uid = text57(input.createdBy);
+    const org = record19(input.organization);
+    if (!uid || !input.organization) return false;
+    const members = record19(org.members);
+    const level = organizationLevelFor({
+      organizationId: input.organizationId,
+      userId: uid,
+      user: input.user ?? null,
+      membership: input.membership ?? null,
+      membersRole: members[uid],
+      creatorUserId: text57(org.creatorUserId) || null
+    });
+    if (level.level !== "admin") return false;
+    const user = input.user ? record19(input.user) : null;
+    if (user && text57(user.organizationId).toLowerCase() === text57(input.organizationId).toLowerCase() && user.isActive === false) return false;
+    const membership = input.membership ? record19(input.membership) : null;
+    if (membership) {
+      const active = "accountActive" in membership ? membership.accountActive : membership.isActive;
+      if (active === false) return false;
+    }
+    return true;
+  }
+
+  // lib/canonical/clientErrors.ts
+  var CLIENT_ERRORS_COLLECTION = "clientErrors";
+  var CLIENT_ERROR_PLATFORMS = ["web", "ios"];
+  var CLIENT_ERROR_SOURCES = ["window", "promise", "boundary", "caught", "uncaught"];
+  var CLIENT_ERRORS_PER_DAY = 20;
+  var CLIENT_ERROR_TTL_DAYS = 30;
+  var CLIENT_ERROR_MESSAGE_MAX = 300;
+  var CLIENT_ERROR_ROUTE_MAX = 120;
+  var CLIENT_ERROR_BUILD_MAX = 40;
+  var CLIENT_ERROR_ORGANIZATION_ID_MAX = 128;
+  var CLIENT_ERROR_DAY_MS = 864e5;
+  var CLIENT_ERROR_FIELDS = [
+    "platform",
+    "source",
+    "message",
+    "route",
+    "build",
+    "organizationId",
+    "dayIndex",
+    "createdAt",
+    "expireAt"
+  ];
+  var EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+  var URL_WITH_PARTS = /\b(?:https?|wss?|ftp|file|gs):\/\/[^\s'"<>()]+/gi;
+  var UUID = /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g;
+  var LONG_HEX = /\b[0-9a-fA-F]{16,}\b/g;
+  var LONG_DIGITS = /\b\d{6,}\b/g;
+  var ID_TOKEN = /\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{16,}\b/g;
+  var JWT = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)?/g;
+  function cap(text58, max) {
+    const chars = Array.from(text58);
+    return chars.length <= max ? text58 : chars.slice(0, Math.max(0, max - 1)).join("") + "\u2026";
+  }
+  function stripUrl(url) {
+    const cut = url.search(/[?#]/);
+    const bare = cut >= 0 ? url.slice(0, cut) : url;
+    return bare.replace(/\/[^/]*$/, (last) => /\d/.test(last) && last.length > 12 ? "/:id" : last);
+  }
+  function sanitizeClientErrorText(value, max = CLIENT_ERROR_MESSAGE_MAX) {
+    if (typeof value !== "string") return "";
+    let text58 = value.replace(JWT, "<id>").replace(EMAIL, "<email>").replace(URL_WITH_PARTS, (url) => stripUrl(url)).replace(UUID, "<id>").replace(LONG_HEX, "<id>").replace(ID_TOKEN, "<id>").replace(LONG_DIGITS, "<id>");
+    text58 = text58.replace(/@/g, " at ");
+    text58 = text58.replace(/\s+/g, " ").trim();
+    return cap(text58, max);
+  }
+  function sanitizeClientErrorRoute(value) {
+    if (typeof value !== "string" || !value.trim()) return "/";
+    let path = value.trim();
+    path = path.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "");
+    const cut = path.search(/[?#]/);
+    if (cut >= 0) path = path.slice(0, cut);
+    if (!path.startsWith("/")) path = "/" + path;
+    const parts3 = path.split("/").map((segment2) => {
+      if (!segment2) return segment2;
+      if (segment2.includes("@")) return ":id";
+      if (/^[0-9a-fA-F-]{8,}$/.test(segment2) && /\d/.test(segment2)) return ":id";
+      if (/^\d+$/.test(segment2)) return ":id";
+      if (/^[A-Za-z0-9_-]{16,}$/.test(segment2) && /\d/.test(segment2)) return ":id";
+      return segment2.replace(/[^A-Za-z0-9_.\-[\]:]/g, "");
+    });
+    const out = parts3.join("/").replace(/\/{2,}/g, "/") || "/";
+    return cap(out, CLIENT_ERROR_ROUTE_MAX);
+  }
+  function clientErrorDayIndex(nowMs2) {
+    return Math.floor(nowMs2 / CLIENT_ERROR_DAY_MS);
+  }
+  function clientErrorHashInput(uid, dayIndex) {
+    return `${uid}|${dayIndex}`;
+  }
+  function clientErrorDocId(hashHex, slot) {
+    if (typeof hashHex !== "string" || !/^[0-9a-f]{64}$/.test(hashHex)) return null;
+    if (!Number.isInteger(slot) || slot < 0 || slot >= CLIENT_ERRORS_PER_DAY) return null;
+    return `${hashHex}_${slot}`;
+  }
+  function clientErrorSignature(input) {
+    return [input.platform, input.source, input.message, input.route, input.build].join("");
+  }
+  function clientErrorThrottle(state, input) {
+    const sameDay = state && state.dayIndex === input.dayIndex;
+    const current = {
+      dayIndex: input.dayIndex,
+      used: sameDay ? Math.max(0, Math.floor(Number(state.used) || 0)) : 0,
+      sent: Array.isArray(state?.sent) ? state.sent.slice(-200) : []
+    };
+    if (current.sent.includes(input.signature)) return { send: false, slot: null, state: current };
+    if (current.used >= CLIENT_ERRORS_PER_DAY) return { send: false, slot: null, state: current };
+    return {
+      send: true,
+      slot: current.used,
+      state: { dayIndex: input.dayIndex, used: current.used + 1, sent: [...current.sent, input.signature] }
+    };
+  }
+  function clientErrorCreateFields(input) {
+    if (!CLIENT_ERROR_PLATFORMS.includes(input.platform)) return null;
+    if (!CLIENT_ERROR_SOURCES.includes(input.source)) return null;
+    const message = sanitizeClientErrorText(input.message, CLIENT_ERROR_MESSAGE_MAX);
+    if (!message) return null;
+    const build = sanitizeClientErrorText(typeof input.build === "string" ? input.build : "", CLIENT_ERROR_BUILD_MAX);
+    const org = typeof input.organizationId === "string" ? input.organizationId.trim() : "";
+    const organizationId = org && org.length <= CLIENT_ERROR_ORGANIZATION_ID_MAX && /^[A-Za-z0-9_-]+$/.test(org) ? org : "";
+    return {
+      platform: input.platform,
+      source: input.source,
+      message,
+      route: sanitizeClientErrorRoute(input.route),
+      build,
+      organizationId,
+      dayIndex: clientErrorDayIndex(input.nowMs),
+      expireAtMs: input.nowMs + CLIENT_ERROR_TTL_DAYS * CLIENT_ERROR_DAY_MS
+    };
+  }
+  function instantMs5(value) {
+    if (value == null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+    if (typeof value === "string") {
+      const ms = Date.parse(value);
+      return Number.isFinite(ms) ? ms : null;
+    }
+    if (typeof value === "object") {
+      const v = value;
+      if (typeof v.toMillis === "function") return v.toMillis();
+      const seconds = typeof v.seconds === "number" ? v.seconds : typeof v._seconds === "number" ? v._seconds : null;
+      if (seconds != null) return seconds * 1e3 + Math.floor((typeof v.nanoseconds === "number" ? v.nanoseconds : 0) / 1e6);
+    }
+    return null;
+  }
+  function parseClientErrorDocument(id2, data) {
+    const d = data || {};
+    const text58 = (key8) => typeof d[key8] === "string" ? d[key8] : "";
+    return {
+      id: id2,
+      platform: text58("platform"),
+      source: text58("source"),
+      message: text58("message"),
+      route: text58("route"),
+      build: text58("build"),
+      organizationId: text58("organizationId"),
+      createdAtMs: instantMs5(d.createdAt)
+    };
+  }
+  function clientErrorGroups(records, filter = {}) {
+    const groups = /* @__PURE__ */ new Map();
+    for (const r of records) {
+      if (filter.platform && r.platform !== filter.platform) continue;
+      if (filter.organizationId != null && filter.organizationId !== "__all__" && r.organizationId !== filter.organizationId) continue;
+      const key8 = [r.platform, r.message, r.route, r.build].join("");
+      let g = groups.get(key8);
+      if (!g) {
+        g = { key: key8, platform: r.platform, message: r.message, route: r.route, build: r.build, count: 0, firstMs: null, lastMs: null, organizationIds: [], sources: [] };
+        groups.set(key8, g);
+      }
+      g.count += 1;
+      if (r.createdAtMs != null) {
+        g.firstMs = g.firstMs == null ? r.createdAtMs : Math.min(g.firstMs, r.createdAtMs);
+        g.lastMs = g.lastMs == null ? r.createdAtMs : Math.max(g.lastMs, r.createdAtMs);
+      }
+      if (!g.organizationIds.includes(r.organizationId)) g.organizationIds.push(r.organizationId);
+      if (!g.sources.includes(r.source)) g.sources.push(r.source);
+    }
+    return [...groups.values()].sort((a, b) => (b.lastMs ?? -1) - (a.lastMs ?? -1) || b.count - a.count || a.key.localeCompare(b.key));
   }
   return __toCommonJS(bundleEntry_exports);
 })();
