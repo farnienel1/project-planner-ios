@@ -457,6 +457,40 @@ enum TaskPeopleRulebook {
         isSelected(kind, id, managers: Set(task.allAssignedManagerIds), operatives: Set(task.allAssignedOperativeIds), index: index)
     }
 
+    /// RULEBOOK 1.89.0 §32 bug B11: every assignee, one per person, managers first — an id whose row is gone, or an
+    /// anonymised deleted profile, reads "Removed user" (`taskAssigneeDisplay`) and is flagged so the task can be
+    /// reassigned. Display only.
+    static func assigneeEntries(
+        managerIds: [UUID],
+        operativeIds: [UUID],
+        index: TaskPersonIndex
+    ) -> [(kind: TaskPersonKind, name: String, removed: Bool)] {
+        var seen = Set<String>()
+        var out: [(kind: TaskPersonKind, name: String, removed: Bool)] = []
+        func add(_ kind: TaskPersonKind, _ id: UUID) {
+            guard seen.insert(index.key(kind, id)).inserted else { return }
+            let display: (name: String, removed: Bool)
+            switch kind {
+            case .manager:
+                if let row = index.manager(id) {
+                    display = TaskRulebook.assigneeDisplay(firstName: row.fullName, lastName: nil, email: row.email, exists: true)
+                } else {
+                    display = TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false)
+                }
+            case .operative:
+                if let row = index.operative(id) {
+                    display = TaskRulebook.assigneeDisplay(firstName: row.name, lastName: nil, email: row.email, exists: true)
+                } else {
+                    display = TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false)
+                }
+            }
+            out.append((kind, display.name, display.removed))
+        }
+        for id in managerIds { add(.manager, id) }
+        for id in operativeIds { add(.operative, id) }
+        return out
+    }
+
     /// The names of a task's assignees, one per person (two stored ids of one person show one name), managers first.
     /// An id whose row is gone is left out, as before.
     static func assigneeNames(

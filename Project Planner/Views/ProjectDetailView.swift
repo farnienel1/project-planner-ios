@@ -71,7 +71,11 @@ struct ProjectDetailView: View {
         return userStore.canManageWorkCatalogue(catalogue)
     }
 
-    private var canViewAllTasksOnThisJob: Bool { canConfigureProjectVisibility }
+    /// RULEBOOK 1.89.0 §32 `taskAccess`: admins and managers outside operative mode see every task on the job (before
+    /// 1.89.0 a manager without the job's add/edit toggle saw only their own here, unlike web).
+    private var canViewAllTasksOnThisJob: Bool {
+        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).seesEveryone
+    }
 
     private var canAccessVariations: Bool {
         WorkAccess.canAccessVariations(project: project, userStore: userStore, operativeStore: operativeStore)
@@ -167,7 +171,8 @@ struct ProjectDetailView: View {
     @State private var isCompactWeekView = false
     @State private var showingAddTask = false
     @State private var showingTaskFilter = false
-    @State private var selectedProjectTaskScope: ProjectTaskListScope = .assignedToMe
+    /// RULEBOOK 1.89.0 §32 bug B9: the list opens on Active (it opened on "Assigned to me", empty for most managers).
+    @State private var selectedProjectTaskScope: ProjectTaskListScope = .active
     @State private var projectTasksSearchText = ""
     @State private var taskFilter = TaskFilter()
     @State private var openVariationCount = 0
@@ -2713,8 +2718,8 @@ struct ProjectDetailView: View {
                 managers: operativeStore.allManagers
             )
         case .overdue:
-            // RULEBOOK §23 `isTaskOverdue`: due before today on the organisation day (never the phone's).
-            tasks = tasks.filter { CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate) }
+            // RULEBOOK 1.89.0 §32 `taskTabKeys`: due before today on the organisation day (never the phone's).
+            tasks = tasks.filter { TaskRulebook.tabs(for: $0).contains(.overdue) }
         }
         
         if !projectTasksSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -2725,20 +2730,14 @@ struct ProjectDetailView: View {
             }
         }
         
-        return tasks.sorted { $0.createdAt > $1.createdAt }
-    }
-    
-    private var projectMyTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
-        let base = myProjectTasksAfterFilters()
-        let incomplete = base.filter { !$0.isCompleted }
-        let todo = incomplete.filter { $0.status == .todo }.count
-        let inProgress = incomplete.filter { $0.status == .inProgress }.count
-        // RULEBOOK §23 `isTaskOverdue` on the organisation day.
-        let overdue = incomplete.filter {
-            CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate)
-        }.count
-        let done = base.filter { $0.isCompleted }.count
-        return (todo, inProgress, overdue, done)
+        // RULEBOOK 1.89.0 §32 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
+        let tab: TaskTab
+        switch scope {
+        case .completed: tab = .completed
+        case .overdue: tab = .overdue
+        case .active, .assignedToMe: tab = .active
+        }
+        return TaskRulebook.sorted(tasks, tab: tab)
     }
     
     private var projectTasksListForCurrentScope: [ProjectTask] {
@@ -3059,14 +3058,11 @@ struct ProjectDetailView: View {
     }
     
     private var tasksContent: some View {
-        let stats = projectMyTasksStats
-        let base = myProjectTasksAfterFilters()
-        let activeCount = base.filter { !$0.isCompleted }.count
-        // RULEBOOK §23 `isTaskOverdue` on the organisation day (never the phone's calendar).
-        let overdueCount = base.filter {
-            CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate)
-        }.count
-        let completedCount = base.filter { $0.isCompleted }.count
+        // RULEBOOK 1.89.0 §32 `taskTabCounts` (bug B13): one count per tab, the definitions Home and the job tile use.
+        let counts = TaskRulebook.tabCounts(myProjectTasksAfterFilters())
+        let activeCount = counts[.active] ?? 0
+        let overdueCount = counts[.overdue] ?? 0
+        let completedCount = counts[.completed] ?? 0
         
         return VStack(alignment: .leading, spacing: 16) {
             HStack {
@@ -3084,10 +3080,9 @@ struct ProjectDetailView: View {
             }
             
             HStack(spacing: 8) {
-                projectStatChip(value: stats.todo, label: "To do", valueColor: ProjectMyTasksPalette.todoCount)
-                projectStatChip(value: stats.inProgress, label: "In progress", valueColor: ProjectMyTasksPalette.inProgressCount)
-                projectStatChip(value: stats.overdue, label: "Overdue", valueColor: ProjectMyTasksPalette.overdueCount)
-                projectStatChip(value: stats.done, label: "Done", valueColor: ProjectMyTasksPalette.doneCount)
+                projectStatChip(value: activeCount, label: TaskTab.active.label, valueColor: ProjectMyTasksPalette.inProgressCount)
+                projectStatChip(value: overdueCount, label: TaskTab.overdue.label, valueColor: ProjectMyTasksPalette.overdueCount)
+                projectStatChip(value: completedCount, label: TaskTab.completed.label, valueColor: ProjectMyTasksPalette.doneCount)
             }
             
             HStack(spacing: 8) {
@@ -3452,9 +3447,9 @@ private struct ProjectTaskRow: View {
     @State private var showingTaskDetail = false
     @State private var showingEditTask = false
     
-    /// Settings cog only for super admins, admins, and managers — not for operative-only users.
+    /// RULEBOOK 1.89.0 §32 `taskAccess.canEdit`: the edit button for admins and managers outside operative mode.
     private var canShowSettingsCog: Bool {
-        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
+        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).canEdit
     }
     
     var body: some View {
@@ -3469,10 +3464,13 @@ private struct ProjectTaskRow: View {
                         Button(action: {
                             showingEditTask = true
                         }) {
-                            Image(systemName: "gearshape")
+                            Image(systemName: "pencil")
                                 .font(.caption)
                                 .foregroundColor(.blue)
+                                .frame(width: 44, height: 44)
+                                .contentShape(Rectangle())
                         }
+                            .accessibilityLabel("Edit task")
                             .accessibilityIdentifier("projectTask.settings")
                     }
                     statusBadge
@@ -3508,15 +3506,14 @@ private struct ProjectTaskRow: View {
                     }
                 }
                 
-                if let dueDate = task.dueDate {
-                    Label {
-                        Text(dueDate, style: .date)
-                    } icon: {
-                        Image(systemName: "calendar")
-                    }
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                // RULEBOOK 1.89.0 §32 `taskDueLabel`: words first, "No due date" when none (bug B10).
+                Label {
+                    Text(TaskRulebook.dueText(task).label)
+                } icon: {
+                    Image(systemName: "calendar")
                 }
+                .font(.caption)
+                .foregroundColor(TaskRulebook.dueText(task).overdue ? .red : .secondary)
             }
             
             Divider()
@@ -3556,7 +3553,7 @@ private struct ProjectTaskRow: View {
     }
     
     private var statusBadge: some View {
-        Text(task.status.rawValue)
+        Text(TaskRulebook.statusLabel(task.status))
             .font(.caption)
             .fontWeight(.medium)
             .padding(.horizontal, 8)
@@ -3567,7 +3564,7 @@ private struct ProjectTaskRow: View {
     }
 
     private var priorityBadge: some View {
-        Text(task.priority.rawValue.uppercased())
+        Text(TaskRulebook.priorityLabel(task.priority).uppercased())
             .font(.system(size: 9, weight: .bold))
             .tracking(0.3)
             .foregroundColor(.white)
@@ -4264,7 +4261,7 @@ private struct AddProjectTaskView: View {
                             .padding(.leading, 4)
                         newTaskSectionHeader("Priority")
                         priorityGrid
-                        newTaskSectionHeader("Schedule", subtitle: "Required")
+                        newTaskSectionHeader(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"), subtitle: "Required")
                         scheduleCard
                         Text("Every task must have a due date.")
                             .font(.system(size: 10))
@@ -4728,13 +4725,9 @@ private struct AddProjectTaskView: View {
         .buttonStyle(.plain)
     }
 
+    /// RULEBOOK 1.89.0 §32 `taskPriorityLabel`: Low / Normal / High / Urgent — never "Medium" (bug B5).
     private func priorityShortLabel(_ level: ProjectTask.Priority) -> String {
-        switch level {
-        case .low: return "Low"
-        case .normal: return "Medium"
-        case .high: return "High"
-        case .urgent: return "Urgent"
-        }
+        TaskRulebook.priorityLabel(level)
     }
 
     private func priorityDotColor(_ level: ProjectTask.Priority) -> Color {
@@ -5144,10 +5137,18 @@ private struct EditProjectTaskView: View {
     @State private var isSaving = false
     @State private var showingOperativeSelection = false
     @State private var showingManagerSelection = false
+    @State private var saveError: String?
+    @State private var showingDeleteConfirm = false
+    @State private var isDeleting = false
     
     /// Owner decision 17 Nov (web #364): one entry per person over every row (old and inactive ones too).
     private var taskPersonIndex: TaskPersonIndex {
         TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
+    }
+
+    /// RULEBOOK 1.89.0 §32 `taskAccess.canDelete`: only admins delete (the security rules refuse anyone else).
+    private var canDeleteTask: Bool {
+        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).canDelete
     }
 
     /// The assigned people of one kind, one per person (sorted by id so the list is stable), with the ids each one stands for removed
@@ -5209,7 +5210,7 @@ private struct EditProjectTaskView: View {
                 Section {
                     Picker("Priority", selection: $priority) {
                         ForEach(ProjectTask.Priority.allCases, id: \.self) { level in
-                            Text(level.rawValue).tag(level)
+                            Text(TaskRulebook.priorityLabel(level)).tag(level)
                         }
                     }
                     .accessibilityIdentifier("editProjectTask.priority")
@@ -5358,20 +5359,60 @@ private struct EditProjectTaskView: View {
                 }
                 
                 Section {
-                    DatePicker("Schedule", selection: $dueDate, displayedComponents: .date)
+                    DatePicker(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"), selection: $dueDate, displayedComponents: .date)
                         .accessibilityIdentifier("editProjectTask.schedule")
                 } header: {
-                    Text("Schedule")
+                    Text(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"))
                 }
                 
-                Section("Status") {
-                    Picker("Status", selection: $status) {
-                        ForEach(ProjectTask.Status.allCases, id: \.rawValue) { st in
-                            Text(st.rawValue).tag(st)
+                // RULEBOOK 1.89.0 §32 bug B7: Edit switches To do / In progress only; completing goes through Complete
+                // (checklist and proof of work), and a completed task stays completed here (Reopen it instead).
+                Section {
+                    if task.status == .completed {
+                        LabeledContent("Status", value: TaskRulebook.statusLabel(.completed))
+                    } else {
+                        Picker("Status", selection: $status) {
+                            ForEach(TaskRulebook.editStatusOptions, id: \.rawValue) { st in
+                                Text(TaskRulebook.statusLabel(st)).tag(st)
+                            }
                         }
-                    }
+                        .pickerStyle(.segmented)
                         .accessibilityIdentifier("editProjectTask.status")
+                    }
+                } header: {
+                    Text(TaskRulebook.copy("form", "statusLabel", fallback: "Status"))
+                } footer: {
+                    Text(TaskRulebook.copy("form", "statusCompletedHint", fallback: "To complete a task, use Complete so the checklist and proof of work are captured."))
                 }
+
+                if let saveError {
+                    Section {
+                        Text(saveError)
+                            .foregroundColor(.red)
+                            .font(.footnote)
+                    }
+                }
+
+                if canDeleteTask {
+                    Section {
+                        Button(role: .destructive) {
+                            showingDeleteConfirm = true
+                        } label: {
+                            Text(isDeleting ? "Deleting…" : TaskRulebook.copy("detail", "delete", fallback: "Delete task"))
+                        }
+                        .disabled(isDeleting || isSaving)
+                        .accessibilityIdentifier("editProjectTask.delete")
+                    }
+                }
+            }
+            .alert(
+                TaskRulebook.copy("delete", "title", values: ["title": task.title], fallback: "Delete \(task.title)?"),
+                isPresented: $showingDeleteConfirm
+            ) {
+                Button(TaskRulebook.copy("form", "cancel", fallback: "Cancel"), role: .cancel) {}
+                Button(TaskRulebook.copy("delete", "confirm", fallback: "Delete"), role: .destructive) { deleteTask() }
+            } message: {
+                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task, its checklist and attachments for everyone on iOS and web."))
             }
             .navigationTitle("Edit Task")
             .navigationBarTitleDisplayMode(.inline)
@@ -5417,14 +5458,22 @@ private struct EditProjectTaskView: View {
                 )
             }
         
+        saveError = nil
         Task {
-            var updatedTask = task
+            let current = taskStore.tasks.first(where: { $0.id == task.id }) ?? task
+            var updatedTask = current
             updatedTask.title = trimmedTitle
             updatedTask.details = detailsValue
             updatedTask.items = items
+            // RULEBOOK 1.89.0 §32 bug B4: an edit never resets ticks; only ticks on removed items go.
+            updatedTask.completedItemIds = TaskRulebook.checklistAfterEdit(items: items, completedItemIds: current.completedItemIds)
             updatedTask.dueDate = dueDate
             updatedTask.priority = priority
-            updatedTask.status = status
+            // Bug B7: To do / In progress only; a completed task keeps Completed and its who / when.
+            let nextStatus = TaskRulebook.editStatus(stored: current.status, chosen: status)
+            if nextStatus != current.status {
+                updatedTask = TaskRulebook.applyingStatus(nextStatus, to: updatedTask, by: userStore.currentUser?.fullName ?? "")
+            }
             updatedTask.updatedAt = Date()
             
             updatedTask.assignedOperativeIds = Array(selectedOperatives)
@@ -5432,11 +5481,26 @@ private struct EditProjectTaskView: View {
             updatedTask.assignedManagerIds = Array(selectedManagers)
             updatedTask.assignedManagerId = selectedManagers.first
             
-            await taskStore.updateTask(updatedTask)
-            
-            await MainActor.run {
-                isSaving = false
+            let ok = await taskStore.updateTaskReportingError(updatedTask)
+            isSaving = false
+            if ok {
                 isPresented = false
+            } else {
+                saveError = taskStore.lastWriteError ?? TaskRulebook.copy("errors", "saveFailed", fallback: "The task wasn't saved. Check your connection and try again.")
+            }
+        }
+    }
+
+    private func deleteTask() {
+        isDeleting = true
+        saveError = nil
+        Task {
+            let ok = await taskStore.deleteTaskReportingError(task)
+            isDeleting = false
+            if ok {
+                isPresented = false
+            } else {
+                saveError = taskStore.lastWriteError ?? TaskRulebook.copy("errors", "deleteRefused", fallback: "Only an admin can delete a task.")
             }
         }
     }
@@ -5492,10 +5556,13 @@ struct TaskCompletionPopupView: View {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
     }
     
-    private var markCompleteEnabled: Bool {
-        let ids = Set(displayTask.effectiveItems.map(\.id))
-        return ids.isSubset(of: draftCompletedItemIds)
+    /// RULEBOOK 1.89.0 §32 `taskCompleteStep` (F2, F25): Complete needs every real item ticked; no row is made from
+    /// the title.
+    private var completeStep: TaskCompleteStepInfo {
+        TaskRulebook.completeStep(items: displayTask.items, completedItemIds: Array(draftCompletedItemIds))
     }
+
+    private var markCompleteEnabled: Bool { completeStep.completeEnabled }
 
     private var hasUnsavedChanges: Bool {
         let existing = Set(displayTask.completedItemIds)
@@ -5522,14 +5589,7 @@ struct TaskCompletionPopupView: View {
         return "\(done) of \(items.count)"
     }
     
-    private var tickRemainingHint: String {
-        let items = displayTask.effectiveItems
-        let ids = Set(items.map(\.id))
-        let done = draftCompletedItemIds.intersection(ids).count
-        let left = max(0, ids.count - done)
-        if left <= 0 { return "" }
-        return left == 1 ? "Tick 1 more item to enable" : "Tick \(left) more items to enable"
-    }
+    private var tickRemainingHint: String { completeStep.hint ?? "" }
     
     var body: some View {
         NavigationStack {
@@ -5570,24 +5630,43 @@ struct TaskCompletionPopupView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
+                // RULEBOOK 1.89.0 §32 F2: two clear choices. Save progress keeps ticks, files and notes and never
+                // changes the status; Complete task needs every item ticked and records who and when.
                 VStack(spacing: 9) {
-                    Button {
-                        saveProgress()
-                    } label: {
-                        HStack(spacing: 8) {
-                            Image(systemName: markCompleteEnabled ? "checkmark.circle.fill" : "tray.and.arrow.down.fill")
-                                .font(.system(size: 18, weight: .medium))
-                            Text(markCompleteEnabled ? "Save & mark complete" : "Save")
+                    HStack(spacing: 10) {
+                        Button {
+                            save(complete: false)
+                        } label: {
+                            Text(TaskRulebook.copy("complete", "saveProgress", fallback: "Save progress"))
                                 .font(.system(size: 15, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 15)
+                                .foregroundStyle(hasUnsavedChanges && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.muted)
+                                .background(ProjectWorksRevampColors.surface)
+                                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 1))
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 15)
-                        .foregroundStyle(Color.white)
-                        .background(hasUnsavedChanges && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.disabledBar)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .accessibilityIdentifier("taskCompletionPopup.saveProgress")
+                        .disabled(!hasUnsavedChanges || isUploading)
+
+                        Button {
+                            save(complete: true)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 18, weight: .medium))
+                                Text(TaskRulebook.copy("complete", "confirm", fallback: "Complete task"))
+                                    .font(.system(size: 15, weight: .medium))
+                            }
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 15)
+                            .foregroundStyle(Color.white)
+                            .background(markCompleteEnabled && !isUploading ? CompleteTaskUXPalette.blue : CompleteTaskUXPalette.disabledBar)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .accessibilityIdentifier("taskCompletionPopup.button")
+                        .disabled(!markCompleteEnabled || isUploading)
                     }
-                    .accessibilityIdentifier("taskCompletionPopup.button")
-                    .disabled(!hasUnsavedChanges || isUploading)
                     if !markCompleteEnabled {
                         Text(tickRemainingHint)
                             .font(.system(size: 11))
@@ -5683,7 +5762,15 @@ struct TaskCompletionPopupView: View {
         return ""
     }
     
+    @ViewBuilder
     private var completeChecklistBlock: some View {
+        // F25: no Checklist section when the task has none.
+        if completeStep.showChecklist {
+            checklistBlockContent
+        }
+    }
+
+    private var checklistBlockContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 8) {
                 Text("CHECKLIST")
@@ -5774,7 +5861,7 @@ struct TaskCompletionPopupView: View {
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(CompleteTaskUXPalette.border, lineWidth: 0.5))
             
-            Text(displayTask.isMultiItemTask ? "Tick the last item to mark this task complete." : "Confirm the work is done, then mark complete below.")
+            Text(TaskRulebook.copy("form", "checklistHelper", fallback: "Assignees tick every item before they can complete the task."))
                 .font(.system(size: 11))
                 .foregroundStyle(CompleteTaskUXPalette.muted)
                 .padding(.leading, 4)
@@ -5933,9 +6020,11 @@ struct TaskCompletionPopupView: View {
         }
     }
     
-    private func saveProgress() {
+    private func save(complete: Bool) {
+        if complete && !markCompleteEnabled { return }
         isUploading = true
         uploadProgress = 0
+        validationMessage = nil
         
         Task {
             let completedBy = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"
@@ -5965,10 +6054,7 @@ struct TaskCompletionPopupView: View {
             
             let notesTrim = completionNotes.trimmingCharacters(in: .whitespacesAndNewlines)
             let notesOut: String? = notesTrim.isEmpty ? nil : notesTrim
-            let effectiveIds = Set(displayTask.effectiveItems.map(\.id))
-            let allTicked = effectiveIds.isSubset(of: draftCompletedItemIds)
-            
-            if allTicked {
+            if complete {
                 await MainActor.run {
                     isUploading = false
                     onComplete(completedBy, imageURLs, fileURLs, notesOut)
@@ -5977,21 +6063,24 @@ struct TaskCompletionPopupView: View {
                 return
             }
 
+            // F2: Save progress keeps the status as it is (it set To do / In progress from the ticks before 1.89.0).
             var updatedTask = displayTask
             updatedTask.completedItemIds = Array(draftCompletedItemIds)
-            let done = draftCompletedItemIds.intersection(effectiveIds).count
-            updatedTask.status = done == 0 ? .todo : .inProgress
             updatedTask.completionImages = imageURLs
             updatedTask.completionFiles = fileURLs
             updatedTask.completionNotes = notesOut
             updatedTask.updatedAt = Date()
-            await taskStore.updateTask(updatedTask)
+            let ok = await taskStore.updateTaskReportingError(updatedTask)
             
             await MainActor.run {
                 isUploading = false
-                selectedImages.removeAll()
-                selectedFiles.removeAll()
-                isPresented = false
+                if ok {
+                    selectedImages.removeAll()
+                    selectedFiles.removeAll()
+                    isPresented = false
+                } else {
+                    validationMessage = taskStore.lastWriteError
+                }
             }
         }
     }
@@ -6270,14 +6359,21 @@ private struct TaskCameraPicker: UIViewControllerRepresentable {
 private struct TaskCompletionFileRow: View {
     let urlString: String
     let label: String
+    /// RULEBOOK 1.89.0 §32 bug B8: opens the in-app viewer when given; otherwise the old behaviour (Safari).
+    let onOpen: (() -> Void)?
     
-    init(urlString: String, label: String? = nil) {
+    init(urlString: String, label: String? = nil, onOpen: (() -> Void)? = nil) {
         self.urlString = urlString
         self.label = label ?? (URL(string: urlString)?.lastPathComponent ?? "File")
+        self.onOpen = onOpen
     }
     
     var body: some View {
         Button(action: {
+            if let onOpen {
+                onOpen()
+                return
+            }
             // RULEBOOK 1.50.0 §24: a stored link opens only when `safeExternalUrl` allows it (https).
             if let url = CanonicalBusinessEngine.safeExternalURL(urlString) {
                 UIApplication.shared.open(url)
@@ -6366,29 +6462,73 @@ struct CompletedTaskDetailView: View {
     @State private var showingCarryOut = false
     @State private var reportTarget: FileReportTarget?
     @State private var showingEditTask = false
+    @State private var showingDeleteConfirm = false
+    @State private var actionBusy = false
+    @State private var actionError: String?
+    /// RULEBOOK 1.89.0 §32 bug B8: the attachment open in the in-app viewer.
+    @State private var viewing: TaskAttachmentViewerItem?
 
     private var displayTask: ProjectTask {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
     }
 
-    private var canEditTask: Bool {
-        userStore.hasAdminAccess() || userStore.displayUser?.permissions.manager == true
+    private var viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole? {
+        userStore.currentUser.map(UserStore.staffAccountRole(for:))
     }
 
-    private var canEditTaskHere: Bool {
-        canEditTask && projectStore.projects.first(where: { $0.id == displayTask.projectId }) != nil
-    }
-
-    private var canCarryOut: Bool {
-        guard !displayTask.isCompleted else { return false }
-        if userStore.hasAdminAccess() { return true }
-        return TaskAssignmentRulebook.isAssigned(
+    /// RULEBOOK 1.89.0 §32 `taskAccess`: staff edit; admins delete; staff and assignees act.
+    private var access: TaskRulebookAccess {
+        let isAssignee = TaskAssignmentRulebook.isAssigned(
             displayTask,
             viewer: userStore.currentUser,
             organizationUsers: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
             managers: operativeStore.allManagers
         )
+        return TaskRulebook.access(role: viewerRole, isAssignee: isAssignee)
+    }
+
+    /// The task's project or small works (before 1.89.0 Edit looked in projects only, so small works tasks could not
+    /// be edited here).
+    private var taskLocation: Project? {
+        projectStore.projects.first(where: { $0.id == displayTask.projectId })
+            ?? projectStore.smallWorks.first(where: { $0.id == displayTask.projectId })
+    }
+
+    private var canEditTaskHere: Bool {
+        access.canEdit && taskLocation != nil
+    }
+
+    /// Start / Complete / Reopen (`taskActions`); "Carry out" is gone.
+    private var canCarryOut: Bool { access.canAct }
+
+    private var primaryAction: TaskActionKind { TaskRulebook.actions(displayTask.status).primary }
+
+    private func runPrimaryAction() {
+        switch primaryAction {
+        case .complete:
+            showingCarryOut = true
+        case .start, .reopen:
+            let status = TaskRulebook.actionStatus(primaryAction)
+            let updated = TaskRulebook.applyingStatus(status, to: displayTask, by: userStore.currentUser?.fullName ?? "")
+            actionBusy = true
+            actionError = nil
+            Task {
+                let ok = await taskStore.updateTaskReportingError(updated)
+                actionBusy = false
+                if !ok { actionError = taskStore.lastWriteError }
+            }
+        }
+    }
+
+    private func deleteTask() {
+        actionBusy = true
+        actionError = nil
+        Task {
+            let ok = await taskStore.deleteTaskReportingError(displayTask)
+            actionBusy = false
+            if ok { dismiss() } else { actionError = taskStore.lastWriteError }
+        }
     }
 
     private var jobLine: String {
@@ -6406,13 +6546,16 @@ struct CompletedTaskDetailView: View {
         TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
-    private var assigneeNames: [(kind: TaskPersonKind, name: String)] {
-        TaskPeopleRulebook.assigneeNames(
+    /// Bug B11: a removed person reads "Removed user" (`taskAssigneeDisplay`).
+    private var assigneeNames: [(kind: TaskPersonKind, name: String, removed: Bool)] {
+        TaskPeopleRulebook.assigneeEntries(
             managerIds: displayTask.allAssignedManagerIds,
             operativeIds: displayTask.allAssignedOperativeIds,
             index: taskPersonIndex
         )
     }
+
+    private var hasRemovedAssignee: Bool { assigneeNames.contains { $0.removed } }
 
     private var assignedSummary: String {
         // One per person (two stored ids of one person count once); an id whose row is gone still counts.
@@ -6439,11 +6582,12 @@ struct CompletedTaskDetailView: View {
         return joined.isEmpty ? "—" : joined
     }
 
+    private var checklistStep: TaskCompleteStepInfo {
+        TaskRulebook.completeStep(items: displayTask.items, completedItemIds: displayTask.completedItemIds)
+    }
+
     private var checklistDoneLabel: String {
-        let items = displayTask.effectiveItems
-        let ids = Set(items.map(\.id))
-        let done = Set(displayTask.completedItemIds).intersection(ids).count
-        return "\(done) of \(items.count) done"
+        "\(checklistStep.done) of \(checklistStep.total) done"
     }
 
     private var checklistProgress: CGFloat {
@@ -6461,8 +6605,19 @@ struct CompletedTaskDetailView: View {
                     summaryHeroCard
                     sectionLabel("Details")
                     detailsCard
-                    checklistHeader
-                    checklistCarryOutButton
+                    if hasRemovedAssignee {
+                        Text(TaskRulebook.copy("detail", "reassign", fallback: "Someone on this task was removed. Edit the task to assign someone else."))
+                            .font(.footnote)
+                            .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
+                            .padding(12)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(ProjectWorksRevampColors.amberTint, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    // F25: no Checklist section when the task has none.
+                    if checklistStep.showChecklist {
+                        checklistHeader
+                        checklistCarryOutButton
+                    }
                     attachmentsSection
                     if displayTask.isCompleted {
                         completionSummarySection
@@ -6493,10 +6648,19 @@ struct CompletedTaskDetailView: View {
                         .accessibilityIdentifier("completedTaskDetail.back")
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    if canEditTaskHere {
+                    if canEditTaskHere || access.canDelete {
                         Menu {
-                            Button("Edit task") { showingEditTask = true }
-                                .accessibilityIdentifier("completedTaskDetail.editTask2")
+                            if canEditTaskHere {
+                                Button(TaskRulebook.copy("detail", "edit", fallback: "Edit")) { showingEditTask = true }
+                                    .accessibilityIdentifier("completedTaskDetail.editTask2")
+                            }
+                            // Only admins delete (the security rules refuse anyone else).
+                            if access.canDelete {
+                                Button(TaskRulebook.copy("detail", "delete", fallback: "Delete task"), role: .destructive) {
+                                    showingDeleteConfirm = true
+                                }
+                                .accessibilityIdentifier("completedTaskDetail.deleteTask")
+                            }
                         } label: {
                             Image(systemName: "ellipsis")
                                 .font(.system(size: 17, weight: .medium))
@@ -6506,9 +6670,30 @@ struct CompletedTaskDetailView: View {
                                 .clipShape(Circle())
                                 .overlay(Circle().stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
                         }
+                            .accessibilityLabel("More actions")
                             .accessibilityIdentifier("completedTaskDetail.editTask")
                     }
                 }
+            }
+            .alert(
+                TaskRulebook.copy("delete", "title", values: ["title": displayTask.title], fallback: "Delete \(displayTask.title)?"),
+                isPresented: $showingDeleteConfirm
+            ) {
+                Button(TaskRulebook.copy("form", "cancel", fallback: "Cancel"), role: .cancel) {}
+                Button(TaskRulebook.copy("delete", "confirm", fallback: "Delete"), role: .destructive) { deleteTask() }
+            } message: {
+                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task, its checklist and attachments for everyone on iOS and web."))
+            }
+            .alert("Couldn't save", isPresented: Binding(
+                get: { actionError != nil },
+                set: { if !$0 { actionError = nil } }
+            )) {
+                Button("OK", role: .cancel) { actionError = nil }
+            } message: {
+                Text(actionError ?? "")
+            }
+            .sheet(item: $viewing) { item in
+                TaskAttachmentViewerSheet(item: item)
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if canCarryOut {
@@ -6535,7 +6720,7 @@ struct CompletedTaskDetailView: View {
                 .environmentObject(projectStore)
             }
             .sheet(isPresented: $showingEditTask) {
-                if let proj = projectStore.projects.first(where: { $0.id == displayTask.projectId }) {
+                if let proj = taskLocation {
                     EditProjectTaskView(
                         task: displayTask,
                         project: proj,
@@ -6606,11 +6791,11 @@ struct CompletedTaskDetailView: View {
     private var statusCapsuleParts: (String, Color, Color, String) {
         switch displayTask.status {
         case .todo:
-            return ("To do", CompleteTaskUXPalette.muted, ProjectWorksRevampColors.grayTint, "circle.dashed")
+            return (TaskRulebook.statusLabel(.todo), CompleteTaskUXPalette.muted, ProjectWorksRevampColors.grayTint, "circle.dashed")
         case .inProgress:
-            return ("In progress", ProjectWorksRevampColors.upcomingAmber, ProjectWorksRevampColors.amberTint, "chart.line.uptrend.xyaxis")
+            return (TaskRulebook.statusLabel(.inProgress), ProjectWorksRevampColors.upcomingAmber, ProjectWorksRevampColors.amberTint, "chart.line.uptrend.xyaxis")
         case .completed:
-            return ("Done", CompleteTaskUXPalette.green, ProjectWorksRevampColors.greenTint, "checkmark.circle.fill")
+            return (TaskRulebook.statusLabel(.completed), CompleteTaskUXPalette.green, ProjectWorksRevampColors.greenTint, "checkmark.circle.fill")
         }
     }
 
@@ -6624,7 +6809,7 @@ struct CompletedTaskDetailView: View {
         }()
         return HStack(spacing: 4) {
             Circle().fill(dot).frame(width: 6, height: 6)
-            Text(displayTask.priority.rawValue)
+            Text(TaskRulebook.priorityLabel(displayTask.priority))
                 .font(.system(size: 10, weight: .medium))
         }
         .foregroundStyle(fg)
@@ -6645,9 +6830,8 @@ struct CompletedTaskDetailView: View {
     private var detailsCard: some View {
         VStack(spacing: 0) {
             detailRow(icon: "person.fill", iconBg: ProjectWorksRevampColors.jobTypePillBg, iconFg: ProjectWorksRevampColors.jobTypePillInk, title: "Created by", value: createdByLine, showDivider: true)
-            if let due = displayTask.dueDate {
-                detailRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconFg: ProjectWorksRevampColors.endDateFg, title: "Due", value: dueLine(due), showDivider: true)
-            }
+            // RULEBOOK 1.89.0 §32 `taskDueLabel`: words first ("3 days overdue"), "No due date" when none (bug B10).
+            detailRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconFg: ProjectWorksRevampColors.endDateFg, title: "Due", value: dueLine, showDivider: true)
             assignedRow
         }
         .padding(.horizontal, 14)
@@ -6661,17 +6845,9 @@ struct CompletedTaskDetailView: View {
         return "\(displayTask.createdBy) · \(df.string(from: displayTask.createdAt))"
     }
 
-    private func dueLine(_ due: Date) -> String {
-        let df = OrganizationWeekSupport.formatter("EEE d MMM yyyy")
-        let base = df.string(from: due)
-        let rel = RelativeDateTimeFormatter()
-        rel.unitsStyle = .full
-        let tail = rel.localizedString(for: due, relativeTo: Date())
-        // Due today or later on the organisation day (never the phone's calendar, guardrail 2).
-        if OrganizationWeekSupport.daysFromToday(to: due) >= 0 {
-            return "\(base) · \(tail)"
-        }
-        return base
+    private var dueLine: String {
+        let due = TaskRulebook.dueText(displayTask)
+        return [due.label, due.secondary].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func detailRow(icon: String, iconBg: Color, iconFg: Color, title: String, value: String, showDivider: Bool) -> some View {
@@ -6740,7 +6916,7 @@ struct CompletedTaskDetailView: View {
     }
 
     private var assigneeInitialsList: [String] {
-        Array(assigneeNames.map { Self.initials(from: $0.name) }.prefix(4))
+        Array(assigneeNames.map { $0.removed ? "?" : Self.initials(from: $0.name) }.prefix(4))
     }
 
     private static func initials(from fullName: String) -> String {
@@ -6768,13 +6944,13 @@ struct CompletedTaskDetailView: View {
 
     @ViewBuilder
     private var checklistCarryOutButton: some View {
-        if canCarryOut {
+        if canCarryOut && !displayTask.isCompleted {
             Button { showingCarryOut = true } label: {
                 readOnlyChecklistCard
                     .overlay(alignment: .bottomTrailing) {
                         HStack(spacing: 4) {
-                            Text("Carry out tasks")
-                                .font(.system(size: 11, weight: .semibold))
+                            Text(TaskRulebook.actionLabel(.complete))
+                                .font(.system(size: 13, weight: .semibold))
                             Image(systemName: "chevron.right")
                                 .font(.system(size: 10, weight: .bold))
                         }
@@ -6846,13 +7022,13 @@ struct CompletedTaskDetailView: View {
 
     private var carryOutLabelButton: some View {
         Button {
-            showingCarryOut = true
+            runPrimaryAction()
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "play.fill")
+                Image(systemName: primaryAction == .reopen ? "arrow.uturn.backward" : (primaryAction == .start ? "play.fill" : "checkmark.circle.fill"))
                     .font(.system(size: 16))
-                Text("Carry out tasks")
-                    .font(.system(size: 13, weight: .medium))
+                Text(actionBusy ? "Saving…" : TaskRulebook.actionLabel(primaryAction))
+                    .font(.system(size: 15, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 12)
@@ -6862,6 +7038,7 @@ struct CompletedTaskDetailView: View {
         }
         .accessibilityIdentifier("completedTaskDetail.playFill")
         .buttonStyle(.plain)
+        .disabled(actionBusy)
     }
 
     private var attachmentsSection: some View {
@@ -6881,10 +7058,10 @@ struct CompletedTaskDetailView: View {
                     .padding(.leading, 4)
                     VStack(spacing: 0) {
                         if let fileURL = displayTask.attachedFileURL {
-                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to open", url: fileURL, reportFileName: displayTask.attachedFileName ?? "", showDivider: !displayTask.attachedImageURLs.isEmpty)
+                            attachmentRow(icon: "doc.fill", iconBg: CompleteTaskUXPalette.requiredBg, iconFg: CompleteTaskUXPalette.requiredFg, title: displayTask.attachedFileName ?? "File", subtitle: "Tap to view", url: fileURL, reportFileName: displayTask.attachedFileName ?? "", showDivider: !displayTask.attachedImageURLs.isEmpty)
                         }
                         ForEach(Array(displayTask.attachedImageURLs.enumerated()), id: \.offset) { idx, url in
-                            attachmentRow(icon: "photo", iconBg: ProjectWorksRevampColors.greenTint, iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to open", url: url, reportFileName: "", showDivider: idx < displayTask.attachedImageURLs.count - 1)
+                            attachmentRow(icon: "photo", iconBg: ProjectWorksRevampColors.greenTint, iconFg: CompleteTaskUXPalette.green, title: "Image \(idx + 1)", subtitle: "Tap to view", url: url, reportFileName: "", showDivider: idx < displayTask.attachedImageURLs.count - 1)
                         }
                     }
                     .padding(.horizontal, 14)
@@ -6899,7 +7076,7 @@ struct CompletedTaskDetailView: View {
     private func attachmentRow(icon: String, iconBg: Color, iconFg: Color, title: String, subtitle: String, url: String, reportFileName: String, showDivider: Bool) -> some View {
         VStack(spacing: 0) {
             Button {
-                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
+                viewing = TaskAttachmentViewerItem(url: url, title: title)
             } label: {
                 HStack(spacing: 12) {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -6915,7 +7092,7 @@ struct CompletedTaskDetailView: View {
                             .foregroundStyle(CompleteTaskUXPalette.muted)
                     }
                     Spacer()
-                    Image(systemName: "arrow.down.circle")
+                    Image(systemName: "eye")
                         .font(.system(size: 16))
                         .foregroundStyle(CompleteTaskUXPalette.blue)
                 }
@@ -6957,7 +7134,7 @@ struct CompletedTaskDetailView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 90), spacing: 8)], spacing: 8) {
                         ForEach(Array(displayTask.completionImages.enumerated()), id: \.offset) { _, url in
                             Button {
-                                if let u = CanonicalBusinessEngine.safeExternalURL(url) { UIApplication.shared.open(u) }
+                                viewing = TaskAttachmentViewerItem(url: url, title: "Proof photo")
                             } label: {
                                 TaskCompletionImageView(urlString: url)
                                     .frame(height: 90)
@@ -6971,7 +7148,7 @@ struct CompletedTaskDetailView: View {
                     }
                 }
                 ForEach(Array(displayTask.completionFiles.enumerated()), id: \.offset) { _, url in
-                    TaskCompletionFileRow(urlString: url)
+                    TaskCompletionFileRow(urlString: url, onOpen: { viewing = TaskAttachmentViewerItem(url: url, title: completionFileLabel(url)) })
                         .fileReportContextMenu(completionReportTarget(url), presented: $reportTarget)
                 }
             }
@@ -7017,12 +7194,17 @@ struct CompletedTaskDetailView: View {
         }
     }
 
+    private func completionFileLabel(_ url: String) -> String {
+        let decoded = URL(string: url).flatMap { $0.lastPathComponent.removingPercentEncoding } ?? "File"
+        return decoded.components(separatedBy: "/").last ?? "File"
+    }
+
     private func applyCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
-        var updatedTask = displayTask
-        updatedTask.completedItemIds = Array(Set(updatedTask.effectiveItems.map(\.id)))
-        updatedTask.status = .completed
-        updatedTask.completedBy = completedBy
-        updatedTask.completedAt = Date()
+        // RULEBOOK 1.89.0 §32: who and when from `taskStatusChangeFields`; ticks are the real items (F25), older kept.
+        var updatedTask = TaskRulebook.applyingStatus(.completed, to: displayTask, by: completedBy)
+        var ticks = updatedTask.completedItemIds
+        for item in updatedTask.items where !ticks.contains(item.id) { ticks.append(item.id) }
+        updatedTask.completedItemIds = ticks
         updatedTask.completionImages = images
         updatedTask.completionFiles = files
         updatedTask.completionNotes = notes
