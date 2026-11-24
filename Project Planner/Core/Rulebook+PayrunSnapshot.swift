@@ -35,6 +35,9 @@ nonisolated struct PayrunSnapshotLink: Codable, Hashable, Sendable {
     var personId: String
     var start: String
     var end: String
+    /// RULEBOOK 1.79.0: a Timesheet cell names the stored sheet it reports (the pay run's latest version); nil with no
+    /// stored sheet. The review screen opens that pay run's latest version for the person.
+    var documentId: String?
 }
 
 /// `PayrunSnapshotCell`: `tone` is `neutral` | `good` | `warn` | `blocked`; red (`blocked`) cells have no link.

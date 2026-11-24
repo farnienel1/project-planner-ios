@@ -211,7 +211,8 @@ final class NotificationPreferenceCanonicalTests: XCTestCase {
         XCTAssertEqual(first, second)
         XCTAssertFalse(first?.isEmpty ?? true)
 
-        XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground), true)
+        // RULEBOOK 1.79.0 (owner 24 Nov): the icon is the unread count, always; opening the app never clears it.
+        XCTAssertEqual(try XCTUnwrap(CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground), false)
     }
 
     func testPackStillExportsSessionAndDeliveryFunctions() {
