@@ -852,6 +852,11 @@ struct ProjectDetailView: View {
         } else if WorkCatalogueDeepLink.pendingSection == "variations", canAccessVariations {
             // A variation notice (`notificationDestination` → `variations` / `variationDetail`).
             openedManageTile = .variations
+        } else if WorkCatalogueDeepLink.pendingSection == "materials",
+                  !userStore.isOperativeMode() || userStore.canViewMaterials() {
+            // RULEBOOK 1.79.0: a material line notice (`notificationDestination` → `jobMaterials`), with the same gate
+            // as the Materials tile.
+            openedManageTile = .materials
         }
         WorkCatalogueDeepLink.focusProjectId = nil
         WorkCatalogueDeepLink.pendingDayKey = nil

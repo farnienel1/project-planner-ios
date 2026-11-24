@@ -266,6 +266,9 @@ enum NotificationDeepLink {
             NotificationCenter.default.post(name: NSNotification.Name("navigateToWarnings"), object: nil)
         case "materialOrders":
             postSurface(["route": MainMenuSurfaceRoute.wholesalers.rawValue])
+        // RULEBOOK 1.79.0 §13: a material line notice opens that job's Materials (relatedId the job id).
+        case "jobMaterials":
+            openJob(destination, isSmallWorks: jobCatalogue.map { $0 == "smallWorks" }, section: "materials")
         case "clients":
             postSurface(["route": MainMenuSurfaceRoute.clients.rawValue])
         case "manageUsers":
@@ -278,8 +281,10 @@ enum NotificationDeepLink {
             postSurface(payload)
         case "tasks":
             NotificationCenter.default.post(name: NSNotification.Name("openTasksDetail"), object: nil)
+        // RULEBOOK 1.79.0 §13: a toolbox talk notice names the job (relatedId) and its collection: that job's Health &
+        // safety. An older row carries the talk's issue id; the receiver opens the job list when no loaded job has it.
         case "healthSafety":
-            openJob(destination, section: "healthSafety")
+            openJob(destination, isSmallWorks: jobCatalogue.map { $0 == "smallWorks" }, section: "healthSafety")
         case "timesheetMine":
             var payload: [String: Any] = [
                 "route": MainMenuSurfaceRoute.invoicing.rawValue,
