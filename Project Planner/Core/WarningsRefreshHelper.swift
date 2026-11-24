@@ -423,7 +423,13 @@ enum WarningsRefreshHelper {
             firebaseBackend: inputs.firebaseBackend
         )
         if !readiness.storeInputsReady { return false }
-        if let quietUntil = inputs.firebaseBackend.launchQuietUntil, Date() < quietUntil {
+        // Owner report 23 Nov: the launch quiet (30 s) held every scan, so Home said "Checking…" for about
+        // 30 seconds even once every input had loaded. Inside it, a scan now waits only for the clash approvals.
+        if WarningsFirstOpenPolicy.launchQuietHoldsScan(
+            quietUntil: inputs.firebaseBackend.launchQuietUntil,
+            now: Date(),
+            clashApprovalsLoaded: WarningResolutionStore.shared.clashApprovalsLoaded
+        ) {
             return false
         }
         return true
@@ -466,6 +472,11 @@ enum WarningsRefreshHelper {
         let today = cal.startOfDay(for: Date())
         // The phone can still be on the default horizon until settings is opened.
         // Re-read the organisation document so exclusion and the scan window match Firestore.
+        // Owner report 23 Nov: the dismissed-qualification read no longer waits for the organisation read and the
+        // material reads (it was the last of four server reads made one after the other). Same document, same keys.
+        // `async let`: cancelled with the scan.
+        let dismissedKeysOrganizationId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+        async let dismissedKeysRead = firebaseBackend.loadDismissedQualificationKeys(organizationId: dismissedKeysOrganizationId)
         let livePaymentRuns = await firebaseBackend.refreshWarningDetectionFromServer()
         if Task.isCancelled { return false }
         // Returns false whenever nothing was published, so no caller reports "Updated · 0 active" for a
@@ -583,9 +594,7 @@ enum WarningsRefreshHelper {
         let liveHolidays = holidayStore.bookings.filter { holiday in
             holiday.endDayKey >= holidayWindowStartKey && holiday.startDayKey <= holidayWindowEndKey
         }
-        let dismissedQualificationKeys = await firebaseBackend.loadDismissedQualificationKeys(
-            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
-        )
+        let dismissedQualificationKeys = await dismissedKeysRead
         print("🔥🔥🔥 DEBUG: Warnings helper pre-window \(coverageStart)…\(coverageEnd) bookings=\(liveBookings.count)/\(bookingStore.bookings.count) mgr=\(liveManager.count)/\(managerScheduleStore.managerSiteBookings.count) dismissedQualifications=\(dismissedQualificationKeys.count)")
 
         await Task.yield()
@@ -645,21 +654,17 @@ enum WarningsRefreshHelper {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else {
             return ([], [], [])
         }
-        var materials: [MaterialItem] = []
-        var records: [MaterialSendRecord] = []
-        var loaded = Set<UUID>()
-        for projectId in projectIds {
-            if Task.isCancelled { break }
-            guard let lines = try? await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: projectId) else {
-                continue
+        // Every job at once (they were read one after the other); same reads, same result (`WarningsMaterialCutOffLoad`).
+        let result = await WarningsMaterialCutOffLoad.load(
+            projectIds: projectIds,
+            lines: { projectId in
+                try? await firebaseBackend.loadMaterialItems(organizationId: organizationId, projectId: projectId)
+            },
+            records: { projectId in
+                try? await firebaseBackend.loadMaterialSendRecords(organizationId: organizationId, projectId: projectId)
             }
-            materials.append(contentsOf: lines)
-            loaded.insert(projectId)
-            if let sent = try? await firebaseBackend.loadMaterialSendRecords(organizationId: organizationId, projectId: projectId) {
-                records.append(contentsOf: sent)
-            }
-        }
-        return (materials, records, loaded)
+        )
+        return (result.lines, result.records, result.loadedProjectIds)
     }
 
     @MainActor

@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import FirebaseFirestore
 
 /// `variationTotals` / `variationListTotals` (`count` only on a list).
 nonisolated struct RulebookVariationTotals: Hashable, Sendable {
@@ -299,6 +300,139 @@ extension CanonicalBusinessEngine {
     /// left on a reopened Open variation no longer pins it).
     nonisolated static func variationIsPinned(status: String, voNumberLocked: Bool) -> Bool {
         (callJSON("variationIsPinned", arguments: [["status": status, "voNumberLocked": voNumberLocked]]) as? Bool) ?? false
+    }
+
+    // MARK: - Tracker drag (owner decision 23 Nov: the iPhone tracker reorders as web does)
+
+    /// `variationRenumberPlan(...)` with its `changes` (the rows whose number or position changes) — what a save writes.
+    nonisolated static func variationRenumberPlanChanges(
+        rows: [[String: Any]],
+        order: [String],
+        prefix: String,
+        padding: Int,
+        orderLocked: Bool
+    ) -> (rows: [RulebookVariationPlanRow], changes: [RulebookVariationPlanRow], refused: String?)? {
+        let input: [String: Any] = ["rows": rows, "order": order, "prefix": prefix, "padding": padding, "orderLocked": orderLocked]
+        guard let result = callJSON("variationRenumberPlan", arguments: [input]) as? [String: Any] else { return nil }
+        func planRows(_ key: String) -> [RulebookVariationPlanRow] {
+            ((result[key] as? [Any]) ?? []).compactMap { entry in
+                guard let row = CanonicalDocumentRow(entry) else { return nil }
+                return RulebookVariationPlanRow(
+                    id: row.id,
+                    from: row.text("from"),
+                    to: row.text("to"),
+                    changed: row.bool("changed"),
+                    pinned: row.bool("pinned"),
+                    sequence: Int(row.number("sequence") ?? 0)
+                )
+            }
+        }
+        return (planRows("rows"), planRows("changes"), result["refused"] as? String)
+    }
+
+    /// `variationRenumberConflict(base, live)`: the variations changed since the tracker loaded them. Nil when the
+    /// script did not answer (the caller refuses the save).
+    nonisolated static func variationRenumberConflict(base: [[String: Any]], live: [[String: Any]]) -> Bool? {
+        callJSON("variationRenumberConflict", arguments: [base, live]) as? Bool
+    }
+
+    /// `variationStaleNumberLocks(rows)` (1.63.0): Open variations still storing `voNumberLocked: true`.
+    nonisolated static func variationStaleNumberLocks(rows: [[String: Any]]) -> [String]? {
+        (callJSON("variationStaleNumberLocks", arguments: [rows]) as? [Any])?.compactMap { $0 as? String }
+    }
+
+    /// `variationRenumberMissingRefusal(changes, storedIds)`: `.some(nil)` when every changed row has its
+    /// `variations/{id}` document, `.some(message)` otherwise, nil when the script did not answer.
+    nonisolated static func variationRenumberMissingRefusal(changes: [RulebookVariationPlanRow], storedIds: [String]) -> String?? {
+        let rows: [[String: Any]] = changes.map { ["id": $0.id, "from": $0.from] }
+        guard let value = callJSON("variationRenumberMissingRefusal", arguments: [rows, storedIds]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let message = value as? String else { return nil }
+        return .some(message)
+    }
+
+    /// `variationRenumberWriteFields({ stored, to, sequence, at, byUid })`: the fields to update on one variation (or its
+    /// settings copy), Firestore values; `.some(nil)` when nothing changes; nil when the script did not answer.
+    nonisolated static func variationRenumberWriteFields(
+        stored: [String: Any],
+        to: String,
+        sequence: Int,
+        at: Timestamp,
+        byUid: String
+    ) -> [String: Any]?? {
+        let input: [String: Any] = [
+            "stored": peopleDocumentJSON(stored),
+            "to": to,
+            "sequence": sequence,
+            "at": FirebaseBackend.firestoreJSON(at),
+            "byUid": byUid,
+        ]
+        guard let value = callJSON("variationRenumberWriteFields", arguments: [input]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let set = (value as? [String: Any])?["set"] as? [String: Any] else { return nil }
+        var fields: [String: Any] = [:]
+        for (key, entry) in set { fields[key] = ScriptFirestoreValue.native(entry) }
+        return .some(fields)
+    }
+
+    /// `variationTrackerWriteFields(stored, { kind: 'renumbered' })` with its values: the version one up, the old
+    /// 5-minute lock removed. `.some(nil)` when nothing changes; nil when the script did not answer.
+    nonisolated static func variationTrackerRenumberedFields(stored: [String: Any]) -> [String: Any]?? {
+        variationTrackerActionFields(stored: stored, action: ["kind": "renumbered"])
+    }
+
+    /// `variationTrackerWriteFields(stored, { kind: 'unlockOrder' })` with its values: `orderLocked: false` and the
+    /// lock's who / when removed. `.some(nil)` when nothing changes; nil when the script did not answer.
+    nonisolated static func variationTrackerUnlockOrderFields(stored: [String: Any]) -> [String: Any]?? {
+        variationTrackerActionFields(stored: stored, action: ["kind": "unlockOrder"])
+    }
+
+    /// `variationTrackerWriteFields(stored, action)` as Firestore update fields (removed keys as `FieldValue.delete()`).
+    nonisolated private static func variationTrackerActionFields(stored: [String: Any], action: [String: Any]) -> [String: Any]?? {
+        guard let value = callJSON("variationTrackerWriteFields", arguments: [peopleDocumentJSON(stored), action]) else { return nil }
+        if value is NSNull { return .some(nil) }
+        guard let row = value as? [String: Any], let set = row["set"] as? [String: Any] else { return nil }
+        var fields: [String: Any] = [:]
+        for (key, entry) in set { fields[key] = ScriptFirestoreValue.native(entry) }
+        for key in ((row["remove"] as? [Any]) ?? []).compactMap({ $0 as? String }) { fields[key] = FieldValue.delete() }
+        return .some(fields)
+    }
+
+    /// `canRenumberVariations(role, { managesJob })`: admins and super admins outside operative mode, and a manager
+    /// who is one of the job's managers (`isJobManager`). Operatives never.
+    nonisolated static func canRenumberVariations(_ role: CanonicalStaffAccountRole, managesJob: Bool) -> Bool {
+        let input: [String: Any] = [
+            "isSuperAdmin": role.isSuperAdmin, "isAdmin": role.isAdmin,
+            "isManager": role.isManager, "isOperativeMode": role.isOperativeMode,
+        ]
+        return (callJSON("canRenumberVariations", arguments: [input, ["managesJob": managesJob]]) as? Bool) ?? false
+    }
+
+    /// `isJobManager(viewer, job, managers)`: the viewer is one of the job's managers (any id, or a managers row on
+    /// their email).
+    nonisolated static func isJobManager(_ viewer: JobAccessViewer, job: [String: Any], managers: [[String: Any]]) -> Bool {
+        (callJSON("isJobManager", arguments: [viewer.json, job, managers]) as? Bool) ?? false
+    }
+
+    /// `VARIATION_RENUMBER_STALE_MESSAGE`.
+    nonisolated static var variationRenumberStaleMessage: String {
+        constant("VARIATION_RENUMBER_STALE_MESSAGE", as: String.self) ?? "Someone else changed the variations — reload"
+    }
+
+    /// `VARIATION_PINNED_MESSAGE`.
+    nonisolated static var variationPinnedMessage: String {
+        constant("VARIATION_PINNED_MESSAGE", as: String.self) ?? ""
+    }
+
+    /// The message shown when someone tries to move a Submitted or Closed variation (web `variationPinnedMoveText`):
+    /// "VO-003 is submitted and locked. " + `VARIATION_PINNED_MESSAGE`, the status word from `VARIATION_STATUS_LABELS`.
+    nonisolated static func variationPinnedMoveText(voNumber: String, status: String) -> String {
+        let labels = constant("VARIATION_STATUS_LABELS", as: [String: String].self) ?? [:]
+        let label = labels[status.lowercased()] ?? ""
+        let trimmed = voNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = trimmed.isEmpty ? "This variation" : trimmed
+        guard !label.isEmpty, label != "Open" else { return variationPinnedMessage }
+        return "\(name) is \(label.lowercased()) and locked. \(variationPinnedMessage)"
     }
 
     // MARK: - Evidence

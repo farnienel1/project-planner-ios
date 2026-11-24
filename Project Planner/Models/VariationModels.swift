@@ -187,6 +187,21 @@ nonisolated struct Variation: Identifiable, Hashable, Sendable {
         evidenceCount = totals.evidenceCount
     }
 
+    /// The status change the status control writes (VariationDetailView, and the tracker's Reopen): the status, one
+    /// history entry, the stamps and — RULEBOOK 1.63.0 `variationStatusWriteFields` — the number lock in the same
+    /// write (Submitted / Closed lock it, Open clears it, so a reopened variation is unpinned).
+    func withStatus(_ status: VariationStatus, byUid uid: String, byName name: String, at now: Date = Date()) -> Variation {
+        var next = self
+        next.status = status
+        next.updatedAt = now
+        next.updatedByUid = uid
+        next.statusHistory.append(VariationStatusHistoryEntry(status: status.rawValue, byUid: uid, byName: name, at: now))
+        next.voNumberLocked = CanonicalBusinessEngine.variationStatusLocksNumber(status: status.rawValue)
+        if status == .submitted { next.submittedAt = now }
+        if status == .closed { next.closedAt = now }
+        return next
+    }
+
     /// `variationTotals` of this variation (pending evidence left out). Nil when the script did not answer.
     var totals: RulebookVariationTotals? {
         CanonicalBusinessEngine.variationTotals(rulebookInput)

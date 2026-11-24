@@ -137,8 +137,9 @@ final class OperativeOwnLeaveTests: XCTestCase {
         XCTAssertEqual(query.operativeIdValues, values.ids, "an operativeId is never an email")
     }
 
-    func testMoreThanFourteenIdsSplitIntoSeveralQueriesWithTheEmailsOnTheFirst() throws {
-        XCTAssertEqual(CanonicalBusinessEngine.ownLeaveIdsPerQuery, 14)
+    /// 1.73.2: 6 ids per query (the security rules' lookup budget; was 14), the emails on the first query only.
+    func testMoreThanSixIdsSplitIntoSeveralQueriesWithTheEmailsOnTheFirst() throws {
+        XCTAssertEqual(CanonicalBusinessEngine.ownLeaveIdsPerQuery, 6)
         let ids = (0..<16).map { "id\($0)" }
         let plan = try XCTUnwrap(CanonicalBusinessEngine.leaveQueryPlan(
             viewer(role(operative: true), uid: "id0", ids: ["id0"]),
@@ -146,11 +147,13 @@ final class OperativeOwnLeaveTests: XCTestCase {
             email: "A@B.co",
             operativeOwnLeave: true
         ))
-        XCTAssertEqual(plan.ownQueries.count, 2)
-        XCTAssertEqual(plan.ownQueries[0].operativeIdValues, Array(ids.prefix(14)))
-        XCTAssertEqual(plan.ownQueries[0].userIdValues, Array(ids.prefix(14)) + ["A@B.co", "a@b.co"])
-        XCTAssertEqual(plan.ownQueries[1].userIdValues, ["id14", "id15"])
-        XCTAssertEqual(plan.ownQueries[1].operativeIdValues, ["id14", "id15"])
+        XCTAssertEqual(plan.ownQueries.count, 3)
+        XCTAssertEqual(plan.ownQueries[0].operativeIdValues, Array(ids[0..<6]))
+        XCTAssertEqual(plan.ownQueries[0].userIdValues, Array(ids[0..<6]) + ["A@B.co", "a@b.co"])
+        XCTAssertEqual(plan.ownQueries[1].userIdValues, Array(ids[6..<12]))
+        XCTAssertEqual(plan.ownQueries[1].operativeIdValues, Array(ids[6..<12]))
+        XCTAssertEqual(plan.ownQueries[2].userIdValues, Array(ids[12..<16]))
+        XCTAssertEqual(plan.ownQueries[2].operativeIdValues, Array(ids[12..<16]))
     }
 
     func testEmptyOwnIdsFallBackToTheViewersIdsNeverTheWholeCollection() throws {

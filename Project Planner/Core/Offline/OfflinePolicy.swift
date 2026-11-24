@@ -79,6 +79,8 @@ nonisolated enum UnlistedOfflineAction: String, Sendable, CaseIterable {
     case deleteMaterialLine = "materials.delete_line"
     case sendMaterialRequest = "materials.send_request"
     case saveDeadlines = "deadlines.save"
+    /// The VO tracker's reorder (RULEBOOK §22): not in `OFFLINE_ACTIONS`, so online only.
+    case renumberVariations = "variations.renumber"
 }
 
 /// A control used while offline whose action is online only (RULEBOOK §2). Final: nothing was queued or written.
