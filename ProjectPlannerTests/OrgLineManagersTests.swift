@@ -44,24 +44,28 @@ final class OrgLineManagersTests: XCTestCase {
         XCTAssertTrue(CanonicalBusinessEngine.parseMemberLineManagerDocuments([(id: "x", data: ["updatedBy": "a"])]).isEmpty)
     }
 
-    func testVisitingMemberReadsTheRecordAndComesOffAgain() {
+    func testVisitingMemberReadsTheRecord() {
         let shown = OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", records: parsedRecords)
         XCTAssertEqual(shown?.first?.assignedManagerUserIds, ["carolB"])
         XCTAssertEqual(shown.map { OrgLineManagerOverlay.accountFields($0[0]).ids }, ["bobA"])
         XCTAssertNil(OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", records: parsedRecords), "idempotent")
+        // The record removed: no line manager here (never the home company's).
         let back = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", records: [:])
-        XCTAssertEqual(back?.first?.assignedManagerUserIds, ["bobA"])
-        XCTAssertNil(back?.first?.orgLineManagerOverlay)
+        XCTAssertEqual(back?.first?.assignedManagerUserIds, [])
+        XCTAssertNotNil(back?.first?.orgLineManagerOverlay)
         // No company open (sign-out / switch): the overlay comes off too.
         let closed = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "", records: parsedRecords)
         XCTAssertEqual(closed?.first?.assignedManagerUserIds, ["bobA"])
     }
 
-    func testHomeAndNoRecordShowTheUsersDocument() {
+    /// Owner answer 24 Nov: a line manager belongs to each company. Home → the users document; a visitor with no record
+    /// here → no line manager here (empty fields, `lineManagerRequiredError` set), never the home company's.
+    func testHomeReadsTheUsersDocumentAndAVisitorWithNoRecordHasNone() {
         // Home company: the users document whatever the record says.
         XCTAssertNil(OrgLineManagerOverlay.apply([jane(home: "TEST-B")], organizationId: "TEST-B", records: parsedRecords))
-        // No record here: the users document is shown, as before 1.88.0.
-        XCTAssertNil(OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", records: [:]))
+        // No company stored on the users document: its own fields, as before 1.88.0.
+        XCTAssertNil(OrgLineManagerOverlay.apply([jane(home: nil)], organizationId: "TEST-B", records: [:]))
+        // A visitor with no record here: no line manager here.
         let fields = CanonicalBusinessEngine.organizationLineManagerFields(
             organizationId: "TEST-B",
             homeOrganizationId: "TEST-A",
@@ -70,18 +74,33 @@ final class OrgLineManagersTests: XCTestCase {
             hasNoLineManager: false,
             record: nil
         )
-        XCTAssertEqual(fields?.source, "users")
-        XCTAssertEqual(fields?.ids, ["bobA"])
+        XCTAssertEqual(fields?.source, "none")
+        XCTAssertEqual(fields?.ids, [])
+        XCTAssertNil(fields?.single)
+        let shown = OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", records: [:])
+        XCTAssertEqual(shown?.first?.assignedManagerUserIds, [])
+        XCTAssertNil(shown?.first?.assignedManagerUserId)
+        XCTAssertEqual(shown.map { OrgLineManagerOverlay.accountFields($0[0]).ids }, ["bobA"], "the users document's own fields stay under the overlay")
+        // The home company's line manager is never shown here, and an operative cannot be saved without one here.
+        if let visitor = shown?.first {
+            XCTAssertEqual(LineManagerRulebook.selectedIds(for: visitor, roster: [visitor]), [])
+            XCTAssertNotNil(AnnualLeaveApproval.lineManagerRequiredError(for: visitor, users: [visitor]))
+        } else {
+            XCTFail("a visitor with no record must be laid over")
+        }
+        // The record arriving later gives this company's line manager.
+        let laid = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", records: parsedRecords)
+        XCTAssertEqual(laid?.first?.assignedManagerUserIds, ["carolB"])
     }
 
     /// Review of web #455 fix (a): a membership `lineManager` map (a 1.88 draft, or a flat copy an older build made)
-    /// is never read — only the record counts.
+    /// is never read — only the record counts; with no record a visitor has no line manager here.
     func testMembershipLineManagerMapIsIgnored() {
         let membership: [String: Any] = [
             "role": "operative",
             "lineManager": ["assignedManagerUserIds": ["carolB"], "assignedManagerUserId": "carolB", "hasNoLineManager": false],
         ]
-        // The membership is not a record: none of the three keys at its top level → no record.
+        // The membership is not a record: none of the three keys at its top level → no record → none here.
         let fromMembership = CanonicalBusinessEngine.organizationLineManagerFields(
             organizationId: "TEST-B",
             homeOrganizationId: "TEST-A",
@@ -90,8 +109,8 @@ final class OrgLineManagersTests: XCTestCase {
             hasNoLineManager: false,
             record: membership
         )
-        XCTAssertEqual(fromMembership?.source, "users")
-        XCTAssertEqual(fromMembership?.ids, ["bobA"])
+        XCTAssertEqual(fromMembership?.source, "none")
+        XCTAssertEqual(fromMembership?.ids, [])
         XCTAssertTrue(CanonicalBusinessEngine.parseMemberLineManagerDocuments([(id: "jane", data: membership)]).isEmpty)
     }
 

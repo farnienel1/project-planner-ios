@@ -10,8 +10,11 @@
 //  (`organizationLineManagerFields`), where an edit is saved (`orgLineManagerEditTarget`), the record a save writes
 //  (`memberLineManagerWriteFields`) and how the records are read (`parseMemberLineManagerDocuments`) come from the
 //  packed script through `CanonicalBusinessEngine.callJSON`. Swift only maps Firestore data and `AppUser` rows in and
-//  out. In their home company, and wherever this company holds no record for them, a person reads their users
-//  document's line manager exactly as before (guardrail 3).
+//  out. In their home company (and when their users document stores no company) a person reads their users document's
+//  line manager exactly as before. A member whose home is another company and who has no record here has NO line
+//  manager here (`source: none`, owner answer 24 Nov: a line manager belongs to each company): this company's admins
+//  decide, Edit user asks for one (`lineManagerRequiredError`) and the screens read "Not set" — the home company's line
+//  manager is never shown or counted here.
 //
 
 import Foundation
@@ -28,8 +31,9 @@ extension CanonicalBusinessEngine {
     static let memberLineManagersCollection = "memberLineManagers"
 
     /// `organizationLineManagerFields`: the person's line-manager fields in `organizationId` and where they came from
-    /// (`users` / `record`). `record` is the data of `memberLineManagers/{uid}` here (nil: none / not read). Only plain
-    /// values reach the script. Nil when the script did not answer.
+    /// (`users` / `record` / `none` — a visitor with no record here: empty fields). `record` is the data of
+    /// `memberLineManagers/{uid}` here (nil: none). Only plain values reach the script. Nil when the script did not
+    /// answer.
     nonisolated static func organizationLineManagerFields(
         organizationId: String,
         homeOrganizationId: String?,
@@ -158,7 +162,9 @@ enum OrgLineManagerOverlay {
             record: record
         ) else { return user }
         var out = user
-        if fields.source == "record" {
+        // `record` (this company's own) and `none` (a visitor with no record: no line manager here) both replace the
+        // users document's fields; only `users` (home, or no company stored) shows them.
+        if fields.source != "users" {
             out.assignedManagerUserIds = fields.ids
             out.assignedManagerUserId = fields.single
             out.hasNoLineManager = fields.hasNoLineManager
@@ -177,16 +183,37 @@ enum OrgLineManagerOverlay {
     }
 
     /// Rows with this company's records laid over (`records`: lower-case users id → record fields, from
-    /// `parseMemberLineManagerDocuments`). Home-company people are never changed; a row whose record went away (or an
-    /// empty `organizationId`, no company open) goes back to its users document. Nil when nothing changes.
+    /// `parseMemberLineManagerDocuments`). Home-company people are never changed; a visitor with no record has no line
+    /// manager here (empty fields); with an empty `organizationId` (no company open) every row goes back to its users
+    /// document. Nil when nothing changes.
     static func apply(_ users: [AppUser], organizationId: String, records: [String: [String: Any]]) -> [AppUser]? {
         guard !users.isEmpty else { return nil }
         var changed = false
         var out = users
+        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         for index in users.indices {
             let user = users[index]
-            let record = organizationId.isEmpty ? nil : records[user.id.lowercased()]
-            guard record != nil || user.orgLineManagerOverlay != nil else { continue }
+            if org.isEmpty {
+                // No company open: nothing is laid over; the users document's own fields come back.
+                guard user.orgLineManagerOverlay != nil else { continue }
+                let base = accountFields(user)
+                var next = user
+                next.assignedManagerUserIds = base.ids
+                next.assignedManagerUserId = base.single
+                next.hasNoLineManager = base.hasNoLineManager
+                next.orgLineManagerOverlay = nil
+                out[index] = next
+                changed = true
+                continue
+            }
+            let record = records[user.id.lowercased()]
+            // Shortcut only (the script decides every other row): a row with nothing laid over it, no record here,
+            // and no company stored or this company stored as its home, reads its users document
+            // (`organizationLineManagerFields` source `users`), so nothing changes.
+            if record == nil, user.orgLineManagerOverlay == nil {
+                let home = (user.storedOrganizationId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if home.isEmpty || home == org { continue }
+            }
             let next = apply(user, organizationId: organizationId, homeOrganizationId: user.storedOrganizationId, record: record)
             if next != user {
                 out[index] = next

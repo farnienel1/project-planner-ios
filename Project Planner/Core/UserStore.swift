@@ -358,8 +358,8 @@ class UserStore: ObservableObject {
     /// organisation (every active member may read it), removed on a company switch or sign-out (no company open).
     /// Each record is laid over the roster (`OrgLineManagerOverlay`, `parseMemberLineManagerDocuments`). A listener
     /// error is logged, marks the records stale and attaches again after `LiveListenerAttachPolicy.retryDelay` while
-    /// the same company is open; a permission refusal that persists (rules before 1.88.0) drops the records, so the
-    /// users documents are the source, as before 1.88.0.
+    /// the same company is open; a permission refusal that persists (rules before 1.88.0) drops the records (visiting
+    /// members then have no line manager here, as the rules read it).
     private func listenToMemberLineManagers(organizationId: String) {
         let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
         guard org.lowercased() != lineManagerRecordsOrg.lowercased() || lineManagerRecordsListener == nil else { return }
@@ -408,7 +408,7 @@ class UserStore: ObservableObject {
         guard let delay = LiveListenerAttachPolicy.retryDelay(afterFailures: lineManagerRecordsFailures, permissionDenied: permissionDenied) else {
             // No more retries this session (the next company switch, or launch, attaches again).
             if permissionDenied {
-                // Rules before 1.88.0 refuse the collection: the users documents are the source, as before.
+                // Rules before 1.88.0 refuse the collection: no records (visitors have no line manager here).
                 applyLineManagerRecords([:])
             }
             print("[memberLineManagers] listener stopped after \(lineManagerRecordsFailures) failures")
@@ -2831,8 +2831,8 @@ class UserStore: ObservableObject {
                     }
                     // `userDeleteWrites`: one batch per step, in order; the account batch first, so a refusal there
                     // leaves everything as it was. Later steps stop at the first refusal.
-                    // RULEBOOK 1.59.0 / 1.82.0: a write marked `optional` (the former-person record, the person's
-                    // `memberNames` entry) never stops the delete: when older security rules refuse the batch, the same
+                    // RULEBOOK 1.59.0 / 1.82.0 / 1.88.0: a write marked `optional` (the former-person record, the
+                    // person's `memberNames` entry, this company's `memberLineManagers` record) never stops the delete: when older security rules refuse the batch, the same
                     // batch runs again without it.
                     func makeBatch(_ writes: [[String: Any]]) -> WriteBatch {
                         let batch = db.batch()

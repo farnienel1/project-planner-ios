@@ -223,7 +223,7 @@ extension FirebaseBackend {
 
     /// RULEBOOK 1.88.0 §8, §11: this company's own line-manager record for `userId` here
     /// (`organizations/{orgId}/memberLineManagers/{uid}`; every active member may read it). Nil when missing, refused
-    /// or failed — the users document's line manager is then shown, as before 1.88.0.
+    /// or failed — the person then has no line manager here (`organizationLineManagerFields` source `none`).
     func readMemberLineManagerRecord(userId: String, organizationId: String) async -> [String: Any]? {
         let orgId = normalizedOrganizationId(organizationId)
         guard !userId.isEmpty, !orgId.isEmpty else { return nil }
@@ -614,9 +614,9 @@ extension FirebaseBackend {
         )
         // RULEBOOK 1.88.0 §8, §11 `organizationLineManagerFields` (the `withOrganizationLineManager` rule with the
         // home company `sharedUserOrganizationId`): the line manager here is this company's own record for the
-        // signed-in person (`memberLineManagers/{uid}`) when it holds one, else the users document's — never the
-        // membership (a flat copy an older build made of the users document onto it, or a 1.88 draft `lineManager`
-        // map, is ignored).
+        // signed-in person (`memberLineManagers/{uid}`) when it holds one, else NONE here (empty fields; the home
+        // company's line manager is never used here) — never the membership (a flat copy an older build made of the
+        // users document onto it, or a 1.88 draft `lineManager` map, is ignored).
         let lineManagerRecord = await readMemberLineManagerRecord(userId: userId, organizationId: orgId)
         if let fields = CanonicalBusinessEngine.organizationLineManagerFields(
             organizationId: orgId,
@@ -686,7 +686,7 @@ extension FirebaseBackend {
         ]
         if let mobile = user.mobileNumber { sharedData["mobileNumber"] = mobile }
         if let photo = user.profilePhotoURL { sharedData["profilePhotoURL"] = photo }
-        // RULEBOOK 1.88.0: the users document's line manager, shown here when this company holds no record for them.
+        // RULEBOOK 1.88.0: the users document's line manager (used only when it is this person's home company).
         sharedData["assignedManagerUserIds"] = user.assignedManagerUserIds
         if let single = user.assignedManagerUserId { sharedData["assignedManagerUserId"] = single }
         sharedData["hasNoLineManager"] = user.hasNoLineManager
@@ -702,12 +702,27 @@ extension FirebaseBackend {
             // The membership read failed: keep this person's rights, but RULEBOOK 1.30.2 `organizationSelfManageFlags`
             // never carries the home company's self-manage toggles here (off until the membership read arrives,
             // both on for this company's creator) — as web `applyDeviceOrgMembership` does.
-            return user.applyingOrganizationSelfManageFlags(
+            var fallback = user.applyingOrganizationSelfManageFlags(
                 organizationId: sessionOrg,
                 userDocument: nil,
                 membership: nil,
                 creatorUserId: creator
             ).carryingLegalAcceptance(from: user)
+            // RULEBOOK 1.88.0 §8, §11: nor the home company's line manager — this company's record, else none here.
+            let lineManagerRecord = await readMemberLineManagerRecord(userId: user.id, organizationId: sessionOrg)
+            if let fields = CanonicalBusinessEngine.organizationLineManagerFields(
+                organizationId: sessionOrg,
+                homeOrganizationId: shared,
+                assignedManagerUserIds: user.assignedManagerUserIds,
+                assignedManagerUserId: user.assignedManagerUserId,
+                hasNoLineManager: user.hasNoLineManager,
+                record: lineManagerRecord
+            ) {
+                fallback.assignedManagerUserIds = fields.ids
+                fallback.assignedManagerUserId = fields.single
+                fallback.hasNoLineManager = fields.hasNoLineManager
+            }
+            return fallback
         }
         session = Self.mergedDeviceSessionProfile(session, user: user)
         deviceSessionProfile = session
