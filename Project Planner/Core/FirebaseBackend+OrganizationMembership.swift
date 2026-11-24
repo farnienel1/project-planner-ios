@@ -221,6 +221,20 @@ extension FirebaseBackend {
         return true
     }
 
+    /// RULEBOOK 1.88.0 §8, §11: another person's membership in `organizationId` (a co-member may read it from 1.88.0's
+    /// rules), for this company's line manager of a member whose home is elsewhere. Nil when missing, refused or failed.
+    func readOrgMembershipForLineManager(userId: String, organizationId: String) async -> [String: Any]? {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !userId.isEmpty, !orgId.isEmpty else { return nil }
+        do {
+            let snap = try await orgMembershipsCollection(userId: userId).document(orgId).getDocument()
+            return snap.exists ? snap.data() : nil
+        } catch {
+            print("🔥🔥🔥 DEBUG: [OrgLineManager] membership read failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
     /// RULEBOOK 1.10.0 §14: the membership as `parseOrgMembershipDocument` reads it (nested `permissions`, else the
     /// legacy flat keys, else the defaults). Nil when the script did not answer.
     static func orgMembership(organizationId: String, data: [String: Any]) -> (role: String, isSuperAdmin: Bool, accountActive: Bool, permissions: [String: Bool])? {
@@ -593,6 +607,21 @@ extension FirebaseBackend {
             membership: membershipSnap.exists ? membershipSnap.data() : nil,
             creatorUserId: creatorUserId
         )
+        // RULEBOOK 1.88.0 §8, §11 `organizationLineManagerFields`: the line manager here is the membership's
+        // `lineManager` map when it holds one, else the users document's (never a flat copy an older build made of the
+        // users document onto the membership).
+        if let fields = CanonicalBusinessEngine.organizationLineManagerFields(
+            organizationId: orgId,
+            homeOrganizationId: sharedUserOrganizationId,
+            assignedManagerUserIds: base.assignedManagerUserIds,
+            assignedManagerUserId: base.assignedManagerUserId,
+            hasNoLineManager: base.hasNoLineManager,
+            membership: membershipSnap.exists ? membershipSnap.data() : nil
+        ) {
+            profile.assignedManagerUserIds = fields.ids
+            profile.assignedManagerUserId = fields.single
+            profile.hasNoLineManager = fields.hasNoLineManager
+        }
         profile.email = base.email.isEmpty ? userEmail : base.email
         profile.firstName = base.firstName
         profile.surname = base.surname
@@ -649,6 +678,10 @@ extension FirebaseBackend {
         ]
         if let mobile = user.mobileNumber { sharedData["mobileNumber"] = mobile }
         if let photo = user.profilePhotoURL { sharedData["profilePhotoURL"] = photo }
+        // RULEBOOK 1.88.0: the users document's line manager, read here when the membership holds none.
+        sharedData["assignedManagerUserIds"] = user.assignedManagerUserIds
+        if let single = user.assignedManagerUserId { sharedData["assignedManagerUserId"] = single }
+        sharedData["hasNoLineManager"] = user.hasNoLineManager
         _ = await loadDeviceSessionProfile(
             userId: user.id,
             organizationId: sessionOrg,

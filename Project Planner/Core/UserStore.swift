@@ -34,6 +34,14 @@ class UserStore: ObservableObject {
             // every screen, PDF and notice that takes names from the roster shows it. (A set inside didSet does not
             // run didSet again.)
             if let named = MemberNameOverlay.apply(organizationUsers, names: memberNames) { organizationUsers = named }
+            // RULEBOOK 1.88.0 §8, §11: a visiting member's line manager in this company (their membership here),
+            // laid over once here so every rule that reads line managers from the roster reads this company's.
+            if let laid = OrgLineManagerOverlay.apply(
+                organizationUsers,
+                organizationId: lineManagerMembershipOrg,
+                memberships: lineManagerMemberships
+            ) { organizationUsers = laid }
+            scheduleLineManagerMemberships()
             revision &+= 1
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
@@ -68,6 +76,11 @@ class UserStore: ObservableObject {
     private var organizationCancellable: AnyCancellable?
     /// RULEBOOK 1.81.0 §11: the open organisation's `memberNames` entries (lower-case users id → name), live.
     private(set) var memberNames: [String: [String: String]] = [:]
+    /// RULEBOOK 1.88.0 §8, §11: memberships here of roster members whose home is another company (lower-case users id
+    /// → membership data), read once per organisation; their `lineManager` map is this company's line manager.
+    private var lineManagerMemberships: [String: [String: Any]] = [:]
+    private var lineManagerMembershipOrg = ""
+    private var lineManagerMembershipRequested: Set<String> = []
     private var memberNamesOrganizationId = ""
     private var memberNamesListener: ListenerRegistration?
     private var memberNamesCancellable: AnyCancellable?
@@ -324,6 +337,51 @@ class UserStore: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.organizationDidLoadForPay() }
             }
+    }
+
+    /// RULEBOOK 1.88.0 §8, §11: reads the membership here of each roster member whose users document names another
+    /// company (once per person per organisation) and lays this company's line manager over their row
+    /// (`OrgLineManagerOverlay`). A refused or failed read keeps the users document's fields, as before 1.88.0.
+    private func scheduleLineManagerMemberships() {
+        let org = (firebaseBackend?.currentOrganization?.firestoreDocumentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if org.lowercased() != lineManagerMembershipOrg.lowercased() {
+            lineManagerMembershipOrg = org
+            lineManagerMemberships = [:]
+            lineManagerMembershipRequested = []
+        }
+        guard !org.isEmpty, let backend = firebaseBackend else { return }
+        let visitors = organizationUsers.filter { user in
+            let home = (user.storedOrganizationId ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return home != org.lowercased() && !lineManagerMembershipRequested.contains(user.id.lowercased())
+        }
+        guard !visitors.isEmpty else { return }
+        for user in visitors { lineManagerMembershipRequested.insert(user.id.lowercased()) }
+        let ids = visitors.map(\.id)
+        Task { @MainActor [weak self] in
+            var found: [String: [String: Any]] = [:]
+            for id in ids {
+                if let data = await backend.readOrgMembershipForLineManager(userId: id, organizationId: org) {
+                    found[id.lowercased()] = data
+                }
+            }
+            guard let self, self.lineManagerMembershipOrg == org, !found.isEmpty else { return }
+            self.lineManagerMemberships.merge(found) { _, new in new }
+            if let laid = OrgLineManagerOverlay.apply(self.organizationUsers, organizationId: org, memberships: self.lineManagerMemberships) {
+                self.organizationUsers = laid
+            }
+        }
+    }
+
+    /// RULEBOOK 1.88.0: after this phone saved a visiting member's line manager here, use it straight away.
+    func noteOrgLineManagerSaved(userId: String, lineManager: [String: Any]) {
+        let key = userId.lowercased()
+        var membership = lineManagerMemberships[key] ?? [:]
+        membership[CanonicalBusinessEngine.orgMembershipLineManagerField] = lineManager
+        lineManagerMemberships[key] = membership
+        lineManagerMembershipRequested.insert(key)
+        if let laid = OrgLineManagerOverlay.apply(organizationUsers, organizationId: lineManagerMembershipOrg, memberships: lineManagerMemberships) {
+            organizationUsers = laid
+        }
     }
 
     /// RULEBOOK 1.81.0 §11: listens to `organizations/{orgId}/memberNames` for the open organisation and lays the
@@ -3529,6 +3587,27 @@ class UserStore: ObservableObject {
                     errorMessage = Self.payChangeRefusedMessage
                     return false
                 }
+                // RULEBOOK 1.88.0 §8, §11 `orgLineManagerEditTarget`: in the person's home company the line manager is
+                // saved on their users document (as before); in any other company it is this company's own line
+                // manager for them, the `lineManager` map on their membership here (admins only). An unknown home
+                // refuses the change rather than write it to the wrong company.
+                let openOrganizationId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+                let lineManagerTarget: String? = lineManagerChanged
+                    ? CanonicalBusinessEngine.orgLineManagerEditTarget(
+                        organizationId: openOrganizationId,
+                        homeOrganizationId: original.storedOrganizationId
+                    )
+                    : "users"
+                if lineManagerChanged && lineManagerTarget == nil {
+                    errorMessage = CanonicalBusinessEngine.orgLineManagerHomeUnknownMessage
+                    return false
+                }
+                let lineManagerOnMembership = lineManagerChanged && lineManagerTarget == "membership"
+                if lineManagerOnMembership,
+                   await firebaseBackend.readOrgMembershipForLineManager(userId: original.id, organizationId: openOrganizationId) == nil {
+                    errorMessage = CanonicalBusinessEngine.orgLineManagerNoMembershipMessage
+                    return false
+                }
                 if dayRateChanged {
                     Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
                 }
@@ -3554,19 +3633,40 @@ class UserStore: ObservableObject {
                     historyRows = change.rows
                 }
                 do {
-                    // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch.
-                    try await firebaseBackend.updateOperativeProfileMetadata(
-                        userId: updatedUser.id,
-                        assignedManagerUserId: updatedUser.assignedManagerUserId,
-                        assignedManagerUserIds: updatedUser.lineManagerUserIds,
-                        hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
-                        dayRate: dayRate,
-                        updateDayRate: dayRateChanged,
-                        // Unchanged (or not ours to change): leave the line-manager keys out of the write entirely.
-                        writeLineManager: lineManagerChanged,
-                        payBasis: previousPay.basis,
-                        historyRows: historyRows
-                    )
+                    var orgLineManager: [String: Any]?
+                    if lineManagerOnMembership {
+                        let noLineManager = hasNoLineManager ?? updatedUser.hasNoLineManager
+                        let ids = noLineManager ? [] : updatedUser.lineManagerUserIds
+                        let map: [String: Any] = [
+                            "assignedManagerUserIds": ids,
+                            "assignedManagerUserId": ids.first ?? NSNull(),
+                            "hasNoLineManager": noLineManager,
+                        ]
+                        try await firebaseBackend.writeOrgMembership(
+                            userId: updatedUser.id,
+                            organizationId: openOrganizationId,
+                            next: [CanonicalBusinessEngine.orgMembershipLineManagerField: map],
+                            writer: "admin"
+                        )
+                        orgLineManager = map
+                    }
+                    if dayRateChanged || (lineManagerChanged && !lineManagerOnMembership) {
+                        // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch.
+                        try await firebaseBackend.updateOperativeProfileMetadata(
+                            userId: updatedUser.id,
+                            assignedManagerUserId: updatedUser.assignedManagerUserId,
+                            assignedManagerUserIds: updatedUser.lineManagerUserIds,
+                            hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
+                            dayRate: dayRate,
+                            updateDayRate: dayRateChanged,
+                            // Unchanged, not ours to change, or saved on the membership here (1.88.0): leave the
+                            // line-manager keys out of the users document write entirely.
+                            writeLineManager: lineManagerChanged && !lineManagerOnMembership,
+                            payBasis: previousPay.basis,
+                            historyRows: historyRows
+                        )
+                    }
+                    if let orgLineManager { noteOrgLineManagerSaved(userId: updatedUser.id, lineManager: orgLineManager) }
                     // Mirror (web writes the same one). Never read over users/{uid}; best effort.
                     let mirrored = Self.storedPay(of: updatedUser)
                     try? await firebaseBackend.saveOperativeProfileMetadataFallback(

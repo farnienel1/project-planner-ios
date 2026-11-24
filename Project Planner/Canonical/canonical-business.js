@@ -85,6 +85,20 @@ var ProjectPlannerCanonical = (() => {
     CLAIM_EVIDENCE_NONE_TEXT: () => CLAIM_EVIDENCE_NONE_TEXT,
     CLAIM_EVIDENCE_SITE_AUDIT_NOTE: () => CLAIM_EVIDENCE_SITE_AUDIT_NOTE,
     CLAIM_EVIDENCE_TAKE_PHOTO_LABEL: () => CLAIM_EVIDENCE_TAKE_PHOTO_LABEL,
+    CLIENT_ERRORS_COLLECTION: () => CLIENT_ERRORS_COLLECTION,
+    CLIENT_ERRORS_PER_DAY: () => CLIENT_ERRORS_PER_DAY,
+    CLIENT_ERROR_BUILD_MAX: () => CLIENT_ERROR_BUILD_MAX,
+    CLIENT_ERROR_DAY_MS: () => CLIENT_ERROR_DAY_MS,
+    CLIENT_ERROR_FIELDS: () => CLIENT_ERROR_FIELDS,
+    CLIENT_ERROR_KIND_MAX: () => CLIENT_ERROR_KIND_MAX,
+    CLIENT_ERROR_KNOWN_MESSAGES: () => CLIENT_ERROR_KNOWN_MESSAGES,
+    CLIENT_ERROR_ORGANIZATION_ID_MAX: () => CLIENT_ERROR_ORGANIZATION_ID_MAX,
+    CLIENT_ERROR_OTHER_MESSAGE_KEY: () => CLIENT_ERROR_OTHER_MESSAGE_KEY,
+    CLIENT_ERROR_PLATFORMS: () => CLIENT_ERROR_PLATFORMS,
+    CLIENT_ERROR_ROUTE_MAX: () => CLIENT_ERROR_ROUTE_MAX,
+    CLIENT_ERROR_SOURCES: () => CLIENT_ERROR_SOURCES,
+    CLIENT_ERROR_TTL_DAYS: () => CLIENT_ERROR_TTL_DAYS,
+    CLIENT_ERROR_WHERE_MAX: () => CLIENT_ERROR_WHERE_MAX,
     COMPANY_ACTIVITY_NOTICE_TYPES: () => COMPANY_ACTIVITY_NOTICE_TYPES,
     COMPANY_EXPORT_REFUSED_MESSAGE: () => COMPANY_EXPORT_REFUSED_MESSAGE,
     CROSS_PLATFORM_CONTRACT_READERS: () => CROSS_PLATFORM_CONTRACT_READERS,
@@ -334,6 +348,28 @@ var ProjectPlannerCanonical = (() => {
     OFFLINE_LAST_UPDATED_PREFIX: () => OFFLINE_LAST_UPDATED_PREFIX,
     OFFLINE_ONLINE_ONLY_MESSAGE: () => OFFLINE_ONLINE_ONLY_MESSAGE,
     OFFLINE_PENDING_SYNC_LABEL: () => OFFLINE_PENDING_SYNC_LABEL,
+    OFFLINE_REPLACE_CHANGED_MESSAGE: () => OFFLINE_REPLACE_CHANGED_MESSAGE,
+    OFFLINE_REPLACE_REFUSED_MESSAGE: () => OFFLINE_REPLACE_REFUSED_MESSAGE,
+    OFFLINE_REPLACE_REPLAY_DECISIONS: () => OFFLINE_REPLACE_REPLAY_DECISIONS,
+    OFFLINE_REPLACE_TARGET_OUTCOMES: () => OFFLINE_REPLACE_TARGET_OUTCOMES,
+    OFFLINE_SYNC_RESULT_BANNER: () => OFFLINE_SYNC_RESULT_BANNER,
+    OFFLINE_SYNC_RESULT_DETAIL_CHANGED: () => OFFLINE_SYNC_RESULT_DETAIL_CHANGED,
+    OFFLINE_SYNC_RESULT_DETAIL_DELETED: () => OFFLINE_SYNC_RESULT_DETAIL_DELETED,
+    OFFLINE_SYNC_RESULT_DETAIL_PERMISSION: () => OFFLINE_SYNC_RESULT_DETAIL_PERMISSION,
+    OFFLINE_SYNC_RESULT_DISMISS_LABEL: () => OFFLINE_SYNC_RESULT_DISMISS_LABEL,
+    OFFLINE_SYNC_RESULT_EMPTY: () => OFFLINE_SYNC_RESULT_EMPTY,
+    OFFLINE_SYNC_RESULT_KINDS: () => OFFLINE_SYNC_RESULT_KINDS,
+    OFFLINE_SYNC_RESULT_NOTIFICATION_TITLE: () => OFFLINE_SYNC_RESULT_NOTIFICATION_TITLE,
+    OFFLINE_SYNC_RESULT_OPEN_DAY_LABEL: () => OFFLINE_SYNC_RESULT_OPEN_DAY_LABEL,
+    OFFLINE_SYNC_RESULT_REASONS: () => OFFLINE_SYNC_RESULT_REASONS,
+    OFFLINE_SYNC_RESULT_TITLE: () => OFFLINE_SYNC_RESULT_TITLE,
+    ONBOARDING_DISMISSED_AT_FIELD: () => ONBOARDING_DISMISSED_AT_FIELD,
+    ONBOARDING_DISMISSED_BY_FIELD: () => ONBOARDING_DISMISSED_BY_FIELD,
+    ONBOARDING_DISMISS_CONFIRM: () => ONBOARDING_DISMISS_CONFIRM,
+    ONBOARDING_DISMISS_LABEL: () => ONBOARDING_DISMISS_LABEL,
+    ONBOARDING_OPTIONAL_LABEL: () => ONBOARDING_OPTIONAL_LABEL,
+    ONBOARDING_SUBTITLE: () => ONBOARDING_SUBTITLE,
+    ONBOARDING_TITLE: () => ONBOARDING_TITLE,
     OPERATIONAL_COLLECTION_PATHS: () => OPERATIONAL_COLLECTION_PATHS,
     OPERATIVE_OWN_LEAVE_ORGANIZATION_IDS_FIELD: () => OPERATIVE_OWN_LEAVE_ORGANIZATION_IDS_FIELD,
     OPERATIVE_OWN_LEAVE_SWITCH_FIELD: () => OPERATIVE_OWN_LEAVE_SWITCH_FIELD,
@@ -344,8 +380,40 @@ var ProjectPlannerCanonical = (() => {
     ORGANIZATION_DELETE_TITLE: () => ORGANIZATION_DELETE_TITLE,
     ORGANIZATION_DOCUMENT_FIELDS: () => ORGANIZATION_DOCUMENT_FIELDS,
     ORGANIZATION_RESTORED_MESSAGE: () => ORGANIZATION_RESTORED_MESSAGE,
+    ORG_COMPLIANCE_AUDIT_COLLECTION: () => ORG_COMPLIANCE_AUDIT_COLLECTION,
+    ORG_COMPLIANCE_COLLECTION: () => ORG_COMPLIANCE_COLLECTION,
+    ORG_COMPLIANCE_COVER_MAX: () => ORG_COMPLIANCE_COVER_MAX,
+    ORG_COMPLIANCE_DOCUMENT_ID: () => ORG_COMPLIANCE_DOCUMENT_ID,
+    ORG_COMPLIANCE_EXPIRING_SOON_DAYS: () => ORG_COMPLIANCE_EXPIRING_SOON_DAYS,
+    ORG_COMPLIANCE_FIELD_LIMITS: () => ORG_COMPLIANCE_FIELD_LIMITS,
+    ORG_COMPLIANCE_HUB_GROUP: () => ORG_COMPLIANCE_HUB_GROUP,
+    ORG_COMPLIANCE_LABELS: () => ORG_COMPLIANCE_LABELS,
+    ORG_COMPLIANCE_MAX_PER_SECTION: () => ORG_COMPLIANCE_MAX_PER_SECTION,
+    ORG_COMPLIANCE_MAX_YEARS_AHEAD: () => ORG_COMPLIANCE_MAX_YEARS_AHEAD,
+    ORG_COMPLIANCE_MESSAGES: () => ORG_COMPLIANCE_MESSAGES,
+    ORG_COMPLIANCE_ORG_ID_PATTERN: () => ORG_COMPLIANCE_ORG_ID_PATTERN,
+    ORG_COMPLIANCE_PAGE_PATH: () => ORG_COMPLIANCE_PAGE_PATH,
+    ORG_COMPLIANCE_PAGE_SUBTITLE: () => ORG_COMPLIANCE_PAGE_SUBTITLE,
+    ORG_COMPLIANCE_PAGE_TITLE: () => ORG_COMPLIANCE_PAGE_TITLE,
+    ORG_COMPLIANCE_REMINDERS_SWITCH_FIELD: () => ORG_COMPLIANCE_REMINDERS_SWITCH_FIELD,
+    ORG_COMPLIANCE_REMINDER_LEDGER_ID: () => ORG_COMPLIANCE_REMINDER_LEDGER_ID,
+    ORG_COMPLIANCE_REMINDER_THRESHOLDS: () => ORG_COMPLIANCE_REMINDER_THRESHOLDS,
+    ORG_COMPLIANCE_SECTIONS: () => ORG_COMPLIANCE_SECTIONS,
+    ORG_COMPLIANCE_SECTION_KEYS: () => ORG_COMPLIANCE_SECTION_KEYS,
+    ORG_COMPLIANCE_SHARE_LINKS_COLLECTION: () => ORG_COMPLIANCE_SHARE_LINKS_COLLECTION,
+    ORG_COMPLIANCE_SHARE_LINK_DAYS: () => ORG_COMPLIANCE_SHARE_LINK_DAYS,
+    ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS: () => ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS,
+    ORG_COMPLIANCE_SHARE_MESSAGES: () => ORG_COMPLIANCE_SHARE_MESSAGES,
+    ORG_COMPLIANCE_SIGNED_URL_SECONDS: () => ORG_COMPLIANCE_SIGNED_URL_SECONDS,
+    ORG_COMPLIANCE_STATUS_ORDER: () => ORG_COMPLIANCE_STATUS_ORDER,
+    ORG_COMPLIANCE_ZIP_MAX_BYTES: () => ORG_COMPLIANCE_ZIP_MAX_BYTES,
+    ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS: () => ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS,
+    ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE: () => ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE,
+    ORG_LINE_MANAGER_HOME_UNKNOWN_MESSAGE: () => ORG_LINE_MANAGER_HOME_UNKNOWN_MESSAGE,
+    ORG_LINE_MANAGER_NO_MEMBERSHIP_MESSAGE: () => ORG_LINE_MANAGER_NO_MEMBERSHIP_MESSAGE,
     ORG_MEMBERSHIP_ADMIN_FIELDS: () => ORG_MEMBERSHIP_ADMIN_FIELDS,
     ORG_MEMBERSHIP_DEFAULT_ON: () => ORG_MEMBERSHIP_DEFAULT_ON,
+    ORG_MEMBERSHIP_LINE_MANAGER_FIELD: () => ORG_MEMBERSHIP_LINE_MANAGER_FIELD,
     ORG_MEMBERSHIP_PERMISSION_KEYS: () => ORG_MEMBERSHIP_PERMISSION_KEYS,
     ORG_MEMBERSHIP_SELF_FIELDS: () => ORG_MEMBERSHIP_SELF_FIELDS,
     ORPHAN_BOOKING_LABEL: () => ORPHAN_BOOKING_LABEL,
@@ -903,6 +971,7 @@ var ProjectPlannerCanonical = (() => {
     canGenerateOvertimeReport: () => canGenerateOvertimeReport,
     canManageMaterialCatalogue: () => canManageMaterialCatalogue,
     canManageOperatives: () => canManageOperatives,
+    canManageOrganizationCompliance: () => canManageOrganizationCompliance,
     canManageSubcontractors: () => canManageSubcontractors,
     canManageVariationTracker: () => canManageVariationTracker,
     canOpenUserTimesheets: () => canOpenUserTimesheets,
@@ -947,6 +1016,19 @@ var ProjectPlannerCanonical = (() => {
     clashPairKey: () => clashPairKey,
     clashResolutionKey: () => clashResolutionKey,
     clashScanDays: () => clashScanDays,
+    clientErrorBuild: () => clientErrorBuild,
+    clientErrorCreateFields: () => clientErrorCreateFields,
+    clientErrorDayIndex: () => clientErrorDayIndex,
+    clientErrorDocId: () => clientErrorDocId,
+    clientErrorGroups: () => clientErrorGroups,
+    clientErrorHashInput: () => clientErrorHashInput,
+    clientErrorKind: () => clientErrorKind,
+    clientErrorMessageKey: () => clientErrorMessageKey,
+    clientErrorNextSlot: () => clientErrorNextSlot,
+    clientErrorRoute: () => clientErrorRoute,
+    clientErrorSignature: () => clientErrorSignature,
+    clientErrorThrottle: () => clientErrorThrottle,
+    clientErrorWhere: () => clientErrorWhere,
     clientWriteFields: () => clientWriteFields,
     clockMinutesFromDeliveryInstant: () => clockMinutesFromDeliveryInstant,
     coalesceOrganizationName: () => coalesceOrganizationName,
@@ -1079,6 +1161,7 @@ var ProjectPlannerCanonical = (() => {
     healthSafetyDocumentId: () => healthSafetyDocumentId,
     healthSafetyDocumentIds: () => healthSafetyDocumentIds,
     healthSafetyDocumentWriteFields: () => healthSafetyDocumentWriteFields,
+    healthSafetyIssueJob: () => healthSafetyIssueJob,
     healthSafetyIssueStatus: () => healthSafetyIssueStatus,
     healthSafetySignatureKey: () => healthSafetySignatureKey,
     healthSafetySignatureRemovalWrites: () => healthSafetySignatureRemovalWrites,
@@ -1101,6 +1184,7 @@ var ProjectPlannerCanonical = (() => {
     intervalsOverlap: () => intervalsOverlap,
     invitationCreateFields: () => invitationCreateFields,
     invitationIsOperativeOnly: () => invitationIsOperativeOnly,
+    invitationLineManagerMap: () => invitationLineManagerMap,
     invitationListConstraints: () => invitationListConstraints,
     invitationProfileFields: () => invitationProfileFields,
     invitationReadErrorIsSkippable: () => invitationReadErrorIsSkippable,
@@ -1131,6 +1215,7 @@ var ProjectPlannerCanonical = (() => {
     isFileReportSurface: () => isFileReportSurface,
     isGhostInvited: () => isGhostInvited,
     isGhostUser: () => isGhostUser,
+    isHomeOrganization: () => isHomeOrganization,
     isIdentifiablePendingLeftover: () => isIdentifiablePendingLeftover,
     isInvoiceLine: () => isInvoiceLine,
     isJobInWarningScope: () => isJobInWarningScope,
@@ -1138,6 +1223,7 @@ var ProjectPlannerCanonical = (() => {
     isKnownNotificationType: () => isKnownNotificationType,
     isLegacyPlaceholderDocumentId: () => isLegacyPlaceholderDocumentId,
     isOpenBookingStatus: () => isOpenBookingStatus,
+    isOrgComplianceSectionKey: () => isOrgComplianceSectionKey,
     isOrganizationSuperAdmin: () => isOrganizationSuperAdmin,
     isPayeAccount: () => isPayeAccount,
     isPayrollTimePolicyState: () => isPayrollTimePolicyState,
@@ -1307,11 +1393,16 @@ var ProjectPlannerCanonical = (() => {
     materialSendStatusWriteFields: () => materialSendStatusWriteFields,
     materialSizeText: () => materialSizeText,
     materialWhatsAppRows: () => materialWhatsAppRows,
+    memberNameBackfillEntries: () => memberNameBackfillEntries,
+    memberNameEditPlan: () => memberNameEditPlan,
     memberNameEditTarget: () => memberNameEditTarget,
+    memberNameEntryMissing: () => memberNameEntryMissing,
     memberNameFor: () => memberNameFor,
+    memberNameJoinEntry: () => memberNameJoinEntry,
     memberNamePath: () => memberNamePath,
     memberNameValidationError: () => memberNameValidationError,
     memberNameWriteFields: () => memberNameWriteFields,
+    memberNameWriterManagesOperative: () => memberNameWriterManagesOperative,
     mergeBookingPaySlice: () => mergeBookingPaySlice,
     mergeHealthSafetyRowCopies: () => mergeHealthSafetyRowCopies,
     mergeJobTypeCatalogues: () => mergeJobTypeCatalogues,
@@ -1366,6 +1457,8 @@ var ProjectPlannerCanonical = (() => {
     normalizeMaterialSearchText: () => normalizeMaterialSearchText,
     normalizeMaterialUnit: () => normalizeMaterialUnit,
     normalizeMaterialWorkflowStatus: () => normalizeMaterialWorkflowStatus,
+    normalizeOrgComplianceCover: () => normalizeOrgComplianceCover,
+    normalizeOrgComplianceExpiry: () => normalizeOrgComplianceExpiry,
     normalizePaymentRunRange: () => normalizePaymentRunRange,
     normalizePersonNamePart: () => normalizePersonNamePart,
     normalizeProjectTaskPriority: () => normalizeProjectTaskPriority,
@@ -1396,7 +1489,18 @@ var ProjectPlannerCanonical = (() => {
     offlineDeleteRefusalDecision: () => offlineDeleteRefusalDecision,
     offlineDeleteReplayDecision: () => offlineDeleteReplayDecision,
     offlineLastUpdatedLabel: () => offlineLastUpdatedLabel,
+    offlineReplaceOrganizationReadDecision: () => offlineReplaceOrganizationReadDecision,
+    offlineReplaceRefusalDecision: () => offlineReplaceRefusalDecision,
+    offlineReplaceReplayDecision: () => offlineReplaceReplayDecision,
+    offlineSyncBookingText: () => offlineSyncBookingText,
+    offlineSyncResultNotificationText: () => offlineSyncResultNotificationText,
+    offlineSyncResultRows: () => offlineSyncResultRows,
+    offlineSyncTimesText: () => offlineSyncTimesText,
     onSiteHoursText: () => onSiteHoursText,
+    onboardingCardVisible: () => onboardingCardVisible,
+    onboardingChecklist: () => onboardingChecklist,
+    onboardingDismissWriteFields: () => onboardingDismissWriteFields,
+    onboardingDismissed: () => onboardingDismissed,
     openVariationCount: () => openVariationCount,
     operativeClashGroups: () => operativeClashGroups,
     operativeJobIds: () => operativeJobIds,
@@ -1406,7 +1510,52 @@ var ProjectPlannerCanonical = (() => {
     operativeRowsForPerson: () => operativeRowsForPerson,
     operativesManagerMayDeleteBooking: () => operativesManagerMayDeleteBooking,
     orgAccessProbeFromReads: () => orgAccessProbeFromReads,
+    orgComplianceAddWriteFields: () => orgComplianceAddWriteFields,
+    orgComplianceCounts: () => orgComplianceCounts,
+    orgComplianceCoverText: () => orgComplianceCoverText,
+    orgComplianceDetailsError: () => orgComplianceDetailsError,
+    orgComplianceDocTypeLabel: () => orgComplianceDocTypeLabel,
+    orgComplianceDocumentPath: () => orgComplianceDocumentPath,
+    orgComplianceDocumentRefKey: () => orgComplianceDocumentRefKey,
+    orgComplianceExpiryStatus: () => orgComplianceExpiryStatus,
+    orgComplianceFileName: () => orgComplianceFileName,
+    orgComplianceFolder: () => orgComplianceFolder,
+    orgComplianceHubSubtitle: () => orgComplianceHubSubtitle,
+    orgComplianceMergePayload: () => orgComplianceMergePayload,
+    orgComplianceOrganizationId: () => orgComplianceOrganizationId,
+    orgCompliancePathBelongsTo: () => orgCompliancePathBelongsTo,
+    orgCompliancePathLinked: () => orgCompliancePathLinked,
+    orgCompliancePublicDocuments: () => orgCompliancePublicDocuments,
+    orgComplianceReminder: () => orgComplianceReminder,
+    orgComplianceReminderBatchTag: () => orgComplianceReminderBatchTag,
+    orgComplianceReminderDayKey: () => orgComplianceReminderDayKey,
+    orgComplianceReminderEmail: () => orgComplianceReminderEmail,
+    orgComplianceReminderLedgerAfter: () => orgComplianceReminderLedgerAfter,
+    orgComplianceReminderLedgerFields: () => orgComplianceReminderLedgerFields,
+    orgComplianceReminderLedgerPath: () => orgComplianceReminderLedgerPath,
+    orgComplianceReminderRecipients: () => orgComplianceReminderRecipients,
+    orgComplianceReminderSetDayKey: () => orgComplianceReminderSetDayKey,
+    orgComplianceRemindersDue: () => orgComplianceRemindersDue,
+    orgComplianceRemindersEnabled: () => orgComplianceRemindersEnabled,
+    orgComplianceRemoveWriteFields: () => orgComplianceRemoveWriteFields,
+    orgComplianceReplaceWriteFields: () => orgComplianceReplaceWriteFields,
+    orgComplianceSection: () => orgComplianceSection,
+    orgComplianceShareCreatorActive: () => orgComplianceShareCreatorActive,
+    orgComplianceShareLinkCreateFields: () => orgComplianceShareLinkCreateFields,
+    orgComplianceShareLinkState: () => orgComplianceShareLinkState,
+    orgComplianceShareOpen: () => orgComplianceShareOpen,
+    orgComplianceSharePath: () => orgComplianceSharePath,
+    orgComplianceShareSelection: () => orgComplianceShareSelection,
+    orgComplianceSharedEntry: () => orgComplianceSharedEntry,
+    orgComplianceSortedEntries: () => orgComplianceSortedEntries,
+    orgComplianceStoragePath: () => orgComplianceStoragePath,
+    orgComplianceTodayKey: () => orgComplianceTodayKey,
+    orgComplianceUpdateWriteFields: () => orgComplianceUpdateWriteFields,
+    orgComplianceZipEntryNames: () => orgComplianceZipEntryNames,
+    orgComplianceZipFileName: () => orgComplianceZipFileName,
     orgDayHours: () => orgDayHours,
+    orgLineManagerEditTarget: () => orgLineManagerEditTarget,
+    orgMembershipLineManagerFields: () => orgMembershipLineManagerFields,
     orgMembershipWriteFields: () => orgMembershipWriteFields,
     organizationCreateFields: () => organizationCreateFields,
     organizationCurrencyWriteFields: () => organizationCurrencyWriteFields,
@@ -1420,6 +1569,7 @@ var ProjectPlannerCanonical = (() => {
     organizationIdFromValue: () => organizationIdFromValue,
     organizationIdsMatch: () => organizationIdsMatch,
     organizationLevelFor: () => organizationLevelFor,
+    organizationLineManagerFields: () => organizationLineManagerFields,
     organizationMemberActive: () => organizationMemberActive,
     organizationNameToFirestore: () => organizationNameToFirestore,
     organizationNameWriteFields: () => organizationNameWriteFields,
@@ -1506,6 +1656,7 @@ var ProjectPlannerCanonical = (() => {
     parseAuthClaims: () => parseAuthClaims,
     parseBookingDocument: () => parseBookingDocument,
     parseClientDocument: () => parseClientDocument,
+    parseClientErrorDocument: () => parseClientErrorDocument,
     parseClockMinutes: () => parseClockMinutes,
     parseCompanyDetails: () => parseCompanyDetails,
     parseDeadlineAssignments: () => parseDeadlineAssignments,
@@ -1539,6 +1690,11 @@ var ProjectPlannerCanonical = (() => {
     parseNotificationDocument: () => parseNotificationDocument,
     parseOperativeDocument: () => parseOperativeDocument,
     parseOperativeProfileDocument: () => parseOperativeProfileDocument,
+    parseOrgComplianceDocumentRef: () => parseOrgComplianceDocumentRef,
+    parseOrgComplianceDocuments: () => parseOrgComplianceDocuments,
+    parseOrgComplianceReminderLedger: () => parseOrgComplianceReminderLedger,
+    parseOrgComplianceShareLink: () => parseOrgComplianceShareLink,
+    parseOrgLineManager: () => parseOrgLineManager,
     parseOrgMembershipDocument: () => parseOrgMembershipDocument,
     parseOrganizationDeletion: () => parseOrganizationDeletion,
     parseOrganizationName: () => parseOrganizationName,
@@ -1731,6 +1887,7 @@ var ProjectPlannerCanonical = (() => {
     readsOnlyOwnLeave: () => readsOnlyOwnLeave,
     receivesJobNotification: () => receivesJobNotification,
     recordsToSave: () => recordsToSave,
+    redactClientErrorTokens: () => redactClientErrorTokens,
     rememberedOrganizationSurvivesSignOut: () => rememberedOrganizationSurvivesSignOut,
     removedEvidenceHeading: () => removedEvidenceHeading,
     removedQualificationCertificateIds: () => removedQualificationCertificateIds,
@@ -1800,6 +1957,7 @@ var ProjectPlannerCanonical = (() => {
     signedTimesheetBookingWriteReopens: () => signedTimesheetBookingWriteReopens,
     signedTimesheetChangeDetails: () => signedTimesheetChangeDetails,
     signedTimesheetChangeForReports: () => signedTimesheetChangeForReports,
+    signedTimesheetLineBooking: () => signedTimesheetLineBooking,
     signedTimesheetLineBookingKey: () => signedTimesheetLineBookingKey,
     siteAuditAuthorSignature: () => siteAuditAuthorSignature,
     siteAuditFieldCounter: () => siteAuditFieldCounter,
@@ -1822,6 +1980,7 @@ var ProjectPlannerCanonical = (() => {
     siteAuditReportTextLines: () => siteAuditReportTextLines,
     siteAuditReportTextWidth: () => siteAuditReportTextWidth,
     siteAuditWriteFields: () => siteAuditWriteFields,
+    siteMapLeaveSummary: () => siteMapLeaveSummary,
     siteMapPins: () => siteMapPins,
     skillsCatalogueWrites: () => skillsCatalogueWrites,
     slotInterval: () => slotInterval,
@@ -2138,6 +2297,7 @@ var ProjectPlannerCanonical = (() => {
     wholesalerWriteFields: () => wholesalerWriteFields,
     windowCoverage: () => windowCoverage,
     withDerivedWeekdayPaidHours: () => withDerivedWeekdayPaidHours,
+    withOrganizationLineManager: () => withOrganizationLineManager,
     withQualificationExpiry: () => withQualificationExpiry,
     withoutDismissedQualificationRows: () => withoutDismissedQualificationRows,
     withoutLockedPermissionWrites: () => withoutLockedPermissionWrites,
@@ -2199,8 +2359,8 @@ var ProjectPlannerCanonical = (() => {
     const { y, m, d } = partsInZone(date, timeZone);
     return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
   }
-  function zoneOffsetMs(instantMs5, timeZone) {
-    const floored = Math.floor(instantMs5 / 6e4) * 6e4;
+  function zoneOffsetMs(instantMs6, timeZone) {
+    const floored = Math.floor(instantMs6 / 6e4) * 6e4;
     const p = partsInZone(new Date(floored), timeZone);
     return Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - floored;
   }
@@ -2429,8 +2589,8 @@ var ProjectPlannerCanonical = (() => {
     if (typeof value === "number") {
       return Number.isFinite(value) && value >= 0 && value <= 24 * 60 ? Math.round(value) : null;
     }
-    const text57 = String(value ?? "").trim();
-    const match = /^(\d{1,2}):(\d{2})$/.exec(text57);
+    const text63 = String(value ?? "").trim();
+    const match = /^(\d{1,2}):(\d{2})$/.exec(text63);
     if (!match) return null;
     const hours2 = Number(match[1]);
     const minutes = Number(match[2]);
@@ -2865,14 +3025,14 @@ var ProjectPlannerCanonical = (() => {
     const value = String(timeZone || "").trim();
     return value || LONDON_TIME_ZONE;
   }
-  function eachDayKey(startKey, endKey, timeZone, cap = 400) {
+  function eachDayKey(startKey, endKey, timeZone, cap2 = 400) {
     if (!startKey || !endKey || startKey > endKey) return [];
     const keys = [];
     let cursor = dateFromDayKeyInZone(startKey, timeZone);
     while (dayKeyInZone(cursor, timeZone) <= endKey) {
       keys.push(dayKeyInZone(cursor, timeZone));
       cursor = addDaysInZone(cursor, 1, timeZone);
-      if (keys.length > cap) break;
+      if (keys.length > cap2) break;
     }
     return keys;
   }
@@ -3524,11 +3684,11 @@ var ProjectPlannerCanonical = (() => {
     const note = text(value);
     return note ? note : null;
   }
-  function leaveRecordDayKeys(record19, timeZone, nonWorkingDayKeys) {
+  function leaveRecordDayKeys(record22, timeZone, nonWorkingDayKeys) {
     const zone3 = zoneOrLondon(timeZone);
-    const start = text(record19.startDayKey);
+    const start = text(record22.startDayKey);
     if (!DAY_KEY.test(start)) return [];
-    const endRaw = text(record19.endDayKey);
+    const endRaw = text(record22.endDayKey);
     const end = DAY_KEY.test(endRaw) && endRaw >= start ? endRaw : start;
     if (end === start) return [start];
     const skip = new Set((nonWorkingDayKeys || []).map(text));
@@ -3537,12 +3697,12 @@ var ProjectPlannerCanonical = (() => {
       return iso !== 6 && iso !== 7 && !skip.has(key8);
     });
   }
-  function leaveDaysInRange(record19, range, timeZone, nonWorkingDayKeys) {
+  function leaveDaysInRange(record22, range, timeZone, nonWorkingDayKeys) {
     const from = text(range?.startDayKey);
     const to = text(range?.endDayKey);
     if (!DAY_KEY.test(from) || !DAY_KEY.test(to) || to < from) return 0;
-    const each = normalizeHolidayTimeSlot(record19?.timeSlot) === "FULL DAY" ? 1 : 0.5;
-    const days = leaveRecordDayKeys(record19, timeZone, nonWorkingDayKeys).filter((key8) => key8 >= from && key8 <= to);
+    const each = normalizeHolidayTimeSlot(record22?.timeSlot) === "FULL DAY" ? 1 : 0.5;
+    const days = leaveRecordDayKeys(record22, timeZone, nonWorkingDayKeys).filter((key8) => key8 >= from && key8 <= to);
     return Math.round(days.length * each * 100) / 100;
   }
   function holidayRequestRanges(picks, timeZone) {
@@ -4498,9 +4658,9 @@ var ProjectPlannerCanonical = (() => {
       return [{ ...chosen, timesheetDeadlineDay: 0, notifyDay: 0 }];
     }
     const paymentDays = input.paymentDates.map((value) => monthDayOrZero(value)).filter((day) => day > 0);
-    const count = Math.max(paymentDays.length, rawList.length, 2);
+    const count2 = Math.max(paymentDays.length, rawList.length, 2);
     const rows3 = [];
-    for (let index = 0; index < count; index += 1) {
+    for (let index = 0; index < count2; index += 1) {
       const paymentDay = paymentDays[index] || 0;
       const fallback = defaultTimesheetSubmissionFromPaymentDay(paymentDay);
       const fromList = rawList[index] != null ? parseTimesheetSubmissionEntry(rawList[index], fallback) : null;
@@ -5201,7 +5361,10 @@ var ProjectPlannerCanonical = (() => {
     "annualLeaveDefaults",
     "warningDetection",
     "invoicing",
-    "settings"
+    "settings",
+    /** 1.85.0 (§33): an admin hid the Getting started card (`onboardingDismissWriteFields`). */
+    "onboardingDismissedAt",
+    "onboardingDismissedBy"
   ];
   var OPERATIONAL_COLLECTION_PATHS = {
     variations: "organizations/{orgId}/variations",
@@ -5239,6 +5402,8 @@ var ProjectPlannerCanonical = (() => {
     materialContacts: "organizations/{orgId}/materialContacts",
     /** 1.81.0 (§11): a person's name in this organisation (`memberNameWriteFields`). */
     memberNames: "organizations/{orgId}/memberNames",
+    /** 1.83.0 (§31): insurance & accreditations, one document (`orgComplianceMergePayload`); admins only. */
+    orgCompliance: "organizations/{orgId}/orgCompliance",
     /** 1.65.0 (§25, §26): one server check per saved overtime / claims report (`reportCheckWriteFields`). */
     reportChecks: "organizations/{orgId}/reportChecks"
   };
@@ -5559,8 +5724,8 @@ var ProjectPlannerCanonical = (() => {
     const breakPaid = policy.breakPaid === true;
     const paidHours = derivedWeekdayPaidHours(policy);
     const range = `${formatClockMinutes(day.start)}\u2013${formatClockMinutes(day.end)}`;
-    const dayText3 = hoursMinutesText(dayMinutes);
-    const line = breakMinutes <= 0 ? `${range} = ${dayText3}` : breakPaid ? `${range} = ${dayText3}, ${breakMinutes} min break paid = ${dayText3}` : `${range} = ${dayText3} \u2212 ${breakMinutes} min unpaid break = ${hoursMinutesText(paidHours * 60)}`;
+    const dayText4 = hoursMinutesText(dayMinutes);
+    const line = breakMinutes <= 0 ? `${range} = ${dayText4}` : breakPaid ? `${range} = ${dayText4}, ${breakMinutes} min break paid = ${dayText4}` : `${range} = ${dayText4} \u2212 ${breakMinutes} min unpaid break = ${hoursMinutesText(paidHours * 60)}`;
     return { start: formatClockMinutes(day.start), end: formatClockMinutes(day.end), dayMinutes, breakMinutes, breakPaid, paidHours, line };
   }
   function payrollPolicyToFirestore(policy) {
@@ -5627,46 +5792,46 @@ var ProjectPlannerCanonical = (() => {
     if (mode === "endOfWorkingWeek" || mode === "week") return "endOfWorkingWeek";
     return DEFAULT_WARNING_DETECTION.clashLookaheadMode;
   }
-  function excludedUnbookedUserIds(record19) {
-    if (Array.isArray(record19.excludedUserIdsFromUnbookedWarnings)) {
-      return stringIdList(record19.excludedUserIdsFromUnbookedWarnings);
+  function excludedUnbookedUserIds(record22) {
+    if (Array.isArray(record22.excludedUserIdsFromUnbookedWarnings)) {
+      return stringIdList(record22.excludedUserIdsFromUnbookedWarnings);
     }
     for (const key8 of ["excludedUserIds", "excludedUsers", "excludedUserIdsFromWarnings", "unbookedWarningExcludedUserIds"]) {
-      if (Array.isArray(record19[key8])) return stringIdList(record19[key8]);
+      if (Array.isArray(record22[key8])) return stringIdList(record22[key8]);
     }
     return [];
   }
   function parseWarningDetection(data) {
-    const record19 = asSettingsRecord(data);
-    if (!record19) return { ...DEFAULT_WARNING_DETECTION, excludedUserIdsFromUnbookedWarnings: [] };
-    const daysRaw = record19.clashLookaheadDays ?? record19.lookaheadDays ?? record19.lookAheadDays ?? record19.numberOfDays ?? record19.daysAhead;
+    const record22 = asSettingsRecord(data);
+    if (!record22) return { ...DEFAULT_WARNING_DETECTION, excludedUserIdsFromUnbookedWarnings: [] };
+    const daysRaw = record22.clashLookaheadDays ?? record22.lookaheadDays ?? record22.lookAheadDays ?? record22.numberOfDays ?? record22.daysAhead;
     const days = daysRaw === void 0 || daysRaw === null ? DEFAULT_WARNING_DETECTION.clashLookaheadDays : daysRaw;
     const clashLookaheadMode = parseClashLookaheadMode(
-      record19.clashLookaheadMode ?? record19.lookAheadMode ?? record19.lookaheadMode
+      record22.clashLookaheadMode ?? record22.lookAheadMode ?? record22.lookaheadMode
     );
     const fallback = lookaheadDaysFallback(daysRaw);
     const parsed = {
-      detectClashes: record19.detectClashes !== false,
+      detectClashes: record22.detectClashes !== false,
       clashLookaheadMode,
       clashLookaheadDays: fallback ? DEFAULT_WARNING_DETECTION.clashLookaheadDays : clampClashLookaheadDays(days),
-      includeWeekendsForUnbookedLabour: Boolean(record19.includeWeekendsForUnbookedLabour),
-      excludedUserIdsFromUnbookedWarnings: excludedUnbookedUserIds(record19),
-      weekendCoverage: parseWeekendCoverage(record19.weekendCoverage, Boolean(record19.includeWeekendsForUnbookedLabour))
+      includeWeekendsForUnbookedLabour: Boolean(record22.includeWeekendsForUnbookedLabour),
+      excludedUserIdsFromUnbookedWarnings: excludedUnbookedUserIds(record22),
+      weekendCoverage: parseWeekendCoverage(record22.weekendCoverage, Boolean(record22.includeWeekendsForUnbookedLabour))
     };
     if (fallback && clashLookaheadMode === "numberOfDays") parsed.clashLookaheadDaysFallback = fallback;
     return parsed;
   }
   var COVERAGE_CLOCK_RE = /^\d{1,2}:\d{2}$/;
   function clockMinutesOf(value) {
-    const text57 = coverageClock(value);
-    if (!text57) return null;
-    const [h4, m] = text57.split(":").map(Number);
+    const text63 = coverageClock(value);
+    if (!text63) return null;
+    const [h4, m] = text63.split(":").map(Number);
     return h4 * 60 + m;
   }
   function coverageClock(value) {
-    const text57 = typeof value === "string" ? value.trim() : "";
-    if (!COVERAGE_CLOCK_RE.test(text57)) return null;
-    const [h4, m] = text57.split(":").map(Number);
+    const text63 = typeof value === "string" ? value.trim() : "";
+    if (!COVERAGE_CLOCK_RE.test(text63)) return null;
+    const [h4, m] = text63.split(":").map(Number);
     return h4 >= 0 && h4 < 24 && m >= 0 && m < 60 ? `${String(h4).padStart(2, "0")}:${String(m).padStart(2, "0")}` : null;
   }
   function parseWeekendCoverage(value, includeWeekends) {
@@ -5830,11 +5995,11 @@ var ProjectPlannerCanonical = (() => {
     const fromOrg = asSettingsRecord(input.organizationMaterialCutOff) ?? (settings ? asSettingsRecord(settings.materialCutOff) : void 0);
     return parseMaterialCutOff(fromOrg);
   }
-  function materialCutOffClockMinutes(clock5) {
-    return clock5.materialCutOffHour * 60 + clock5.materialCutOffMinute;
+  function materialCutOffClockMinutes(clock6) {
+    return clock6.materialCutOffHour * 60 + clock6.materialCutOffMinute;
   }
-  function formatMaterialCutOffClock(clock5) {
-    return formatClockMinutes(materialCutOffClockMinutes(clock5));
+  function formatMaterialCutOffClock(clock6) {
+    return formatClockMinutes(materialCutOffClockMinutes(clock6));
   }
   function materialCutOffToFirestore(prefs) {
     return {
@@ -5969,8 +6134,8 @@ var ProjectPlannerCanonical = (() => {
     return policy.weekdayOutsideStandardMultiplier;
   }
   function segment(kind, baseHours, multiplier, start, end, workedHours = baseHours, unpaidBreakHours = 0) {
-    const clock5 = (value) => value == null ? void 0 : typeof value === "number" ? formatClockMinutes(value > 24 * 60 ? value - 24 * 60 : Math.min(value, 24 * 60 - 1)) : value;
-    const row3 = { kind, clockStart: clock5(start), clockEnd: clock5(end), baseHours, multiplier, paidHours: baseHours * multiplier, workedHours };
+    const clock6 = (value) => value == null ? void 0 : typeof value === "number" ? formatClockMinutes(value > 24 * 60 ? value - 24 * 60 : Math.min(value, 24 * 60 - 1)) : value;
+    const row3 = { kind, clockStart: clock6(start), clockEnd: clock6(end), baseHours, multiplier, paidHours: baseHours * multiplier, workedHours };
     if (unpaidBreakHours > 0) row3.unpaidBreakHours = unpaidBreakHours;
     return row3;
   }
@@ -5982,15 +6147,15 @@ var ProjectPlannerCanonical = (() => {
     return row3;
   }
   function payrollOutsideClockHours(result2) {
-    let clock5 = 0;
+    let clock6 = 0;
     let brk = 0;
     for (const row3 of result2?.segments ?? []) {
       if (row3.kind === "standardWindow") continue;
       const b = row3.unpaidBreakHours ?? 0;
-      clock5 += row3.baseHours + (b > 0 && row3.multiplier > 0 ? b / row3.multiplier : 0);
+      clock6 += row3.baseHours + (b > 0 && row3.multiplier > 0 ? b / row3.multiplier : 0);
       brk += b;
     }
-    return { outsideClockHours: clock5, outsideBreakHours: brk };
+    return { outsideClockHours: clock6, outsideBreakHours: brk };
   }
   function roundHundredths(value) {
     return Math.round(value * 100) / 100;
@@ -5999,15 +6164,15 @@ var ProjectPlannerCanonical = (() => {
     return `${roundHundredths(hours2)}h`;
   }
   function multipliedHoursText(input) {
-    const clock5 = Math.max(0, Number(input.clockHours) || 0);
+    const clock6 = Math.max(0, Number(input.clockHours) || 0);
     const n = Number(input.multiplier) > 0 ? Number(input.multiplier) : 1;
     const brk = Math.max(0, Number(input.breakHours) || 0);
-    const multiplied = `${plainHoursText(clock5)} \xD7 ${roundHundredths(n)}`;
-    const total = plainHoursText(Math.max(0, clock5 * n - brk));
+    const multiplied = `${plainHoursText(clock6)} \xD7 ${roundHundredths(n)}`;
+    const total = plainHoursText(Math.max(0, clock6 * n - brk));
     return roundHundredths(brk) > 0 ? `${multiplied} \u2212 ${plainHoursText(brk)} break = ${total}` : `${multiplied} = ${total}`;
   }
-  function parseMultipliedHoursText(text57) {
-    const match = /(\d+(?:\.\d+)?)h × (\d+(?:\.\d+)?)(?: − (\d+(?:\.\d+)?)h break)? = \d+(?:\.\d+)?h/.exec(String(text57 ?? ""));
+  function parseMultipliedHoursText(text63) {
+    const match = /(\d+(?:\.\d+)?)h × (\d+(?:\.\d+)?)(?: − (\d+(?:\.\d+)?)h break)? = \d+(?:\.\d+)?h/.exec(String(text63 ?? ""));
     if (!match) return null;
     const clockHours = Number(match[1]);
     const multiplier = Number(match[2]);
@@ -6053,9 +6218,9 @@ var ProjectPlannerCanonical = (() => {
     return { standard, overtime, standardText: standard.join(" + "), overtimeText: overtime.join(" + ") };
   }
   function timesheetLineClockText(details) {
-    const text57 = String(details ?? "").trim();
-    const cut = text57.indexOf(" \xB7 OT ");
-    return cut >= 0 ? text57.slice(0, cut).trim() : text57;
+    const text63 = String(details ?? "").trim();
+    const cut = text63.indexOf(" \xB7 OT ");
+    return cut >= 0 ? text63.slice(0, cut).trim() : text63;
   }
   function result(segments, outsideMultiplier) {
     let total = 0;
@@ -6681,9 +6846,9 @@ var ProjectPlannerCanonical = (() => {
   }
   var WEEKEND_COUNTS_AS_STEP_HOURS = 0.5;
   function weekendCountsAsError(policy, previous) {
-    const cap = weekdayPaidHours(policy);
-    const capText = `${Math.round(cap * 100) / 100}h`;
-    const weekdayChanged = previous != null && Math.abs(weekdayPaidHours(previous) - cap) > 1e-9;
+    const cap2 = weekdayPaidHours(policy);
+    const capText = `${Math.round(cap2 * 100) / 100}h`;
+    const weekdayChanged = previous != null && Math.abs(weekdayPaidHours(previous) - cap2) > 1e-9;
     const days = [["Saturday", "saturday"]];
     if (!policy.sunday?.sameAsSaturday) days.push(["Sunday", "sunday"]);
     for (const [name, key8] of days) {
@@ -6693,14 +6858,14 @@ var ProjectPlannerCanonical = (() => {
       const before = previous?.[key8];
       const unchanged = before != null && before.countsAsFollowsWeekday !== true && Math.abs(weekendCountsAsHours(before) - value) < 1e-9;
       if (unchanged) {
-        if (weekdayChanged && value > cap + 1e-9) {
+        if (weekdayChanged && value > cap2 + 1e-9) {
           return `${name} counts as ${Math.round(value * 100) / 100}h, more than the new Monday\u2013Friday day of ${capText}. Lower ${name}'s Counts as or turn on Same as Monday\u2013Friday.`;
         }
         continue;
       }
       const steps = value / WEEKEND_COUNTS_AS_STEP_HOURS;
       if (Math.abs(steps - Math.round(steps)) > 1e-9) return `${name} counts-as hours use half-hour steps (e.g. 7.5).`;
-      if (value > cap + 1e-9) {
+      if (value > cap2 + 1e-9) {
         return `${name} counts-as hours can't be more than the Monday\u2013Friday paid day (${capText}).`;
       }
     }
@@ -6830,15 +6995,15 @@ var ProjectPlannerCanonical = (() => {
   }
   function workingDaysInclusive(startKey, endKey, timeZone) {
     if (!startKey || !endKey || startKey > endKey) return 0;
-    let count = 0;
+    let count2 = 0;
     let cursor = dateFromDayKeyInZone(startKey, timeZone);
     while (dayKeyInZone(cursor, timeZone) <= endKey) {
       const iso = isoWeekdayInZone(cursor, timeZone);
-      if (iso >= 1 && iso <= 5) count += 1;
+      if (iso >= 1 && iso <= 5) count2 += 1;
       cursor = addDaysInZone(cursor, 1, timeZone);
-      if (count > 400) break;
+      if (count2 > 400) break;
     }
-    return count;
+    return count2;
   }
   var formatUnbookedDay = formatLongDayKey;
   function formatCoverageHours(hours2) {
@@ -7267,8 +7432,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function formatHours(hours2) {
     const rounded = Math.round(hours2 * 4) / 4;
-    const text57 = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, "");
-    return `${text57} hour${rounded === 1 ? "" : "s"}`;
+    const text63 = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace(/0+$/, "");
+    return `${text63} hour${rounded === 1 ? "" : "s"}`;
   }
   function joinRanges(intervals) {
     const labels = intervals.map(rangeLabel);
@@ -7278,7 +7443,7 @@ var ProjectPlannerCanonical = (() => {
   function leaveCoverageRows(input) {
     const timeZone = zoneOrLondon(input.timeZone);
     const excluded = new Set((input.excludedUserIds || []).map(idKey).filter(Boolean));
-    const approvedLeave = input.leave.filter((record19) => record19.approved && record19.startDayKey && record19.endDayKey);
+    const approvedLeave = input.leave.filter((record22) => record22.approved && record22.startDayKey && record22.endDayKey);
     if (approvedLeave.length === 0) return [];
     const peopleByUserId = /* @__PURE__ */ new Map();
     const peopleByOperativeId = /* @__PURE__ */ new Map();
@@ -7295,10 +7460,10 @@ var ProjectPlannerCanonical = (() => {
         if (key8 && !peopleByOperativeId.has(key8)) peopleByOperativeId.set(key8, person);
       }
     }
-    const personForLeave = (record19) => {
-      const userId = idKey(record19.userId);
+    const personForLeave = (record22) => {
+      const userId = idKey(record22.userId);
       if (userId && peopleByUserId.has(userId)) return peopleByUserId.get(userId);
-      const operativeId = idKey(record19.operativeId);
+      const operativeId = idKey(record22.operativeId);
       if (operativeId && peopleByOperativeId.has(operativeId)) return peopleByOperativeId.get(operativeId);
       return void 0;
     };
@@ -7324,20 +7489,20 @@ var ProjectPlannerCanonical = (() => {
       const day = bookingStandardDayOn(input.day, dayKey);
       const windows = leaveHalfDayWindows(day);
       const lunch = standardBreakWindow(day);
-      for (const record19 of approvedLeave) {
-        if (dayKey < record19.startDayKey || dayKey > record19.endDayKey) continue;
-        const person = personForLeave(record19);
+      for (const record22 of approvedLeave) {
+        if (dayKey < record22.startDayKey || dayKey > record22.endDayKey) continue;
+        const person = personForLeave(record22);
         if (!person) continue;
-        const dedupe = `${person.personKey}|${dayKey}|${record19.id}`;
+        const dedupe = `${person.personKey}|${dayKey}|${record22.id}`;
         if (seen.has(dedupe)) continue;
         seen.add(dedupe);
-        const leaveSlot2 = leaveSlotKind(record19.timeSlot);
+        const leaveSlot2 = leaveSlotKind(record22.timeSlot);
         const leaveWindow = leaveSlot2 === "AM" ? windows.am : leaveSlot2 === "PM" ? windows.pm : windows.day;
         const dayBookings = bookingsByPersonDay.get(`${person.personKey}|${dayKey}`) || [];
         const intervals = dayBookings.map((booking) => ({ booking, interval: leaveComparableInterval(booking, day) })).filter((entry) => entry.interval !== null);
         const personName = String(person.name || "").trim() || person.personKey;
         const userId = String(person.userId || "").trim() || void 0;
-        const operativeId = String(record19.operativeId || person.operativeIds?.[0] || "").trim() || void 0;
+        const operativeId = String(record22.operativeId || person.operativeIds?.[0] || "").trim() || void 0;
         const longDay = formatLongDayKey(dayKey, timeZone);
         const leaveLabel = leaveLabelFor(leaveSlot2);
         const clashes = intervals.filter(({ interval: interval2 }) => intervalsOverlap(interval2, leaveWindow)).map(({ booking, interval: interval2 }) => ({
@@ -7353,14 +7518,14 @@ var ProjectPlannerCanonical = (() => {
           const bookedText = clashes.map((clash) => `${clash.label} ${formatClockMinutes(clash.start)}\u2013${formatClockMinutes(clash.end)}`).join(", ");
           const leaveText = leaveSlot2 === "FULL_DAY" ? "full-day annual leave" : `${leaveLabel} annual leave (${rangeLabel(leaveWindow)})`;
           rows3.push({
-            id: `leave-clash-${dayKey}-${person.personKey}-${record19.id}`,
+            id: `leave-clash-${dayKey}-${person.personKey}-${record22.id}`,
             kind: "leave_clash",
             personKey: person.personKey,
             personName,
             userId,
             operativeId,
             dayKey,
-            leaveId: record19.id,
+            leaveId: record22.id,
             leaveSlot: leaveSlot2,
             leaveLabel,
             leaveWindow: { ...leaveWindow },
@@ -7393,14 +7558,14 @@ var ProjectPlannerCanonical = (() => {
         const bookedHours = hoursOf(bookedInWorking);
         const message = bookedHours > 0 ? `${personName} has ${leaveLabel} annual leave on ${longDay}. The ${workingLabel} (${rangeLabel(workingWindow)}) is only booked ${joinRanges(bookedInWorking)}; ${joinRanges(missing)} (${formatHours(missingHours)}) is not booked.` : `${personName} has ${leaveLabel} annual leave on ${longDay} but is not booked for the ${workingLabel} (${rangeLabel(workingWindow)}, ${formatHours(missingHours)}).`;
         rows3.push({
-          id: `leave-cover-${dayKey}-${person.personKey}-${record19.id}`,
+          id: `leave-cover-${dayKey}-${person.personKey}-${record22.id}`,
           kind: "leave_cover",
           personKey: person.personKey,
           personName,
           userId,
           operativeId,
           dayKey,
-          leaveId: record19.id,
+          leaveId: record22.id,
           leaveSlot: leaveSlot2,
           leaveLabel,
           leaveWindow: { ...leaveWindow },
@@ -7800,13 +7965,13 @@ var ProjectPlannerCanonical = (() => {
   function unreadNotificationBadgeCount(notifications, userId, now) {
     if (ownerKeys(userId).size === 0) return 0;
     const rows3 = Array.isArray(notifications) ? notifications : [];
-    let count = 0;
+    let count2 = 0;
     for (const row3 of rows3) {
       if (!inboxNotificationVisibleToUser(row3, userId, now)) continue;
       if (row3.isRead === true) continue;
-      count += 1;
+      count2 += 1;
     }
-    return count;
+    return count2;
   }
   function bookingDestination(role, relatedId, dayKey, catalogue) {
     if (role === "operative") return { kind: "mySchedule", dayKey };
@@ -8166,9 +8331,9 @@ var ProjectPlannerCanonical = (() => {
         employment ? inWindow(prior.window) : void 0
       );
       carriedForward = prior.window ? Math.max(0, snapLeaveDays(prior.allowance - prevTaken)) : 0;
-      const cap = input.maxCarryOverDays;
-      if (cap != null && Number.isFinite(Number(cap)) && Number(cap) >= 0) {
-        carriedForward = Math.min(carriedForward, snapLeaveDays(Number(cap)));
+      const cap2 = input.maxCarryOverDays;
+      if (cap2 != null && Number.isFinite(Number(cap2)) && Number(cap2) >= 0) {
+        carriedForward = Math.min(carriedForward, snapLeaveDays(Number(cap2)));
       }
     }
     const yearAllowance = overrideApplies ? snapLeaveDays(input.yearAllowance) : null;
@@ -8211,16 +8376,16 @@ var ProjectPlannerCanonical = (() => {
   }
   function annualLeaveEmploymentInput(input) {
     const person = input.person ?? {};
-    let record19 = person;
+    let record22 = person;
     if (input.privatePay) {
       if (!input.payProfileRead) return null;
-      if (input.payProfile) record19 = { ...person, ...input.payProfile.fields };
+      if (input.payProfile) record22 = { ...person, ...input.payProfile.fields };
     }
     const str2 = (value) => typeof value === "string" && value.trim() ? value : null;
-    const at = record19.employmentTypeEffectiveAt;
+    const at = record22.employmentTypeEffectiveAt;
     return {
-      employmentType: str2(record19.employmentType),
-      employmentTypeTransitionFrom: str2(record19.employmentTypeTransitionFrom),
+      employmentType: str2(record22.employmentType),
+      employmentTypeTransitionFrom: str2(record22.employmentTypeTransitionFrom),
       employmentTypeEffectiveAt: at instanceof Date || typeof at === "string" || typeof at === "number" ? at : documentInstant(at)
     };
   }
@@ -8324,22 +8489,22 @@ var ProjectPlannerCanonical = (() => {
     }
     return null;
   }
-  function recordFields(record19) {
+  function recordFields(record22) {
     return {
-      name: fieldTokens(record19.name),
-      brand: fieldTokens(record19.brand),
-      code: fieldTokens(record19.productCode),
+      name: fieldTokens(record22.name),
+      brand: fieldTokens(record22.brand),
+      code: fieldTokens(record22.productCode),
       extra: [
-        ...fieldTokens(record19.category),
-        ...fieldTokens(record19.size),
-        ...fieldTokens(record19.length)
+        ...fieldTokens(record22.category),
+        ...fieldTokens(record22.size),
+        ...fieldTokens(record22.length)
       ]
     };
   }
-  function materialSearchScore(query, record19) {
+  function materialSearchScore(query, record22) {
     const tokens = tokenizeMaterialSearch(query);
     if (tokens.length === 0) return 1;
-    const fields = recordFields(record19);
+    const fields = recordFields(record22);
     const all = [...fields.name, ...fields.brand, ...fields.code, ...fields.extra];
     let score = 0;
     for (const token of tokens) {
@@ -8355,7 +8520,7 @@ var ProjectPlannerCanonical = (() => {
       if (coded) score += 18;
       if (named) score += 8;
     }
-    const name = normalizeMaterialSearchText(record19.name);
+    const name = normalizeMaterialSearchText(record22.name);
     const joined = tokens.join(" ");
     if (name.startsWith(joined)) score += 24;
     else if (name.includes(joined)) score += 10;
@@ -8363,8 +8528,8 @@ var ProjectPlannerCanonical = (() => {
     if (nameLength > 0) score += Math.max(0, 20 - Math.floor(nameLength / 8));
     return score;
   }
-  function materialRecordMatches(query, record19) {
-    return materialSearchScore(query, record19) > 0;
+  function materialRecordMatches(query, record22) {
+    return materialSearchScore(query, record22) > 0;
   }
   function rankMaterialRecords(query, records, limit) {
     const tokens = tokenizeMaterialSearch(query);
@@ -8381,8 +8546,8 @@ var ProjectPlannerCanonical = (() => {
         return left.localeCompare(right);
       });
     }
-    const cap = Number(limit);
-    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    const cap2 = Number(limit);
+    if (Number.isFinite(cap2) && cap2 > 0) return hits.slice(0, cap2);
     return hits;
   }
   function catalogueRecordFromItem(item) {
@@ -8450,22 +8615,22 @@ var ProjectPlannerCanonical = (() => {
     }
     return null;
   }
-  function recordFields2(record19) {
+  function recordFields2(record22) {
     return {
-      name: fieldTokens2(record19.name),
-      code: fieldTokens2(record19.code),
-      body: fieldTokens2(record19.awardingBody),
+      name: fieldTokens2(record22.name),
+      code: fieldTokens2(record22.code),
+      body: fieldTokens2(record22.awardingBody),
       extra: [
-        ...fieldTokens2(record19.section),
-        ...fieldTokens2(record19.subsection),
-        ...fieldTokens2(record19.notes)
+        ...fieldTokens2(record22.section),
+        ...fieldTokens2(record22.subsection),
+        ...fieldTokens2(record22.notes)
       ]
     };
   }
-  function qualificationSearchScore(query, record19) {
+  function qualificationSearchScore(query, record22) {
     const tokens = tokenizeQualificationSearch(query);
     if (tokens.length === 0) return 1;
-    const fields = recordFields2(record19);
+    const fields = recordFields2(record22);
     const all = [...fields.name, ...fields.code, ...fields.body, ...fields.extra];
     let score = 0;
     for (const token of tokens) {
@@ -8481,20 +8646,20 @@ var ProjectPlannerCanonical = (() => {
       if (coded) score += 18;
       if (named) score += 8;
     }
-    const name = normalizeQualificationSearchText(record19.name);
+    const name = normalizeQualificationSearchText(record22.name);
     const joined = tokens.join(" ");
     if (name.startsWith(joined)) score += 24;
     else if (name.includes(joined)) score += 10;
     if (name.length > 0) score += Math.max(0, 20 - Math.floor(name.length / 8));
     return score;
   }
-  function qualificationRecordMatches(query, record19) {
-    return qualificationSearchScore(query, record19) > 0;
+  function qualificationRecordMatches(query, record22) {
+    return qualificationSearchScore(query, record22) > 0;
   }
-  function qualificationMatchesSection(record19, section) {
+  function qualificationMatchesSection(record22, section) {
     const wanted = String(section || "").trim();
     if (!wanted || wanted === QUALIFICATION_FILTER_ALL) return true;
-    const value = String(record19.section || "").trim();
+    const value = String(record22.section || "").trim();
     if (wanted === QUALIFICATION_FILTER_OTHER) return value.length === 0;
     return value === wanted;
   }
@@ -8505,8 +8670,8 @@ var ProjectPlannerCanonical = (() => {
   function qualificationLibraryFilterChips(records) {
     const counts = /* @__PURE__ */ new Map();
     let other = 0;
-    for (const record19 of records) {
-      const section = String(record19.section || "").trim();
+    for (const record22 of records) {
+      const section = String(record22.section || "").trim();
       if (!section) {
         other += 1;
         continue;
@@ -8517,13 +8682,13 @@ var ProjectPlannerCanonical = (() => {
       { key: QUALIFICATION_FILTER_ALL, label: QUALIFICATION_FILTER_ALL, count: records.length }
     ];
     for (const row3 of QUALIFICATION_LIBRARY_SECTIONS) {
-      const count = counts.get(row3.section) || 0;
-      if (count === 0) continue;
-      chips.push({ key: row3.section, label: row3.chip, count });
+      const count2 = counts.get(row3.section) || 0;
+      if (count2 === 0) continue;
+      chips.push({ key: row3.section, label: row3.chip, count: count2 });
       counts.delete(row3.section);
     }
-    for (const [section, count] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-      chips.push({ key: section, label: section, count });
+    for (const [section, count2] of [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      chips.push({ key: section, label: section, count: count2 });
     }
     if (other > 0) {
       chips.push({ key: QUALIFICATION_FILTER_OTHER, label: QUALIFICATION_FILTER_OTHER, count: other });
@@ -8546,8 +8711,8 @@ var ProjectPlannerCanonical = (() => {
         return left.localeCompare(right);
       });
     }
-    const cap = Number(limit);
-    if (Number.isFinite(cap) && cap > 0) return hits.slice(0, cap);
+    const cap2 = Number(limit);
+    if (Number.isFinite(cap2) && cap2 > 0) return hits.slice(0, cap2);
     return hits;
   }
   function qualificationSearchRecordFromItem(item) {
@@ -10758,16 +10923,16 @@ var ProjectPlannerCanonical = (() => {
       return Number.isNaN(parsed) ? null : parsed;
     }
     if (typeof value === "object") {
-      const record19 = value;
-      if (typeof record19.toDate === "function") {
+      const record22 = value;
+      if (typeof record22.toDate === "function") {
         try {
-          const parsed = record19.toDate();
+          const parsed = record22.toDate();
           const ms = timestampMs(parsed);
           if (ms != null) return ms;
         } catch {
         }
       }
-      const seconds = typeof record19.seconds === "number" ? record19.seconds : record19._seconds;
+      const seconds = typeof record22.seconds === "number" ? record22.seconds : record22._seconds;
       if (typeof seconds === "number" && Number.isFinite(seconds)) return Math.round(seconds * 1e3);
     }
     return null;
@@ -11644,7 +11809,7 @@ var ProjectPlannerCanonical = (() => {
     const email = emailKey2(account?.email);
     if (email) ids.add(email);
     const has2 = (value) => typeof value === "string" && value.trim() !== "" && ids.has(value.trim().toLowerCase());
-    return (records || []).filter((record19) => has2(record19?.userId) || has2(record19?.operativeId));
+    return (records || []).filter((record22) => has2(record22?.userId) || has2(record22?.operativeId));
   }
 
   // lib/canonical/lineManagers.ts
@@ -11907,12 +12072,12 @@ var ProjectPlannerCanonical = (() => {
     }
     return out.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
-  function linkBookingPersonConfirmMessage(count, name) {
-    const n = Math.max(0, Math.floor(Number(count) || 0));
+  function linkBookingPersonConfirmMessage(count2, name) {
+    const n = Math.max(0, Math.floor(Number(count2) || 0));
     return `All ${n} booking${n === 1 ? "" : "s"} under this ID will show as ${text8(name) || "this person"}.`;
   }
-  function linkBookingPersonDoneMessage(count, name) {
-    const n = Math.max(0, Math.floor(Number(count) || 0));
+  function linkBookingPersonDoneMessage(count2, name) {
+    const n = Math.max(0, Math.floor(Number(count2) || 0));
     return `Linked: ${n} booking${n === 1 ? "" : "s"} now show${n === 1 ? "s" : ""} as ${text8(name) || "this person"}.`;
   }
   function linkBookingPersonRefusal(input) {
@@ -12003,8 +12168,8 @@ var ProjectPlannerCanonical = (() => {
     return typeof value === "string" ? value.trim().toLowerCase() : "";
   }
   function dayKeyText(value) {
-    const text57 = typeof value === "string" ? value.trim() : "";
-    return DAY_KEY2.test(text57) ? text57 : null;
+    const text63 = typeof value === "string" ? value.trim() : "";
+    return DAY_KEY2.test(text63) ? text63 : null;
   }
   function compareText(a, b) {
     if (a === b) return 0;
@@ -12132,8 +12297,8 @@ var ProjectPlannerCanonical = (() => {
   function personDayItems(input) {
     const managerIdByKey = /* @__PURE__ */ new Map();
     for (const id2 of input?.managerIds || []) {
-      const text57 = idText2(id2);
-      if (text57) managerIdByKey.set(text57.toLowerCase(), text57);
+      const text63 = idText2(id2);
+      if (text63) managerIdByKey.set(text63.toLowerCase(), text63);
     }
     const people = input?.people || { accounts: [], operatives: [] };
     const managerIdByEmail = /* @__PURE__ */ new Map();
@@ -12234,9 +12399,9 @@ var ProjectPlannerCanonical = (() => {
     return [idText2(bookingAId), idText2(bookingBId)].sort(compareText).join("|");
   }
   function comparableKey(key8) {
-    const text57 = normalizeDocumentId(key8);
-    const parts3 = text57.split("|");
-    return parts3.length === 2 && parts3[0] && parts3[1] ? [...parts3].sort(compareText).join("|") : text57;
+    const text63 = normalizeDocumentId(key8);
+    const parts3 = text63.split("|");
+    return parts3.length === 2 && parts3[0] && parts3[1] ? [...parts3].sort(compareText).join("|") : text63;
   }
   function isClashAccepted(bookingAId, bookingBId, accepted) {
     const a = idKey7(bookingAId);
@@ -12285,11 +12450,11 @@ var ProjectPlannerCanonical = (() => {
   }
   function warningResolutionKeys(records, statuses) {
     const keys = /* @__PURE__ */ new Map();
-    for (const record19 of records || []) {
-      if (!record19) continue;
-      const status = typeof record19.status === "string" ? record19.status.trim().toLowerCase() : "";
+    for (const record22 of records || []) {
+      if (!record22) continue;
+      const status = typeof record22.status === "string" ? record22.status.trim().toLowerCase() : "";
       if (!statuses.includes(status)) continue;
-      const key8 = idText2(record19.resolutionKey) || idText2(record19.id);
+      const key8 = idText2(record22.resolutionKey) || idText2(record22.id);
       if (key8 && !keys.has(normalizeDocumentId(key8))) keys.set(normalizeDocumentId(key8), key8);
     }
     return [...keys.values()].sort(compareText);
@@ -12380,14 +12545,14 @@ var ProjectPlannerCanonical = (() => {
       const id2 = idText2(booking?.id);
       const day = dayKeyText(booking?.dayKey);
       if (!id2 || !day || seen.has(id2.toLowerCase()) || !occupiesDay(booking.status)) continue;
-      const clock5 = { timeSlot: booking.timeSlot, workStartTime: booking.workStartTime, workEndTime: booking.workEndTime };
+      const clock6 = { timeSlot: booking.timeSlot, workStartTime: booking.workStartTime, workEndTime: booking.workEndTime };
       let interval2 = null;
-      if (day === dayKey) interval2 = slotInterval(clock5, standard);
+      if (day === dayKey) interval2 = slotInterval(clock6, standard);
       else if (nextCalendarDayKey(day) === dayKey) {
-        const own = slotInterval(clock5, bookingStandardDayOn(input.day, day));
+        const own = slotInterval(clock6, bookingStandardDayOn(input.day, day));
         interval2 = own && intervalCrossesMidnight(own) ? overnightCarryInterval(own) : null;
       } else if (nextCalendarDayKey(dayKey) === day && intervalCrossesMidnight(probe)) {
-        const own = slotInterval(clock5, bookingStandardDayOn(input.day, day));
+        const own = slotInterval(clock6, bookingStandardDayOn(input.day, day));
         interval2 = own ? { start: own.start + 24 * 60, end: own.end + 24 * 60 } : null;
       }
       if (!interval2 || !intervalsOverlap(probe, interval2)) continue;
@@ -12542,7 +12707,9 @@ var ProjectPlannerCanonical = (() => {
     "paye_claim_evidence",
     "personal_site_audit",
     // 1.80.0: subcontractor insurance and RAMS documents (staff only).
-    "subcontractor_document"
+    "subcontractor_document",
+    // 1.83.0 (§31): organisation insurance and accreditation certificates (admins only).
+    "org_compliance_document"
   ];
   function text11(value) {
     return typeof value === "string" ? value.trim() : "";
@@ -12572,6 +12739,7 @@ var ProjectPlannerCanonical = (() => {
     if (rest.length === 4 && rest[0] === "subcontractors" && rest[1] && rest[2] === "documents") {
       return { ...base, kind: "subcontractor_document" };
     }
+    if (rest.length === 2 && rest[0] === "compliance" && rest[1]) return { ...base, kind: "org_compliance_document" };
     if (rest.length >= 2 && rest[0] === "siteAudits") return { ...base, kind: "site_audit_photo" };
     if (rest.length >= 2 && rest[0] === "tasks") return { ...base, kind: "task_attachment" };
     if (rest.length >= 2 && rest[0] === "healthSafety") return { ...base, kind: "health_safety" };
@@ -12618,7 +12786,9 @@ var ProjectPlannerCanonical = (() => {
     if (parsed.kind === "profile_photo") {
       return parsed.ownerUserId === viewer ? { allowed: true, reason: "own_profile_photo", undoEndsAtMs: null } : deny("not_uploader");
     }
-    if (parsed.kind === "company_logo" || parsed.kind === "timesheet_export") return deny("admin_only");
+    if (parsed.kind === "company_logo" || parsed.kind === "timesheet_export" || parsed.kind === "org_compliance_document") {
+      return deny("admin_only");
+    }
     const uploader = storedFileUploader(input.storagePath);
     if (!uploader || uploader.uploaderUserId !== viewer) return deny("not_uploader");
     const given = Number(input.uploadedAtMs);
@@ -12730,8 +12900,8 @@ var ProjectPlannerCanonical = (() => {
   var CLAIM_EVIDENCE_HELP_TEXT = "Photos and PDFs up to 10MB.";
   var CLAIM_EVIDENCE_SITE_AUDIT_NOTE = "A frozen copy (PDF) is attached; your line managers and admins see the copy, never your list.";
   var CLAIM_EVIDENCE_LEGACY_RECEIPT_NOTE = "Receipt noted before files were stored \u2014 no file to open";
-  function claimEvidenceCountText(count) {
-    const n = Math.max(0, Math.floor(Number(count) || 0));
+  function claimEvidenceCountText(count2) {
+    const n = Math.max(0, Math.floor(Number(count2) || 0));
     if (n === 0) return "";
     return n === 1 ? "1 piece of evidence" : `${n} pieces of evidence`;
   }
@@ -12799,8 +12969,8 @@ var ProjectPlannerCanonical = (() => {
       let id2 = "";
       if (typeof item === "string") id2 = item.trim();
       else if (item && typeof item === "object") {
-        const record19 = item;
-        id2 = text13(record19.id) || text13(record19.contactId);
+        const record22 = item;
+        id2 = text13(record22.id) || text13(record22.contactId);
       }
       const key8 = normalizeDocumentId(id2);
       if (!id2 || seen.has(key8)) continue;
@@ -13898,7 +14068,7 @@ var ProjectPlannerCanonical = (() => {
   function timesheetLateExtrasSummary(sheet, options = {}) {
     const data = sheet && typeof sheet === "object" ? sheet : {};
     const rows3 = timesheetLateExtraRows(data, options);
-    const count = (state) => rows3.filter((row3) => row3.decision.state === state).length;
+    const count2 = (state) => rows3.filter((row3) => row3.decision.state === state).length;
     const exported = typeof options.exportedAtStored === "boolean" ? options.exportedAtStored : timesheetExportedFieldSet(data.exportedAt);
     let snapshotInStep = true;
     const override = data.weeklyReportOverride;
@@ -13916,12 +14086,12 @@ var ProjectPlannerCanonical = (() => {
       }
       snapshotInStep = signedLate.size === approved.size && [...approved].every(([id2, paid]) => signedLate.has(id2) && Math.abs((signedLate.get(id2) ?? 0) - paid) < AMOUNT_EPSILON2);
     }
-    const pending = count("pending");
+    const pending = count2("pending");
     const signedEntriesChanged = timesheetSignedEntriesChangedSinceSignOff(data, options);
     return {
       pending,
-      approved: count("approved"),
-      declined: count("declined"),
+      approved: count2("approved"),
+      declined: count2("declined"),
       snapshotInStep,
       exported,
       signedEntriesChanged,
@@ -14080,9 +14250,9 @@ var ProjectPlannerCanonical = (() => {
     return "apply";
   }
   function offlineDeleteRefusalDecision(code) {
-    const text57 = errorCodeText(code);
-    if (text57 === "not-found" || text57 === "5") return "alreadyGone";
-    if (text57 === "permission-denied" || text57 === "7") return "refusePermission";
+    const text63 = errorCodeText(code);
+    if (text63 === "not-found" || text63 === "5") return "alreadyGone";
+    if (text63 === "permission-denied" || text63 === "7") return "refusePermission";
     return "retry";
   }
   function bookingDeleteSignedTimesheetWarning(dayKey, sheets) {
@@ -16154,6 +16324,9 @@ var ProjectPlannerCanonical = (() => {
     const left = fingerprintCore(a);
     return left !== "" && left === fingerprintCore(b);
   }
+  function signedTimesheetLineBooking(line) {
+    return lineBooking(line);
+  }
   function lineBooking(line) {
     if (!line) return null;
     const rawId = text18(line.id);
@@ -16418,12 +16591,12 @@ var ProjectPlannerCanonical = (() => {
     const recordAtMs = realMs(sheet.operativeSignedBookingsAt);
     const recordSignedAtMs = realMs(sheet.operativeSignedBookingsSignedAt);
     const recordCurrent = operativeSignedMs != null && (recordSignedAtMs != null ? Math.abs(operativeSignedMs - recordSignedAtMs) <= RECORD_SIGNED_AT_MATCH_MS : recordAtMs != null && operativeSignedMs <= recordAtMs + RECORD_SIGNATURE_TOLERANCE_MS);
-    const record19 = recordCurrent ? recordSide(sheet.operativeSignedBookings) : null;
+    const record22 = recordCurrent ? recordSide(sheet.operativeSignedBookings) : null;
     const recordReferenceMs = recordAtMs ?? operativeSignedMs;
     const recordAddedAfter = recordReferenceMs == null ? null : recordReferenceMs - SIGNED_TIMESHEET_ADDITION_WINDOW_MS;
     const reviewerEdits = currentReviewerEdits(sheet.reviewerBookingEdits, operativeSignedMs);
     let personDiff;
-    if (record19) personDiff = diffSides(record19, live, documents, recordAddedAfter, reviewerEdits);
+    if (record22) personDiff = diffSides(record22, live, documents, recordAddedAfter, reviewerEdits);
     else if (snapshotDiff && reviewerEdits && override) {
       const snapshotAtMs = realMs(override.approvedAt) ?? realMs(sheet.managerSignedAt) ?? realMs(sheet.approvedAt) ?? operativeSignedMs;
       personDiff = diffSides(
@@ -16436,13 +16609,13 @@ var ProjectPlannerCanonical = (() => {
     } else personDiff = snapshotDiff;
     const gap = [];
     const gapAllowed = SNAPSHOT_GAP_FROM_MS == null || operativeSignedMs != null && operativeSignedMs >= SNAPSHOT_GAP_FROM_MS;
-    if (record19 && snapshotDiff && gapAllowed) {
+    if (record22 && snapshotDiff && gapAllowed) {
       const snapshotKeys = groupLines(Array.isArray(override?.lines) ? override.lines : []).byKey;
       const optionPlace = new Set(
         (input.liveLines ?? []).filter((line) => line && line.scheduleOptionPlace === true).map((line) => signedTimesheetLineBookingKey(line)).filter(Boolean)
       );
       const already = new Set([...snapshotDiff.added, ...personDiff?.added ?? []].map((id2) => normalizeDocumentId(id2)));
-      for (const [key8, row3] of record19) {
+      for (const [key8, row3] of record22) {
         if (!live.has(key8) || snapshotKeys.has(key8) || optionPlace.has(key8)) continue;
         const id2 = normalizeDocumentId(row3.bookingId);
         if (already.has(id2)) continue;
@@ -16456,7 +16629,7 @@ var ProjectPlannerCanonical = (() => {
     if (!personChanged && !snapshotChanged && !gapChanged) return base;
     const gapFields = { snapshotGapBookingIds: gap, snapshotGapOnly: gapChanged && !personChanged && !snapshotChanged };
     if (!personChanged && !snapshotChanged) {
-      const ids2 = { basis: record19 ? "fingerprint" : "bookingIds", changedBookingIds: [], addedBookingIds: [], removedBookingIds: [] };
+      const ids2 = { basis: record22 ? "fingerprint" : "bookingIds", changedBookingIds: [], addedBookingIds: [], removedBookingIds: [] };
       if (exported) return { ...base, ...ids2, ...gapFields, changed: true, reviewerMessage: SIGNED_TIMESHEET_EXPORTED_CHANGED_MESSAGE };
       const waitingFor2 = input.selfSigned === true ? "person" : "lineManager";
       return {
@@ -16518,12 +16691,12 @@ var ProjectPlannerCanonical = (() => {
     const recordAtMs = realMs(sheet.operativeSignedBookingsAt);
     const recordSignedAtMs = realMs(sheet.operativeSignedBookingsSignedAt);
     const recordCurrent = operativeSignedMs != null && (recordSignedAtMs != null ? Math.abs(operativeSignedMs - recordSignedAtMs) <= RECORD_SIGNED_AT_MATCH_MS : recordAtMs != null && operativeSignedMs <= recordAtMs + RECORD_SIGNATURE_TOLERANCE_MS);
-    const record19 = recordCurrent ? recordSide(sheet.operativeSignedBookings) : null;
+    const record22 = recordCurrent ? recordSide(sheet.operativeSignedBookings) : null;
     let reference = null;
     let addedAfter = null;
     let used = "none";
-    if (record19) {
-      reference = record19;
+    if (record22) {
+      reference = record22;
       used = "record";
       const referenceMs = recordAtMs ?? operativeSignedMs;
       addedAfter = referenceMs == null ? null : referenceMs - SIGNED_TIMESHEET_ADDITION_WINDOW_MS;
@@ -16570,8 +16743,8 @@ var ProjectPlannerCanonical = (() => {
     const name = text19(line?.projectName);
     const title = NO_JOB_NUMBER.has(jobNumber) ? name || "Booking" : name ? `${jobNumber} \xB7 ${name}` : jobNumber;
     const details = text19(line?.details);
-    const clock5 = timesheetLineClockText(details);
-    if (/\d{1,2}:\d{2}/.test(clock5)) return { title, times: clock5 };
+    const clock6 = timesheetLineClockText(details);
+    if (/\d{1,2}:\d{2}/.test(clock6)) return { title, times: clock6 };
     const [head, ...rest] = details.split(" \xB7 ");
     const suffix = rest.length > 0 ? ` \xB7 ${rest.join(" \xB7 ")}` : "";
     const slot = normalizeBookingTimeSlot(head.trim());
@@ -16821,11 +16994,11 @@ var ProjectPlannerCanonical = (() => {
   }
   function payEditorStartingValues(person, profile, options) {
     const overlaid = options?.privatePay === true && profile ? overlayPayProfile(person, profile) : person;
-    const record19 = overlaid || {};
-    const pay = readStoredRates(record19);
+    const record22 = overlaid || {};
+    const pay = readStoredRates(record22);
     const rate = pay.payBasis === "hourly" ? pay.hourlyRate : pay.dayRate;
-    const employmentType = Object.prototype.hasOwnProperty.call(record19, "employmentType") ? record19.employmentType ?? null : null;
-    return { record: record19, pay, rate, employmentType, source: overlaid !== person ? "payProfile" : "users" };
+    const employmentType = Object.prototype.hasOwnProperty.call(record22, "employmentType") ? record22.employmentType ?? null : null;
+    return { record: record22, pay, rate, employmentType, source: overlaid !== person ? "payProfile" : "users" };
   }
 
   // lib/canonical/reportPay.ts
@@ -17271,8 +17444,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.81.0" : "",
-      sha256: true ? "4a43cb3457c191f2ec4b9c2cf4d897c2e39063aee5ac45a024cd6781408435cf" : ""
+      version: true ? "1.88.0" : "",
+      sha256: true ? "5b720e3f07749d5aa6575b932a076bffaa7d7d06ea1c3dc5e435d23530b3b7eb" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -17403,15 +17576,15 @@ var ProjectPlannerCanonical = (() => {
     }
     return out;
   }
-  function labourHolidayInput(record19) {
+  function labourHolidayInput(record22) {
     return {
-      id: record19.id,
-      userId: record19.userId,
-      operativeId: record19.operativeId,
-      startDayKey: record19.startDayKey,
-      endDayKey: record19.endDayKey,
-      timeSlot: record19.timeSlot,
-      approved: record19.approved
+      id: record22.id,
+      userId: record22.userId,
+      operativeId: record22.operativeId,
+      startDayKey: record22.startDayKey,
+      endDayKey: record22.endDayKey,
+      timeSlot: record22.timeSlot,
+      approved: record22.approved
     };
   }
 
@@ -17474,18 +17647,18 @@ var ProjectPlannerCanonical = (() => {
     const end = String(period?.endDayKey || "").trim();
     if (!start || !end || start > end) return [];
     const byDay = /* @__PURE__ */ new Map();
-    for (const record19 of leaveRecords || []) {
-      if (!record19) continue;
-      const approved = record19.approved === true || record19.approved == null && normalizeHolidayStatus(record19.status) === "approved";
+    for (const record22 of leaveRecords || []) {
+      if (!record22) continue;
+      const approved = record22.approved === true || record22.approved == null && normalizeHolidayStatus(record22.status) === "approved";
       if (!approved) continue;
-      const slot = normalizeHolidayTimeSlot(record19.timeSlot);
-      for (const dayKey of leaveRecordDayKeys(record19, timeZone, nonWorkingDayKeys)) {
+      const slot = normalizeHolidayTimeSlot(record22.timeSlot);
+      for (const dayKey of leaveRecordDayKeys(record22, timeZone, nonWorkingDayKeys)) {
         if (dayKey < start || dayKey > end) continue;
         const list = byDay.get(dayKey) || [];
         if (list.some((line2) => line2.timeSlot === slot || line2.timeSlot === "FULL DAY")) continue;
         const line = {
-          id: `leave-${String(record19.id)}-${dayKey}`,
-          leaveId: String(record19.id),
+          id: `leave-${String(record22.id)}-${dayKey}`,
+          leaveId: String(record22.id),
           dayKey,
           timeSlot: slot,
           label: timesheetLeaveLabel(slot)
@@ -17581,8 +17754,8 @@ var ProjectPlannerCanonical = (() => {
     return Math.round(value * 1e4) / 1e4;
   }
   function basisOf(value) {
-    const text57 = String(value ?? "").trim().toLowerCase();
-    return text57 === "hourly" || text57 === "hour" ? "hourly" : "day";
+    const text63 = String(value ?? "").trim().toLowerCase();
+    return text63 === "hourly" || text63 === "hour" ? "hourly" : "day";
   }
   var PAYROLL_LINE_EDIT_TIMES_MESSAGE = "Enter a start and a finish time that are different.";
   function clockMinutes2(value) {
@@ -17731,7 +17904,7 @@ var ProjectPlannerCanonical = (() => {
     "isBreakRemoved",
     "otMultiplierOverride"
   ];
-  var TIMESHEET_REVIEW_EDIT_BOOKING_NOTE = "Saving changes the booking itself, so scheduling, Daily Overview and the weekly report show the new hours. You can keep reviewing; the person sees the change when you counter-sign.";
+  var TIMESHEET_REVIEW_EDIT_BOOKING_NOTE = "Saving changes the booking itself, so scheduling, daily Overview and the weekly report show the new hours. You can keep reviewing; the person sees the change when you counter-sign.";
   var TIMESHEET_REVIEW_DELETE_BOOKING_TITLE = "Remove this booking?";
   var TIMESHEET_REVIEW_DELETE_BOOKING_CONFIRM_LABEL = "Remove booking";
   var TIMESHEET_REVIEW_DELETE_BOOKING_CANCEL_LABEL = "Go back";
@@ -18205,10 +18378,10 @@ var ProjectPlannerCanonical = (() => {
     const pick = (flat, legacy) => text25(data[flat]) || text25(nested[legacy]);
     const line1 = pick("officeAddressLine1", "addressLine1");
     const city = pick("officeCity", "town");
-    const hasOfficeAddress = Boolean(line1 && city);
+    const hasOfficeAddress2 = Boolean(line1 && city);
     return {
       name: parseOrganizationName(data),
-      hasOfficeAddress,
+      hasOfficeAddress: hasOfficeAddress2,
       officeAddressLine1: line1,
       officeAddressLine2: pick("officeAddressLine2", "addressLine2"),
       officeCity: city,
@@ -19060,13 +19233,13 @@ var ProjectPlannerCanonical = (() => {
   }
   function orderedMaterialIds(records) {
     const ids = /* @__PURE__ */ new Set();
-    for (const record19 of records || []) {
-      if (!record19 || normalizeMaterialRequestType(record19.requestType) !== "Order") continue;
-      for (const id2 of record19.materialIds || []) {
+    for (const record22 of records || []) {
+      if (!record22 || normalizeMaterialRequestType(record22.requestType) !== "Order") continue;
+      for (const id2 of record22.materialIds || []) {
         const value = normalizeDocumentId(id2);
         if (value) ids.add(value);
       }
-      for (const line of record19.lines || []) {
+      for (const line of record22.lines || []) {
         const value = normalizeDocumentId(line?.materialId);
         if (value) ids.add(value);
       }
@@ -19086,14 +19259,14 @@ var ProjectPlannerCanonical = (() => {
     const timeZone = zoneOrLondon(input.timeZone);
     const now = instant(input.now);
     if (Number.isNaN(now.getTime())) return [];
-    const clock5 = resolveMaterialCutOffClock({ organizationMaterialCutOff: input.cutOff ?? null });
-    if (clock5.materialOrderCutOff === false) return [];
+    const clock6 = resolveMaterialCutOffClock({ organizationMaterialCutOff: input.cutOff ?? null });
+    if (clock6.materialOrderCutOff === false) return [];
     const parts3 = partsInZone(now, timeZone);
-    if (parts3.h * 60 + parts3.min < materialCutOffClockMinutes(clock5)) return [];
+    if (parts3.h * 60 + parts3.min < materialCutOffClockMinutes(clock6)) return [];
     const tomorrow = addDaysInZone(midnightInZone(now, timeZone), 1, timeZone);
     const weekday2 = isoWeekdayInZone(tomorrow, timeZone);
-    if (weekday2 === 6 && clock5.materialCutOffOnSaturday !== true) return [];
-    if (weekday2 === 7 && clock5.materialCutOffOnSunday !== true) return [];
+    if (weekday2 === 6 && clock6.materialCutOffOnSaturday !== true) return [];
+    if (weekday2 === 7 && clock6.materialCutOffOnSunday !== true) return [];
     const tomorrowKey = dayKeyInZone(tomorrow, timeZone);
     const bookedProjectIds = [];
     const seen = /* @__PURE__ */ new Set();
@@ -19107,7 +19280,7 @@ var ProjectPlannerCanonical = (() => {
     }
     const projectsById = new Map((input.projects || []).map((project) => [text27(project.id), project]));
     const ordered = orderedMaterialIds(input.sendRecords);
-    const cutOffLabel = formatMaterialCutOffClock(clock5);
+    const cutOffLabel = formatMaterialCutOffClock(clock6);
     const rows3 = [];
     for (const projectId of bookedProjectIds) {
       const project = projectsById.get(projectId);
@@ -19181,13 +19354,14 @@ var ProjectPlannerCanonical = (() => {
     "booking.edit": "allowedOffline",
     // 1.33.0: labour (`bookings`) and manager schedule (`managerSiteBookings`) deletes, iOS and Android.
     "booking.delete": "allowedOffline",
+    // 1.86.0 (owner decision 24 Nov): Replace on a double-booking row (create + delete + tombstone in one batch) is
+    // queued as one item and replayed through `offlineReplaceReplayDecision`. Online only from 1.41.0 to 1.85.
+    "booking.replace": "allowedOffline",
     "annual_leave.request": "allowedOffline",
     "profile.own_fields": "allowedOffline",
     "notifications.own_toggles": "allowedOffline",
     // Online only: bookings (1.33.0: subcontractor bookings are deleted online only)
     "booking.delete_subcontractor": "onlineOnly",
-    // 1.41.0 (owner decision 11 Nov): Replace on a double-booking row (create + delete + tombstone in one batch).
-    "booking.replace": "onlineOnly",
     // Online only: organisation settings
     "settings.company_details": "onlineOnly",
     "settings.currency": "onlineOnly",
@@ -20254,8 +20428,8 @@ var ProjectPlannerCanonical = (() => {
     if (!role || role.isOperativeMode === true) return false;
     return role.isSuperAdmin === true || role.isAdmin === true;
   }
-  function removedEvidenceHeading(count) {
-    const n = typeof count === "number" && Number.isFinite(count) && count > 0 ? Math.trunc(count) : 0;
+  function removedEvidenceHeading(count2) {
+    const n = typeof count2 === "number" && Number.isFinite(count2) && count2 > 0 ? Math.trunc(count2) : 0;
     return `Removed evidence (${n})`;
   }
   var VARIATION_LABOUR_WRITE_GROUP = ["labour", "totalLabourHours"];
@@ -20748,6 +20922,20 @@ var ProjectPlannerCanonical = (() => {
     }
     return writes.sort((a, b) => a.documentId.localeCompare(b.documentId));
   }
+  function healthSafetyIssueJob(input) {
+    const wanted = normalizeDocumentId(input.issueId);
+    if (!wanted) return null;
+    for (const candidate of input.candidates || []) {
+      if (!candidate || !text29(candidate.jobId)) continue;
+      for (const data of candidate.documents || []) {
+        const issues = rows2(record9(data).issues);
+        if (issues.some((issue) => normalizeDocumentId(issue.id) === wanted)) {
+          return { jobId: candidate.jobId, collection: candidate.collection };
+        }
+      }
+    }
+    return null;
+  }
 
   // lib/canonical/liveSources.ts
   var LIVE_COLLECTIONS = [
@@ -20798,9 +20986,11 @@ var ProjectPlannerCanonical = (() => {
     { id: "annualLeaveAdjustments", path: "organizations/{orgId}/annualLeaveAdjustments", scope: "organization", listen: true, note: "1.40.0: manual annual-leave adjustments (parseAnnualLeaveAdjustmentDocument), written once and never changed; the person's own, or the people an admin or line manager may adjust, while an annual leave screen is open." },
     { id: "deletedPeople", path: "organizations/{orgId}/deletedPeople", scope: "organization", listen: false, note: "1.59.0: former people on old bookings (parseFormerPersonDocument), written once by a person delete and never changed; staff read them when a job week, Data health or Add user opens." },
     { id: "memberNames", path: "organizations/{orgId}/memberNames/{uid}", scope: "organization", listen: true, note: "1.81.0: a person's name in this organisation (parseMemberNameDocuments, displayNameInOrganization); every screen showing people listens with the roster." },
+    { id: "orgCompliance", path: "organizations/{orgId}/orgCompliance/documents", scope: "organization", listen: true, note: "1.83.0 \xA731: insurance & accreditations (parseOrgComplianceDocuments); admins only, while Settings \u203A Organisation or its Compliance page is open." },
     { id: "reportChecks", path: "organizations/{orgId}/reportChecks", scope: "organization", listen: false, note: "1.65.0: one server check per saved overtime / price work / expenses report (parseReportCheckDocument); written by the server only, admins read them when Data health opens." },
     { id: "materialContacts", path: "organizations/{orgId}/materialContacts", scope: "organization", listen: false, note: "1.59.0: addresses the organisation has emailed a quote or order to (the safe-sender box); read by id and written once by the send route and the email function, never shown." },
-    { id: "deletedBookings", path: "organizations/{orgId}/deletedBookings", scope: "organization", listen: false, note: "Write-only tombstones; never shown." }
+    { id: "deletedBookings", path: "organizations/{orgId}/deletedBookings", scope: "organization", listen: false, note: "Write-only tombstones; never shown." },
+    { id: "clientErrors", path: "clientErrors", scope: "platform", listen: false, note: "1.84.0 \xA732 (D7): anonymous error reports, created by a signed-in device (clientErrorCreateFields), read only by the platform owner (owner console Errors, parseClientErrorDocument); 30-day TTL." }
   ];
   function liveCollection(id2) {
     const key8 = typeof id2 === "string" ? id2.trim() : "";
@@ -21027,6 +21217,7 @@ var ProjectPlannerCanonical = (() => {
       { op: "delete", path: `users/${uid}/orgMemberships/${org}` }
     ];
     if (email && !email.includes("/")) account.push({ op: "delete", path: `organizations/${org}/userEmails/${email}` });
+    account.push({ op: "delete", path: `organizations/${org}/memberNames/${uid}`, optional: true });
     if (input.listedInMembers !== false) account.push({ op: "update", path: `organizations/${org}`, deleteFields: [`members.${uid}`] });
     const formerWrite = input.formerPerson ? {
       op: "set",
@@ -21084,13 +21275,13 @@ var ProjectPlannerCanonical = (() => {
     for (const writes of bookingWrites) steps.push({ step: "bookings", writes });
     if (rosterRows.length > 0) {
       const rowRecord = (row3) => {
-        const record19 = input.formerRows?.[`${row3.collection}/${row3.id}`];
-        if (!record19 || key4(row3.id) === key4(uid)) return null;
+        const record22 = input.formerRows?.[`${row3.collection}/${row3.id}`];
+        if (!record22 || key4(row3.id) === key4(uid)) return null;
         return {
           op: "set",
           path: `organizations/${org}/deletedPeople/${row3.id}`,
-          fields: { ...record19.fields },
-          serverTimestampFields: [...record19.serverTimestampFields],
+          fields: { ...record22.fields },
+          serverTimestampFields: [...record22.serverTimestampFields],
           optional: true
         };
       };
@@ -21102,17 +21293,104 @@ var ProjectPlannerCanonical = (() => {
         });
       }
       for (const row3 of rosterRows) {
-        const record19 = rowRecord(row3);
-        if (!record19) continue;
+        const record22 = rowRecord(row3);
+        if (!record22) continue;
         steps.push({
           step: "rosterRows",
-          writes: [{ op: "delete", path: `organizations/${org}/${row3.collection}/${row3.id}` }, record19]
+          writes: [{ op: "delete", path: `organizations/${org}/${row3.collection}/${row3.id}` }, record22]
         });
       }
     }
     const invitations = (input.invitations || []).filter((row3) => email !== "" && key4(row3?.email) === email && text31(row3.id) && !text31(row3.id).includes("/")).map((row3) => ({ op: "delete", path: `invitations/${text31(row3.id)}` }));
     if (invitations.length > 0) steps.push({ step: "invitations", writes: invitations });
     return steps;
+  }
+
+  // lib/canonical/orgLineManagers.ts
+  var ORG_MEMBERSHIP_LINE_MANAGER_FIELD = "lineManager";
+  var ORG_LINE_MANAGER_NO_MEMBERSHIP_MESSAGE = "This person's company record here could not be found, so their line manager can't be saved yet. Ask them to open this company in the app once, then try again.";
+  var ORG_LINE_MANAGER_HOME_UNKNOWN_MESSAGE = "Couldn't check this person's company \u2014 try saving the line manager again.";
+  function text32(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function idList7(many, one) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    const add = (value) => {
+      const id2 = text32(value);
+      if (!id2 || seen.has(id2.toLowerCase())) return;
+      seen.add(id2.toLowerCase());
+      out.push(id2);
+    };
+    if (Array.isArray(many)) for (const id2 of many) add(id2);
+    if (out.length === 0) add(one);
+    return out;
+  }
+  function parseOrgLineManager(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const row3 = value;
+    if (Object.keys(row3).length === 0) return null;
+    const hasNoLineManager = row3.hasNoLineManager === true;
+    const ids = hasNoLineManager ? [] : idList7(row3.assignedManagerUserIds, row3.assignedManagerUserId);
+    return { assignedManagerUserIds: ids, assignedManagerUserId: ids[0] ?? null, hasNoLineManager };
+  }
+  function storedFields(user) {
+    const row3 = user && typeof user === "object" ? user : {};
+    const many = Array.isArray(row3.assignedManagerUserIds) ? row3.assignedManagerUserIds.map(text32).filter(Boolean) : [];
+    return {
+      assignedManagerUserIds: many,
+      assignedManagerUserId: text32(row3.assignedManagerUserId) || null,
+      hasNoLineManager: row3.hasNoLineManager === true
+    };
+  }
+  function isHomeOrganization(user, organizationId) {
+    const org = text32(organizationId).toLowerCase();
+    if (!org || !user || typeof user !== "object") return false;
+    const home = documentOrganizationId(user.organizationId);
+    return home != null && home.trim().toLowerCase() === org;
+  }
+  function organizationLineManagerFields(input) {
+    const user = input?.user && typeof input.user === "object" ? input.user : null;
+    const fromUsers = { ...storedFields(user), source: "users" };
+    if (isHomeOrganization(user, input?.organizationId)) return fromUsers;
+    const membership = input?.membership && typeof input.membership === "object" ? input.membership : null;
+    const parsed = membership ? parseOrgLineManager(membership[ORG_MEMBERSHIP_LINE_MANAGER_FIELD]) : null;
+    return parsed ? { ...parsed, source: "membership" } : fromUsers;
+  }
+  function withOrganizationLineManager(person, input) {
+    if (!person || typeof person !== "object") return person;
+    const row3 = person;
+    const user = input?.homeOrganizationId !== void 0 ? { ...row3, organizationId: input.homeOrganizationId } : row3;
+    const fields = organizationLineManagerFields({ organizationId: input?.organizationId, user, membership: input?.membership });
+    if (fields.source === "users") return person;
+    const same = row3.hasNoLineManager === fields.hasNoLineManager && text32(row3.assignedManagerUserId) === (fields.assignedManagerUserId ?? "") && Array.isArray(row3.assignedManagerUserIds) && row3.assignedManagerUserIds.length === fields.assignedManagerUserIds.length && row3.assignedManagerUserIds.every((id2, at) => id2 === fields.assignedManagerUserIds[at]);
+    if (same) return person;
+    return {
+      ...person,
+      assignedManagerUserIds: fields.assignedManagerUserIds,
+      assignedManagerUserId: fields.assignedManagerUserId ?? void 0,
+      hasNoLineManager: fields.hasNoLineManager
+    };
+  }
+  function orgLineManagerEditTarget(input) {
+    const org = text32(input?.organizationId);
+    const home = documentOrganizationId(input?.homeOrganizationId);
+    if (!org || !home) return null;
+    return home.trim().toLowerCase() === org.toLowerCase() ? "users" : "membership";
+  }
+  function orgMembershipLineManagerFields(next) {
+    const hasNoLineManager = next?.hasNoLineManager === true;
+    const ids = hasNoLineManager ? [] : idList7(next?.assignedManagerUserIds, next?.assignedManagerUserId);
+    return { assignedManagerUserIds: ids, assignedManagerUserId: ids[0] ?? null, hasNoLineManager };
+  }
+  function invitationLineManagerMap(invitation) {
+    const row3 = invitation && typeof invitation === "object" ? invitation : {};
+    if (!("assignedManagerUserIds" in row3) && !("assignedManagerUserId" in row3) && !("hasNoLineManager" in row3)) return null;
+    return {
+      assignedManagerUserIds: Array.isArray(row3.assignedManagerUserIds) ? [...row3.assignedManagerUserIds] : [],
+      assignedManagerUserId: typeof row3.assignedManagerUserId === "string" ? row3.assignedManagerUserId : null,
+      hasNoLineManager: row3.hasNoLineManager === true
+    };
   }
 
   // lib/canonical/orgMembership.ts
@@ -21140,9 +21418,17 @@ var ProjectPlannerCanonical = (() => {
     "wholesalersOrderHistory",
     "dailyOverview"
   ];
-  var ORG_MEMBERSHIP_ADMIN_FIELDS = ["role", "isSuperAdmin", "accountActive", "isActive", "permissions", ...ORG_MEMBERSHIP_PERMISSION_KEYS];
+  var ORG_MEMBERSHIP_ADMIN_FIELDS = [
+    "role",
+    "isSuperAdmin",
+    "accountActive",
+    "isActive",
+    "permissions",
+    ORG_MEMBERSHIP_LINE_MANAGER_FIELD,
+    ...ORG_MEMBERSHIP_PERMISSION_KEYS
+  ];
   var ORG_MEMBERSHIP_SELF_FIELDS = ["status", "acceptedAt", "updatedAt", "updatedBy", "updatedFrom"];
-  function text32(value) {
+  function text33(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function bool2(value) {
@@ -21172,7 +21458,7 @@ var ProjectPlannerCanonical = (() => {
     return null;
   }
   function parseOrgMembershipDocument(organizationId, data) {
-    const org = text32(organizationId);
+    const org = text33(organizationId);
     if (!org) return null;
     const row3 = data && typeof data === "object" ? data : {};
     const nested = row3.permissions && typeof row3.permissions === "object" ? row3.permissions : {};
@@ -21191,20 +21477,21 @@ var ProjectPlannerCanonical = (() => {
     const accountActive = bool2(row3.accountActive) ?? bool2(row3.isActive) ?? true;
     return {
       organizationId: org,
-      role: text32(row3.role) || "member",
-      status: text32(row3.status) === "pending" ? "pending" : "active",
+      role: text33(row3.role) || "member",
+      status: text33(row3.status) === "pending" ? "pending" : "active",
       isSuperAdmin: bool2(row3.isSuperAdmin) === true,
       accountActive,
       permissions,
-      invitedBy: text32(row3.invitedBy) || null,
+      invitedBy: text33(row3.invitedBy) || null,
       invitedAtMs: instantMs2(row3.invitedAt),
       acceptedAtMs: instantMs2(row3.acceptedAt),
       updatedAtMs: instantMs2(row3.updatedAt),
-      hasLegacyFlatFlags
+      hasLegacyFlatFlags,
+      lineManager: parseOrgLineManager(row3[ORG_MEMBERSHIP_LINE_MANAGER_FIELD])
     };
   }
   function orgMembershipWriteFields(input) {
-    const org = text32(input?.organizationId);
+    const org = text33(input?.organizationId);
     if (!org) return null;
     const storedRaw = input.stored && typeof input.stored === "object" ? input.stored : null;
     const current = storedRaw ? parseOrgMembershipDocument(org, storedRaw) : null;
@@ -21223,7 +21510,7 @@ var ProjectPlannerCanonical = (() => {
       fields.updatedAt = input.now;
       return { mode: "update", fields, remove: [] };
     }
-    const role = text32(next.role);
+    const role = text33(next.role);
     if (!current) {
       const permissions = {};
       for (const key8 of ORG_MEMBERSHIP_PERMISSION_KEYS) {
@@ -21241,8 +21528,9 @@ var ProjectPlannerCanonical = (() => {
         updatedAt: input.now
       };
       if (status === "active") set.acceptedAt = input.now;
-      const invitedBy = text32(next.invitedBy);
+      const invitedBy = text33(next.invitedBy);
       if (invitedBy) set.invitedBy = invitedBy;
+      if (next.lineManager) set[ORG_MEMBERSHIP_LINE_MANAGER_FIELD] = orgMembershipLineManagerFields(next.lineManager);
       return { mode: "create", fields: set, remove: [] };
     }
     if (role && role !== current.role) fields.role = role;
@@ -21252,6 +21540,12 @@ var ProjectPlannerCanonical = (() => {
     }
     if (typeof next.isSuperAdmin === "boolean" && next.isSuperAdmin !== current.isSuperAdmin) fields.isSuperAdmin = next.isSuperAdmin;
     if (typeof next.accountActive === "boolean" && next.accountActive !== current.accountActive) fields.accountActive = next.accountActive;
+    if (next.lineManager) {
+      const lineManager = orgMembershipLineManagerFields(next.lineManager);
+      const stored = current.lineManager;
+      const same = stored != null && stored.hasNoLineManager === lineManager.hasNoLineManager && stored.assignedManagerUserIds.length === lineManager.assignedManagerUserIds.length && stored.assignedManagerUserIds.every((id2, at) => id2 === lineManager.assignedManagerUserIds[at]);
+      if (!same) fields[ORG_MEMBERSHIP_LINE_MANAGER_FIELD] = lineManager;
+    }
     const nested = storedRaw && storedRaw.permissions && typeof storedRaw.permissions === "object" ? storedRaw.permissions : {};
     for (const key8 of ORG_MEMBERSHIP_PERMISSION_KEYS) {
       const value = next.permissions?.[key8];
@@ -21312,7 +21606,7 @@ var ProjectPlannerCanonical = (() => {
   var ANNUAL_LEAVE_ADJUSTMENT_REASON_TOO_LONG_MESSAGE = `Keep the reason to ${ANNUAL_LEAVE_ADJUSTMENT_REASON_MAX} characters.`;
   var ANNUAL_LEAVE_ADJUSTMENT_NOT_ALLOWED_MESSAGE = "Only an admin or this person's line manager can adjust their annual leave, and nobody adjusts their own.";
   var ANNUAL_LEAVE_ADJUSTMENT_NOTE = "Adds or takes off days for this leave year only. It does not carry over, and it counts only while the person is PAYE.";
-  function text33(value) {
+  function text34(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function isDayKey2(value) {
@@ -21324,7 +21618,7 @@ var ProjectPlannerCanonical = (() => {
     if (!Number.isFinite(days) || days === 0 || Math.abs(days) > ANNUAL_LEAVE_ADJUSTMENT_MAX_DAYS || Math.abs(days * 2 - Math.round(days * 2)) > 1e-9) {
       return ANNUAL_LEAVE_ADJUSTMENT_DAYS_MESSAGE;
     }
-    const reason = text33(input.reason);
+    const reason = text34(input.reason);
     if (!reason) return ANNUAL_LEAVE_ADJUSTMENT_REASON_MESSAGE;
     if (reason.length > ANNUAL_LEAVE_ADJUSTMENT_REASON_MAX) return ANNUAL_LEAVE_ADJUSTMENT_REASON_TOO_LONG_MESSAGE;
     return null;
@@ -21347,43 +21641,43 @@ var ProjectPlannerCanonical = (() => {
     return canAdjustAnnualLeave(viewer, subject, roster);
   }
   function annualLeaveAdjustmentCreateFields(input) {
-    const userId = text33(input.userId);
-    const yearKey = text33(input.yearKey);
-    const createdBy = text33(input.createdBy);
+    const userId = text34(input.userId);
+    const yearKey = text34(input.yearKey);
+    const createdBy = text34(input.createdBy);
     if (!userId || !createdBy || !isDayKey2(yearKey) || idKey(userId) === idKey(createdBy)) return null;
-    if (input.allowedYearKeys && !input.allowedYearKeys.map(text33).includes(yearKey)) return null;
+    if (input.allowedYearKeys && !input.allowedYearKeys.map(text34).includes(yearKey)) return null;
     if (annualLeaveAdjustmentValidationError({ days: input.days, reason: input.reason })) return null;
     return {
       userId,
       days: Math.round(Number(input.days) * 2) / 2,
-      reason: text33(input.reason),
+      reason: text34(input.reason),
       yearKey,
       createdBy
     };
   }
   function annualLeaveAdjustmentAuthorName(adjustment, roster) {
-    const by = idKey(text33(adjustment?.createdBy));
+    const by = idKey(text34(adjustment?.createdBy));
     if (!by) return "Someone";
     const members = (roster || []).filter((row4) => row4 && idText(row4.id));
     const row3 = members.find((member) => idKey(member.id) === by) ?? members.find((member) => personIdSet(member, members).some((id2) => idKey(id2) === by));
     if (!row3) return "Someone";
-    const name = `${text33(row3.firstName)} ${text33(row3.surname) || text33(row3.lastName)}`.trim();
-    return name || text33(row3.email) || "Someone";
+    const name = `${text34(row3.firstName)} ${text34(row3.surname) || text34(row3.lastName)}`.trim();
+    return name || text34(row3.email) || "Someone";
   }
   function parseAnnualLeaveAdjustmentDocument(docId, data) {
-    const id2 = text33(docId);
+    const id2 = text34(docId);
     const row3 = data && typeof data === "object" ? data : {};
-    const userId = text33(row3.userId);
-    const yearKey = text33(row3.yearKey);
+    const userId = text34(row3.userId);
+    const yearKey = text34(row3.yearKey);
     const days = documentNumber(row3.days);
     if (!id2 || !userId || !isDayKey2(yearKey) || days == null) return null;
     return {
       id: id2,
       userId,
       days: Math.round(days * 2) / 2,
-      reason: text33(row3.reason),
+      reason: text34(row3.reason),
       yearKey,
-      createdBy: text33(row3.createdBy),
+      createdBy: text34(row3.createdBy),
       createdAtMs: documentInstantMs(row3.createdAt)
     };
   }
@@ -21403,9 +21697,9 @@ var ProjectPlannerCanonical = (() => {
     return companyActivityRecipients(actor, roster);
   }
   function annualLeaveAdjustedNoticeText(input) {
-    const person = text33(input.personName) || "Someone";
-    const actor = text33(input.actorName) || "Someone";
-    const reason = text33(input.reason);
+    const person = text34(input.personName) || "Someone";
+    const actor = text34(input.actorName) || "Someone";
+    const reason = text34(input.reason);
     return {
       title: "Annual leave adjusted",
       // 1.40.0 (review r306 #10): the push sends `title` and `message` only, so the reason is never on a lock screen;
@@ -21472,7 +21766,7 @@ var ProjectPlannerCanonical = (() => {
   var SUBCONTRACTOR_DOCUMENT_EXPIRY_LABEL = "Expiry date (optional)";
   var SUBCONTRACTOR_DOCUMENT_EXPIRY_INVALID_MESSAGE = "Enter the expiry date as a date, or leave it empty.";
   var SUBCONTRACTOR_DOCUMENTS_FULL_MESSAGE = `A subcontractor can hold up to ${SUBCONTRACTOR_DOCUMENTS_MAX_PER_KIND} documents of each kind. Remove an old one first.`;
-  function text34(value) {
+  function text35(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function record10(value) {
@@ -21497,33 +21791,33 @@ var ProjectPlannerCanonical = (() => {
     return flags2.manager === true && flags2.subContractors === true;
   }
   function subcontractorDocumentsFolder(organizationId, subcontractorId) {
-    const org = text34(organizationId);
-    const sub = text34(subcontractorId);
+    const org = text35(organizationId);
+    const sub = text35(subcontractorId);
     if (!org || !sub || org.includes("/") || sub.includes("/")) return null;
     return `organizations/${org}/subcontractors/${sub}/documents`;
   }
   function subcontractorDocumentStoragePath(input) {
     const folder = subcontractorDocumentsFolder(input.organizationId, input.subcontractorId);
-    const uid = text34(input.uid);
+    const uid = text35(input.uid);
     if (!folder || !uid || !/^[A-Za-z0-9-]+$/.test(uid)) return null;
     const ms = Math.floor(Number(input.unixMs));
     if (!Number.isFinite(ms) || ms < 0) return null;
-    const ext = text34(input.extension).toLowerCase().replace(/^\.+/, "").replace(/[^a-z0-9]/g, "");
+    const ext = text35(input.extension).toLowerCase().replace(/^\.+/, "").replace(/[^a-z0-9]/g, "");
     return ext ? `${folder}/${uid}_${ms}.${ext}` : `${folder}/${uid}_${ms}`;
   }
   function subcontractorDocumentPathBelongsTo(path, organizationId, subcontractorId) {
-    const value = text34(path);
+    const value = text35(path);
     if (!value || value.includes("..") || value.includes("//")) return false;
     const parts3 = value.split("/");
     if (parts3.length !== 6) return false;
     if (parts3[0] !== "organizations" || parts3[2] !== "subcontractors" || parts3[4] !== "documents" || !parts3[5]) return false;
-    const org = text34(organizationId);
+    const org = text35(organizationId);
     if (org && normalizeDocumentId(parts3[1]) !== normalizeDocumentId(org)) return false;
     return normalizeDocumentId(parts3[3]) === normalizeDocumentId(subcontractorId);
   }
   function normalizeSubcontractorDocumentExpiry(value) {
     if (value === null || value === void 0) return null;
-    const raw = text34(value);
+    const raw = text35(value);
     if (!raw) return null;
     return validDayKey(raw) ? raw : void 0;
   }
@@ -21532,29 +21826,29 @@ var ProjectPlannerCanonical = (() => {
   }
   function parseEntry(entry, index, kind, subcontractorId, organizationId) {
     const row3 = record10(entry);
-    const path = text34(row3.path) || text34(row3.storagePath);
+    const path = text35(row3.path) || text35(row3.storagePath);
     if (!subcontractorDocumentPathBelongsTo(path, organizationId, subcontractorId)) return null;
-    const name = text34(row3.name) || path.split("/").pop() || "Document";
+    const name = text35(row3.name) || path.split("/").pop() || "Document";
     const size = Number(row3.sizeBytes);
     const expiry = normalizeSubcontractorDocumentExpiry(row3.expiresOn);
     return {
-      id: text34(row3.id) || derivedRowId(subcontractorId, `documents.${kind}`, index, [path]),
+      id: text35(row3.id) || derivedRowId(subcontractorId, `documents.${kind}`, index, [path]),
       path,
       name,
-      contentType: text34(row3.contentType),
+      contentType: text35(row3.contentType),
       sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
       uploadedAtMs: documentInstantMs(row3.uploadedAtMs ?? row3.uploadedAt),
-      uploadedBy: text34(row3.uploadedBy),
+      uploadedBy: text35(row3.uploadedBy),
       // A stored expiry that is not a date reads as none (never drops the row).
       expiresOn: expiry ?? null
     };
   }
   function parseSubcontractorDocuments(subcontractorId, data, options) {
-    const id2 = text34(subcontractorId);
+    const id2 = text35(subcontractorId);
     const out = { insurance: [], rams: [] };
     if (!id2) return out;
     const documents = record10(record10(data).documents);
-    const org = text34(options?.organizationId) || text34(record10(data).organizationId) || null;
+    const org = text35(options?.organizationId) || text35(record10(data).organizationId) || null;
     for (const kind of SUBCONTRACTOR_DOCUMENT_KINDS) {
       const list = Array.isArray(documents[kind]) ? documents[kind] : [];
       const seen = /* @__PURE__ */ new Set();
@@ -21576,24 +21870,24 @@ var ProjectPlannerCanonical = (() => {
   }
   function subcontractorDocumentAddWriteFields(stored, input) {
     if (!isSubcontractorDocumentKind(input.kind)) return { set: null, outcome: "invalid" };
-    const path = text34(input.entry?.path);
+    const path = text35(input.entry?.path);
     if (!subcontractorDocumentPathBelongsTo(path, input.organizationId, input.subcontractorId)) return { set: null, outcome: "invalid" };
     const expiry = normalizeSubcontractorDocumentExpiry(input.entry.expiresOn);
     if (expiry === void 0) return { set: null, outcome: "invalid" };
-    const uploadedBy = text34(input.entry.uploadedBy);
+    const uploadedBy = text35(input.entry.uploadedBy);
     if (!uploadedBy) return { set: null, outcome: "invalid" };
     const list = storedList(stored, input.kind);
-    if (list.some((row3) => (text34(record10(row3).path) || text34(record10(row3).storagePath)) === path)) {
+    if (list.some((row3) => (text35(record10(row3).path) || text35(record10(row3).storagePath)) === path)) {
       return { set: null, outcome: "alreadyLinked" };
     }
     if (list.length >= SUBCONTRACTOR_DOCUMENTS_MAX_PER_KIND) return { set: null, outcome: "refused" };
     const size = Number(input.entry.sizeBytes);
     const uploadedAtMs = Math.floor(Number(input.entry.uploadedAtMs));
     const entry = {
-      id: text34(input.entry.id) || derivedRowId(input.subcontractorId, `documents.${input.kind}`, list.length, [path]),
+      id: text35(input.entry.id) || derivedRowId(input.subcontractorId, `documents.${input.kind}`, list.length, [path]),
       path,
-      name: text34(input.entry.name) || path.split("/").pop() || "Document",
-      contentType: text34(input.entry.contentType),
+      name: text35(input.entry.name) || path.split("/").pop() || "Document",
+      contentType: text35(input.entry.contentType),
       sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
       uploadedAtMs: Number.isFinite(uploadedAtMs) ? uploadedAtMs : null,
       uploadedBy,
@@ -21603,18 +21897,18 @@ var ProjectPlannerCanonical = (() => {
   }
   function entryMatches(row3, kind, subcontractorId, index, entryId) {
     const line = record10(row3);
-    const stored = text34(line.id);
-    const path = text34(line.path) || text34(line.storagePath);
+    const stored = text35(line.id);
+    const path = text35(line.path) || text35(line.storagePath);
     const id2 = stored || derivedRowId(subcontractorId, `documents.${kind}`, index, [path]);
     return normalizeDocumentId(id2) === normalizeDocumentId(entryId);
   }
   function subcontractorDocumentRemoveWriteFields(stored, input) {
     if (!isSubcontractorDocumentKind(input.kind)) return { set: null, removedPath: null };
     const list = storedList(stored, input.kind);
-    const index = list.findIndex((row3, i) => entryMatches(row3, input.kind, text34(input.subcontractorId), i, text34(input.entryId)));
+    const index = list.findIndex((row3, i) => entryMatches(row3, input.kind, text35(input.subcontractorId), i, text35(input.entryId)));
     if (index < 0) return { set: null, removedPath: null };
     const line = record10(list[index]);
-    const removedPath = text34(line.path) || text34(line.storagePath) || null;
+    const removedPath = text35(line.path) || text35(line.storagePath) || null;
     const next = list.filter((_, i) => i !== index);
     return { set: { fieldPath: subcontractorDocumentsFieldPath(input.kind), value: next }, removedPath };
   }
@@ -21623,7 +21917,7 @@ var ProjectPlannerCanonical = (() => {
     const expiry = normalizeSubcontractorDocumentExpiry(input.expiresOn);
     if (expiry === void 0) return { set: null, outcome: "invalid" };
     const list = storedList(stored, input.kind);
-    const index = list.findIndex((row3, i) => entryMatches(row3, input.kind, text34(input.subcontractorId), i, text34(input.entryId)));
+    const index = list.findIndex((row3, i) => entryMatches(row3, input.kind, text35(input.subcontractorId), i, text35(input.entryId)));
     if (index < 0) return { set: null, outcome: "missing" };
     const line = record10(list[index]);
     const current = normalizeSubcontractorDocumentExpiry(line.expiresOn) ?? null;
@@ -21715,7 +22009,7 @@ var ProjectPlannerCanonical = (() => {
 
   // lib/canonical/inviteAccept.ts
   var ACCEPT_DROPPED_FIELDS = ["ghost", "inviteEmailHint"];
-  function text35(value) {
+  function text36(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function record11(value) {
@@ -21730,7 +22024,7 @@ var ProjectPlannerCanonical = (() => {
     return typeof value === "number" && Number.isFinite(value) ? value : null;
   }
   function sameOrganization(a, b) {
-    const raw = text35(a);
+    const raw = text36(a);
     const id2 = raw.includes("/") ? raw.split("/").filter(Boolean).pop() ?? "" : raw;
     return id2 !== "" && id2.toLowerCase() === b.toLowerCase();
   }
@@ -21738,21 +22032,21 @@ var ProjectPlannerCanonical = (() => {
     const invitation = record11(input.invitation) ?? {};
     const placeholder = record11(input.placeholder);
     const existing = record11(input.existingProfile);
-    const organizationId = text35(invitation.organizationId);
+    const organizationId = text36(invitation.organizationId);
     const permissions = flags(invitation.permissions);
-    const invitedRole = text35(invitation.role).toLowerCase();
+    const invitedRole = text36(invitation.role).toLowerCase();
     const role = ["admin", "manager", "operative", "member"].includes(invitedRole) ? invitedRole : Object.keys(permissions).length > 0 ? accountKindFromFlags({
       isSuperAdmin: false,
       adminAccess: permissions.adminAccess === true,
       operativeMode: permissions.operativeMode === true,
       role: ""
-    }) : ["admin", "manager", "operative"].includes(text35(placeholder?.role).toLowerCase()) ? text35(placeholder?.role).toLowerCase() : "member";
-    const basis = text35(invitation.payBasis) === "hourly" ? "hourly" : text35(invitation.payBasis) === "day" ? "day" : null;
+    }) : ["admin", "manager", "operative"].includes(text36(placeholder?.role).toLowerCase()) ? text36(placeholder?.role).toLowerCase() : "member";
+    const basis = text36(invitation.payBasis) === "hourly" ? "hourly" : text36(invitation.payBasis) === "day" ? "day" : null;
     const pay = basis === "hourly" && finite4(invitation.hourlyRate) != null ? { payBasis: "hourly", dayRate: null, hourlyRate: finite4(invitation.hourlyRate) } : basis === "day" && finite4(invitation.dayRate) != null ? { payBasis: "day", dayRate: finite4(invitation.dayRate), hourlyRate: null } : null;
     if (existing) {
       const another = organizationId !== "" && !sameOrganization(existing.organizationId, organizationId);
-      const placeholderId = text35(input.placeholderId).toLowerCase();
-      const listed = Array.isArray(existing.formerUserIds) ? existing.formerUserIds.some((id2) => text35(id2).toLowerCase() === placeholderId) : false;
+      const placeholderId = text36(input.placeholderId).toLowerCase();
+      const listed = Array.isArray(existing.formerUserIds) ? existing.formerUserIds.some((id2) => text36(id2).toLowerCase() === placeholderId) : false;
       const linked = placeholderId === "" || listed;
       return {
         mode: "existingAccount",
@@ -21783,18 +22077,18 @@ var ProjectPlannerCanonical = (() => {
       dropPlaceholderFields: [...ACCEPT_DROPPED_FIELDS]
     };
   }
-  function idList7(value) {
+  function idList8(value) {
     if (!Array.isArray(value)) return [];
     const out = [];
     for (const item of value) {
-      const id2 = text35(item);
+      const id2 = text36(item);
       if (id2 && !out.includes(id2)) out.push(id2);
     }
     return out;
   }
   function invitationRole(invitation) {
     const row3 = record11(invitation) ?? {};
-    const stored = text35(row3.role).toLowerCase();
+    const stored = text36(row3.role).toLowerCase();
     if (stored === "admin" || stored === "manager" || stored === "operative" || stored === "member") return stored;
     const permissions = record11(row3.permissions) ?? {};
     if (Object.keys(permissions).length === 0) return "member";
@@ -21810,7 +22104,7 @@ var ProjectPlannerCanonical = (() => {
     const row3 = record11(invitation) ?? {};
     const permissions = record11(row3.permissions) ?? {};
     if (invitationRole(row3) !== "operative") return false;
-    if (!(flagOn3(permissions.operativeMode) || text35(row3.role).toLowerCase() === "operative")) return false;
+    if (!(flagOn3(permissions.operativeMode) || text36(row3.role).toLowerCase() === "operative")) return false;
     return OPERATIVE_INVITE_FORBIDDEN_FLAGS.every((key8) => !flagOn3(permissions[key8]) && !flagOn3(row3[key8]));
   }
   function invitationProfileFields(invitation) {
@@ -21821,9 +22115,9 @@ var ProjectPlannerCanonical = (() => {
       out.permissions = { ...permissions };
       for (const [key8, value] of Object.entries(permissions)) if (typeof value === "boolean") out[key8] = value;
     }
-    const employment = text35(row3.employmentType);
+    const employment = text36(row3.employmentType);
     if (employment) out.employmentType = normalizeEmploymentType(employment);
-    const basis = text35(row3.payBasis);
+    const basis = text36(row3.payBasis);
     if (basis === "hourly" && finite4(row3.hourlyRate) != null) {
       out.payBasis = "hourly";
       out.hourlyRate = finite4(row3.hourlyRate);
@@ -21834,8 +22128,8 @@ var ProjectPlannerCanonical = (() => {
     if (row3.hasNoLineManager === true) {
       out.hasNoLineManager = true;
     } else {
-      let managers = idList7(row3.assignedManagerUserIds);
-      if (managers.length === 0 && text35(row3.assignedManagerUserId)) managers = [text35(row3.assignedManagerUserId)];
+      let managers = idList8(row3.assignedManagerUserIds);
+      if (managers.length === 0 && text36(row3.assignedManagerUserId)) managers = [text36(row3.assignedManagerUserId)];
       if (managers.length > 0) {
         out.assignedManagerUserIds = managers;
         out.assignedManagerUserId = managers[0];
@@ -21859,9 +22153,9 @@ var ProjectPlannerCanonical = (() => {
   ];
   function inviteMembershipWrites(input) {
     const row3 = record11(input?.invitation) ?? {};
-    const organizationId = text35(row3.organizationId);
-    const invitationId = text35(input?.invitationId);
-    const authUid = text35(input?.authUid);
+    const organizationId = text36(row3.organizationId);
+    const invitationId = text36(input?.invitationId);
+    const authUid = text36(input?.authUid);
     if (!organizationId || !invitationId || !authUid) return null;
     const role = invitationRole(row3);
     const membership = {
@@ -21876,8 +22170,10 @@ var ProjectPlannerCanonical = (() => {
       acceptedAt: input.now,
       updatedAt: input.now
     };
-    const invitedBy = text35(row3.invitedBy);
+    const invitedBy = text36(row3.invitedBy);
     if (invitedBy) membership.invitedBy = invitedBy;
+    const lineManager = input.homeAccount === true ? null : invitationLineManagerMap(row3);
+    if (lineManager) membership[ORG_MEMBERSHIP_LINE_MANAGER_FIELD] = lineManager;
     return { organizationId, membership, membersField: `members.${authUid}`, role };
   }
   var INVITED_PAY_FIELDS = [
@@ -21890,8 +22186,8 @@ var ProjectPlannerCanonical = (() => {
   ];
   function invitePayProfileCopyWrite(input) {
     if (input?.privatePay !== true) return null;
-    const authUid = text35(input.authUid);
-    const placeholderId = text35(input.placeholderId);
+    const authUid = text36(input.authUid);
+    const placeholderId = text36(input.placeholderId);
     if (!authUid || !placeholderId || placeholderId === authUid) return null;
     if (record11(input.accountProfile)) return null;
     const source = record11(input.placeholderProfile);
@@ -21913,20 +22209,20 @@ var ProjectPlannerCanonical = (() => {
   var MEMBER_NAME_REQUIRED_MESSAGE = "Enter a first name.";
   var MEMBER_NAME_TOO_LONG_MESSAGE = `Names are ${MEMBER_NAME_MAX_LENGTH} characters at most.`;
   var MEMBER_NAME_REFUSED_MESSAGE = "Only an admin can change this person's name in this company.";
-  function text36(value) {
+  function text37(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function key5(id2) {
-    return text36(id2).toLowerCase();
+    return text37(id2).toLowerCase();
   }
   function memberNamePath(organizationId, userId) {
-    return `organizations/${text36(organizationId)}/${MEMBER_NAMES_COLLECTION}/${text36(userId)}`;
+    return `organizations/${text37(organizationId)}/${MEMBER_NAMES_COLLECTION}/${text37(userId)}`;
   }
   function parseMemberNameDocument(docId, data) {
-    const userId = text36(docId);
+    const userId = text37(docId);
     if (!userId || !data || typeof data !== "object") return null;
-    const firstName = text36(data.firstName);
-    const surname = text36(data.surname) || text36(data.lastName);
+    const firstName = text37(data.firstName);
+    const surname = text37(data.surname) || text37(data.lastName);
     const displayName2 = `${firstName} ${surname}`.trim();
     if (!displayName2) return null;
     return { userId, firstName, surname, displayName: displayName2 };
@@ -21960,9 +22256,9 @@ var ProjectPlannerCanonical = (() => {
     return null;
   }
   function accountName(person) {
-    let firstName = text36(person?.firstName);
-    let surname = text36(person?.surname) || text36(person?.lastName);
-    const combined = text36(person?.displayName) || text36(person?.name);
+    let firstName = text37(person?.firstName);
+    let surname = text37(person?.surname) || text37(person?.lastName);
+    const combined = text37(person?.displayName) || text37(person?.name);
     if (!firstName && !surname && combined) {
       const space = combined.indexOf(" ");
       firstName = space < 0 ? combined : combined.slice(0, space).trim();
@@ -21990,12 +22286,12 @@ var ProjectPlannerCanonical = (() => {
   function memberNameEditTarget(input) {
     const org = key5(input?.organizationId);
     const home = key5(documentOrganizationId(input?.homeOrganizationId));
-    if (!org || !home) return "account";
-    return org === home ? "account" : "organization";
+    if (!org) return "account";
+    return home && org === home ? "account" : "organization";
   }
   function memberNameValidationError(input) {
-    const firstName = text36(input?.firstName);
-    const surname = text36(input?.surname);
+    const firstName = text37(input?.firstName);
+    const surname = text37(input?.surname);
     if (!firstName) return MEMBER_NAME_REQUIRED_MESSAGE;
     if (firstName.length > MEMBER_NAME_MAX_LENGTH || surname.length > MEMBER_NAME_MAX_LENGTH) return MEMBER_NAME_TOO_LONG_MESSAGE;
     return null;
@@ -22003,23 +22299,59 @@ var ProjectPlannerCanonical = (() => {
   function memberNameWriteFields(input) {
     if (memberNameValidationError(input)) return null;
     return {
-      firstName: text36(input.firstName),
-      surname: text36(input.surname),
+      firstName: text37(input.firstName),
+      surname: text37(input.surname),
       ...writeMetadataFields(input.writerUserId, input.platform) ?? {}
     };
   }
   function canWriteMemberName(input) {
     const writer = key5(input?.writerUserId);
     if (!writer) return false;
-    return writer === key5(input?.subjectUserId) || input?.writerIsAdmin === true;
+    return writer === key5(input?.subjectUserId) || input?.writerIsAdmin === true || input?.writerManagesOperative === true;
+  }
+  function memberNameEditPlan(input) {
+    const org = key5(input?.organizationId);
+    const home = key5(documentOrganizationId(input?.homeOrganizationId));
+    return { writeEntry: Boolean(org), writeAccount: Boolean(org && home && org === home) };
+  }
+  function memberNameWriterManagesOperative(input) {
+    if (!input?.writer || !input?.subject) return false;
+    return canManageOperatives(input.writer) && permissionLevelOf(input.subject) === "operative";
+  }
+  function memberNameJoinEntry(candidates) {
+    for (const candidate of candidates || []) {
+      if (!candidate) continue;
+      const name = accountName(candidate);
+      if (!memberNameValidationError(name)) return { firstName: name.firstName, surname: name.surname };
+    }
+    return null;
+  }
+  function memberNameEntryMissing(input) {
+    if (!input?.serverRead || !input.person || !key5(input.person.id)) return false;
+    return !memberNameFor(input.person, input.names);
+  }
+  function memberNameBackfillEntries(input) {
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const person of input?.people || []) {
+      const userId = text37(person?.id);
+      if (!userId || seen.has(key5(userId))) continue;
+      seen.add(key5(userId));
+      const shown = accountName(person);
+      if (!text37(person?.email) && shown.displayName === "Deleted user") continue;
+      if (memberNameFor(person, input?.names)) continue;
+      const name = memberNameJoinEntry([person]);
+      if (name) out.push({ userId, ...name });
+    }
+    return out;
   }
 
   // lib/canonical/orgRoster.ts
-  function text37(value) {
+  function text38(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function orgIdOf(value) {
-    const raw = text37(value);
+    const raw = text38(value);
     return raw.includes("/") ? raw.split("/").filter(Boolean).pop() ?? "" : raw;
   }
   function flagValue(value) {
@@ -22031,16 +22363,16 @@ var ProjectPlannerCanonical = (() => {
     return flagValue(user[key8]) || flagValue(permissions[key8]);
   }
   function levelFromRole(role) {
-    const value = text37(role).toLowerCase().replace(/[\s-]/g, "_");
+    const value = text38(role).toLowerCase().replace(/[\s-]/g, "_");
     if (value === "admin" || value === "super_admin" || value === "superadmin") return "admin";
     if (value === "manager") return "manager";
     if (value === "operative") return "operative";
     return null;
   }
   function organizationLevelFor(input) {
-    const org = text37(input.organizationId).toLowerCase();
-    const id2 = text37(input.userId);
-    if (id2 && text37(input.creatorUserId) === id2) return { level: "admin", isSuperAdmin: true, source: "creator" };
+    const org = text38(input.organizationId).toLowerCase();
+    const id2 = text38(input.userId);
+    if (id2 && text38(input.creatorUserId) === id2) return { level: "admin", isSuperAdmin: true, source: "creator" };
     const user = input.user ?? null;
     if (user && orgIdOf(user.organizationId).toLowerCase() === org) {
       return { level: permissionLevelOf(user), isSuperAdmin: storedPermissionFlag(user, "isSuperAdmin") === true, source: "users" };
@@ -22056,12 +22388,12 @@ var ProjectPlannerCanonical = (() => {
     return { level: levelFromRole(input.membersRole) ?? "operative", isSuperAdmin: false, source: "members" };
   }
   function organizationSelfManageFlags(input) {
-    const org = text37(input?.organizationId).toLowerCase();
-    const id2 = text37(input?.userId);
+    const org = text38(input?.organizationId).toLowerCase();
+    const id2 = text38(input?.userId);
     const user = input?.user && typeof input.user === "object" ? input.user : null;
     const none = { source: "none", superAdmin: false, admin: false, active: true, annualLeaveSelfBook: false, timesheetSelfSign: false };
     if (!org || !id2) return none;
-    const creator = text37(input?.creatorUserId) !== "" && text37(input?.creatorUserId) === id2;
+    const creator = text38(input?.creatorUserId) !== "" && text38(input?.creatorUserId) === id2;
     const home = Boolean(user && orgIdOf(user.organizationId).toLowerCase() === org);
     if (creator || home) {
       const level2 = home ? permissionLevelOf(user) : "admin";
@@ -22107,30 +22439,31 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function rosterMembersForOrganization(input) {
-    const org = text37(input?.organizationId);
+    const org = text38(input?.organizationId);
     const members = input?.members && typeof input.members === "object" ? input.members : {};
-    const creator = text37(input?.creatorUserId);
-    const signedIn = text37(input?.signedInUserId);
+    const creator = text38(input?.creatorUserId);
+    const signedIn = text38(input?.signedInUserId);
     const anchored = [];
     const add = (id2) => {
       if (id2 && !anchored.some((row3) => row3.toLowerCase() === id2.toLowerCase())) anchored.push(id2);
     };
-    for (const key8 of Object.keys(members)) add(text37(key8));
+    for (const key8 of Object.keys(members)) add(text38(key8));
     add(creator);
     if (signedIn && Object.keys(members).some((key8) => key8.toLowerCase() === signedIn.toLowerCase())) add(signedIn);
     const anchoredKeys = new Set(anchored.map((id2) => id2.toLowerCase()));
-    const missing = new Set((input?.missingIds || []).map((id2) => text37(id2).toLowerCase()));
+    const missing = new Set((input?.missingIds || []).map((id2) => text38(id2).toLowerCase()));
     const docs = (input?.users || []).filter((row3) => {
-      const id2 = text37(row3?.id).toLowerCase();
+      const id2 = text38(row3?.id).toLowerCase();
       if (!id2 || missing.has(id2)) return false;
       return orgIdOf(row3.organizationId).toLowerCase() === org.toLowerCase() || anchoredKeys.has(id2);
     });
     const folded = rosterPeople(docs);
     const people = applyMemberNames(folded.people, input?.memberNames).map((person) => {
-      const id2 = text37(person.id);
+      const id2 = text38(person.id);
       const membersRole = Object.entries(members).find(([key8]) => key8.toLowerCase() === id2.toLowerCase())?.[1];
+      const here = withOrganizationLineManager(person, { organizationId: org, membership: input?.memberships?.[id2] ?? null });
       return {
-        ...person,
+        ...here,
         organizationLevel: organizationLevelFor({
           organizationId: org,
           userId: id2,
@@ -22141,7 +22474,7 @@ var ProjectPlannerCanonical = (() => {
         })
       };
     });
-    const present3 = new Set(docs.map((row3) => text37(row3.id).toLowerCase()));
+    const present3 = new Set(docs.map((row3) => text38(row3.id).toLowerCase()));
     const unreadIds = anchored.filter((id2) => !present3.has(id2.toLowerCase()) && !missing.has(id2.toLowerCase()));
     return { people, userIdAliases: folded.userIdAliases, anchoredIds: anchored, unreadIds };
   }
@@ -22364,7 +22697,7 @@ var ProjectPlannerCanonical = (() => {
       const range = rangeOf(row3);
       const prefix = parts3 > 0 ? "+ " : "";
       if (row3.kind === "standardWindow") {
-        const clock5 = clockSpanHours(row3) ?? row3.workedHours + (row3.unpaidBreakHours ?? 0);
+        const clock6 = clockSpanHours(row3) ?? row3.workedHours + (row3.unpaidBreakHours ?? 0);
         const note = breakNote(row3, brk);
         if (kind === "weekendWindow") {
           const credited = row3.baseHours + (row3.unpaidBreakHours ?? 0);
@@ -22382,7 +22715,7 @@ var ProjectPlannerCanonical = (() => {
             summaryParts.push(`${h(row3.baseHours)} (full day, unpaid break allowed for)`);
           } else if (!full && lessBreak && lessBreak.window > 0 && windowHours && fullDayHours != null && range) {
             const windowLess = round(windowHours - lessBreak.window / 60);
-            const coveredLess = round(Math.max(0, clock5 - lessBreak.covered / 60));
+            const coveredLess = round(Math.max(0, clock6 - lessBreak.covered / 60));
             const proRata = `${h(fullDayHours)} \xD7 ${coveredLess} \xF7 ${windowLess} = ${h(credited)}`;
             steps.push(`${prefix}Booked ${range} = ${h(coveredLess)} of the ${h(windowLess)} window outside the unpaid break \u2192 ${proRata}`);
             summaryParts.push(`${proRata} (part of the window, unpaid break not counted)`);
@@ -22391,9 +22724,9 @@ var ProjectPlannerCanonical = (() => {
             steps.push(`${prefix}${range ?? label} = ${h(row3.baseHours)} (${why})`);
             summaryParts.push(`${h(row3.baseHours)} (${why})`);
           } else if (windowHours && fullDayHours != null && range) {
-            const proRata = `${h(fullDayHours)} \xD7 ${round(clock5)} \xF7 ${round(windowHours)} = ${h(credited)}`;
+            const proRata = `${h(fullDayHours)} \xD7 ${round(clock6)} \xF7 ${round(windowHours)} = ${h(credited)}`;
             const tail = brk > 0 ? `, ${note} = ${h(row3.baseHours)}` : note ? ` (${note})` : "";
-            steps.push(`${prefix}Booked ${range} = ${h(clock5)} of the ${h(windowHours)} window \u2192 ${proRata}${tail}`);
+            steps.push(`${prefix}Booked ${range} = ${h(clock6)} of the ${h(windowHours)} window \u2192 ${proRata}${tail}`);
             summaryParts.push(`${proRata}${tail} (part of the ${h(windowHours)} window)`);
           } else {
             steps.push(`${prefix}${range ?? label} = ${h(row3.baseHours)}${note ? ` (${note})` : ""}`);
@@ -22406,14 +22739,14 @@ var ProjectPlannerCanonical = (() => {
         }
         parts3 += 1;
       } else {
-        const clock5 = clockSpanHours(row3) ?? row3.baseHours + (row3.multiplier > 0 ? (row3.unpaidBreakHours ?? 0) / row3.multiplier : 0);
-        const multiplied = clock5 * row3.multiplier;
-        steps.push(`${prefix}${range ?? label} = ${h(clock5)} \xD7 ${times(row3.multiplier)} = ${h(multiplied)}`);
+        const clock6 = clockSpanHours(row3) ?? row3.baseHours + (row3.multiplier > 0 ? (row3.unpaidBreakHours ?? 0) / row3.multiplier : 0);
+        const multiplied = clock6 * row3.multiplier;
+        steps.push(`${prefix}${range ?? label} = ${h(clock6)} \xD7 ${times(row3.multiplier)} = ${h(multiplied)}`);
         if (brk > 0) {
           steps.push(`\u2212 ${h(brk)} unpaid break`);
           multipliedBreak = true;
         }
-        summaryParts.push(`${h(clock5)} \xD7 ${times(row3.multiplier)} = ${h(multiplied)}${brk > 0 ? ` \u2212 ${h(brk)} unpaid break` : ""}`);
+        summaryParts.push(`${h(clock6)} \xD7 ${times(row3.multiplier)} = ${h(multiplied)}${brk > 0 ? ` \u2212 ${h(brk)} unpaid break` : ""}`);
         parts3 += 1;
       }
     }
@@ -22460,10 +22793,10 @@ var ProjectPlannerCanonical = (() => {
   var WEEKEND_TIME_SLOTS = ["CUSTOM"];
   function isoWeekdayOf(day, timeZone) {
     if (typeof day === "number") return day;
-    const text57 = String(day || "").trim().toLowerCase();
-    if (text57 === "saturday") return 6;
-    if (text57 === "sunday") return 7;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text57)) return isoWeekdayOfDayKey(text57, zoneOrLondon(timeZone));
+    const text63 = String(day || "").trim().toLowerCase();
+    if (text63 === "saturday") return 6;
+    if (text63 === "sunday") return 7;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text63)) return isoWeekdayOfDayKey(text63, zoneOrLondon(timeZone));
     return 0;
   }
   function isWeekendDayKey(dayKey, timeZone) {
@@ -22776,7 +23109,7 @@ var ProjectPlannerCanonical = (() => {
     const kind = namedSlotKind(input.timeSlot);
     const slot = kind === "UNKNOWN" ? identityPart(input.timeSlot) : kind;
     const custom = kind === "CUSTOM";
-    const clock5 = (value) => {
+    const clock6 = (value) => {
       const minutes = parseClockMinutes(value ?? null);
       return minutes === null ? identityPart(value) : String(minutes);
     };
@@ -22787,8 +23120,8 @@ var ProjectPlannerCanonical = (() => {
       identityPart(input.locationType),
       identityPart(input.locationId),
       identityPart(input.customLocationName),
-      custom ? clock5(input.workStartTime) : "",
-      custom ? clock5(input.workEndTime) : "",
+      custom ? clock6(input.workStartTime) : "",
+      custom ? clock6(input.workEndTime) : "",
       input.isBreakRemoved === true ? "break-off" : ""
     ].join("|");
   }
@@ -22799,9 +23132,9 @@ var ProjectPlannerCanonical = (() => {
     if (!result2) return { hours: 0, label: "0h" };
     const total = roundHours2(Number(result2.totalPaidHours) || 0);
     const standard = roundHours2(Number(result2.standardHours) || 0);
-    const clock5 = result2.segments ? payrollOutsideClockHours({ segments: result2.segments }) : null;
-    const outside = roundHours2(clock5 ? clock5.outsideClockHours : Number(result2.outsideHours) || 0);
-    const outsideBreak = roundHours2(clock5 ? clock5.outsideBreakHours : 0);
+    const clock6 = result2.segments ? payrollOutsideClockHours({ segments: result2.segments }) : null;
+    const outside = roundHours2(clock6 ? clock6.outsideClockHours : Number(result2.outsideHours) || 0);
+    const outsideBreak = roundHours2(clock6 ? clock6.outsideBreakHours : 0);
     const multiplier = roundHours2(Number(result2.outsideMultiplier) || 1);
     if (outside > 0 && Math.abs(multiplier - 1) > 1e-3) {
       const multiplied = standard > 0 ? `${hoursText2(standard)} + ${hoursText2(outside)} \xD7 ${multiplier}` : `${hoursText2(outside)} \xD7 ${multiplier}`;
@@ -22855,8 +23188,8 @@ var ProjectPlannerCanonical = (() => {
         return "Full day";
     }
   }
-  function spoken(text57) {
-    return text57.replace(/–/g, " to ").replace(/ − /g, " less ").replace(/×(\d+(?:\.\d+)?)/g, "$1 times").replace(/(\d+(?:\.\d+)?)h\b/g, (_, n) => `${n} ${n === "1" ? "hour" : "hours"}`);
+  function spoken(text63) {
+    return text63.replace(/–/g, " to ").replace(/ − /g, " less ").replace(/×(\d+(?:\.\d+)?)/g, "$1 times").replace(/(\d+(?:\.\d+)?)h\b/g, (_, n) => `${n} ${n === "1" ? "hour" : "hours"}`);
   }
   function row2(kind, label, details, hours2) {
     const value = h2(hours2);
@@ -23015,23 +23348,23 @@ var ProjectPlannerCanonical = (() => {
     return Number.isFinite(n) && n > 0 ? n : 1;
   }
   function overtimeTotalText(input) {
-    const clock5 = Math.max(0, Number(input?.clockHours) || 0);
-    if (!(round5(clock5) > 0)) return "";
+    const clock6 = Math.max(0, Number(input?.clockHours) || 0);
+    if (!(round5(clock6) > 0)) return "";
     const n = multiplierOf2(input?.multiplier);
     const brk = Math.max(0, Number(input?.breakHours) || 0);
-    const total = h3(Math.max(0, clock5 * n - brk));
-    return round5(brk) > 0 ? `${h3(clock5)} OT \xD7 ${round5(n)} \u2212 ${h3(brk)} break = ${total}` : `${h3(clock5)} OT \xD7 ${round5(n)} = ${total}`;
+    const total = h3(Math.max(0, clock6 * n - brk));
+    return round5(brk) > 0 ? `${h3(clock6)} OT \xD7 ${round5(n)} \u2212 ${h3(brk)} break = ${total}` : `${h3(clock6)} OT \xD7 ${round5(n)} = ${total}`;
   }
   function overtimeIncludedText(input) {
-    const text57 = overtimeTotalText(input);
-    return text57 ? `incl. ${text57}` : "";
+    const text63 = overtimeTotalText(input);
+    return text63 ? `incl. ${text63}` : "";
   }
   function bookedWithOvertimeText(input) {
     const booked = `${h3(Math.max(0, Number(input?.bookedHours) || 0))} booked`;
-    const clock5 = Math.max(0, Number(input?.clockHours) || 0);
-    if (!(round5(clock5) > 0)) return booked;
-    if (input?.multiplier == null) return `${booked} (incl. ${h3(clock5)} OT)`;
-    return `${booked} (incl. ${h3(clock5)} OT \xD7 ${round5(multiplierOf2(input.multiplier))})`;
+    const clock6 = Math.max(0, Number(input?.clockHours) || 0);
+    if (!(round5(clock6) > 0)) return booked;
+    if (input?.multiplier == null) return `${booked} (incl. ${h3(clock6)} OT)`;
+    return `${booked} (incl. ${h3(clock6)} OT \xD7 ${round5(multiplierOf2(input.multiplier))})`;
   }
   function bookingHoursCountText(hours2) {
     const value = round5(Math.max(0, Number(hours2) || 0));
@@ -23378,7 +23711,7 @@ var ProjectPlannerCanonical = (() => {
   var ORGANIZATION_RESTORED_MESSAGE = "The organisation is restored.";
   var ACCOUNT_HANDOVER_REQUIRED_MESSAGE = "You are the super admin. Make another admin the super admin before you delete your account.";
   var ACCOUNT_DELETE_WITH_COMPANY_MESSAGE = "You are the only member of this organisation. Deleting your account also deletes the organisation. Type the company name and DELETE to confirm.";
-  function text38(value) {
+  function text39(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function record12(value) {
@@ -23409,16 +23742,16 @@ var ProjectPlannerCanonical = (() => {
   }
   function parseOrganizationDeletion(org) {
     const raw = record12(record12(org).deletion);
-    const status = text38(raw.status).toLowerCase();
+    const status = text39(raw.status).toLowerCase();
     if (status !== "scheduled" && status !== "erased") return null;
     const requestedAtMs = deletionTimeMs(raw.requestedAt);
     const eraseAfterMs = deletionTimeMs(raw.eraseAfter) ?? (requestedAtMs == null ? null : requestedAtMs + DELETION_RESTORE_DAYS * DAY_MS);
     return {
       status,
       requestedAtMs,
-      requestedBy: text38(raw.requestedBy),
+      requestedBy: text39(raw.requestedBy),
       eraseAfterMs,
-      restoreBy: text38(raw.restoreBy) === "platform_owner" ? "platform_owner" : "super_admin"
+      restoreBy: text39(raw.restoreBy) === "platform_owner" ? "platform_owner" : "super_admin"
     };
   }
   function organizationDeletionState(org, now = Date.now()) {
@@ -23445,7 +23778,7 @@ var ProjectPlannerCanonical = (() => {
         day: "numeric",
         month: "long",
         year: "numeric",
-        timeZone: text38(timeZone) || "Europe/London"
+        timeZone: text39(timeZone) || "Europe/London"
       }).format(new Date(eraseAfterMs));
     } catch {
       return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "Europe/London" }).format(
@@ -23463,20 +23796,20 @@ var ProjectPlannerCanonical = (() => {
       deletion: {
         status: "scheduled",
         requestedAt: new Date(at),
-        requestedBy: text38(input?.requestedBy),
+        requestedBy: text39(input?.requestedBy),
         eraseAfter: new Date(at + DELETION_RESTORE_DAYS * DAY_MS),
         restoreBy: input?.restoreBy === "platform_owner" ? "platform_owner" : "super_admin"
       }
     };
   }
   function isOrganizationSuperAdmin(viewer, org) {
-    const id2 = text38(viewer?.id);
+    const id2 = text39(viewer?.id);
     if (!id2) return false;
-    const creator = text38(org?.creatorUserId);
+    const creator = text39(org?.creatorUserId);
     if (creator && creator.toLowerCase() === id2.toLowerCase()) return true;
     if (viewer?.isSuperAdmin !== true) return false;
-    const orgId = text38(org?.id);
-    const home = text38(viewer?.organizationId);
+    const orgId = text39(org?.id);
+    const home = text39(viewer?.organizationId);
     const homeId = home.includes("/") ? home.split("/").filter(Boolean).pop() ?? "" : home;
     return !!orgId && !!homeId && homeId.toLowerCase() === orgId.toLowerCase();
   }
@@ -23486,29 +23819,29 @@ var ProjectPlannerCanonical = (() => {
     if (input.viewerIsPlatformOwner === true) return true;
     if (state.restoreBy !== "super_admin") return false;
     const org = record12(input.org);
-    return isOrganizationSuperAdmin(input.viewer ?? null, { id: text38(org.id), creatorUserId: org.creatorUserId });
+    return isOrganizationSuperAdmin(input.viewer ?? null, { id: text39(org.id), creatorUserId: org.creatorUserId });
   }
   function organizationDeleteConfirmationError(input) {
-    const name = text38(input?.organizationName).toLowerCase();
-    if (!name || text38(input?.typedName).toLowerCase() !== name) return "Type the company name exactly as it is shown.";
-    if (text38(input?.typedConfirmation) !== ORGANIZATION_DELETE_CONFIRMATION) return "Type DELETE to confirm.";
+    const name = text39(input?.organizationName).toLowerCase();
+    if (!name || text39(input?.typedName).toLowerCase() !== name) return "Type the company name exactly as it is shown.";
+    if (text39(input?.typedConfirmation) !== ORGANIZATION_DELETE_CONFIRMATION) return "Type DELETE to confirm.";
     return null;
   }
   function accountDeletionPath(viewer, roster, org) {
-    if (!viewer || !text38(viewer.id) || !org) return "delete";
+    if (!viewer || !text39(viewer.id) || !org) return "delete";
     if (organizationDeletionState(org).state !== "active") return "delete";
     if (!isOrganizationSuperAdmin(viewer, org)) return "delete";
     const rows3 = roster || [];
     const own = new Set(personIdSet(viewer, rows3).map((id2) => id2.toLowerCase()));
     const others = rows3.filter((row3) => {
-      const id2 = text38(row3?.id).toLowerCase();
+      const id2 = text39(row3?.id).toLowerCase();
       if (!id2 || own.has(id2)) return false;
       return rosterSegment(row3) === "active";
     });
     return others.length > 0 ? "handover_required" : "delete_with_company";
   }
   function erasedOrganizationAuditFields(org, erasedAtMs) {
-    const name = text38(record12(org).name);
+    const name = text39(record12(org).name);
     return { erasedAt: new Date(Number.isFinite(erasedAtMs) ? erasedAtMs : Date.now()), name };
   }
   var ERASED_ORGANIZATIONS_COLLECTION = "erasedOrganizations";
@@ -23607,17 +23940,17 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/pushTokens.ts
-  function text39(value) {
+  function text40(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function isPushTokenPlaceholderUserId(userId) {
-    return isBookingUuid(text39(userId));
+    return isBookingUuid(text40(userId));
   }
   function pushTokenList(raw) {
     const list = Array.isArray(raw) ? raw : [raw];
     const out = [];
     for (const value of list) {
-      const token = text39(value);
+      const token = text40(value);
       if (token && !out.includes(token)) out.push(token);
     }
     return out;
@@ -23627,14 +23960,14 @@ var ProjectPlannerCanonical = (() => {
     return pushTokenList(after).filter((token) => !old.has(token));
   }
   function pushTokenOwnerWrites(token, ownerUid, holders) {
-    const value = text39(token);
-    const owner = text39(ownerUid);
+    const value = text40(token);
+    const owner = text40(ownerUid);
     if (!value || !owner) return [];
     if (isPushTokenPlaceholderUserId(owner)) return [{ userId: owner, remove: [value] }];
     const out = [];
     const seen = /* @__PURE__ */ new Set();
     for (const holder of holders || []) {
-      const id2 = text39(holder?.id);
+      const id2 = text40(holder?.id);
       if (!id2 || id2 === owner || seen.has(id2)) continue;
       if (!pushTokenList(holder.pushTokens).includes(value)) continue;
       seen.add(id2);
@@ -23659,7 +23992,7 @@ var ProjectPlannerCanonical = (() => {
     return 0;
   }
   function pushTokenDedupePlan(documents) {
-    const docs = (documents || []).filter((doc) => doc && text39(doc.id));
+    const docs = (documents || []).filter((doc) => doc && text40(doc.id));
     const holders = /* @__PURE__ */ new Map();
     for (const doc of docs) {
       if (isPushTokenPlaceholderUserId(doc.id)) continue;
@@ -23675,13 +24008,13 @@ var ProjectPlannerCanonical = (() => {
       let best = null;
       for (const doc of list) {
         const ms = byTokenTime ? instantMs3(doc.pushTokenUpdatedAt) : instantMs3(doc.updatedAt);
-        if (!best || ms > best.ms) best = { id: text39(doc.id), ms };
+        if (!best || ms > best.ms) best = { id: text40(doc.id), ms };
       }
       if (best) keeper.set(token, best.id);
     }
     const out = [];
     for (const doc of docs) {
-      const id2 = text39(doc.id);
+      const id2 = text40(doc.id);
       const remove = [];
       const keptOn = {};
       for (const token of pushTokenList(doc.pushTokens)) {
@@ -23714,14 +24047,14 @@ var ProjectPlannerCanonical = (() => {
     const source = row3 || {};
     const weekStartMs = documentInstantMs(source.deepLinkWeekStart);
     const values = {
-      notificationId: text39(source.notificationId) || text39(source.id),
-      type: text39(source.type),
-      relatedId: text39(source.relatedId),
-      dayKey: /^\d{4}-\d{2}-\d{2}$/.test(text39(source.dayKey)) ? text39(source.dayKey) : "",
-      catalogue: text39(source.catalogue) === "projects" || text39(source.catalogue) === "smallWorks" ? text39(source.catalogue) : "",
-      userId: text39(source.userId),
-      organizationId: text39(source.organizationId),
-      deepLinkUserId: text39(source.deepLinkUserId),
+      notificationId: text40(source.notificationId) || text40(source.id),
+      type: text40(source.type),
+      relatedId: text40(source.relatedId),
+      dayKey: /^\d{4}-\d{2}-\d{2}$/.test(text40(source.dayKey)) ? text40(source.dayKey) : "",
+      catalogue: text40(source.catalogue) === "projects" || text40(source.catalogue) === "smallWorks" ? text40(source.catalogue) : "",
+      userId: text40(source.userId),
+      organizationId: text40(source.organizationId),
+      deepLinkUserId: text40(source.deepLinkUserId),
       deepLinkWeekStartMs: weekStartMs == null ? "" : String(weekStartMs)
     };
     const out = {};
@@ -23729,10 +24062,10 @@ var ProjectPlannerCanonical = (() => {
     return out;
   }
   function notificationOrganizationSwitch(input) {
-    const row3 = text39(input?.rowOrganizationId);
-    const open = text39(input?.openOrganizationId);
+    const row3 = text40(input?.rowOrganizationId);
+    const open = text40(input?.openOrganizationId);
     if (!row3 || row3.toLowerCase() === open.toLowerCase()) return null;
-    const member = (input.membershipIds || []).some((id2) => text39(id2).toLowerCase() === row3.toLowerCase());
+    const member = (input.membershipIds || []).some((id2) => text40(id2).toLowerCase() === row3.toLowerCase());
     return member ? row3 : null;
   }
 
@@ -24138,8 +24471,8 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/leaveReport.ts
-  function leaveReportDayCount(record19, range, timeZone, nonWorkingDayKeys) {
-    return snapLeaveDays(leaveDaysInRange(record19, range, timeZone, nonWorkingDayKeys));
+  function leaveReportDayCount(record22, range, timeZone, nonWorkingDayKeys) {
+    return snapLeaveDays(leaveDaysInRange(record22, range, timeZone, nonWorkingDayKeys));
   }
   function leaveReportRows(input) {
     const zone3 = zoneOrLondon(input.timeZone);
@@ -24149,18 +24482,18 @@ var ProjectPlannerCanonical = (() => {
     const nonWorking = input.nonWorkingDayKeys ?? [];
     const range = { startDayKey: year.startDayKey, endDayKey: year.endDayKey };
     const rows3 = [];
-    for (const record19 of input.records || []) {
-      if (!record19) continue;
-      const mine = record19.userId != null && ids.has(normalizeDocumentId(record19.userId)) || record19.operativeId != null && ids.has(normalizeDocumentId(record19.operativeId));
+    for (const record22 of input.records || []) {
+      if (!record22) continue;
+      const mine = record22.userId != null && ids.has(normalizeDocumentId(record22.userId)) || record22.operativeId != null && ids.has(normalizeDocumentId(record22.operativeId));
       if (!mine) continue;
-      const status = normalizeHolidayStatus(record19.status);
+      const status = normalizeHolidayStatus(record22.status);
       if (!statuses.has(status)) continue;
-      const start = String(record19.startDayKey || "").trim();
-      const endRaw = String(record19.endDayKey || "").trim();
+      const start = String(record22.startDayKey || "").trim();
+      const endRaw = String(record22.endDayKey || "").trim();
       const end = endRaw && endRaw >= start ? endRaw : start;
       if (!start || end < range.startDayKey || start > range.endDayKey) continue;
-      const days = leaveReportDayCount({ startDayKey: start, endDayKey: end, timeSlot: record19.timeSlot }, range, zone3, nonWorking);
-      rows3.push({ id: String(record19.id ?? ""), startDayKey: start, endDayKey: end, timeSlot: normalizeHolidayTimeSlot(record19.timeSlot), status, days });
+      const days = leaveReportDayCount({ startDayKey: start, endDayKey: end, timeSlot: record22.timeSlot }, range, zone3, nonWorking);
+      rows3.push({ id: String(record22.id ?? ""), startDayKey: start, endDayKey: end, timeSlot: normalizeHolidayTimeSlot(record22.timeSlot), status, days });
     }
     rows3.sort((a, b) => a.startDayKey === b.startDayKey ? a.id.localeCompare(b.id) : a.startDayKey < b.startDayKey ? 1 : -1);
     return {
@@ -24226,7 +24559,7 @@ var ProjectPlannerCanonical = (() => {
         const key8 = identity(line);
         seen.set(key8, (seen.get(key8) || 0) + 1);
       }
-      for (const [key8, count] of seen) maxCount.set(key8, Math.max(maxCount.get(key8) || 0, count));
+      for (const [key8, count2] of seen) maxCount.set(key8, Math.max(maxCount.get(key8) || 0, count2));
     }
     const taken = /* @__PURE__ */ new Map();
     const merged = [];
@@ -24687,25 +25020,74 @@ var ProjectPlannerCanonical = (() => {
   function leaveDayKind(records, dayKey, timeZone, nonWorkingDayKeys) {
     let best = "none";
     let recordId = null;
-    for (const record19 of records || []) {
-      if (!record19) continue;
-      const status = normalizeHolidayStatus(record19.status);
+    for (const record22 of records || []) {
+      if (!record22) continue;
+      const status = normalizeHolidayStatus(record22.status);
       if (status !== "approved" && status !== "pending") continue;
-      if (!leaveRecordDayKeys(record19, timeZone, nonWorkingDayKeys).includes(dayKey)) continue;
-      const slot = normalizeHolidayTimeSlot(record19.timeSlot);
+      if (!leaveRecordDayKeys(record22, timeZone, nonWorkingDayKeys).includes(dayKey)) continue;
+      const slot = normalizeHolidayTimeSlot(record22.timeSlot);
       const half = slot === "AM" || slot === "PM";
       const kind = status === "pending" ? half ? "pendingHalf" : "pendingFull" : half ? "approvedHalf" : "approvedFull";
       if (RANK[kind] > RANK[best]) {
         best = kind;
-        recordId = String(record19.id ?? "").trim() || null;
+        recordId = String(record22.id ?? "").trim() || null;
       }
     }
     return { kind: best, recordId, isLocked: best === "approvedFull" || best === "pendingFull" };
   }
   function dailyOverviewLeaveRows(records, dayKey, timeZone, nonWorkingDayKeys) {
     return (records || []).filter(
-      (record19) => Boolean(record19) && normalizeHolidayStatus(record19.status) === "approved" && leaveRecordDayKeys(record19, timeZone, nonWorkingDayKeys).includes(dayKey)
+      (record22) => Boolean(record22) && normalizeHolidayStatus(record22.status) === "approved" && leaveRecordDayKeys(record22, timeZone, nonWorkingDayKeys).includes(dayKey)
     );
+  }
+
+  // lib/canonical/siteMapLeave.ts
+  function siteMapLeaveSummary(input) {
+    const onDay = dailyOverviewLeaveRows(input.records, input.dayKey, input.timeZone, input.nonWorkingDayKeys);
+    const roster = (input.roster || []).filter((row3) => row3 && idKey(row3.id));
+    const byId = /* @__PURE__ */ new Map();
+    const byEmail = /* @__PURE__ */ new Map();
+    for (const row3 of roster) {
+      const owner = { key: `person:${idKey(row3.id)}`, name: (row3.name ?? "").trim() || null };
+      for (const id2 of personIdSet(row3, roster)) {
+        const k = idKey(id2);
+        if (k && !byId.has(k)) byId.set(k, owner);
+      }
+      const email = idKey(row3.email);
+      if (email && !byEmail.has(email)) byEmail.set(email, owner);
+    }
+    const operativeById = /* @__PURE__ */ new Map();
+    for (const row3 of input.operatives || []) if (row3 && idKey(row3.id)) operativeById.set(idKey(row3.id), row3);
+    const resolve = (record22) => {
+      for (const raw of [record22.userId, record22.operativeId]) {
+        const k = idKey(raw);
+        if (!k) continue;
+        const hit = byId.get(k) ?? byEmail.get(k);
+        if (hit) return hit;
+        const operative = operativeById.get(k);
+        if (operative) {
+          const viaEmail = byEmail.get(idKey(operative.email));
+          if (viaEmail) return viaEmail;
+          return { key: `operative:${k}`, name: (operative.name ?? "").trim() || null };
+        }
+      }
+      const fallback = idKey(record22.userId) || idKey(record22.operativeId);
+      return fallback ? { key: `id:${fallback}`, name: null } : null;
+    };
+    const people = [];
+    const index = /* @__PURE__ */ new Map();
+    onDay.forEach((record22, position) => {
+      const owner = resolve(record22) ?? { key: `record:${String(record22.id ?? position)}`, name: null };
+      const recordId = String(record22.id ?? "").trim();
+      const at = index.get(owner.key);
+      if (at === void 0) {
+        index.set(owner.key, people.length);
+        people.push({ key: owner.key, name: owner.name, recordIds: recordId ? [recordId] : [] });
+      } else if (recordId) {
+        people[at].recordIds.push(recordId);
+      }
+    });
+    return { onAnnualLeave: people.length, people };
   }
 
   // lib/canonical/jobScheduleLeave.ts
@@ -24793,11 +25175,11 @@ var ProjectPlannerCanonical = (() => {
         }
         const pending = kind === "pendingFull" || kind === "pendingHalf";
         const half = kind === "approvedHalf" || kind === "pendingHalf";
-        const record19 = (result2.recordId ? mine.find((h4) => String(h4.id ?? "").trim() === result2.recordId) : void 0) ?? mine.find((h4) => {
+        const record22 = (result2.recordId ? mine.find((h4) => String(h4.id ?? "").trim() === result2.recordId) : void 0) ?? mine.find((h4) => {
           const slot2 = normalizeHolidayTimeSlot(h4.timeSlot);
           return half ? slot2 !== "FULL DAY" : slot2 === "FULL DAY";
         });
-        const slot = mixedSlot ?? (half ? normalizeHolidayTimeSlot(record19?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY");
+        const slot = mixedSlot ?? (half ? normalizeHolidayTimeSlot(record22?.timeSlot) === "PM" ? "PM" : "AM" : "FULL DAY");
         const base = pending ? JOB_SCHEDULE_LEAVE_PENDING_LABEL : JOB_SCHEDULE_LEAVE_LABEL;
         const dayInput2 = standardDayOn(input?.day, dayKey);
         const state = pending ? "pending" : "approved";
@@ -24859,11 +25241,11 @@ var ProjectPlannerCanonical = (() => {
     for (const booking of bookings) {
       paid += Math.max(0, Number(booking.paidHours) || 0);
       overtime += Math.max(0, Number(booking.overtimeHours) || 0);
-      const clock5 = Math.max(0, Number(booking.overtime?.clockHours) || 0);
-      if (clock5 > 0) {
+      const clock6 = Math.max(0, Number(booking.overtime?.clockHours) || 0);
+      if (clock6 > 0) {
         const rate = Number(booking.overtime?.multiplier) > 0 ? hundredths(Number(booking.overtime?.multiplier)) : 1;
         const row3 = byRate.get(rate) ?? { clock: 0, brk: 0 };
-        row3.clock += clock5;
+        row3.clock += clock6;
         row3.brk += Math.max(0, Number(booking.overtime?.breakHours) || 0);
         byRate.set(rate, row3);
       }
@@ -25064,7 +25446,7 @@ var ProjectPlannerCanonical = (() => {
   function splitCsvRecords(textValue) {
     const records = [];
     let field = "";
-    let record19 = [];
+    let record22 = [];
     let quoted = false;
     const value = textValue.replace(/^﻿/, "");
     for (let i = 0; i < value.length; i += 1) {
@@ -25085,21 +25467,21 @@ var ProjectPlannerCanonical = (() => {
       if (char === '"') {
         quoted = true;
       } else if (char === ",") {
-        record19.push(field);
+        record22.push(field);
         field = "";
       } else if (char === "\n" || char === "\r") {
         if (char === "\r" && value[i + 1] === "\n") i += 1;
-        record19.push(field);
-        records.push(record19);
-        record19 = [];
+        record22.push(field);
+        records.push(record22);
+        record22 = [];
         field = "";
       } else {
         field += char;
       }
     }
-    if (field !== "" || record19.length > 0) {
-      record19.push(field);
-      records.push(record19);
+    if (field !== "" || record22.length > 0) {
+      record22.push(field);
+      records.push(record22);
     }
     return records;
   }
@@ -25327,6 +25709,8 @@ var ProjectPlannerCanonical = (() => {
     personal_site_audit: photosOnly(10 * MB),
     // 1.80.0: subcontractor insurance and RAMS documents.
     subcontractor_document: photosAndPdf(10 * MB),
+    // 1.83.0 (§31): organisation insurance and accreditation certificates.
+    org_compliance_document: photosAndPdf(10 * MB),
     // The 1.48.0 §28 catalogue import (`materialCatalogueCsvFileError` / `materialCatalogueCsvTextError` keep their own
     // messages on the import screens); listed here so the one table names every upload.
     material_catalogue_import: {
@@ -25460,13 +25844,13 @@ var ProjectPlannerCanonical = (() => {
     if (startsWith(bytes, [208, 207, 17, 224, 161, 177, 26, 225])) return "application/x-ole-storage";
     if (startsWith(bytes, [66, 77])) return "image/bmp";
     if (startsWith(bytes, [73, 73, 42, 0]) || startsWith(bytes, [77, 77, 0, 42])) return "image/tiff";
-    const text57 = ascii(bytes, 0, bytes.length);
-    const lead = text57.replace(/^(\uFEFF|\xEF\xBB\xBF)/, "").trimStart().toLowerCase();
+    const text63 = ascii(bytes, 0, bytes.length);
+    const lead = text63.replace(/^(\uFEFF|\xEF\xBB\xBF)/, "").trimStart().toLowerCase();
     if (lead.startsWith("<")) {
       return lead.includes("<svg") ? "image/svg+xml" : "text/html";
     }
-    const pdfAt = text57.indexOf("%PDF-");
-    if (pdfAt >= 0 && !text57.slice(0, pdfAt).includes("<")) return "application/pdf";
+    const pdfAt = text63.indexOf("%PDF-");
+    if (pdfAt >= 0 && !text63.slice(0, pdfAt).includes("<")) return "application/pdf";
     if (!bytes.includes(0)) {
       if (lead.includes("<svg")) return "image/svg+xml";
       if (lead.includes("<html") || lead.includes("<script")) return "text/html";
@@ -25655,11 +26039,11 @@ var ProjectPlannerCanonical = (() => {
     changed: "Changed",
     needsMark: "Changed \u2014 tick or cross it"
   };
-  function text40(value) {
+  function text41(value) {
     return value == null ? "" : String(value).trim();
   }
   function clock3(value) {
-    const minutes = parseClockMinutes(text40(value));
+    const minutes = parseClockMinutes(text41(value));
     return minutes == null ? "" : formatClockMinutes(minutes);
   }
   function multiplierOf3(value) {
@@ -25811,8 +26195,8 @@ var ProjectPlannerCanonical = (() => {
           booking: input.booking,
           organization: input.organization,
           timeZone: input.timeZone,
-          start: text40(input.booking.workStartTime),
-          end: text40(input.booking.workEndTime),
+          start: text41(input.booking.workStartTime),
+          end: text41(input.booking.workEndTime),
           multiplier: multiplierOf3(input.booking.otMultiplierOverride)
         });
         oldFigure = preview.beforeText;
@@ -25883,19 +26267,19 @@ var ProjectPlannerCanonical = (() => {
   var PRICE_WORK_JOB_NUMBER_TOO_LONG_MESSAGE = "The job number can be up to 60 characters.";
   var PRICE_WORK_JOB_NUMBER_MISSING_TEXT = "\u2014";
   var PRICE_WORK_JOB_NUMBER_LABEL = "Job number";
-  function text41(value) {
+  function text42(value) {
     if (value == null) return "";
     if (typeof value === "number" && Number.isFinite(value)) return String(value);
     return typeof value === "string" ? value.trim() : "";
   }
   function priceWorkJobNumberError(value) {
-    const job = text41(value);
+    const job = text42(value);
     if (!job) return PRICE_WORK_JOB_NUMBER_REQUIRED_MESSAGE;
     if (job.length > PRICE_WORK_JOB_NUMBER_MAX) return PRICE_WORK_JOB_NUMBER_TOO_LONG_MESSAGE;
     return null;
   }
   function priceWorkJobNumberText(value) {
-    return text41(value) || PRICE_WORK_JOB_NUMBER_MISSING_TEXT;
+    return text42(value) || PRICE_WORK_JOB_NUMBER_MISSING_TEXT;
   }
   var OWNER_ENTRY_FIELDS = {
     priceWork: ["title", "details", "jobNumber", "agreedManagerName", "amount"],
@@ -25906,13 +26290,13 @@ var ProjectPlannerCanonical = (() => {
     return value && typeof value === "object" && !Array.isArray(value) ? value : {};
   }
   function evidencePaths(value) {
-    return (Array.isArray(value) ? value : []).map((entry) => text41(record13(entry).path)).filter(Boolean);
+    return (Array.isArray(value) ? value : []).map((entry) => text42(record13(entry).path)).filter(Boolean);
   }
   function sameOwnerFields(a, b, kind) {
     for (const key8 of OWNER_ENTRY_FIELDS[kind]) {
       if (key8 === "amount") {
         if ((Number(a.amount) || 0) !== (Number(b.amount) || 0)) return false;
-      } else if (text41(a[key8]) !== text41(b[key8])) return false;
+      } else if (text42(a[key8]) !== text42(b[key8])) return false;
     }
     for (const key8 of OWNER_ENTRY_DATE_FIELDS[kind]) {
       if ((documentInstantMs(a[key8]) ?? null) !== (documentInstantMs(b[key8]) ?? null)) return false;
@@ -25982,7 +26366,7 @@ var ProjectPlannerCanonical = (() => {
   var PAYE_CLAIM_DETAILS_MAX = 4e3;
   var PAYE_CLAIM_AMOUNT_MAX = 1e6;
   var DAY_KEY10 = /^\d{4}-\d{2}-\d{2}$/;
-  function text42(value) {
+  function text43(value) {
     return value == null ? "" : String(value).trim();
   }
   function record14(value) {
@@ -26003,12 +26387,12 @@ var ProjectPlannerCanonical = (() => {
     return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
   }
   function storedDayKey2(value, timeZone) {
-    if (isDayKey3(text42(value))) return text42(value);
+    if (isDayKey3(text43(value))) return text43(value);
     const ms = documentInstantMs(value);
     return ms == null ? "" : dayKeyInZone(new Date(ms), timeZone);
   }
   function jobNumberText(value) {
-    return typeof value === "number" && Number.isFinite(value) ? String(value) : text42(value);
+    return typeof value === "number" && Number.isFinite(value) ? String(value) : text43(value);
   }
   function sameText(a, b) {
     return idKey(a) === idKey(b) && idKey(a) !== "";
@@ -26016,7 +26400,7 @@ var ProjectPlannerCanonical = (() => {
   function priceWorkApproverCandidates(person, roster, options) {
     if (!person || !idText(person.id)) return [];
     const rows3 = roster || [];
-    const org = text42(options?.organizationId);
+    const org = text43(options?.organizationId);
     return lineManagerCandidates(person, rows3).filter((candidate) => {
       const row3 = rows3.find((member) => idText(member?.id) === candidate.id);
       if (!row3) return false;
@@ -26026,12 +26410,12 @@ var ProjectPlannerCanonical = (() => {
   }
   var AGREED_MANAGER_SUGGESTIONS_MAX = 6;
   function agreedManagerSuggestions(query, person, roster, options) {
-    const needle = text42(query).toLowerCase();
+    const needle = text43(query).toLowerCase();
     if (!needle) return [];
     const names = [];
     const seen = /* @__PURE__ */ new Set();
     for (const candidate of priceWorkApproverCandidates(person, roster, options)) {
-      const name = text42(candidate.name);
+      const name = text43(candidate.name);
       const key8 = name.toLowerCase();
       if (!name || key8 === needle || seen.has(key8) || !key8.includes(needle)) continue;
       seen.add(key8);
@@ -26063,13 +26447,13 @@ var ProjectPlannerCanonical = (() => {
     });
   }
   function priceWorkValidationError(draft, context) {
-    if (!text42(draft.title)) return PAYE_CLAIM_TITLE_MESSAGE;
+    if (!text43(draft.title)) return PAYE_CLAIM_TITLE_MESSAGE;
     const job = priceWorkJobNumberError(draft.jobNumber);
     if (job) return job;
-    const start = text42(draft.startDate);
-    const end = text42(draft.endDate) || start;
+    const start = text43(draft.startDate);
+    const end = text43(draft.endDate) || start;
     if (!isDayKey3(start) || !isDayKey3(end) || end < start) return PRICE_WORK_DATES_MESSAGE;
-    const approver = text42(draft.approvedByUserId);
+    const approver = text43(draft.approvedByUserId);
     if (!approver) return PRICE_WORK_APPROVER_REQUIRED_MESSAGE;
     const candidates = priceWorkApproverCandidates(context.person, context.roster, { organizationId: context.organizationId });
     if (!candidates.some((row3) => row3.id === approver)) return PRICE_WORK_APPROVER_INVALID_MESSAGE;
@@ -26078,42 +26462,42 @@ var ProjectPlannerCanonical = (() => {
     return evidenceError(draft.evidence, { organizationId: context.organizationId ?? void 0, userId: context.organizationId != null ? context.person?.id : void 0 });
   }
   function expenseValidationError(draft, context) {
-    if (!text42(draft.title)) return PAYE_CLAIM_TITLE_MESSAGE;
-    if (!isDayKey3(text42(draft.date))) return PAYE_CLAIM_DATE_MESSAGE;
+    if (!text43(draft.title)) return PAYE_CLAIM_TITLE_MESSAGE;
+    if (!isDayKey3(text43(draft.date))) return PAYE_CLAIM_DATE_MESSAGE;
     const money2 = amountError(draft.amount);
     if (money2) return money2;
     if (!draft.evidence || draft.evidence.length === 0) return EXPENSE_EVIDENCE_REQUIRED_MESSAGE;
     return evidenceError(draft.evidence, { organizationId: context?.organizationId ?? void 0, userId: context?.userId ?? void 0 });
   }
   function payeClaimPersonFields(creatorUserId) {
-    const id2 = text42(creatorUserId);
+    const id2 = text43(creatorUserId);
     return id2 ? { personUserId: id2 } : {};
   }
   function payeClaimPersonUserIdBackfill(input) {
     const item = input.item;
-    if (!item || text42(item.personUserId)) return null;
+    if (!item || text43(item.personUserId)) return null;
     const key8 = idKey(item.userId);
     if (!key8) return null;
-    const users = (input.users || []).filter((row3) => row3 && text42(row3.id));
+    const users = (input.users || []).filter((row3) => row3 && text43(row3.id));
     const own = users.find((row3) => idKey(row3.id) === key8);
-    if (own) return { personUserId: text42(own.id) };
+    if (own) return { personUserId: text43(own.id) };
     const listed = (value) => Array.isArray(value) ? value.some((id2) => idKey(id2) === key8) : false;
     const claims = users.filter((row3) => listed(row3.formerUserIds) || listed(row3.sameEmailUserIds));
-    const ids = Array.from(new Set(claims.map((row3) => text42(row3.id))));
+    const ids = Array.from(new Set(claims.map((row3) => text43(row3.id))));
     return ids.length === 1 ? { personUserId: ids[0] } : null;
   }
   function priceWorkWriteFields(input) {
-    const userId = text42(input.userId);
+    const userId = text43(input.userId);
     if (!userId || idText(input.person?.id) !== userId) return null;
     if (priceWorkValidationError(input.draft, { person: input.person, roster: input.roster, organizationId: input.organizationId })) return null;
-    const start = text42(input.draft.startDate);
-    const end = text42(input.draft.endDate) || start;
-    const approver = priceWorkApproverCandidates(input.person, input.roster, { organizationId: input.organizationId }).find((row3) => row3.id === text42(input.draft.approvedByUserId));
+    const start = text43(input.draft.startDate);
+    const end = text43(input.draft.endDate) || start;
+    const approver = priceWorkApproverCandidates(input.person, input.roster, { organizationId: input.organizationId }).find((row3) => row3.id === text43(input.draft.approvedByUserId));
     return {
       userId,
-      title: text42(input.draft.title).slice(0, PAYE_CLAIM_TITLE_MAX),
-      details: text42(input.draft.details).slice(0, PAYE_CLAIM_DETAILS_MAX),
-      jobNumber: text42(input.draft.jobNumber).slice(0, PRICE_WORK_JOB_NUMBER_MAX),
+      title: text43(input.draft.title).slice(0, PAYE_CLAIM_TITLE_MAX),
+      details: text43(input.draft.details).slice(0, PAYE_CLAIM_DETAILS_MAX),
+      jobNumber: text43(input.draft.jobNumber).slice(0, PRICE_WORK_JOB_NUMBER_MAX),
       startDate: start,
       endDate: end,
       approvedByUserId: approver?.id ?? "",
@@ -26126,15 +26510,15 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function expenseWriteFields(input) {
-    const userId = text42(input.userId);
+    const userId = text43(input.userId);
     if (!userId) return null;
     if (expenseValidationError(input.draft, { organizationId: input.organizationId, userId })) return null;
     return {
       userId,
-      title: text42(input.draft.title).slice(0, PAYE_CLAIM_TITLE_MAX),
-      details: text42(input.draft.details).slice(0, PAYE_CLAIM_DETAILS_MAX),
-      jobNumber: text42(input.draft.jobNumber).slice(0, 60),
-      date: text42(input.draft.date),
+      title: text43(input.draft.title).slice(0, PAYE_CLAIM_TITLE_MAX),
+      details: text43(input.draft.details).slice(0, PAYE_CLAIM_DETAILS_MAX),
+      jobNumber: text43(input.draft.jobNumber).slice(0, 60),
+      date: text43(input.draft.date),
       amount: amountOf2(input.draft.amount),
       currency: normalizeCurrencyCode(input.currency) ?? "GBP",
       evidence: (input.draft.evidence || []).map(payeClaimEvidenceWriteFields),
@@ -26150,7 +26534,7 @@ var ProjectPlannerCanonical = (() => {
     for (const key8 of keys) {
       if (key8 === "evidence") {
         const nextEvidence = Array.isArray(next.evidence) ? next.evidence : [];
-        const same = claimEvidenceSameList(stored.evidence, nextEvidence) && stored.evidence.every((entry, index) => entry.name === text42(nextEvidence[index]?.name));
+        const same = claimEvidenceSameList(stored.evidence, nextEvidence) && stored.evidence.every((entry, index) => entry.name === text43(nextEvidence[index]?.name));
         if (!same) set.evidence = next.evidence;
         continue;
       }
@@ -26158,7 +26542,7 @@ var ProjectPlannerCanonical = (() => {
         if (round24(Number(current.amount)) !== round24(Number(next.amount))) set.amount = next.amount;
         continue;
       }
-      if (text42(current[key8]) !== text42(next[key8])) set[key8] = next[key8];
+      if (text43(current[key8]) !== text43(next[key8])) set[key8] = next[key8];
     }
     return { set, remove: [] };
   }
@@ -26208,16 +26592,16 @@ var ProjectPlannerCanonical = (() => {
   }
   function baseOf(docId, row3, organizationId) {
     return {
-      id: text42(docId),
-      userId: text42(row3.userId),
-      title: text42(row3.title),
-      details: text42(row3.details),
+      id: text43(docId),
+      userId: text43(row3.userId),
+      title: text43(row3.title),
+      details: text43(row3.details),
       amount: amountOf2(row3.amount) ?? 0,
       currency: normalizeCurrencyCode(row3.currency) ?? "",
       evidence: parsePayeClaimEvidence(row3.evidence, { userId: row3.userId, organizationId }),
       createdAtMs: documentInstantMs(row3.createdAt),
-      createdBy: text42(row3.createdBy),
-      personUserId: text42(row3.personUserId) || null
+      createdBy: text43(row3.createdBy),
+      personUserId: text43(row3.personUserId) || null
     };
   }
   function parsePriceWorkDocument(docId, data, options) {
@@ -26232,8 +26616,8 @@ var ProjectPlannerCanonical = (() => {
       jobNumber: jobNumberText(row3.jobNumber),
       startDate: a,
       endDate: b,
-      approvedByUserId: text42(row3.approvedByUserId),
-      approvedByName: text42(row3.approvedByName)
+      approvedByUserId: text43(row3.approvedByUserId),
+      approvedByName: text43(row3.approvedByName)
     };
   }
   function parseExpenseDocument(docId, data, options) {
@@ -26242,7 +26626,7 @@ var ProjectPlannerCanonical = (() => {
     return {
       ...baseOf(docId, row3, options?.organizationId),
       kind: "expense",
-      jobNumber: text42(row3.jobNumber),
+      jobNumber: text43(row3.jobNumber),
       date: storedDayKey2(row3.date, zone3)
     };
   }
@@ -26289,8 +26673,8 @@ var ProjectPlannerCanonical = (() => {
     return member ? rosterMemberActive(member) : true;
   }
   function canWritePayeClaim(viewerId, item) {
-    const viewer = text42(viewerId);
-    return Boolean(viewer) && Boolean(item) && text42(item?.userId) === viewer;
+    const viewer = text43(viewerId);
+    return Boolean(viewer) && Boolean(item) && text43(item?.userId) === viewer;
   }
   function timesheetClaimLatestSheets(sheets) {
     const latest = /* @__PURE__ */ new Map();
@@ -26316,7 +26700,7 @@ var ProjectPlannerCanonical = (() => {
           seen.add(idKey(entry.id));
           out.push({
             id: entry.id,
-            sheetId: text42(sheet.id),
+            sheetId: text43(sheet.id),
             kind,
             title: entry.title,
             details: entry.details,
@@ -26338,7 +26722,7 @@ var ProjectPlannerCanonical = (() => {
           seen.add(idKey(entry.id));
           out.push({
             id: entry.id,
-            sheetId: text42(sheet.id),
+            sheetId: text43(sheet.id),
             kind,
             title: entry.title,
             details: entry.details,
@@ -26369,12 +26753,12 @@ var ProjectPlannerCanonical = (() => {
       evidence: item.evidence.map((entry) => ({ ...entry }))
     }));
     return {
-      userId: text42(input.userId),
-      userName: text42(input.userName),
-      companyName: text42(input.companyName),
+      userId: text43(input.userId),
+      userName: text43(input.userName),
+      companyName: text43(input.companyName),
       kind: input.kind,
-      rangeStart: text42(input.rangeStart),
-      rangeEnd: text42(input.rangeEnd),
+      rangeStart: text43(input.rangeStart),
+      rangeEnd: text43(input.rangeEnd),
       currency: normalizeCurrencyCode(input.currency) ?? "GBP",
       items,
       totals: {
@@ -26382,37 +26766,37 @@ var ProjectPlannerCanonical = (() => {
         itemCount: items.length,
         evidenceCount: items.reduce((sum, item) => sum + item.evidence.length, 0)
       },
-      generatedBy: text42(input.generatedBy)
+      generatedBy: text43(input.generatedBy)
     };
   }
   function parsePayeClaimReportDocument(docId, data) {
     const row3 = record14(data);
-    const kind = text42(row3.kind) === "priceWork" ? "priceWork" : "expense";
+    const kind = text43(row3.kind) === "priceWork" ? "priceWork" : "expense";
     const owner = { userId: row3.userId };
     const items = (Array.isArray(row3.items) ? row3.items : []).map((raw) => {
       const r = record14(raw);
-      const start = isDayKey3(text42(r.startDate)) ? text42(r.startDate) : "";
+      const start = isDayKey3(text43(r.startDate)) ? text43(r.startDate) : "";
       return {
-        id: text42(r.id),
-        title: text42(r.title),
-        details: text42(r.details),
-        jobNumber: text42(r.jobNumber),
+        id: text43(r.id),
+        title: text43(r.title),
+        details: text43(r.details),
+        jobNumber: text43(r.jobNumber),
         startDate: start,
-        endDate: isDayKey3(text42(r.endDate)) ? text42(r.endDate) : start,
-        approvedByName: text42(r.approvedByName),
+        endDate: isDayKey3(text43(r.endDate)) ? text43(r.endDate) : start,
+        approvedByName: text43(r.approvedByName),
         amount: amountOf2(r.amount) ?? 0,
         evidence: parsePayeClaimEvidence(r.evidence, owner)
       };
     });
     const totals = record14(row3.totals);
     return {
-      id: text42(docId),
-      userId: text42(row3.userId),
-      userName: text42(row3.userName),
-      companyName: text42(row3.companyName),
+      id: text43(docId),
+      userId: text43(row3.userId),
+      userName: text43(row3.userName),
+      companyName: text43(row3.companyName),
       kind,
-      rangeStart: isDayKey3(text42(row3.rangeStart)) ? text42(row3.rangeStart) : "",
-      rangeEnd: isDayKey3(text42(row3.rangeEnd)) ? text42(row3.rangeEnd) : "",
+      rangeStart: isDayKey3(text43(row3.rangeStart)) ? text43(row3.rangeStart) : "",
+      rangeEnd: isDayKey3(text43(row3.rangeEnd)) ? text43(row3.rangeEnd) : "",
       currency: normalizeCurrencyCode(row3.currency) ?? "GBP",
       items,
       totals: {
@@ -26420,7 +26804,7 @@ var ProjectPlannerCanonical = (() => {
         itemCount: Number(totals.itemCount) || items.length,
         evidenceCount: Number(totals.evidenceCount) || items.reduce((sum, item) => sum + item.evidence.length, 0)
       },
-      generatedBy: text42(row3.generatedBy),
+      generatedBy: text43(row3.generatedBy),
       generatedAtMs: documentInstantMs(row3.generatedAt)
     };
   }
@@ -26434,21 +26818,21 @@ var ProjectPlannerCanonical = (() => {
     const priceWork = snapshot.kind === "priceWork";
     const rows3 = snapshot.items.map((item) => {
       const date = dateText(item.startDate, item.endDate);
-      const jobNumber = priceWork ? priceWorkJobNumberText(item.jobNumber) : text42(item.jobNumber);
-      const approvedBy = priceWork ? text42(item.approvedByName) : "";
+      const jobNumber = priceWork ? priceWorkJobNumberText(item.jobNumber) : text43(item.jobNumber);
+      const approvedBy = priceWork ? text43(item.approvedByName) : "";
       const evidenceNote = item.evidence.length > 0 ? `Evidence: ${item.evidence.length} (${item.evidence.map((entry) => entry.name).join(", ")})` : "";
       const amount = formatMoney(item.amount, snapshot.currency);
       return {
         heading: [date, jobNumber, item.title].filter(Boolean).join(" \xB7 "),
         figure: amount,
         lines: [item.details, approvedBy ? `Approved by ${approvedBy}` : "", evidenceNote].filter(Boolean),
-        itemId: text42(item.id),
+        itemId: text43(item.id),
         date,
         jobNumber,
-        name: text42(item.title),
+        name: text43(item.title),
         approvedBy,
         amount,
-        description: text42(item.details),
+        description: text43(item.details),
         evidenceNote
       };
     });
@@ -26456,8 +26840,8 @@ var ProjectPlannerCanonical = (() => {
     const totalLabel = priceWork ? PRICE_WORK_TOTAL_LABEL : EXPENSES_TOTAL_LABEL;
     const totalAmount = formatMoney(snapshot.totals.amount, snapshot.currency);
     const period = `${formatPaymentRunDay(snapshot.rangeStart)} \u2013 ${formatPaymentRunDay(snapshot.rangeEnd)}`;
-    const companyName = text42(snapshot.companyName);
-    const personName = text42(snapshot.userName);
+    const companyName = text43(snapshot.companyName);
+    const personName = text43(snapshot.userName);
     return {
       title: `${documentTitle} \xB7 ${personName}`,
       subtitle: period,
@@ -26501,13 +26885,13 @@ var ProjectPlannerCanonical = (() => {
           name: entry.name,
           contentType: entry.contentType,
           drawAs: payeClaimEvidenceDrawAs(entry),
-          itemName: text42(item.title) || "Untitled",
+          itemName: text43(item.title) || "Untitled",
           date,
-          jobNumber: priceWork ? priceWorkJobNumberText(item.jobNumber) : text42(item.jobNumber),
-          approvedBy: priceWork ? text42(item.approvedByName) : "",
+          jobNumber: priceWork ? priceWorkJobNumberText(item.jobNumber) : text43(item.jobNumber),
+          approvedBy: priceWork ? text43(item.approvedByName) : "",
           amount,
           evidenceTitle,
-          notes: [text42(item.details)].filter(Boolean)
+          notes: [text43(item.details)].filter(Boolean)
         });
       });
     }
@@ -26518,7 +26902,7 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/timesheetEntryEvidence.ts
-  function text43(value) {
+  function text44(value) {
     return value == null ? "" : String(value).trim();
   }
   var TIMESHEET_ENTRY_EDIT_LABEL = "Edit";
@@ -26578,8 +26962,8 @@ var ProjectPlannerCanonical = (() => {
         date = ex.dayKey ? formatPaymentRunDay(ex.dayKey) : "";
       }
       const amount = formatMoney(row3.amount, input.currency);
-      const jobNumber = priceWork ? priceWorkJobNumberText(row3.jobNumber || entry.jobNumber) : text43(row3.jobNumber || entry.jobNumber);
-      const approvedBy = priceWork ? text43(entry.agreedManagerName) : "";
+      const jobNumber = priceWork ? priceWorkJobNumberText(row3.jobNumber || entry.jobNumber) : text44(row3.jobNumber || entry.jobNumber);
+      const approvedBy = priceWork ? text44(entry.agreedManagerName) : "";
       entry.evidence.forEach((evidence, index) => {
         const evidenceTitle = `Evidence ${index + 1} of ${entry.evidence.length}: ${evidence.name}${evidence.kind === "personalSiteAudit" ? " (personal site audit copy)" : ""}`;
         out.push({
@@ -26596,7 +26980,7 @@ var ProjectPlannerCanonical = (() => {
           approvedBy,
           amount,
           evidenceTitle,
-          notes: [text43(entry.details)].filter(Boolean)
+          notes: [text44(entry.details)].filter(Boolean)
         });
       });
     }
@@ -26612,7 +26996,7 @@ var ProjectPlannerCanonical = (() => {
     approved: "Approved",
     rejected: "Rejected"
   };
-  function text44(value) {
+  function text45(value) {
     return value == null ? "" : String(value).trim();
   }
   function instantMs4(raw) {
@@ -26645,26 +27029,26 @@ var ProjectPlannerCanonical = (() => {
     return `Approved ${input.approved} of ${input.total}.${reasons.length > 0 ? ` ${reasons.join("; ")}.` : ""}`;
   }
   function payeClaimReviewDocId(kind, itemId) {
-    return `${kind === "expense" ? "expense" : "priceWork"}_${text44(itemId)}`;
+    return `${kind === "expense" ? "expense" : "priceWork"}_${text45(itemId)}`;
   }
   function payeClaimFingerprint(item) {
     if (!item) return "";
-    const dates = item.kind === "priceWork" ? `${text44(item.startDate)}~${text44(item.endDate)}` : text44(item.date);
+    const dates = item.kind === "priceWork" ? `${text45(item.startDate)}~${text45(item.endDate)}` : text45(item.date);
     const amount = (Math.round((Number(item.amount) || 0) * 100) / 100).toFixed(2);
-    return [item.kind, text44(item.title), text44(item.jobNumber), dates, amount, text44(item.currency).toUpperCase(), String((item.evidence || []).length)].join("|");
+    return [item.kind, text45(item.title), text45(item.jobNumber), dates, amount, text45(item.currency).toUpperCase(), String((item.evidence || []).length)].join("|");
   }
   function parsePayeClaimReviewDocument(docId, data) {
     const row3 = data && typeof data === "object" ? data : {};
     return {
-      id: text44(docId),
-      userId: text44(row3.userId),
-      itemId: text44(row3.itemId),
-      kind: text44(row3.kind) === "expense" ? "expense" : "priceWork",
-      decision: text44(row3.decision) === "approved" ? "approved" : "rejected",
-      fingerprint: text44(row3.fingerprint),
-      reviewedBy: text44(row3.reviewedBy) || null,
+      id: text45(docId),
+      userId: text45(row3.userId),
+      itemId: text45(row3.itemId),
+      kind: text45(row3.kind) === "expense" ? "expense" : "priceWork",
+      decision: text45(row3.decision) === "approved" ? "approved" : "rejected",
+      fingerprint: text45(row3.fingerprint),
+      reviewedBy: text45(row3.reviewedBy) || null,
       reviewedAtMs: instantMs4(row3.reviewedAt),
-      personUserId: text44(row3.personUserId) || null
+      personUserId: text45(row3.personUserId) || null
     };
   }
   function payeClaimReviewState(item, reviews) {
@@ -26685,7 +27069,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function payeClaimReviewWrites(input) {
     const ids = new Set((input.personIds || []).map(idKey).filter(Boolean));
-    const subjectUserId = text44(input.subjectUserId);
+    const subjectUserId = text45(input.subjectUserId);
     const decisions = new Map(Object.entries(input.decisions || {}).map(([key8, value]) => [idKey(key8), value]));
     const writes = [];
     const outcomes = {};
@@ -26710,12 +27094,12 @@ var ProjectPlannerCanonical = (() => {
         outcomes[item.id] = "unchanged";
       } else {
         const fields = {
-          userId: text44(item.userId),
-          itemId: text44(item.id),
+          userId: text45(item.userId),
+          itemId: text45(item.id),
           kind: item.kind,
           decision,
           fingerprint: payeClaimFingerprint(item),
-          reviewedBy: text44(input.reviewerId)
+          reviewedBy: text45(input.reviewerId)
         };
         if (subjectUserId && idKey(item.userId) !== idKey(subjectUserId)) fields.personUserId = subjectUserId;
         writes.push({ docId: payeClaimReviewDocId(item.kind, item.id), fields });
@@ -26735,7 +27119,7 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/reportIntegrity.ts
   var REPORT_CHECKS_COLLECTION = "reportChecks";
   var EPSILON = 0.011;
-  function text45(value) {
+  function text46(value) {
     return value == null ? "" : String(value).trim();
   }
   function round25(value) {
@@ -26750,31 +27134,31 @@ var ProjectPlannerCanonical = (() => {
   }
   var DAY = /^\d{4}-\d{2}-\d{2}$/;
   function clock24(value) {
-    const minutes = parseClockMinutes(text45(value));
+    const minutes = parseClockMinutes(text46(value));
     return minutes == null ? "" : formatClockMinutes(minutes);
   }
   function sameWords(a, b) {
-    return text45(a).toLowerCase().replace(/\s+/g, " ") === text45(b).toLowerCase().replace(/\s+/g, " ");
+    return text46(a).toLowerCase().replace(/\s+/g, " ") === text46(b).toLowerCase().replace(/\s+/g, " ");
   }
   function evidenceKeys(list) {
-    return (list || []).map((entry) => text45(entry?.path) || text45(entry?.name)).filter(Boolean).sort().join("|");
+    return (list || []).map((entry) => text46(entry?.path) || text46(entry?.name)).filter(Boolean).sort().join("|");
   }
   function headerProblems(report, context) {
     const out = [];
-    if (text45(report.userName) && text45(context.personName) && !sameWords(report.userName, context.personName)) {
+    if (text46(report.userName) && text46(context.personName) && !sameWords(report.userName, context.personName)) {
       out.push({
         code: "details_differ",
         recordId: "",
         severity: "mismatch",
-        message: `The report is for "${text45(report.userName)}"; the person is "${text45(context.personName)}".`
+        message: `The report is for "${text46(report.userName)}"; the person is "${text46(context.personName)}".`
       });
     }
-    if (text45(report.companyName) && text45(context.organizationName) && !sameWords(report.companyName, context.organizationName)) {
+    if (text46(report.companyName) && text46(context.organizationName) && !sameWords(report.companyName, context.organizationName)) {
       out.push({
         code: "details_differ",
         recordId: "",
         severity: "mismatch",
-        message: `The report names the company "${text45(report.companyName)}"; the organisation is "${text45(context.organizationName)}".`
+        message: `The report names the company "${text46(report.companyName)}"; the organisation is "${text46(context.organizationName)}".`
       });
     }
     return out;
@@ -26782,7 +27166,7 @@ var ProjectPlannerCanonical = (() => {
   var ZERO_STATES = /* @__PURE__ */ new Set(["returnedDeclined", "deleted"]);
   var ZERO_DECISIONS = /* @__PURE__ */ new Set(["declined", "deleted", "cancelled"]);
   function bookingFromFingerprint(id2, fingerprint) {
-    const parts3 = text45(fingerprint).split("|");
+    const parts3 = text46(fingerprint).split("|");
     if (parts3.length < 7 || !/^\d{4}-\d{2}-\d{2}$/.test(parts3[0])) return null;
     const rate = parts3[4] === "" ? null : Number(parts3[4]);
     return {
@@ -26825,10 +27209,10 @@ var ProjectPlannerCanonical = (() => {
     const bookings = new Map((input.bookings || []).filter(Boolean).map((booking) => [idKey(booking.id), booking]));
     problems.push(...headerProblems(report, input));
     const personKeys = input.personIds && input.personIds.length ? new Set(input.personIds.map(idKey).filter(Boolean)) : null;
-    const names = new Map(Object.entries(input.reviewerNames || {}).map(([uid, name]) => [idKey(uid), text45(name)]));
+    const names = new Map(Object.entries(input.reviewerNames || {}).map(([uid, name]) => [idKey(uid), text46(name)]));
     const seen = /* @__PURE__ */ new Set();
-    const rangeStart = text45(report.rangeStart);
-    const rangeEnd = text45(report.rangeEnd);
+    const rangeStart = text46(report.rangeStart);
+    const rangeEnd = text46(report.rangeEnd);
     const hasRange = DAY.test(rangeStart) && DAY.test(rangeEnd);
     if (!hasRange) {
       problems.push({ code: "outside_range", recordId: "", severity: "mismatch", message: "The report has no valid date range." });
@@ -26855,7 +27239,7 @@ var ProjectPlannerCanonical = (() => {
         continue;
       }
       seen.add(key8);
-      const state = text45(line.state);
+      const state = text46(line.state);
       const zero = ZERO_STATES.has(state) || line.declined === true;
       if (zero && line.overtimeHours > EPSILON) {
         problems.push({
@@ -26865,7 +27249,7 @@ var ProjectPlannerCanonical = (() => {
           message: `${label}: a declined or removed line counts ${line.overtimeHours}h (it should be 0h).`
         });
       }
-      const fingerprint = text45(line.fingerprint);
+      const fingerprint = text46(line.fingerprint);
       const review = reviews.find((row3) => idKey(row3.bookingId) === key8 && idKey(row3.userId) === idKey(report.userId));
       const selfReviewed = review != null && review.reviewedBy != null && idKey(review.reviewedBy) === idKey(report.userId);
       const live = bookings.get(key8);
@@ -26937,18 +27321,18 @@ var ProjectPlannerCanonical = (() => {
             code: "details_differ",
             recordId: id2,
             severity: "mismatch",
-            message: `${label}: declined by "${text45(line.declinedByName)}" on the report; the decision was ${knownName ? `"${knownName}"'s` : "not named"}.`
+            message: `${label}: declined by "${text46(line.declinedByName)}" on the report; the decision was ${knownName ? `"${knownName}"'s` : "not named"}.`
           });
         }
         const note = declinedLine ? knownName !== void 0 ? `Declined by ${knownName || "your line manager"}` : "" : state === "deleted" ? OVERTIME_LINE_STATE_LABELS.deleted : "";
         const expectedZeroText = note ? `${note} \xB7 0h` : "";
-        const textOk = expectedZeroText ? sameWords(line.text, expectedZeroText) : declinedLine ? /^Declined by .+ · 0h$/.test(text45(line.text)) : /(^|·\s*)0h$/.test(text45(line.text));
+        const textOk = expectedZeroText ? sameWords(line.text, expectedZeroText) : declinedLine ? /^Declined by .+ · 0h$/.test(text46(line.text)) : /(^|·\s*)0h$/.test(text46(line.text));
         if (!textOk) {
           problems.push({
             code: "text_differs",
             recordId: id2,
             severity: "mismatch",
-            message: `${label}: a 0h line prints "${text45(line.text)}"${expectedZeroText ? `; expected "${expectedZeroText}"` : ""}.`
+            message: `${label}: a 0h line prints "${text46(line.text)}"${expectedZeroText ? `; expected "${expectedZeroText}"` : ""}.`
           });
         }
       }
@@ -26959,7 +27343,7 @@ var ProjectPlannerCanonical = (() => {
           severity: "mismatch",
           message: `${label}: the line does not say which booking it was priced from.`
         });
-        if (!inRange2(text45(line.dayKey))) outOfRange(id2, label);
+        if (!inRange2(text46(line.dayKey))) outOfRange(id2, label);
         continue;
       }
       if (review && !overtimeFingerprintsMatch(review.fingerprint, fingerprint)) {
@@ -26987,13 +27371,13 @@ var ProjectPlannerCanonical = (() => {
           severity: "mismatch",
           message: `${label}: the line's booking fingerprint cannot be read.`
         });
-        if (!inRange2(text45(line.dayKey))) outOfRange(id2, label);
+        if (!inRange2(text46(line.dayKey))) outOfRange(id2, label);
         continue;
       }
       if (!inRange2(booking.dayKey)) outOfRange(id2, label);
       const details = [];
-      if (text45(line.dayKey) !== text45(booking.dayKey)) details.push("day");
-      if (text45(line.dayLabel) && text45(line.dayLabel) !== formatPaymentRunDay(booking.dayKey)) details.push("day label");
+      if (text46(line.dayKey) !== text46(booking.dayKey)) details.push("day");
+      if (text46(line.dayLabel) && text46(line.dayLabel) !== formatPaymentRunDay(booking.dayKey)) details.push("day label");
       if (clock24(line.start) !== clock24(booking.workStartTime) || clock24(line.end) !== clock24(booking.workEndTime)) {
         details.push("start or finish");
       }
@@ -27006,28 +27390,28 @@ var ProjectPlannerCanonical = (() => {
         });
       }
       if (liveMatches && live && live.jobId !== void 0) {
-        const jobId = text45(live.jobId);
-        const sameJob = jobId ? sameWords(line.jobNumber, live.jobNumber) && (!text45(line.jobName) || sameWords(line.jobName, live.jobName)) : !text45(line.jobNumber) && (!text45(line.jobName) || sameWords(line.jobName, live.customLocationName));
+        const jobId = text46(live.jobId);
+        const sameJob = jobId ? sameWords(line.jobNumber, live.jobNumber) && (!text46(line.jobName) || sameWords(line.jobName, live.jobName)) : !text46(line.jobNumber) && (!text46(line.jobName) || sameWords(line.jobName, live.customLocationName));
         if (!sameJob) {
           problems.push({
             code: "job_differs",
             recordId: id2,
             severity: "mismatch",
-            message: `${label}: the report names job "${[line.jobNumber, line.jobName].filter(Boolean).join(" ")}"; the booking is on ${jobId ? `"${[live.jobNumber, live.jobName].filter(Boolean).join(" ")}"` : text45(live.customLocationName) ? `"${text45(live.customLocationName)}"` : "no job"}.`
+            message: `${label}: the report names job "${[line.jobNumber, line.jobName].filter(Boolean).join(" ")}"; the booking is on ${jobId ? `"${[live.jobNumber, live.jobName].filter(Boolean).join(" ")}"` : text46(live.customLocationName) ? `"${text46(live.customLocationName)}"` : "no job"}.`
           });
         }
       }
       if (zeroLine) continue;
       const figures = overtimeForBooking({ booking, organization: input.organization, timeZone: input.timeZone });
       const priced = figures ? figures.overtimeHours : 0;
-      const clock5 = figures ? figures.clockHours : 0;
+      const clock6 = figures ? figures.clockHours : 0;
       const multiplier = figures ? figures.multiplier : null;
-      if (Math.abs(clock5 - line.clockHours) > EPSILON || multiplier != null && Math.abs(multiplier - line.multiplier) > 1e-3) {
+      if (Math.abs(clock6 - line.clockHours) > EPSILON || multiplier != null && Math.abs(multiplier - line.multiplier) > 1e-3) {
         problems.push({
           code: "clock_differs",
           recordId: id2,
           severity: "mismatch",
-          message: `${label}: the report says ${line.clockHours}h \xD7 ${line.multiplier}; the booking gives ${clock5}h \xD7 ${multiplier ?? "\u2014"}.`
+          message: `${label}: the report says ${line.clockHours}h \xD7 ${line.multiplier}; the booking gives ${clock6}h \xD7 ${multiplier ?? "\u2014"}.`
         });
       }
       if (Math.abs(priced - line.overtimeHours) > EPSILON) {
@@ -27038,13 +27422,13 @@ var ProjectPlannerCanonical = (() => {
           message: `${label}: the report says ${line.overtimeHours}h; the booking gives ${priced}h.`
         });
       }
-      const expectedText = figures ? text45(figures.text) : "";
-      if (text45(line.text) !== expectedText) {
+      const expectedText = figures ? text46(figures.text) : "";
+      if (text46(line.text) !== expectedText) {
         problems.push({
           code: "text_differs",
           recordId: id2,
           severity: "mismatch",
-          message: `${label}: the report prints "${text45(line.text)}"; the booking gives "${expectedText}".`
+          message: `${label}: the report prints "${text46(line.text)}"; the booking gives "${expectedText}".`
         });
       }
       recomputed += priced;
@@ -27082,8 +27466,8 @@ var ProjectPlannerCanonical = (() => {
         message: `The report says ${storedCount} items but lists ${report.items.length}.`
       });
     }
-    const rangeStart = text45(report.rangeStart);
-    const rangeEnd = text45(report.rangeEnd);
+    const rangeStart = text46(report.rangeStart);
+    const rangeEnd = text46(report.rangeEnd);
     const hasRange = DAY.test(rangeStart) && DAY.test(rangeEnd);
     if (!hasRange) {
       problems.push({ code: "outside_range", recordId: "", severity: "mismatch", message: "The report has no valid date range." });
@@ -27092,7 +27476,7 @@ var ProjectPlannerCanonical = (() => {
     problems.push(...headerProblems(report, input));
     if (input.organization !== void 0) {
       const orgCurrency = resolveOrganizationCurrency(input.organization);
-      if (orgCurrency && text45(report.currency) !== orgCurrency) {
+      if (orgCurrency && text46(report.currency) !== orgCurrency) {
         problems.push({
           code: "currency_differs",
           recordId: "",
@@ -27161,7 +27545,7 @@ var ProjectPlannerCanonical = (() => {
       if (!sameWords(entry.details, item.details)) details.push("description");
       if (item.kind === "priceWork" && !sameWords(entry.approvedByName, item.approvedByName)) details.push("approver");
       if (evidenceKeys(entry.evidence) !== evidenceKeys(item.evidence)) details.push("evidence");
-      if (text45(entry.startDate) !== text45(itemStart) || text45(entry.endDate || entry.startDate) !== text45(itemEnd)) details.push("dates");
+      if (text46(entry.startDate) !== text46(itemStart) || text46(entry.endDate || entry.startDate) !== text46(itemEnd)) details.push("dates");
       if (details.length) {
         problems.push({
           code: "details_differ",
@@ -27170,7 +27554,7 @@ var ProjectPlannerCanonical = (() => {
           message: `"${label}": the ${details.join(", ")} printed on the report ${details.length > 1 ? "are" : "is"} not the stored item's.`
         });
       }
-      if (text45(item.currency) && text45(item.currency) !== text45(report.currency)) {
+      if (text46(item.currency) && text46(item.currency) !== text46(report.currency)) {
         problems.push({
           code: "currency_differs",
           recordId: entry.id,
@@ -27207,7 +27591,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function reportCheckWriteFields(input) {
     return {
-      reportId: text45(input.reportId),
+      reportId: text46(input.reportId),
       collection: input.collection,
       kind: input.result.kind,
       userId: input.result.userId,
@@ -27220,21 +27604,21 @@ var ProjectPlannerCanonical = (() => {
   function parseReportCheckDocument(docId, data) {
     const row3 = record15(data);
     return {
-      id: text45(docId),
-      reportId: text45(row3.reportId) || text45(docId),
-      collection: text45(row3.collection),
-      kind: text45(row3.kind),
-      userId: text45(row3.userId),
+      id: text46(docId),
+      reportId: text46(row3.reportId) || text46(docId),
+      collection: text46(row3.collection),
+      kind: text46(row3.kind),
+      userId: text46(row3.userId),
       ok: row3.ok === true,
       reportedTotal: storedNumber(row3.reportedTotal) ?? 0,
       recomputedTotal: storedNumber(row3.recomputedTotal) ?? 0,
       problems: (Array.isArray(row3.problems) ? row3.problems : []).map((raw) => {
         const p = record15(raw);
         return {
-          code: text45(p.code),
-          recordId: text45(p.recordId),
-          message: text45(p.message),
-          severity: text45(p.severity) === "note" ? "note" : "mismatch"
+          code: text46(p.code),
+          recordId: text46(p.recordId),
+          message: text46(p.message),
+          severity: text46(p.severity) === "note" ? "note" : "mismatch"
         };
       })
     };
@@ -27250,9 +27634,9 @@ var ProjectPlannerCanonical = (() => {
   var SQUARE = { width: 1280, height: 1280 };
   var PANORAMA = { width: 4e3, height: 600 };
   var AT = Date.UTC(2026, 10, 17, 9, 30);
-  var repeat = (text57, length) => {
+  var repeat = (text63, length) => {
     let out = "";
-    while (out.length < length) out += text57;
+    while (out.length < length) out += text63;
     return out.slice(0, length);
   };
   var SITE_AUDIT_REPORT_FIXTURE_INPUTS = [
@@ -27451,10 +27835,10 @@ var ProjectPlannerCanonical = (() => {
   }
   function siteAuditFieldCounter(field, value, options) {
     const max = SITE_AUDIT_FIELD_LIMITS[field];
-    const count = siteAuditFieldLength(value);
-    const over = count > max;
+    const count2 = siteAuditFieldLength(value);
+    const over = count2 > max;
     const unchanged = options?.stored !== void 0 && String(options.stored ?? "") === String(value ?? "");
-    return { count, max, label: `${count} / ${max}`, over, blocksSave: over && !unchanged };
+    return { count: count2, max, label: `${count2} / ${max}`, over, blocksSave: over && !unchanged };
   }
   function siteAuditFieldLimitError(fields, stored) {
     for (const field of Object.keys(SITE_AUDIT_FIELD_LIMITS)) {
@@ -27483,7 +27867,7 @@ var ProjectPlannerCanonical = (() => {
   var EXTRA_LATIN = { \u0142: "l", \u0141: "L", \u0111: "d", \u0110: "D", \u0127: "h", \u0126: "H", \u0131: "i", \u00F8: "\xF8", \u00D8: "\xD8" };
   function siteAuditReportText(value) {
     const table = widthTable(false);
-    const drawable = (text57) => text57.length > 0 && Array.from(text57).every((c) => table.has(c.codePointAt(0) ?? 0));
+    const drawable = (text63) => text63.length > 0 && Array.from(text63).every((c) => table.has(c.codePointAt(0) ?? 0));
     const source = String(value ?? "").normalize("NFC").replace(/\r\n?/g, "\n").replace(/\t/g, " ");
     let out = "";
     for (const cluster of siteAuditGraphemes(source)) {
@@ -27526,23 +27910,23 @@ var ProjectPlannerCanonical = (() => {
     return out;
   }
   function siteAuditReportFitLine(value, size, maxWidth, bold = false) {
-    const text57 = siteAuditReportText(value).replace(/\n/g, " ");
-    if (siteAuditReportTextWidth(text57, size, bold) <= maxWidth + 0.01) return text57;
-    const chars = Array.from(text57);
+    const text63 = siteAuditReportText(value).replace(/\n/g, " ");
+    if (siteAuditReportTextWidth(text63, size, bold) <= maxWidth + 0.01) return text63;
+    const chars = Array.from(text63);
     while (chars.length > 0 && siteAuditReportTextWidth(chars.join("") + "\u2026", size, bold) > maxWidth + 0.01) chars.pop();
     return chars.join("").trimEnd() + "\u2026";
   }
-  function siteAuditReportTextWidth(text57, size, bold = false) {
+  function siteAuditReportTextWidth(text63, size, bold = false) {
     const table = widthTable(bold);
     let units = 0;
-    for (const ch of Array.from(text57)) units += table.get(ch.codePointAt(0) ?? 0) ?? 556;
+    for (const ch of Array.from(text63)) units += table.get(ch.codePointAt(0) ?? 0) ?? 556;
     return units * size / 1e3;
   }
   function wrapSiteAuditReportText(value, size, maxWidth, bold = false) {
-    const text57 = siteAuditReportText(value);
+    const text63 = siteAuditReportText(value);
     const fits = (line) => siteAuditReportTextWidth(line, size, bold) <= maxWidth + 0.01;
     const lines = [];
-    for (const paragraph of text57.split("\n")) {
+    for (const paragraph of text63.split("\n")) {
       const words = paragraph.split(" ");
       let line = "";
       for (const word of words) {
@@ -27647,9 +28031,9 @@ var ProjectPlannerCanonical = (() => {
     });
     return top + lines.length * lineHeight;
   }
-  function flowLine(b, text57, x, size, lineHeight, bold, color) {
+  function flowLine(b, text63, x, size, lineHeight, bold, color) {
     if (b.y + lineHeight > BODY_BOTTOM) b.newPage();
-    textOps(b.ops, [text57], x, b.y, size, lineHeight, bold, color);
+    textOps(b.ops, [text63], x, b.y, size, lineHeight, bold, color);
     b.y += lineHeight;
   }
   var SITE_AUDIT_REPORT_LOGO_BOX = Object.freeze({
@@ -27662,16 +28046,16 @@ var ProjectPlannerCanonical = (() => {
   function siteAuditReportLogoPlacement(logo) {
     if (!logo || !(logo.width > 0) || !(logo.height > 0) || !Number.isFinite(logo.width) || !Number.isFinite(logo.height)) return null;
     const box = SITE_AUDIT_REPORT_LOGO_BOX;
-    const pad4 = SITE_AUDIT_REPORT_LOGO_PADDING;
-    const scale = Math.min((box.w - pad4 * 2) / logo.width, (box.h - pad4 * 2) / logo.height);
+    const pad5 = SITE_AUDIT_REPORT_LOGO_PADDING;
+    const scale = Math.min((box.w - pad5 * 2) / logo.width, (box.h - pad5 * 2) / logo.height);
     const w = round6(logo.width * scale);
     const h4 = round6(logo.height * scale);
-    const tileW = round6(w + pad4 * 2);
-    const tileH = round6(h4 + pad4 * 2);
+    const tileW = round6(w + pad5 * 2);
+    const tileH = round6(h4 + pad5 * 2);
     const tileX = round6(box.x + box.w - tileW);
     return {
       tile: { x: tileX, y: box.y, w: tileW, h: tileH },
-      image: { x: round6(tileX + pad4), y: round6(box.y + pad4), w, h: h4 }
+      image: { x: round6(tileX + pad5), y: round6(box.y + pad5), w, h: h4 }
     };
   }
   function siteAuditReportLayout(input) {
@@ -27698,10 +28082,10 @@ var ProjectPlannerCanonical = (() => {
     const headerTextW = W - MARGIN - 150;
     const subtitle = `${jobNumber} \xB7 ${str(input.siteAddress) || str(audit.projectName)}`;
     const leftLines = [{ text: "SITE AUDIT REPORT", size: 9, lh: 14, bold: true, color: C.whiteSoft, gap: 0 }];
-    wrapSiteAuditReportText(type, 22, headerTextW, true).forEach((text57, i) => leftLines.push({ text: text57, size: 22, lh: 26, bold: true, color: C.white, gap: i === 0 ? 2 : 0 }));
-    wrapSiteAuditReportText(subtitle, 12, headerTextW).forEach((text57, i) => leftLines.push({ text: text57, size: 12, lh: 15, bold: false, color: C.whiteSoft, gap: i === 0 ? 4 : 0 }));
+    wrapSiteAuditReportText(type, 22, headerTextW, true).forEach((text63, i) => leftLines.push({ text: text63, size: 22, lh: 26, bold: true, color: C.white, gap: i === 0 ? 2 : 0 }));
+    wrapSiteAuditReportText(subtitle, 12, headerTextW).forEach((text63, i) => leftLines.push({ text: text63, size: 12, lh: 15, bold: false, color: C.whiteSoft, gap: i === 0 ? 4 : 0 }));
     if (str(audit.customTitle)) {
-      wrapSiteAuditReportText(str(audit.customTitle), 10.5, headerTextW).forEach((text57) => leftLines.push({ text: text57, size: 10.5, lh: 13, bold: false, color: C.whiteSoft, gap: 0 }));
+      wrapSiteAuditReportText(str(audit.customTitle), 10.5, headerTextW).forEach((text63) => leftLines.push({ text: text63, size: 10.5, lh: 13, bold: false, color: C.whiteSoft, gap: 0 }));
     }
     const orgLines = wrapSiteAuditReportText(orgName, 10, 110, true);
     const leftHeight = 24 + leftLines.reduce((sum, line) => sum + line.gap + line.lh, 0) + 20;
@@ -27769,8 +28153,8 @@ var ProjectPlannerCanonical = (() => {
       if (b.y + 14 + 15 > BODY_BOTTOM) breakBand(b.y);
       [0, 1].forEach((col) => textOps(b.ops, [pairs[row3 * 2 + col][0].toUpperCase()], MARGIN + col * (colW + 18), b.y, 8, 11, true, C.muted));
       b.y += 14;
-      const count2 = Math.max(cells[0].length, cells[1].length);
-      for (let i = 0; i < count2; i += 1) {
+      const count3 = Math.max(cells[0].length, cells[1].length);
+      for (let i = 0; i < count3; i += 1) {
         if (b.y + 15 > BODY_BOTTOM) breakBand(b.y);
         [0, 1].forEach((col) => {
           const line = cells[col][i];
@@ -27782,10 +28166,10 @@ var ProjectPlannerCanonical = (() => {
     b.y += 24;
     closeBand(b.y);
     b.y += 16;
-    const count = audit.items.length;
+    const count2 = audit.items.length;
     if (b.y + 36 + 120 > BODY_BOTTOM) b.newPage();
     b.ops.push({ kind: "rect", x: MARGIN, y: round6(b.y), w: 24, h: 3, fill: C.accent });
-    textOps(b.ops, [`SITE OBSERVATIONS \xB7 ${count} ITEM${count === 1 ? "" : "S"}`], MARGIN, b.y + 10, 13, 16, true, C.ink);
+    textOps(b.ops, [`SITE OBSERVATIONS \xB7 ${count2} ITEM${count2 === 1 ? "" : "S"}`], MARGIN, b.y + 10, 13, 16, true, C.ink);
     b.y += 36;
     audit.items.forEach((item, index) => layoutItem(b, item, index + 1, contentW, zone3));
     if (b.y + 96 > BODY_BOTTOM) b.newPage();
@@ -27834,12 +28218,12 @@ var ProjectPlannerCanonical = (() => {
     const C = SITE_AUDIT_REPORT_COLORS;
     const x = MARGIN;
     const photo = siteAuditReportPhotoBox(item.photo);
-    const pad4 = 14;
-    const detailX = photo ? x + pad4 + PHOTO_COLUMN + pad4 : x + pad4;
-    const detailW = photo ? contentW - PHOTO_COLUMN - pad4 * 3 : contentW - pad4 * 2;
+    const pad5 = 14;
+    const detailX = photo ? x + pad5 + PHOTO_COLUMN + pad5 : x + pad5;
+    const detailW = photo ? contentW - PHOTO_COLUMN - pad5 * 3 : contentW - pad5 * 2;
     const taken = `Taken ${dateText2(siteAuditItemTakenMs(item), zone3, true)}`;
     const takenW = siteAuditReportTextWidth(siteAuditReportText(taken), 9);
-    const titleW = contentW - 44 - pad4 - takenW - 10;
+    const titleW = contentW - 44 - pad5 - takenW - 10;
     const title = str(item.title) || "Untitled item";
     const allTitleLines = wrapSiteAuditReportText(title, 12, titleW, true);
     const titleLines = allTitleLines.slice(0, ITEM_TITLE_HEADER_LINES);
@@ -27859,22 +28243,22 @@ var ProjectPlannerCanonical = (() => {
     });
     const linesHeight = (from, to) => lines.slice(from, to).reduce((sum, line) => sum + line.gapBefore + line.height, 0);
     const freshSpace = BODY_BOTTOM - CONTENT_TOP;
-    const fullHeight = headerH + pad4 + Math.max(photo?.h ?? 0, linesHeight(0, lines.length)) + pad4;
+    const fullHeight = headerH + pad5 + Math.max(photo?.h ?? 0, linesHeight(0, lines.length)) + pad5;
     if (b.y + fullHeight > BODY_BOTTOM && fullHeight <= freshSpace) b.newPage();
-    else if (fullHeight > freshSpace && b.y + headerH + pad4 + (photo?.h ?? 14) + pad4 > BODY_BOTTOM) b.newPage();
+    else if (fullHeight > freshSpace && b.y + headerH + pad5 + (photo?.h ?? 14) + pad5 > BODY_BOTTOM) b.newPage();
     let next = 0;
     let segment2 = 0;
     while (segment2 === 0 || next < lines.length) {
       const top = b.y;
       const continued = segment2 > 0;
       const segHeaderH = continued ? 30 : headerH;
-      const bodyTop = top + segHeaderH + pad4;
-      const room = BODY_BOTTOM - pad4 - bodyTop;
+      const bodyTop = top + segHeaderH + pad5;
+      const room = BODY_BOTTOM - pad5 - bodyTop;
       let end = next;
       while (end < lines.length && linesHeight(next, end + 1) <= room) end += 1;
       if (end === next && next < lines.length) end = next + 1;
       const bodyH = Math.max(segment2 === 0 ? photo?.h ?? 0 : 0, linesHeight(next, end));
-      const cardH = segHeaderH + pad4 + bodyH + pad4;
+      const cardH = segHeaderH + pad5 + bodyH + pad5;
       b.ops.push({ kind: "rect", x, y: round6(top), w: contentW, h: round6(cardH), fill: C.white, stroke: C.border, radius: 8 });
       b.ops.push({ kind: "rect", x, y: round6(top), w: contentW, h: round6(segHeaderH), fill: C.soft, radius: 8 });
       b.ops.push({ kind: "line", x1: x, y1: round6(top + segHeaderH), x2: x + contentW, y2: round6(top + segHeaderH), color: C.border, width: 1 });
@@ -27885,8 +28269,8 @@ var ProjectPlannerCanonical = (() => {
         textOps(b.ops, [SITE_AUDIT_REPORT_CONTINUED], x + 44, top + 8, 11, 14, true, C.ink);
       } else {
         textOps(b.ops, titleLines, x + 44, top + 10, 12, 15, true, C.ink);
-        textOps(b.ops, [siteAuditReportText(taken)], x + contentW - pad4 - takenW, top + 11, 9, 12, false, C.muted);
-        if (photo) b.ops.push({ kind: "image", ref: item.id, x: x + pad4, y: round6(bodyTop), w: photo.w, h: photo.h });
+        textOps(b.ops, [siteAuditReportText(taken)], x + contentW - pad5 - takenW, top + 11, 9, 12, false, C.muted);
+        if (photo) b.ops.push({ kind: "image", ref: item.id, x: x + pad5, y: round6(bodyTop), w: photo.w, h: photo.h });
       }
       let ly = bodyTop;
       for (let i = next; i < end; i += 1) {
@@ -27963,7 +28347,7 @@ var ProjectPlannerCanonical = (() => {
   var PERSONAL_SITE_AUDIT_ITEMS_MAX = 100;
   var PERSONAL_SITE_AUDIT_PRIVACY_NOTICE = "Personal site audits are private to the person who created them. A copy attached to an expense or price work item is visible to that person\u2019s line managers and admins, and is kept for recovery if the item is later removed.";
   var DAY_KEY11 = /^\d{4}-\d{2}-\d{2}$/;
-  function text46(value) {
+  function text47(value) {
     return value == null ? "" : String(value).trim();
   }
   function record16(value) {
@@ -27976,7 +28360,7 @@ var ProjectPlannerCanonical = (() => {
     return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
   }
   function personalSiteAuditImagePath(input) {
-    const parts3 = [text46(input.organizationId), text46(input.ownerUserId), text46(input.auditId)];
+    const parts3 = [text47(input.organizationId), text47(input.ownerUserId), text47(input.auditId)];
     if (parts3.some((part) => !part || part.includes("/"))) return null;
     const name = storedFileObjectName({ uid: parts3[1], unixMs: input.unixMs, extension: input.extension });
     return name ? `organizations/${parts3[0]}/${PERSONAL_SITE_AUDITS_COLLECTION}/${parts3[1]}/${parts3[2]}/${name}` : null;
@@ -27989,28 +28373,28 @@ var ProjectPlannerCanonical = (() => {
     if (input.kind === "personal") {
       return personalSiteAuditImagePath({ organizationId: input.organizationId, ownerUserId: input.userId, auditId: input.auditId, unixMs, extension: input.extension });
     }
-    const org = text46(input.organizationId);
-    const audit = text46(input.auditId);
+    const org = text47(input.organizationId);
+    const audit = text47(input.auditId);
     if (!org || !audit || org.includes("/") || audit.includes("/")) return null;
-    const name = storedFileObjectName({ uid: text46(input.userId), unixMs, extension: input.extension });
+    const name = storedFileObjectName({ uid: text47(input.userId), unixMs, extension: input.extension });
     return name ? `organizations/${org}/siteAudits/${audit}/images/${name}` : null;
   }
   function canViewPersonalSiteAudit(viewerUserId, audit) {
-    const viewer = text46(viewerUserId);
-    return Boolean(viewer) && text46(audit?.ownerUserId) === viewer;
+    const viewer = text47(viewerUserId);
+    return Boolean(viewer) && text47(audit?.ownerUserId) === viewer;
   }
   function personalSiteAuditValidationError(draft, context) {
-    if (!text46(draft.jobName)) return PERSONAL_SITE_AUDIT_JOB_NAME_MESSAGE;
-    const limit = siteAuditFieldLimitError({ jobNumber: text46(draft.jobNumber), jobName: text46(draft.jobName) });
+    if (!text47(draft.jobName)) return PERSONAL_SITE_AUDIT_JOB_NAME_MESSAGE;
+    const limit = siteAuditFieldLimitError({ jobNumber: text47(draft.jobNumber), jobName: text47(draft.jobName) });
     if (limit) return limit;
-    if (!isDayKey4(text46(draft.date))) return PERSONAL_SITE_AUDIT_DATE_MESSAGE;
+    if (!isDayKey4(text47(draft.date))) return PERSONAL_SITE_AUDIT_DATE_MESSAGE;
     const items = draft.items || [];
     if (items.length === 0 || items.length > PERSONAL_SITE_AUDIT_ITEMS_MAX) return PERSONAL_SITE_AUDIT_ITEMS_MESSAGE;
     for (const item of items) {
-      if (!text46(item.title)) return PERSONAL_SITE_AUDIT_ITEM_TITLE_MESSAGE;
+      if (!text47(item.title)) return PERSONAL_SITE_AUDIT_ITEM_TITLE_MESSAGE;
       if (context?.organizationId && context.ownerUserId) {
-        const parsed = storedFileKind(text46(item.imagePath));
-        if (!parsed || parsed.kind !== "personal_site_audit" || parsed.organizationId !== text46(context.organizationId) || parsed.ownerUserId !== text46(context.ownerUserId)) {
+        const parsed = storedFileKind(text47(item.imagePath));
+        if (!parsed || parsed.kind !== "personal_site_audit" || parsed.organizationId !== text47(context.organizationId) || parsed.ownerUserId !== text47(context.ownerUserId)) {
           return PERSONAL_SITE_AUDIT_ITEMS_MESSAGE;
         }
       }
@@ -28018,17 +28402,17 @@ var ProjectPlannerCanonical = (() => {
     return null;
   }
   function personalSiteAuditWriteFields(input) {
-    const owner = text46(input.ownerUserId);
+    const owner = text47(input.ownerUserId);
     if (!owner) return null;
     if (personalSiteAuditValidationError(input.draft, { organizationId: input.organizationId, ownerUserId: owner })) return null;
     const items = (input.draft.items || []).map((item, index) => {
       const out = {
-        id: text46(item.id) || `item-${index + 1}`,
-        title: text46(item.title).slice(0, 200),
-        imagePath: text46(item.imagePath)
+        id: text47(item.id) || `item-${index + 1}`,
+        title: text47(item.title).slice(0, 200),
+        imagePath: text47(item.imagePath)
       };
       for (const key8 of ["location", "comments", "assignee", "annotations"]) {
-        const value = text46(item[key8]).slice(0, 2e3);
+        const value = text47(item[key8]).slice(0, 2e3);
         if (value) out[key8] = value;
       }
       const taken = documentInstantMs(item.takenAtMs);
@@ -28037,58 +28421,58 @@ var ProjectPlannerCanonical = (() => {
     });
     return {
       ownerUserId: owner,
-      jobNumber: text46(input.draft.jobNumber),
-      jobName: text46(input.draft.jobName),
-      type: text46(input.draft.type).slice(0, 60) || "General",
-      customTitle: text46(input.draft.customTitle).slice(0, 200),
-      date: text46(input.draft.date),
-      authorName: text46(input.draft.authorName).slice(0, 200),
+      jobNumber: text47(input.draft.jobNumber),
+      jobName: text47(input.draft.jobName),
+      type: text47(input.draft.type).slice(0, 60) || "General",
+      customTitle: text47(input.draft.customTitle).slice(0, 200),
+      date: text47(input.draft.date),
+      authorName: text47(input.draft.authorName).slice(0, 200),
       items
     };
   }
   function parsePersonalSiteAuditDocument(docId, data, options) {
     const row3 = record16(data);
     const zone3 = zoneOrLondon(options?.timeZone);
-    const rawDate = text46(row3.date);
+    const rawDate = text47(row3.date);
     const dateMs = isDayKey4(rawDate) ? null : documentInstantMs(row3.date);
     const items = (Array.isArray(row3.items) ? row3.items : []).map((raw, index) => {
       const r = record16(raw);
       return {
-        id: text46(r.id) || `item-${index + 1}`,
-        title: text46(r.title),
-        location: text46(r.location),
-        comments: text46(r.comments),
-        assignee: text46(r.assignee),
-        annotations: text46(r.annotations),
-        imagePath: text46(r.imagePath),
+        id: text47(r.id) || `item-${index + 1}`,
+        title: text47(r.title),
+        location: text47(r.location),
+        comments: text47(r.comments),
+        assignee: text47(r.assignee),
+        annotations: text47(r.annotations),
+        imagePath: text47(r.imagePath),
         takenAtMs: documentInstantMs(r.takenAtMs ?? r.createdAt)
       };
     });
     return {
-      id: text46(docId),
-      ownerUserId: text46(row3.ownerUserId),
-      jobNumber: text46(row3.jobNumber),
-      jobName: text46(row3.jobName),
-      type: text46(row3.type) || "General",
-      customTitle: text46(row3.customTitle),
+      id: text47(docId),
+      ownerUserId: text47(row3.ownerUserId),
+      jobNumber: text47(row3.jobNumber),
+      jobName: text47(row3.jobName),
+      type: text47(row3.type) || "General",
+      customTitle: text47(row3.customTitle),
       date: isDayKey4(rawDate) ? rawDate : dateMs != null ? dayKeyInZone(new Date(dateMs), zone3) : "",
-      authorName: text46(row3.authorName),
+      authorName: text47(row3.authorName),
       items,
       createdAtMs: documentInstantMs(row3.createdAt)
     };
   }
   function personalSiteAuditTitle(audit) {
-    const job = [text46(audit.jobNumber), text46(audit.jobName)].filter(Boolean).join(" ");
-    return [text46(audit.customTitle) || `Site audit (${text46(audit.type) || "General"})`, job, audit.date ? formatPaymentRunDay(audit.date) : ""].filter(Boolean).join(" \xB7 ");
+    const job = [text47(audit.jobNumber), text47(audit.jobName)].filter(Boolean).join(" ");
+    return [text47(audit.customTitle) || `Site audit (${text47(audit.type) || "General"})`, job, audit.date ? formatPaymentRunDay(audit.date) : ""].filter(Boolean).join(" \xB7 ");
   }
   function personalSiteAuditPdfRows(audit, options) {
     const zone3 = zoneOrLondon(options?.timeZone);
     return {
-      title: text46(audit.customTitle) || `Personal site audit \xB7 ${text46(audit.type) || "General"}`,
+      title: text47(audit.customTitle) || `Personal site audit \xB7 ${text47(audit.type) || "General"}`,
       lines: [
-        `Job number: ${text46(audit.jobNumber) || "\u2014"}`,
-        `Job name: ${text46(audit.jobName) || "\u2014"}`,
-        `Author: ${text46(audit.authorName) || "\u2014"}`,
+        `Job number: ${text47(audit.jobNumber) || "\u2014"}`,
+        `Job name: ${text47(audit.jobName) || "\u2014"}`,
+        `Author: ${text47(audit.authorName) || "\u2014"}`,
         `Date: ${audit.date ? formatPaymentRunDay(audit.date) : "\u2014"}`,
         `Items: ${audit.items.length}`
       ],
@@ -28107,11 +28491,11 @@ var ProjectPlannerCanonical = (() => {
   }
   function personalSiteAuditEvidence(audit, path) {
     return {
-      path: text46(path),
+      path: text47(path),
       name: personalSiteAuditTitle(audit),
       kind: "personalSiteAudit",
       contentType: "application/pdf",
-      auditId: text46(audit.id) || null
+      auditId: text47(audit.id) || null
     };
   }
   function personalSiteAuditsFor(audits, viewerUserId) {
@@ -28131,23 +28515,23 @@ var ProjectPlannerCanonical = (() => {
     no_account: "Former manager \u2014 no user account"
   };
   var JOB_MANAGER_NO_CANDIDATES_MESSAGE = "No managers or admins yet. Invite a manager from Manage users, then return here.";
-  function text47(value) {
+  function text48(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function bareKey(value) {
-    const raw = text47(value);
+    const raw = text48(value);
     return idKey(raw.toLowerCase().startsWith("user:") ? raw.slice(5) : raw);
   }
   function emailKey5(value) {
-    return text47(value).toLowerCase();
+    return text48(value).toLowerCase();
   }
   function groupsOf(roster) {
-    return rosterPersonGroups((roster || []).filter((row3) => row3 && text47(row3.id)));
+    return rosterPersonGroups((roster || []).filter((row3) => row3 && text48(row3.id)));
   }
   function exclusion(row3) {
     if (isAnonymisedDeletedProfile(row3)) return "deleted";
     if (!rosterMemberActive(row3)) return "inactive";
-    if (row3.passwordSet === false || text47(row3.status).toLowerCase() === "pending") return "pending";
+    if (row3.passwordSet === false || text48(row3.status).toLowerCase() === "pending") return "pending";
     return levelOf(row3) === "operative" ? "not_manager" : null;
   }
   function candidateOf(group) {
@@ -28156,7 +28540,7 @@ var ProjectPlannerCanonical = (() => {
     const ids = [];
     const seen = /* @__PURE__ */ new Set();
     const add = (id2) => {
-      const value = text47(id2);
+      const value = text48(id2);
       if (!value || seen.has(idKey(value))) return;
       seen.add(idKey(value));
       ids.push(value);
@@ -28167,9 +28551,9 @@ var ProjectPlannerCanonical = (() => {
       for (const alias of [...member.formerUserIds || [], ...member.sameEmailUserIds || []]) add(alias);
     }
     return {
-      id: text47(row3.id),
+      id: text48(row3.id),
       userIds: ids,
-      email: text47(row3.email),
+      email: text48(row3.email),
       name: rosterPersonName2(row3),
       level: levelOf(row3) === "admin" ? "admin" : "manager"
     };
@@ -28187,7 +28571,7 @@ var ProjectPlannerCanonical = (() => {
   }
   function jobManagerAssignments(job, roster, catalogue) {
     const groups = groupsOf(roster);
-    const rows3 = (catalogue || []).filter((row3) => row3 && text47(row3.id));
+    const rows3 = (catalogue || []).filter((row3) => row3 && text48(row3.id));
     const out = [];
     const seenPeople = /* @__PURE__ */ new Set();
     for (const storedId of jobManagerIds(job)) {
@@ -28220,7 +28604,7 @@ var ProjectPlannerCanonical = (() => {
           storedId,
           state: "former",
           candidate: null,
-          name: `${text47(catalogueRow.firstName)} ${text47(catalogueRow.lastName)}`.trim() || text47(catalogueRow.email),
+          name: `${text48(catalogueRow.firstName)} ${text48(catalogueRow.lastName)}`.trim() || text48(catalogueRow.email),
           reason: "no_account",
           note: JOB_MANAGER_FORMER_NOTES.no_account
         });
@@ -28232,22 +28616,22 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/peopleAccess.ts
-  function text48(value) {
+  function text49(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function sameOrg2(value, organizationId) {
-    const raw = text48(value);
+    const raw = text49(value);
     const id2 = raw.includes("/") ? raw.split("/").filter(Boolean).pop() ?? "" : raw;
     return id2 !== "" && id2.toLowerCase() === organizationId.trim().toLowerCase();
   }
   function storedLineManagerIds(row3) {
     if (row3.hasNoLineManager === true) return [];
-    const listed = (row3.assignedManagerUserIds || []).map(text48).filter(Boolean);
-    return listed.length > 0 ? listed : [text48(row3.assignedManagerUserId)].filter(Boolean);
+    const listed = (row3.assignedManagerUserIds || []).map(text49).filter(Boolean);
+    return listed.length > 0 ? listed : [text49(row3.assignedManagerUserId)].filter(Boolean);
   }
   function lineManagerReports(person, roster) {
-    if (!person || !text48(person.id)) return [];
-    const rows3 = (roster || []).filter((row3) => row3 && text48(row3.id));
+    if (!person || !text49(person.id)) return [];
+    const rows3 = (roster || []).filter((row3) => row3 && text49(row3.id));
     const keys = new Set(personIdSet(person, rows3).map(idKey));
     const out = [];
     for (const group of rosterPersonGroups(rows3)) {
@@ -28255,7 +28639,7 @@ var ProjectPlannerCanonical = (() => {
       const primary = group.primary;
       if (!rosterMemberActive(primary) || isAnonymisedDeletedProfile(primary)) continue;
       const reports = group.rows.some((row3) => storedLineManagerIds(row3).some((id2) => keys.has(idKey(id2))));
-      if (reports) out.push({ id: text48(primary.id), name: rosterPersonName2(primary) || text48(primary.id) });
+      if (reports) out.push({ id: text49(primary.id), name: rosterPersonName2(primary) || text49(primary.id) });
     }
     return out.sort((a, b) => a.name.localeCompare(b.name, "en", { sensitivity: "base" }) || a.id.localeCompare(b.id));
   }
@@ -28300,11 +28684,11 @@ var ProjectPlannerCanonical = (() => {
   }
   var JOB_MANAGER_REQUIRED_MESSAGE = "Please assign at least one manager";
   function jobManagerRequiredError(managerIds) {
-    return (managerIds || []).some((id2) => text48(id2) !== "") ? null : JOB_MANAGER_REQUIRED_MESSAGE;
+    return (managerIds || []).some((id2) => text49(id2) !== "") ? null : JOB_MANAGER_REQUIRED_MESSAGE;
   }
   var JOB_MANAGER_REMOVED_NOTICE_TYPE = "job_manager_removed";
   function jobManagerRemovedNoticeText(name, jobCount) {
-    const who = text48(name) || "A manager";
+    const who = text49(name) || "A manager";
     const jobs = jobCount === 1 ? "1 job" : `${jobCount} jobs`;
     return {
       title: "Manager removed from jobs",
@@ -28312,10 +28696,10 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function jobManagerRemovalWrites(input) {
-    const org = text48(input?.organizationId);
+    const org = text49(input?.organizationId);
     const person = input?.person;
-    if (!org || !person || !text48(person.id) || !changeRemovesJobManager(person, input.change)) return [];
-    const rows3 = (input.roster || []).filter((row3) => row3 && text48(row3.id));
+    if (!org || !person || !text49(person.id) || !changeRemovesJobManager(person, input.change)) return [];
+    const rows3 = (input.roster || []).filter((row3) => row3 && text49(row3.id));
     const keys = /* @__PURE__ */ new Set();
     for (const id2 of personIdSet(person, rows3)) {
       keys.add(idKey(id2));
@@ -28325,29 +28709,29 @@ var ProjectPlannerCanonical = (() => {
     if (idKey(person.email)) emails.add(idKey(person.email));
     for (const row3 of rows3) if (keys.has(idKey(row3.id)) && idKey(row3.email)) emails.add(idKey(row3.email));
     for (const row3 of input.managers || []) {
-      if (!row3 || !text48(row3.id) || !emails.has(idKey(row3.email))) continue;
+      if (!row3 || !text49(row3.id) || !emails.has(idKey(row3.email))) continue;
       keys.add(idKey(row3.id));
       keys.add(idKey(stableManagerId(row3.id)));
     }
     keys.delete("");
     const out = [];
     for (const job of input.jobs || []) {
-      const jobId = text48(job?.id);
+      const jobId = text49(job?.id);
       if (!jobId || jobId.includes("/") || job.collection !== "projects" && job.collection !== "smallWorks") continue;
       if (!jobManagerIds(job).some((id2) => keys.has(idKey(id2)))) continue;
       const set = {};
       const remove = [];
-      const keep = (list) => (list || []).map(text48).filter((id2) => id2 && !keys.has(idKey(id2)));
+      const keep = (list) => (list || []).map(text49).filter((id2) => id2 && !keys.has(idKey(id2)));
       let remainingManagerIds = keep(job.managerIds);
       for (const field of ["managerIds", "managerUserIds", "assignedManagerUserIds"]) {
-        const stored = (job[field] || []).map(text48).filter(Boolean);
+        const stored = (job[field] || []).map(text49).filter(Boolean);
         if (stored.length === 0) continue;
         const kept = keep(stored);
         if (kept.length === stored.length) continue;
         if (kept.length > 0) set[field] = kept;
         else remove.push(field);
       }
-      const primary = text48(job.managerId);
+      const primary = text49(job.managerId);
       if (primary && keys.has(idKey(primary))) {
         if (remainingManagerIds.length === 0) remainingManagerIds = keep(job.managerUserIds);
         if (remainingManagerIds.length > 0) set.managerId = remainingManagerIds[0];
@@ -28359,11 +28743,11 @@ var ProjectPlannerCanonical = (() => {
     return out;
   }
   function superAdminTransferWrites(input) {
-    const org = text48(input?.organizationId);
-    const from = text48(input?.fromUserId);
-    const to = text48(input?.toUserId);
+    const org = text49(input?.organizationId);
+    const from = text49(input?.fromUserId);
+    const to = text49(input?.toUserId);
     if (!org || !to || idKey(to) === idKey(from) || org.includes("/") || to.includes("/")) return null;
-    const rows3 = (input.roster || []).filter((row3) => row3 && text48(row3.id));
+    const rows3 = (input.roster || []).filter((row3) => row3 && text49(row3.id));
     const toRow = rows3.find((row3) => idKey(row3.id) === idKey(to));
     const toKeys = new Set(personIdSet(toRow ?? { id: to }, rows3).map(idKey));
     const writes = [
@@ -28383,7 +28767,7 @@ var ProjectPlannerCanonical = (() => {
     writes.push({ path: `users/${to}`, kind: "userProfile", fields: { ...promote } });
     for (const row3 of rows3) {
       if (idKey(row3.id) !== idKey(to) && toKeys.has(idKey(row3.id)) && inOrg(row3) && idKey(row3.email) === idKey(toRow?.email)) {
-        writes.push({ path: `users/${text48(row3.id)}`, kind: "userProfile", fields: { ...promote, isSuperAdmin: false } });
+        writes.push({ path: `users/${text49(row3.id)}`, kind: "userProfile", fields: { ...promote, isSuperAdmin: false } });
       }
     }
     writes.push({
@@ -28393,12 +28777,12 @@ var ProjectPlannerCanonical = (() => {
     });
     const demote = /* @__PURE__ */ new Map();
     if (from) demote.set(idKey(from), rows3.find((row3) => idKey(row3.id) === idKey(from)) ?? null);
-    const creator = text48(input.previousCreatorUserId);
+    const creator = text49(input.previousCreatorUserId);
     if (creator) demote.set(idKey(creator), rows3.find((row3) => idKey(row3.id) === idKey(creator)) ?? null);
     for (const row3 of rows3) if (storedPermissionFlag(row3, "isSuperAdmin") === true && inOrg(row3)) demote.set(idKey(row3.id), row3);
     for (const key8 of toKeys) demote.delete(key8);
     for (const [key8, row3] of demote) {
-      const id2 = text48(row3?.id) || (idKey(from) === key8 ? from : creator);
+      const id2 = text49(row3?.id) || (idKey(from) === key8 ? from : creator);
       if (!id2 || id2.includes("/")) continue;
       const needsSelfApproval = !hasActiveLineManager(row3 ?? { id: id2 }, rows3);
       const fields = { isSuperAdmin: false, adminAccess: true, role: "admin", "permissions.adminAccess": true };
@@ -28418,19 +28802,19 @@ var ProjectPlannerCanonical = (() => {
     return writes;
   }
   function userActiveWrites(input) {
-    const org = text48(input?.organizationId);
-    const uid = text48(input?.person?.id);
+    const org = text49(input?.organizationId);
+    const uid = text49(input?.person?.id);
     if (!org || !uid || uid.includes("/")) return [];
     const active = input.isActive === true;
     const out = [];
     const ownRow = (input.roster || []).find((row3) => idKey(row3?.id) === idKey(uid));
-    const homeOrg = text48(input.person.organizationId) ? input.person.organizationId : ownRow?.organizationId;
-    if (!text48(homeOrg) || sameOrg2(homeOrg, org)) out.push({ path: `users/${uid}`, kind: "userProfile", fields: { isActive: active } });
+    const homeOrg = text49(input.person.organizationId) ? input.person.organizationId : ownRow?.organizationId;
+    if (!text49(homeOrg) || sameOrg2(homeOrg, org)) out.push({ path: `users/${uid}`, kind: "userProfile", fields: { isActive: active } });
     const email = idKey(input.person.email);
     const seen = /* @__PURE__ */ new Set([idKey(uid)]);
     if (email) {
       for (const row3 of input.roster || []) {
-        const id2 = text48(row3?.id);
+        const id2 = text49(row3?.id);
         if (!id2 || id2.includes("/") || seen.has(idKey(id2)) || idKey(row3.email) !== email || !sameOrg2(row3.organizationId, org)) continue;
         seen.add(idKey(id2));
         out.push({ path: `users/${id2}`, kind: "userProfile", fields: { isActive: active } });
@@ -28483,7 +28867,7 @@ var ProjectPlannerCanonical = (() => {
     "revisionCreatedBy",
     "revisionCreatedAt"
   ];
-  function text49(value) {
+  function text50(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function record17(value) {
@@ -28507,7 +28891,7 @@ var ProjectPlannerCanonical = (() => {
     const ref = parseTimesheetRevisionDocId(input?.documentId);
     if (!ref) return "";
     const base = ref.baseDocumentId;
-    const stored = text49(input?.userId);
+    const stored = text50(input?.userId);
     const subject = stored && base.startsWith(`${TIMESHEET_DOCUMENT_PREFIX}${stored}_`) ? stored : timesheetDocumentSubjectId(base);
     if (!subject) return "";
     const stamp = base.slice(`${TIMESHEET_DOCUMENT_PREFIX}${subject}_`.length).replace(/[^0-9]/g, "");
@@ -28516,7 +28900,7 @@ var ProjectPlannerCanonical = (() => {
     return `TS-${stamp}-${person}`;
   }
   function timesheetInvoiceNumberForRevision(baseInvoiceNumber, revision) {
-    const base = text49(baseInvoiceNumber);
+    const base = text50(baseInvoiceNumber);
     if (!base) return "";
     const n = typeof revision === "number" ? revision : Number(revision);
     return Number.isInteger(n) && n > 0 ? `${base}-REV${n}` : base;
@@ -28543,7 +28927,7 @@ var ProjectPlannerCanonical = (() => {
   function timesheetVersionsForPeriod(documents) {
     const chains = /* @__PURE__ */ new Map();
     for (const row3 of documents ?? []) {
-      const version = versionOf(text49(row3?.documentId), record17(row3?.data));
+      const version = versionOf(text50(row3?.documentId), record17(row3?.data));
       if (!version) continue;
       const chain = chains.get(version.baseDocumentId) ?? [];
       if (!chain.some((existing) => existing.revision === version.revision)) chain.push(version);
@@ -28652,12 +29036,12 @@ var ProjectPlannerCanonical = (() => {
     const override = record17(data.weeklyReportOverride);
     for (const line of Array.isArray(override.lines) ? override.lines : []) {
       const row3 = record17(line);
-      const id2 = text49(row3.id).toLowerCase();
+      const id2 = text50(row3.id).toLowerCase();
       if (id2 && !snapshot.has(id2)) snapshot.set(id2, row3);
     }
     const live = /* @__PURE__ */ new Map();
     for (const line of input?.liveLines ?? []) {
-      const id2 = text49(line?.id).toLowerCase();
+      const id2 = text50(line?.id).toLowerCase();
       if (line && id2 && !live.has(id2)) live.set(id2, line);
     }
     const kept = {};
@@ -28665,8 +29049,8 @@ var ProjectPlannerCanonical = (() => {
       const signed = snapshot.get(key8.trim().toLowerCase());
       const now = live.get(key8.trim().toLowerCase());
       if (!signed || !now) continue;
-      const fingerprint = text49(signed.bookingFingerprint);
-      const decision = text49(signed.decision);
+      const fingerprint = text50(signed.bookingFingerprint);
+      const decision = text50(signed.decision);
       const unchanged = fingerprint ? overtimeFingerprintsMatch(fingerprint, now.bookingFingerprint) : close(signed.paidHours, now.paidHours) && (decision === "declined" || decision === "edited" || close(signed.amount, now.amount));
       if (unchanged) kept[key8] = review;
     }
@@ -28675,8 +29059,8 @@ var ProjectPlannerCanonical = (() => {
   function timesheetRevisionCreateFields(input) {
     const ref = parseTimesheetRevisionDocId(input?.previous?.documentId);
     const data = record17(input?.previous?.data);
-    const writer = text49(input?.writerUserId);
-    if (!ref || !writer || resolveTimesheetExportedAtMs(data) == null || !text49(data.userId) || data.weekStart == null) return null;
+    const writer = text50(input?.writerUserId);
+    if (!ref || !writer || resolveTimesheetExportedAtMs(data) == null || !text50(data.userId) || data.weekStart == null) return null;
     const revision = ref.revision + 1;
     const documentId3 = timesheetRevisionDocId(ref.baseDocumentId, revision);
     if (!documentId3) return null;
@@ -28692,7 +29076,7 @@ var ProjectPlannerCanonical = (() => {
     return { documentId: documentId3, revision, fields };
   }
   function timesheetRevisionToSignRecipients(subject, actor, roster) {
-    const id2 = typeof subject === "string" ? text49(subject) : text49(subject?.id);
+    const id2 = typeof subject === "string" ? text50(subject) : text50(subject?.id);
     return id2 ? excludeActor([id2], actor, roster) : [];
   }
   function timesheetRevisionNoticeKey(revisionDocumentId) {
@@ -28701,14 +29085,14 @@ var ProjectPlannerCanonical = (() => {
   }
 
   // lib/canonical/timesheetClarity.ts
-  function text50(value) {
+  function text51(value) {
     return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
   }
   var WEEKDAYS_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var WEEKDAYS_LONG = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   var MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function dayParts(dayKey) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text50(dayKey));
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text51(dayKey));
     if (!match) return null;
     const y = Number(match[1]);
     const m = Number(match[2]);
@@ -28725,18 +29109,18 @@ var ProjectPlannerCanonical = (() => {
     return parts3 ? `${WEEKDAYS_LONG[parts3.weekday]} ${parts3.day} ${MONTHS_SHORT[parts3.month]}` : "";
   }
   function parseTimesheetBookingFingerprint(fingerprint) {
-    const value = text50(fingerprint);
+    const value = text51(fingerprint);
     if (!value) return null;
     const parts3 = value.split("|");
     if (parts3.length < 6) return null;
     const rateNumber = Number(parts3[4]);
     return {
-      dayKey: text50(parts3[0]),
-      slot: text50(parts3[1]) ? bookingFingerprintSlot(parts3[1]) : "",
-      start: text50(parts3[2]),
-      finish: text50(parts3[3]),
-      rate: text50(parts3[4]) && Number.isFinite(rateNumber) ? rateNumber : null,
-      breakRemoved: text50(parts3[5]) === "nb"
+      dayKey: text51(parts3[0]),
+      slot: text51(parts3[1]) ? bookingFingerprintSlot(parts3[1]) : "",
+      start: text51(parts3[2]),
+      finish: text51(parts3[3]),
+      rate: text51(parts3[4]) && Number.isFinite(rateNumber) ? rateNumber : null,
+      breakRemoved: text51(parts3[5]) === "nb"
     };
   }
   function timesText2(parts3) {
@@ -28754,8 +29138,8 @@ var ProjectPlannerCanonical = (() => {
   function jobLabel(jobId, jobs) {
     const job = jobs.get(normalizeDocumentId(jobId));
     if (!job) return "";
-    const number = text50(job.jobNumber);
-    const name = text50(job.name);
+    const number = text51(job.jobNumber);
+    const name = text51(job.name);
     return number && name ? `${number} \xB7 ${name}` : number || name;
   }
   function placeLabel(place, jobs, customName) {
@@ -28764,7 +29148,7 @@ var ProjectPlannerCanonical = (() => {
     if (kind === "job") return jobLabel(id2 ?? "", jobs) || "A job";
     if (PLACE_LABELS[kind]) return PLACE_LABELS[kind];
     if (kind === "project" || kind === "small_work" || kind === "smallworks" || kind === "small_works") return jobLabel(id2 ?? "", jobs) || "A job";
-    const name = text50(customName) || text50(custom);
+    const name = text51(customName) || text51(custom);
     if (name) return name.charAt(0).toUpperCase() + name.slice(1);
     return kind ? kind.charAt(0).toUpperCase() + kind.slice(1).replace(/_/g, " ") : "";
   }
@@ -28791,8 +29175,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function sideFrom(ref, jobs) {
     const parts3 = parseTimesheetBookingFingerprint(ref.fingerprint);
-    const dayKey = parts3?.dayKey || text50(ref.dayKey);
-    const label = placeLabel(ref.place, jobs, ref.customName) || text50(ref.storedJob);
+    const dayKey = parts3?.dayKey || text51(ref.dayKey);
+    const label = placeLabel(ref.place, jobs, ref.customName) || text51(ref.storedJob);
     return {
       dayKey,
       dayLabel: timesheetChangeDayLabel(dayKey),
@@ -28804,7 +29188,7 @@ var ProjectPlannerCanonical = (() => {
       breakRemoved: parts3?.breakRemoved === true,
       placeLabel: label,
       place: ref.place,
-      storedText: parts3 ? null : text50(ref.storedText) || null
+      storedText: parts3 ? null : text51(ref.storedText) || null
     };
   }
   function sideText(side, parts3) {
@@ -28821,7 +29205,7 @@ var ProjectPlannerCanonical = (() => {
     return out.join(" \xB7 ");
   }
   function comparablePlaceLabel(side) {
-    const label = text50(side.placeLabel);
+    const label = text51(side.placeLabel);
     return label && label !== "A job" ? label.toLowerCase() : "";
   }
   function changedPartsOf(before, after) {
@@ -28839,12 +29223,12 @@ var ProjectPlannerCanonical = (() => {
     if (before.timesText && after.timesText && before.breakRemoved !== after.breakRemoved) parts3.push("break");
     return parts3;
   }
-  function plural(count, one, many) {
-    return `${count} ${count === 1 ? one : many}`;
+  function plural(count2, one, many) {
+    return `${count2} ${count2 === 1 ? one : many}`;
   }
   function signedTimesheetChangeDetails(input) {
     const jobs = /* @__PURE__ */ new Map();
-    for (const job of input.jobs ?? []) if (job && text50(job.id)) jobs.set(normalizeDocumentId(job.id), job);
+    for (const job of input.jobs ?? []) if (job && text51(job.id)) jobs.set(normalizeDocumentId(job.id), job);
     const sheet = input.sheet ?? null;
     const change = signedTimesheetBookingChanges({
       sheet,
@@ -28855,12 +29239,12 @@ var ProjectPlannerCanonical = (() => {
       tombstonedBookingIds: input.tombstonedBookingIds,
       personIds: input.personIds
     });
-    const record19 = /* @__PURE__ */ new Map();
+    const record22 = /* @__PURE__ */ new Map();
     for (const raw of Array.isArray(sheet?.operativeSignedBookings) ? sheet?.operativeSignedBookings : []) {
       if (!raw || typeof raw !== "object") continue;
       const row3 = raw;
-      const id2 = normalizeDocumentId(text50(row3.bookingId));
-      if (id2 && !record19.has(id2)) record19.set(id2, { fingerprint: text50(row3.fingerprint), place: text50(row3.place), storedText: null, dayKey: "", storedJob: "" });
+      const id2 = normalizeDocumentId(text51(row3.bookingId));
+      if (id2 && !record22.has(id2)) record22.set(id2, { fingerprint: text51(row3.fingerprint), place: text51(row3.place), storedText: null, dayKey: "", storedJob: "" });
     }
     const snapshot = /* @__PURE__ */ new Map();
     const override = sheet?.weeklyReportOverride;
@@ -28872,32 +29256,32 @@ var ProjectPlannerCanonical = (() => {
       if (!key8) continue;
       const id2 = key8.slice(key8.indexOf("|") + 1);
       const held = snapshot.get(id2);
-      const jobNumber = text50(line.jobNumber);
-      const projectName = text50(line.projectName);
-      const storedJob = jobNumber && projectName ? `${jobNumber} \xB7 ${projectName}` : jobNumber || projectName || PLACE_LABELS[text50(line.locationKind)] || "";
+      const jobNumber = text51(line.jobNumber);
+      const projectName = text51(line.projectName);
+      const storedJob = jobNumber && projectName ? `${jobNumber} \xB7 ${projectName}` : jobNumber || projectName || PLACE_LABELS[text51(line.locationKind)] || "";
       const row3 = {
-        fingerprint: text50(line.bookingFingerprint),
+        fingerprint: text51(line.bookingFingerprint),
         place: "",
-        storedText: text50(line.details) || null,
+        storedText: text51(line.details) || null,
         dayKey: snapshotDayKey(line.date, input.timeZone),
         storedJob
       };
       if (!held || !held.fingerprint && row3.fingerprint) snapshot.set(id2, row3);
     }
     const docs = /* @__PURE__ */ new Map();
-    for (const doc of input.liveBookings ?? []) if (doc && text50(doc.bookingId)) docs.set(normalizeDocumentId(doc.bookingId), doc);
+    for (const doc of input.liveBookings ?? []) if (doc && text51(doc.bookingId)) docs.set(normalizeDocumentId(doc.bookingId), doc);
     const live = /* @__PURE__ */ new Map();
     for (const line of input.liveLines ?? []) {
       if (!line || line.isLeave === true || line.isPayeDay === true) continue;
       const key8 = signedTimesheetLineBookingKey(line);
       if (!key8) continue;
       const id2 = key8.slice(key8.indexOf("|") + 1);
-      const fingerprint = text50(line.bookingFingerprint);
+      const fingerprint = text51(line.bookingFingerprint);
       if (!live.has(id2) || !live.get(id2) && fingerprint) live.set(id2, fingerprint);
     }
     const preferSnapshot = change.waitingFor === "lineManager";
     const beforeOf = (id2) => {
-      const fromRecord = record19.get(id2);
+      const fromRecord = record22.get(id2);
       const fromSnapshot = snapshot.get(id2);
       const first = preferSnapshot ? fromSnapshot ?? fromRecord : fromRecord ?? fromSnapshot;
       if (!first) return null;
@@ -28916,14 +29300,14 @@ var ProjectPlannerCanonical = (() => {
         const fingerprint2 = overtimeBookingFingerprint({
           id: doc.bookingId,
           personId: "",
-          dayKey: text50(doc.dayKey),
-          timeSlot: text50(doc.timeSlot),
-          workStartTime: text50(doc.workStartTime) || void 0,
-          workEndTime: text50(doc.workEndTime) || void 0,
+          dayKey: text51(doc.dayKey),
+          timeSlot: text51(doc.timeSlot),
+          workStartTime: text51(doc.workStartTime) || void 0,
+          workEndTime: text51(doc.workEndTime) || void 0,
           isBreakRemoved: doc.isBreakRemoved === true,
           otMultiplierOverride: typeof doc.otMultiplierOverride === "number" ? doc.otMultiplierOverride : null
         });
-        return sideFrom({ fingerprint: fingerprint2, place: signedTimesheetBookingPlace(doc), customName: text50(doc.customLocationName) }, jobs);
+        return sideFrom({ fingerprint: fingerprint2, place: signedTimesheetBookingPlace(doc), customName: text51(doc.customLocationName) }, jobs);
       }
       const fingerprint = live.get(id2);
       if (fingerprint == null) return null;
@@ -28978,7 +29362,7 @@ var ProjectPlannerCanonical = (() => {
     for (const id2 of change.removedBookingIds) add(id2, "removed");
     for (const id2 of change.snapshotGapBookingIds) add(id2, "added", input.selfSigned === true ? TIMESHEET_CHANGE_NOT_IN_SIGNED_COPY_LABEL : void 0);
     rows3.sort((a, b) => a.dayKey < b.dayKey ? -1 : a.dayKey > b.dayKey ? 1 : 0);
-    const currency = text50(input.currency) || "GBP";
+    const currency = text51(input.currency) || "GBP";
     const entries = timesheetSignedEntryChanges(sheet, input.entryOptions ?? {});
     for (const entry of entries) {
       const kind = entry.removed ? "removed" : "changed";
@@ -29028,9 +29412,9 @@ var ProjectPlannerCanonical = (() => {
     const sheet = input.sheet ?? {};
     const role = input.viewerRole;
     const isPerson = role === "person";
-    const person = text50(input.personName) || (isPerson ? "you" : "the person");
-    const lineManager = input.hasLineManager === false ? TIMESHEET_NEXT_STEP_ADMIN_SIGNER : text50(input.lineManagerName) || "your line manager";
-    const rev = text50(input.revisionLabel);
+    const person = text51(input.personName) || (isPerson ? "you" : "the person");
+    const lineManager = input.hasLineManager === false ? TIMESHEET_NEXT_STEP_ADMIN_SIGNER : text51(input.lineManagerName) || "your line manager";
+    const rev = text51(input.revisionLabel);
     const change = input.change ?? null;
     const exported = resolveTimesheetExportedAtMs(sheet) != null;
     const fields = parseTimesheetStatusFields(sheet);
@@ -29041,15 +29425,15 @@ var ProjectPlannerCanonical = (() => {
       return { whoseTurn, viewerActs, text: textValue, tone: whoseTurn === "nobody" ? "done" : viewerActs ? "action" : "waiting", generateInvoice };
     };
     const why = (() => {
-      const count = input.changedBookingCount ?? 0;
-      const day = text50(input.changedDayLabel);
-      if (count === 1 && day) return `a booking changed on ${day}`;
-      if (count > 1) return `${count} bookings changed`;
+      const count2 = input.changedBookingCount ?? 0;
+      const day = text51(input.changedDayLabel);
+      if (count2 === 1 && day) return `a booking changed on ${day}`;
+      if (count2 > 1) return `${count2} bookings changed`;
       return "bookings changed";
     })();
     if (exported) {
       if (input.revision?.due === true) {
-        const label = text50(input.revision.label);
+        const label = text51(input.revision.label);
         return isPerson ? step("person", `Your turn: review and sign the update to your exported timesheet${label ? ` (${label})` : ""}`) : step("person", `Waiting for ${person} to review and sign the update${label ? ` (${label})` : ""} \u2014 ${why}`);
       }
       return step("nobody", TIMESHEET_NEXT_STEP_EXPORTED_TEXT);
@@ -29086,9 +29470,9 @@ var ProjectPlannerCanonical = (() => {
     const sheet = input.sheet ?? null;
     if (!sheet) return none;
     const exported = resolveTimesheetExportedAtMs(sheet) != null;
-    const next = text50(input.nextRevisionLabel) || "a new revision";
-    const person = text50(input.personName) || "the person";
-    const lineManager = input.hasLineManager === false ? TIMESHEET_NEXT_STEP_ADMIN_SIGNER : text50(input.lineManagerName) || "your line manager";
+    const next = text51(input.nextRevisionLabel) || "a new revision";
+    const person = text51(input.personName) || "the person";
+    const lineManager = input.hasLineManager === false ? TIMESHEET_NEXT_STEP_ADMIN_SIGNER : text51(input.lineManagerName) || "your line manager";
     const option = (action, help) => ({
       action,
       label: TIMESHEET_CORRECTION_LABEL,
@@ -29186,7 +29570,7 @@ var ProjectPlannerCanonical = (() => {
     noItems: "No items"
   };
   var DAY_KEY12 = /^\d{4}-\d{2}-\d{2}$/;
-  function text51(value) {
+  function text52(value) {
     return value == null ? "" : String(value).trim();
   }
   function record18(value) {
@@ -29214,7 +29598,7 @@ var ProjectPlannerCanonical = (() => {
     const paye = run ? { kind: "paye", start: run.start, end: run.end, label: payePayrunLabel(run) } : null;
     let paymentRun = null;
     const invoicing = invoicingOf2(input.organization);
-    if (invoicing && DAY_KEY12.test(text51(input.todayKey))) {
+    if (invoicing && DAY_KEY12.test(text52(input.todayKey))) {
       const midday = new Date(dateFromDayKeyInZone(input.todayKey, zone3).getTime() + 12 * 36e5);
       const summary = activePaymentRunSummary(invoicing, midday, zone3);
       if (!summary.notConfigured) paymentRun = { kind: "paymentRun", start: summary.start, end: summary.end, label: `Payment run: ${summary.label}` };
@@ -29231,15 +29615,15 @@ var ProjectPlannerCanonical = (() => {
     return range ? { kind: "custom", start: range.start, end: range.end, label: `Custom: ${rangeText(range.start, range.end)}` } : null;
   }
   function parsePayrunSnapshotSheet(docId, data, timeZone) {
-    if (!text51(docId).startsWith("timesheet_")) return null;
+    if (!text52(docId).startsWith("timesheet_")) return null;
     const row3 = record18(data) ?? {};
-    const userId = text51(row3.userId);
-    const startKey = text51(row3.weekStartKey);
+    const userId = text52(row3.userId);
+    const startKey = text52(row3.weekStartKey);
     const startDayKey = DAY_KEY12.test(startKey) ? startKey : timesheetStoredStartDayKey(row3.weekStart, timeZone);
     if (!userId || !DAY_KEY12.test(startDayKey)) return null;
-    const endKey = text51(row3.weekEndKey);
+    const endKey = text52(row3.weekEndKey);
     const endDayKey = DAY_KEY12.test(endKey) ? endKey : timesheetStoredStartDayKey(row3.weekEnd, timeZone);
-    return { userId, startDayKey, endDayKey: DAY_KEY12.test(endDayKey) ? endDayKey : "", status: parseTimesheetStatusFields(row3), documentId: text51(docId), signedOff: timesheetVersionSignedOff(row3) };
+    return { userId, startDayKey, endDayKey: DAY_KEY12.test(endDayKey) ? endDayKey : "", status: parseTimesheetStatusFields(row3), documentId: text52(docId), signedOff: timesheetVersionSignedOff(row3) };
   }
   var TIMESHEET_ORDER = { notStarted: 0, submitted: 1, signed: 2 };
   function payRunsInPeriod(organization, period, sheets, timeZone) {
@@ -29300,7 +29684,7 @@ var ProjectPlannerCanonical = (() => {
         personSigned ? selfSigned ? null : "lineManager" : "person",
         person.firstName || person.name || person.displayName
       ) : revision?.label ?? "";
-      const documentId3 = text51(sheet?.documentId) || void 0;
+      const documentId3 = text52(sheet?.documentId) || void 0;
       return { run, state, revisionLabel, revisionOpen, waiting, documentId: documentId3 };
     });
     const link = (run, documentId3) => ({
@@ -29322,11 +29706,11 @@ var ProjectPlannerCanonical = (() => {
     return cell(least.state, label, tone, link(least.run, least.documentId));
   }
   function requestReturned(status) {
-    const value = text51(status).toLowerCase();
+    const value = text52(status).toLowerCase();
     return value === "approved" || value === "returned";
   }
   function requestWaiting(status) {
-    const value = text51(status).toLowerCase();
+    const value = text52(status).toLowerCase();
     return value === "pending" || value === "submitted";
   }
   function overtimeCell(person, ids, roster, requests, reports, period, reportOutOfDate) {
@@ -29362,16 +29746,16 @@ var ProjectPlannerCanonical = (() => {
     if (reports.some((report) => report.kind === kind && ids.has(idKey(report.userId)) && overlaps(period, report.rangeStart, report.rangeEnd))) {
       return cell("reportYes", PAYRUN_SNAPSHOT_STATE_LABELS.reportYes, "good", link);
     }
-    const count = payeClaimsInRange(
+    const count2 = payeClaimsInRange(
       items.filter((item) => item.kind === kind && ids.has(idKey(item.userId))),
       period
     ).length;
-    if (count === 0) return cell("noItems", PAYRUN_SNAPSHOT_STATE_LABELS.noItems, "neutral", link);
-    return cell("itemsNoReport", `${count} ${count === 1 ? "item" : "items"}, no report`, "warn", link);
+    if (count2 === 0) return cell("noItems", PAYRUN_SNAPSHOT_STATE_LABELS.noItems, "neutral", link);
+    return cell("itemsNoReport", `${count2} ${count2 === 1 ? "item" : "items"}, no report`, "warn", link);
   }
   function hasRecords(ids, input, period) {
     const mine = (userId) => ids.has(idKey(userId));
-    return (input.sheets ?? []).some((sheet) => mine(sheet.userId) && overlaps(period, sheet.startDayKey, sheet.endDayKey)) || (input.overtimeRequests ?? []).some((row3) => mine(row3.userId) && text51(row3.status).toLowerCase() !== "withdrawn" && overlaps(period, row3.rangeStart, row3.rangeEnd)) || (input.overtimeReports ?? []).some((row3) => mine(row3.userId) && overlaps(period, row3.rangeStart, row3.rangeEnd)) || (input.payeClaimReports ?? []).some((row3) => mine(row3.userId) && overlaps(period, row3.rangeStart, row3.rangeEnd)) || payeClaimsInRange([...input.priceWork ?? [], ...input.expenses ?? []].filter((item) => mine(item.userId)), period).length > 0;
+    return (input.sheets ?? []).some((sheet) => mine(sheet.userId) && overlaps(period, sheet.startDayKey, sheet.endDayKey)) || (input.overtimeRequests ?? []).some((row3) => mine(row3.userId) && text52(row3.status).toLowerCase() !== "withdrawn" && overlaps(period, row3.rangeStart, row3.rangeEnd)) || (input.overtimeReports ?? []).some((row3) => mine(row3.userId) && overlaps(period, row3.rangeStart, row3.rangeEnd)) || (input.payeClaimReports ?? []).some((row3) => mine(row3.userId) && overlaps(period, row3.rangeStart, row3.rangeEnd)) || payeClaimsInRange([...input.priceWork ?? [], ...input.expenses ?? []].filter((item) => mine(item.userId)), period).length > 0;
   }
   function rosterActive(person) {
     return !isAnonymisedDeletedProfile(person) && rosterSegment(person) === "active";
@@ -29380,15 +29764,15 @@ var ProjectPlannerCanonical = (() => {
     const period = input.period ? payeCustomRange(input.period.start, input.period.end) : null;
     if (!period) return [];
     const zone3 = zoneOrLondon(input.timeZone);
-    const roster = (input.roster ?? []).filter((person) => person && text51(person.id));
+    const roster = (input.roster ?? []).filter((person) => person && text52(person.id));
     const ordered = [...roster].sort((a, b) => Number(rosterActive(b)) - Number(rosterActive(a)));
     const used = /* @__PURE__ */ new Set();
     const sheets = input.sheets ?? [];
     const out = [];
     for (const person of ordered) {
       if (used.has(idKey(person.id))) continue;
-      const idList8 = personIdSet(person, roster);
-      const ids = new Set(idList8.map(idKey));
+      const idList9 = personIdSet(person, roster);
+      const ids = new Set(idList9.map(idKey));
       for (const member of roster) if (ids.has(idKey(member.id))) used.add(idKey(member.id));
       const active = roster.some((member) => ids.has(idKey(member.id)) && rosterActive(member));
       if (!active && !hasRecords(ids, input, period)) continue;
@@ -29418,8 +29802,8 @@ var ProjectPlannerCanonical = (() => {
         priceWork: blocked(PAYRUN_SNAPSHOT_SELF_EMPLOYED_CELL)
       };
       out.push({
-        personId: text51(person.id),
-        name: rosterPersonName(person) || text51(person.email) || "Unknown person",
+        personId: text52(person.id),
+        name: rosterPersonName(person) || text52(person.email) || "Unknown person",
         level,
         levelLabel,
         employment: paye ? "paye" : "selfEmployed",
@@ -29548,10 +29932,10 @@ var ProjectPlannerCanonical = (() => {
     if (!isPlainMap(perms)) return false;
     return truthy(get(perms, kind, get(m, kind, false)));
   }
-  function utf8Bytes2(text57) {
+  function utf8Bytes2(text63) {
     let bytes = 0;
-    for (let i = 0; i < text57.length; i += 1) {
-      const code = text57.charCodeAt(i);
+    for (let i = 0; i < text63.length; i += 1) {
+      const code = text63.charCodeAt(i);
       if (code < 128) bytes += 1;
       else if (code < 2048) bytes += 2;
       else if (code >= 55296 && code <= 56319) {
@@ -30572,8 +30956,8 @@ var ProjectPlannerCanonical = (() => {
   function dataParityLogAppend(log, entry, limit = DATA_PARITY_LOG_LIMIT) {
     const kept = Array.isArray(log) ? log.filter((row3) => row3 && typeof row3.atMs === "number") : [];
     const next = [...kept, entry];
-    const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DATA_PARITY_LOG_LIMIT;
-    return next.slice(Math.max(0, next.length - cap));
+    const cap2 = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : DATA_PARITY_LOG_LIMIT;
+    return next.slice(Math.max(0, next.length - cap2));
   }
   function clock4(atMs, timeZone) {
     const parts3 = partsInZone(new Date(atMs), zoneOrLondon(timeZone));
@@ -30627,11 +31011,11 @@ var ProjectPlannerCanonical = (() => {
   var BOOKING_REPLACE_HELP = "Replace the existing booking with this one";
   var BOOKING_REPLACE_CHOSEN_TEXT = "replaces the existing booking";
   var BOOKING_REPLACE_COLLECTIONS = ["bookings", "managerSiteBookings"];
-  function text52(value) {
+  function text53(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function isReplaceCollection(value) {
-    return BOOKING_REPLACE_COLLECTIONS.includes(text52(value));
+    return BOOKING_REPLACE_COLLECTIONS.includes(text53(value));
   }
   function refKey(collection, bookingId) {
     return `${collection}/${bookingId.toLowerCase()}`;
@@ -30642,8 +31026,8 @@ var ProjectPlannerCanonical = (() => {
     const rows3 = input?.clashing || [];
     if (rows3.length === 0) return { offered: false, bookings: [] };
     for (const row3 of rows3) {
-      const bookingId = text52(row3?.bookingId);
-      const collection = text52(row3?.collection);
+      const bookingId = text53(row3?.bookingId);
+      const collection = text53(row3?.collection);
       if (!row3 || !bookingId || bookingId.includes("/") || !isReplaceCollection(collection) || row3.mayDelete !== true) {
         return { offered: false, bookings: [] };
       }
@@ -30655,9 +31039,9 @@ var ProjectPlannerCanonical = (() => {
     return { offered: out.length > 0, bookings: out };
   }
   function bookingReplaceWrites(input) {
-    const organizationId = text52(input?.organizationId);
-    const bookingCollection = text52(input?.booking?.collection);
-    const bookingId = text52(input?.booking?.bookingId);
+    const organizationId = text53(input?.organizationId);
+    const bookingCollection = text53(input?.booking?.collection);
+    const bookingId = text53(input?.booking?.bookingId);
     if (!organizationId || organizationId.includes("/") || !bookingId || bookingId.includes("/")) return null;
     if (!isReplaceCollection(bookingCollection)) return null;
     const rows3 = input?.replaced || [];
@@ -30665,8 +31049,8 @@ var ProjectPlannerCanonical = (() => {
     const deletes = [];
     const seen = /* @__PURE__ */ new Set();
     for (const row3 of rows3) {
-      const collection = text52(row3?.collection);
-      const id2 = text52(row3?.bookingId);
+      const collection = text53(row3?.collection);
+      const id2 = text53(row3?.bookingId);
       if (!isReplaceCollection(collection) || !id2) return null;
       if (id2.toLowerCase() === bookingId.toLowerCase()) return null;
       const key8 = refKey(collection, id2);
@@ -30853,8 +31237,8 @@ var ProjectPlannerCanonical = (() => {
         rows3.set(person.id, list);
       }
       const row3 = list.get(key8) ?? seed();
-      const clock5 = Number(slice.breakHours) > 0 ? Number(slice.clockHours) || 0 : slice.paidHours;
-      row3.clockHours += row3.overtime ? clock5 : 0;
+      const clock6 = Number(slice.breakHours) > 0 ? Number(slice.clockHours) || 0 : slice.paidHours;
+      row3.clockHours += row3.overtime ? clock6 : 0;
       row3.breakHours += row3.overtime ? Number(slice.breakHours) || 0 : 0;
       const merged = mergeBookingPaySlice({ isOvertime: row3.overtime, paidHours: 0, pay: row3.pay }, slice);
       row3.pay = merged.pay;
@@ -31240,26 +31624,26 @@ var ProjectPlannerCanonical = (() => {
     const personFor = leavePersonMatcher(input.people);
     const rows3 = /* @__PURE__ */ new Map();
     const unmatched = [];
-    for (const record19 of input.records || []) {
-      if (!record19 || String(record19.status ?? "approved").toLowerCase() !== "approved") continue;
+    for (const record22 of input.records || []) {
+      if (!record22 || String(record22.status ?? "approved").toLowerCase() !== "approved") continue;
       const days = leaveDaysInRange(
-        { startDayKey: record19.startDayKey, endDayKey: record19.endDayKey, timeSlot: record19.timeSlot ?? "FULL DAY" },
+        { startDayKey: record22.startDayKey, endDayKey: record22.endDayKey, timeSlot: record22.timeSlot ?? "FULL DAY" },
         { startDayKey: input.range.start, endDayKey: input.range.end },
         zone3,
         input.nonWorkingDayKeys ?? null
       );
       if (!(days > 0)) continue;
-      const person = personFor(record19);
+      const person = personFor(record22);
       if (!person) {
-        const missingId = String(record19.userId || record19.operativeId || record19.id || "").trim();
-        const former = leaveRecordFormerPerson(record19, input.formerPeople);
+        const missingId = String(record22.userId || record22.operativeId || record22.id || "").trim();
+        const former = leaveRecordFormerPerson(record22, input.formerPeople);
         unmatched.push({
-          recordId: record19.id,
-          userId: record19.userId ?? null,
-          operativeId: record19.operativeId ?? null,
+          recordId: record22.id,
+          userId: record22.userId ?? null,
+          operativeId: record22.operativeId ?? null,
           ...former ? { formerPersonId: former.id } : {}
         });
-        const stored = String(record19.userName ?? "").trim();
+        const stored = String(record22.userName ?? "").trim();
         const name = former ? formerPersonLabel(former.displayName) : stored || `${WEEKLY_REPORT_PERSON_NOT_FOUND} (id ${missingId})`;
         const key8 = former ? `former:${idKey9(former.id)}` : `missing:${idKey9(missingId)}`;
         const row4 = rows3.get(key8) ?? { personId: null, person: name, role: "\u2014", days: 0, type: "Approved", found: false };
@@ -31283,13 +31667,13 @@ var ProjectPlannerCanonical = (() => {
         if (key8 && !byId.has(key8)) byId.set(key8, person);
       }
     }
-    return (record19) => byId.get(idKey9(record19.userId)) ?? byId.get(idKey9(record19.operativeId)) ?? null;
+    return (record22) => byId.get(idKey9(record22.userId)) ?? byId.get(idKey9(record22.operativeId)) ?? null;
   }
-  function leaveRecordFormerPerson(record19, formerPeople) {
-    if (!record19 || !formerPeople?.length) return null;
-    const byId = formerPersonForId(record19.userId, formerPeople) ?? formerPersonForId(record19.operativeId, formerPeople);
+  function leaveRecordFormerPerson(record22, formerPeople) {
+    if (!record22 || !formerPeople?.length) return null;
+    const byId = formerPersonForId(record22.userId, formerPeople) ?? formerPersonForId(record22.operativeId, formerPeople);
     if (byId) return byId;
-    const email = String(record19.userId ?? "").trim().toLowerCase();
+    const email = String(record22.userId ?? "").trim().toLowerCase();
     if (!email.includes("@")) return null;
     let found = null;
     for (const person of formerPeople) {
@@ -31300,14 +31684,14 @@ var ProjectPlannerCanonical = (() => {
   }
   function leaveRecordsWithoutPerson(input) {
     const personFor = leavePersonMatcher(input.people);
-    return (input.records || []).filter((record19) => record19 && !personFor(record19));
+    return (input.records || []).filter((record22) => record22 && !personFor(record22));
   }
   var WEEKLY_REPORT_WARNING_OPEN = "Open";
   function weeklyReportClashDetail(input) {
     const places = (input.places || []).filter(Boolean);
-    const count = places.length === 2 ? "two" : String(places.length);
+    const count2 = places.length === 2 ? "two" : String(places.length);
     const list = places.map((place) => [String(place.label ?? "").trim(), String(place.time ?? "").trim()].filter(Boolean).join(" ")).filter(Boolean);
-    return `Booked in ${count} places on ${input.dayText}${list.length ? `: ${list.join("; ")}` : ""}.`;
+    return `Booked in ${count2} places on ${input.dayText}${list.length ? `: ${list.join("; ")}` : ""}.`;
   }
   function weeklyReportDayKey(date, timeZone) {
     return dayKeyInZone(date instanceof Date ? date : new Date(date), zoneOrLondon(timeZone));
@@ -31383,7 +31767,7 @@ var ProjectPlannerCanonical = (() => {
   var TIMESHEET_BOOKINGS_CHANGED_NOTICE_TYPE = "timesheet_bookings_changed";
   var TIMESHEET_BOOKINGS_CHANGED_NOTICE_TITLE = "Your signed timesheet has changed";
   var TIMESHEET_BOOKINGS_CHANGED_NOTICE_MESSAGE = "A booking on your signed timesheet has changed. Please review and sign again, or speak to your line manager if something isn't correct.";
-  function text53(value) {
+  function text54(value) {
     return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
   }
   function realMs2(value) {
@@ -31397,28 +31781,28 @@ var ProjectPlannerCanonical = (() => {
     const fingerprint = overtimeBookingFingerprint({
       id: doc.bookingId,
       personId: "",
-      dayKey: text53(doc.dayKey),
-      timeSlot: text53(doc.timeSlot),
-      workStartTime: text53(doc.workStartTime) || void 0,
-      workEndTime: text53(doc.workEndTime) || void 0,
+      dayKey: text54(doc.dayKey),
+      timeSlot: text54(doc.timeSlot),
+      workStartTime: text54(doc.workStartTime) || void 0,
+      workEndTime: text54(doc.workEndTime) || void 0,
       isBreakRemoved: doc.isBreakRemoved === true,
       otMultiplierOverride: typeof doc.otMultiplierOverride === "number" ? doc.otMultiplierOverride : null
     });
     return overtimeFingerprintKey(fingerprint).split("|").slice(0, 6).join("|");
   }
   function occupies(doc) {
-    const status = text53(doc.status);
+    const status = text54(doc.status);
     return status === "" || bookingOccupiesDay(status);
   }
   function timesheetBookingSheetTest(input) {
-    const ids = new Set((input.personIds ?? []).map((id2) => normalizeDocumentId(text53(id2))).filter(Boolean));
-    const start = text53(input.periodStartDayKey);
-    const end = text53(input.periodEndDayKey);
+    const ids = new Set((input.personIds ?? []).map((id2) => normalizeDocumentId(text54(id2))).filter(Boolean));
+    const start = text54(input.periodStartDayKey);
+    const end = text54(input.periodEndDayKey);
     const selfEmployedDays = input.person ? new Set(timesheetDaysForPerson(input.person, { startDayKey: start, endDayKey: end }, input.timeZone)) : null;
     return (doc) => {
       if (!doc) return "no-person";
-      if (!ids.has(normalizeDocumentId(text53(doc.personId)))) return "no-person";
-      const day = text53(doc.dayKey);
+      if (!ids.has(normalizeDocumentId(text54(doc.personId)))) return "no-person";
+      const day = text54(doc.dayKey);
       if (!day || day < start || day > end) return "no-period";
       if (selfEmployedDays && !selfEmployedDays.has(day)) return "no-paye";
       return occupies(doc) ? "yes" : "no-period";
@@ -31428,20 +31812,20 @@ var ProjectPlannerCanonical = (() => {
     const onSheet = timesheetBookingSheetTest(input);
     const lines = [];
     for (const doc of input.bookings ?? []) {
-      if (!doc || !text53(doc.bookingId) || onSheet(doc) !== "yes") continue;
-      const collection = text53(doc.collection) || "bookings";
+      if (!doc || !text54(doc.bookingId) || onSheet(doc) !== "yes") continue;
+      const collection = text54(doc.collection) || "bookings";
       const fingerprint = overtimeBookingFingerprint({
-        id: text53(doc.bookingId),
+        id: text54(doc.bookingId),
         personId: "",
-        dayKey: text53(doc.dayKey),
-        timeSlot: text53(doc.timeSlot),
-        workStartTime: text53(doc.workStartTime) || void 0,
-        workEndTime: text53(doc.workEndTime) || void 0,
+        dayKey: text54(doc.dayKey),
+        timeSlot: text54(doc.timeSlot),
+        workStartTime: text54(doc.workStartTime) || void 0,
+        workEndTime: text54(doc.workEndTime) || void 0,
         isBreakRemoved: doc.isBreakRemoved === true,
         otMultiplierOverride: typeof doc.otMultiplierOverride === "number" ? doc.otMultiplierOverride : null
       });
       lines.push({
-        bookingId: text53(doc.bookingId),
+        bookingId: text54(doc.bookingId),
         bookingCollection: collection,
         bookingFingerprint: fingerprint,
         isPayeDay: false,
@@ -31456,7 +31840,7 @@ var ProjectPlannerCanonical = (() => {
     if (!before || !after) return Boolean(before || after);
     if (core(before) !== core(after)) return true;
     if (signedTimesheetBookingPlace(before) !== signedTimesheetBookingPlace(after)) return true;
-    if (normalizeDocumentId(text53(before.personId)) !== normalizeDocumentId(text53(after.personId))) return true;
+    if (normalizeDocumentId(text54(before.personId)) !== normalizeDocumentId(text54(after.personId))) return true;
     return occupies(before) !== occupies(after);
   }
   function timesheetBookingChangeNotice(input) {
@@ -31495,17 +31879,17 @@ var ProjectPlannerCanonical = (() => {
     return { notify: true, ...exported ? { exported: true } : {}, reason: decision.kind === "added" ? "booking-added" : "signed-booking-changed" };
   }
   function timesheetBookingsChangedRecipients(subject, actor, roster) {
-    const id2 = typeof subject === "string" ? text53(subject) : text53(subject?.id);
+    const id2 = typeof subject === "string" ? text54(subject) : text54(subject?.id);
     return id2 ? excludeActor([id2], actor, roster) : [];
   }
   function timesheetBookingsChangedNoticeId(sheetDocId, sheet) {
-    const id2 = text53(sheetDocId);
+    const id2 = text54(sheetDocId);
     const signedMs = realMs2(sheet?.operativeSignedAt) ?? realMs2(sheet?.operativeSignedAtMs) ?? realMs2(sheet?.managerSignedAt) ?? realMs2(sheet?.approvedAt);
     if (!id2 || signedMs == null) return null;
     return derivedDocumentId(`timesheetBookingsChanged|${id2}|${signedMs}`);
   }
   function timesheetRevisionDueNoticeId(sheetDocId, sheet) {
-    const id2 = text53(sheetDocId);
+    const id2 = text54(sheetDocId);
     const exportedMs = realMs2(sheet?.exportedAt) ?? realMs2(sheet?.exportedAtMs);
     if (!id2 || exportedMs == null) return null;
     return derivedDocumentId(`timesheetRevisionDue|${id2}|${exportedMs}`);
@@ -31515,22 +31899,22 @@ var ProjectPlannerCanonical = (() => {
   var TIMESHEETS_HALF_SIGNED_HEADING = "Timesheets half signed";
   var TIMESHEETS_HALF_SIGNED_HELP = "The line manager signed these timesheets but the person\u2019s own signature is missing (an older app cleared it when price work or expenses were added). They show as not signed and cannot be invoiced or exported. Ask the person to open the timesheet and sign it again \u2014 their line manager\u2019s signature is kept.";
   var TIMESHEETS_HALF_SIGNED_NONE = "No timesheet is missing the person\u2019s signature.";
-  function text54(value) {
+  function text55(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function timesheetsHalfSigned(sheets) {
     const rows3 = [];
     for (const sheet of sheets) {
-      if (!sheet || !text54(sheet.id).startsWith("timesheet_")) continue;
+      if (!sheet || !text55(sheet.id).startsWith("timesheet_")) continue;
       const data = sheet.data && typeof sheet.data === "object" ? sheet.data : {};
       const status = parseTimesheetStatusFields(data);
       if (status.exportedAtMs != null) continue;
       if (status.operativeSignedAtMs != null || status.managerSignedAtMs == null) continue;
       rows3.push({
         sheetId: sheet.id,
-        userId: text54(data.userId) || timesheetDocumentSubjectId(sheet.id),
-        startDayKey: text54(data.weekStartKey),
-        endDayKey: text54(data.weekEndKey),
+        userId: text55(data.userId) || timesheetDocumentSubjectId(sheet.id),
+        startDayKey: text55(data.weekStartKey),
+        endDayKey: text55(data.weekEndKey),
         managerSignedAtMs: status.managerSignedAtMs,
         managerSignedByName: status.managerSignedByName
       });
@@ -31576,8 +31960,8 @@ var ProjectPlannerCanonical = (() => {
       };
     });
     const findings = [];
-    for (const { entry, record: record19 } of parsed) {
-      const owners = plans.filter((plan) => leaveRecordsForAccount([record19], plan.account, operatives).length > 0);
+    for (const { entry, record: record22 } of parsed) {
+      const owners = plans.filter((plan) => leaveRecordsForAccount([record22], plan.account, operatives).length > 0);
       if (owners.length === 0) continue;
       const storedUserId = storedText(entry.data?.userId);
       const storedOperativeId = storedText(entry.data?.operativeId);
@@ -31590,8 +31974,8 @@ var ProjectPlannerCanonical = (() => {
           personEmail: owners[0].email,
           storedUserId,
           storedOperativeId,
-          readerUserId: record19.userId,
-          readerOperativeId: record19.operativeId,
+          readerUserId: record22.userId,
+          readerOperativeId: record22.operativeId,
           reason: "conflict",
           otherPersonIds: owners.slice(1).map((plan) => plan.person.id),
           fix: `Decide whose leave organizations/{orgId}/holidayBookings/${entry.id} is (${owners.map((plan) => plan.person.id).join(", ")}) and set its userId to that person's users id.`
@@ -31601,7 +31985,7 @@ var ProjectPlannerCanonical = (() => {
       const owner = owners[0];
       if (queriedBy(owner)) continue;
       const spelling = owner.userKeys.has(key7(storedUserId)) || owner.operativeKeys.has(key7(storedOperativeId));
-      const sameEmail = owner.sameEmailKeys.has(key7(record19.userId)) || owner.sameEmailKeys.has(key7(record19.operativeId));
+      const sameEmail = owner.sameEmailKeys.has(key7(record22.userId)) || owner.sameEmailKeys.has(key7(record22.operativeId));
       const reason = spelling ? "letterCase" : sameEmail ? "sameEmailAccount" : "legacyKey";
       findings.push({
         leaveId: entry.id,
@@ -31609,8 +31993,8 @@ var ProjectPlannerCanonical = (() => {
         personEmail: owner.email,
         storedUserId,
         storedOperativeId,
-        readerUserId: record19.userId,
-        readerOperativeId: record19.operativeId,
+        readerUserId: record22.userId,
+        readerOperativeId: record22.operativeId,
         reason,
         otherPersonIds: [],
         fix: `Set userId to "${owner.person.id}" on organizations/{orgId}/holidayBookings/${entry.id} (keep every other field).`
@@ -31677,8 +32061,8 @@ var ProjectPlannerCanonical = (() => {
   }
   function materialSendRecordRecipientEmails(records) {
     const out = /* @__PURE__ */ new Set();
-    for (const record19 of records || []) {
-      for (const recipient of record19 && Array.isArray(record19.recipients) ? record19.recipients : []) {
+    for (const record22 of records || []) {
+      for (const recipient of record22 && Array.isArray(record22.recipients) ? record22.recipients : []) {
         const email = emailKey6(recipient?.email);
         if (email) out.add(email);
       }
@@ -31778,7 +32162,7 @@ var ProjectPlannerCanonical = (() => {
   function idKey10(value) {
     return typeof value === "string" ? value.trim().toLowerCase() : "";
   }
-  function text55(value) {
+  function text56(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function sheetOwnerKey(sheet) {
@@ -31805,8 +32189,8 @@ var ProjectPlannerCanonical = (() => {
     ].some((key8) => filled(sheet[key8]));
   }
   function sheetEnd(sheet) {
-    const end = text55(sheet.endDayKey);
-    return DAY_KEY13.test(end) ? end : text55(sheet.startDayKey);
+    const end = text56(sheet.endDayKey);
+    return DAY_KEY13.test(end) ? end : text56(sheet.startDayKey);
   }
   function userTimesheetQueue(input) {
     const members = (input?.members ?? []).filter((member) => member && idKey10(member.id));
@@ -31844,18 +32228,18 @@ var ProjectPlannerCanonical = (() => {
     people.forEach((person, personOrder) => {
       const own = sheets.map((sheet, index) => ({ sheet, index })).filter(({ sheet }) => {
         const owner = sheetOwnerKey(sheet);
-        return owner && !viewerKeys.has(owner) && person.keys.has(owner) && DAY_KEY13.test(text55(sheet.startDayKey));
+        return owner && !viewerKeys.has(owner) && person.keys.has(owner) && DAY_KEY13.test(text56(sheet.startDayKey));
       });
       if (own.length === 0) return;
       const candidates = own.map(({ sheet }) => ({
-        startDayKey: text55(sheet.startDayKey),
-        endDayKey: DAY_KEY13.test(text55(sheet.endDayKey)) ? text55(sheet.endDayKey) : null,
+        startDayKey: text56(sheet.startDayKey),
+        endDayKey: DAY_KEY13.test(text56(sheet.endDayKey)) ? text56(sheet.endDayKey) : null,
         hasActivity: typeof sheet.hasActivity === "boolean" ? sheet.hasActivity : timesheetSheetHasActivity(sheet.data),
-        documentId: text55(sheet.documentId) || null
+        documentId: text56(sheet.documentId) || null
       }));
       const runs = /* @__PURE__ */ new Map();
       for (const { sheet } of own) {
-        const run = { startDayKey: text55(sheet.startDayKey), endDayKey: sheetEnd(sheet) };
+        const run = { startDayKey: text56(sheet.startDayKey), endDayKey: sheetEnd(sheet) };
         runs.set(`${run.startDayKey}|${run.endDayKey}`, run);
       }
       const picked = /* @__PURE__ */ new Set();
@@ -31869,15 +32253,15 @@ var ProjectPlannerCanonical = (() => {
         if (!showsMyTimesheets(member, run, timeZone)) continue;
         const status = sheet.status ?? parseTimesheetStatusFields(sheet.data ?? {});
         const selfSigned = typeof member.timesheetSelfSigned === "boolean" ? member.timesheetSelfSigned : timesheetSelfSigned(member);
-        const change = sheet.bookingsChange ?? (sheet.data ? timesheetChangesWithLateExtras(null, timesheetLateExtrasSummary(sheet.data, { sheetDocId: text55(sheet.documentId) || null })) : null);
+        const change = sheet.bookingsChange ?? (sheet.data ? timesheetChangesWithLateExtras(null, timesheetLateExtrasSummary(sheet.data, { sheetDocId: text56(sheet.documentId) || null })) : null);
         const bucket = timesheetListBucket(status, !selfSigned, change);
         rows3.push({
           key: `${member.id}|${run.startDayKey}|${run.endDayKey}`,
           personId: member.id,
-          sheetUserId: text55(sheet.userId) || timesheetDocumentSubjectId(sheet.documentId ?? ""),
+          sheetUserId: text56(sheet.userId) || timesheetDocumentSubjectId(sheet.documentId ?? ""),
           startDayKey: run.startDayKey,
           endDayKey: run.endDayKey,
-          documentId: text55(sheet.documentId),
+          documentId: text56(sheet.documentId),
           sheetIndex: index,
           bucket,
           order: personOrder
@@ -31905,11 +32289,11 @@ var ProjectPlannerCanonical = (() => {
   var LOOKBACK_DAYS = 70;
   var DETAIL_NAMES_MAX = 8;
   var DAY_KEY14 = /^\d{4}-\d{2}-\d{2}$/;
-  function text56(value) {
+  function text57(value) {
     return typeof value === "string" ? value.trim() : "";
   }
   function textList3(value) {
-    return Array.isArray(value) ? value.map(text56).filter(Boolean) : [];
+    return Array.isArray(value) ? value.map(text57).filter(Boolean) : [];
   }
   function nowMsOf(now) {
     if (typeof now === "number" && Number.isFinite(now)) return now;
@@ -31968,10 +32352,10 @@ var ProjectPlannerCanonical = (() => {
     return { due: runs.length > 0, runs };
   }
   function timesheetSignOffReminderRosterMember(id2, data, org) {
-    const docId = text56(id2);
+    const docId = text57(id2);
     if (!docId || !data || typeof data !== "object") return null;
     const organizationId = documentOrganizationId(data.organizationId) ?? "";
-    const home = organizationId !== "" && organizationId.toLowerCase() === text56(org.organizationId).toLowerCase();
+    const home = organizationId !== "" && organizationId.toLowerCase() === text57(org.organizationId).toLowerCase();
     const bool3 = (value) => typeof value === "boolean" ? value : null;
     if (!home) return anchoredMember(docId, data, org);
     const level = permissionLevelOf(data);
@@ -32004,9 +32388,9 @@ var ProjectPlannerCanonical = (() => {
     };
   }
   function sharedMemberFields(docId, data) {
-    const firstName = text56(data.firstName);
-    const surname = text56(data.surname) || text56(data.lastName);
-    const email = text56(data.email);
+    const firstName = text57(data.firstName);
+    const surname = text57(data.surname) || text57(data.lastName);
+    const email = text57(data.email);
     return {
       id: docId,
       email,
@@ -32016,12 +32400,12 @@ var ProjectPlannerCanonical = (() => {
       formerUserIds: textList3(data.formerUserIds),
       sameEmailUserIds: textList3(data.sameEmailUserIds),
       assignedManagerUserIds: textList3(data.assignedManagerUserIds),
-      assignedManagerUserId: text56(data.assignedManagerUserId) || null,
+      assignedManagerUserId: text57(data.assignedManagerUserId) || null,
       hasNoLineManager: data.hasNoLineManager === true,
-      employmentType: text56(data.employmentType) || null,
-      employmentTypeTransitionFrom: text56(data.employmentTypeTransitionFrom) || null,
+      employmentType: text57(data.employmentType) || null,
+      employmentTypeTransitionFrom: text57(data.employmentTypeTransitionFrom) || null,
       employmentTypeEffectiveAt: documentInstantMs(data.employmentTypeEffectiveAt),
-      displayName: [firstName, surname].filter(Boolean).join(" ") || text56(data.displayName) || text56(data.name) || email
+      displayName: [firstName, surname].filter(Boolean).join(" ") || text57(data.displayName) || text57(data.name) || email
     };
   }
   function anchoredMember(docId, data, org) {
@@ -32043,7 +32427,11 @@ var ProjectPlannerCanonical = (() => {
     const superAdmin = here.isSuperAdmin === true || flags2.superAdmin === true;
     const level = here.level;
     const membershipActive2 = flags2.source === "membership" ? flags2.active : true;
-    const shared = sharedMemberFields(docId, data);
+    const shared = withOrganizationLineManager(sharedMemberFields(docId, data), {
+      organizationId: org.organizationId,
+      membership: org.membership ?? null,
+      homeOrganizationId: data.organizationId ?? null
+    });
     return {
       ...shared,
       isActive: membershipActive2,
@@ -32068,7 +32456,7 @@ var ProjectPlannerCanonical = (() => {
     const keys = new Set(ids.map(idKey));
     const emails = new Set(roster.filter((row3) => keys.has(idKey(row3.id))).map((row3) => idKey(row3.email)).filter(Boolean));
     for (const row3 of operatives ?? []) {
-      const rowId = text56(row3?.id);
+      const rowId = text57(row3?.id);
       if (!rowId || keys.has(idKey(rowId))) continue;
       const linked = [row3?.linkedUserId, row3?.userId, row3?.uid].some((value) => keys.has(idKey(value)));
       const email = idKey(row3?.email);
@@ -32085,13 +32473,13 @@ var ProjectPlannerCanonical = (() => {
     const bookings = readBookings ? input.bookings : [];
     const tombstones = input?.tombstonedBookingIds ?? [];
     for (const row3 of rows3) {
-      const documentId3 = text56(row3?.documentId);
+      const documentId3 = text57(row3?.documentId);
       const data = row3?.data && typeof row3.data === "object" ? row3.data : null;
       if (!documentId3.startsWith("timesheet_") || !data) continue;
       const startDayKey = sheetDayKey(data, "weekStartKey", "weekStart", timeZone);
       const endDayKey = sheetDayKey(data, "weekEndKey", "weekEnd", timeZone) || end;
       if (startDayKey !== start || endDayKey !== end) continue;
-      const userId = text56(data.userId) || null;
+      const userId = text57(data.userId) || null;
       const sheet = { documentId: documentId3, data, userId, startDayKey, endDayKey };
       if (readBookings) {
         const member = rosterMemberFor(userId || timesheetDocumentSubjectId(documentId3), roster);
@@ -32130,16 +32518,16 @@ var ProjectPlannerCanonical = (() => {
     return { id: reviewer.id, formerIds: reviewer.formerUserIds ?? [], aliasIds, role: reviewer.role };
   }
   function sheetDayKey(data, keyField, instantField, timeZone) {
-    const stored = text56(data[keyField]);
+    const stored = text57(data[keyField]);
     if (DAY_KEY14.test(stored)) return stored;
     const ms = documentInstantMs(data[instantField]);
     return ms == null ? "" : dayKeyInZone(new Date(ms), timeZone);
   }
   function timesheetSignOffReminderRecipients(input) {
     const timeZone = zoneOrLondon(input?.timeZone);
-    const roster = (input?.roster ?? []).filter((member) => member && text56(member.id));
-    const start = text56(input?.payRun?.startDayKey);
-    const end = text56(input?.payRun?.endDayKey);
+    const roster = (input?.roster ?? []).filter((member) => member && text57(member.id));
+    const start = text57(input?.payRun?.startDayKey);
+    const end = text57(input?.payRun?.endDayKey);
     if (!DAY_KEY14.test(start) || !DAY_KEY14.test(end) || roster.length === 0) return [];
     const sheets = runSheets(input?.sheets ?? [], start, end, timeZone, input, roster);
     if (sheets.length === 0) return [];
@@ -32174,9 +32562,9 @@ var ProjectPlannerCanonical = (() => {
   }
   function timesheetSignOffEscalationRecipients(input) {
     const timeZone = zoneOrLondon(input?.timeZone);
-    const roster = (input?.roster ?? []).filter((member) => member && text56(member.id));
-    const start = text56(input?.payRun?.startDayKey);
-    const end = text56(input?.payRun?.endDayKey);
+    const roster = (input?.roster ?? []).filter((member) => member && text57(member.id));
+    const start = text57(input?.payRun?.startDayKey);
+    const end = text57(input?.payRun?.endDayKey);
     if (!DAY_KEY14.test(start) || !DAY_KEY14.test(end) || roster.length === 0) return [];
     const sheets = runSheets(input?.sheets ?? [], start, end, timeZone, input, roster);
     if (sheets.length === 0) return [];
@@ -32205,39 +32593,1388 @@ var ProjectPlannerCanonical = (() => {
     return out;
   }
   function timesheetSignOffEscalationNotice(input) {
-    const count = Math.max(0, Math.floor(Number(input?.count) || 0));
-    const payday = DAY_KEY14.test(text56(input?.paymentDayKey)) ? ` ${formatPaymentRunDay(text56(input.paymentDayKey))}` : "";
-    const message = count === 1 ? `1 timesheet is still not signed off, payday is tomorrow${payday}.` : `${count} timesheets are still not signed off, payday is tomorrow${payday}.`;
+    const count2 = Math.max(0, Math.floor(Number(input?.count) || 0));
+    const payday = DAY_KEY14.test(text57(input?.paymentDayKey)) ? ` ${formatPaymentRunDay(text57(input.paymentDayKey))}` : "";
+    const message = count2 === 1 ? `1 timesheet is still not signed off, payday is tomorrow${payday}.` : `${count2} timesheets are still not signed off, payday is tomorrow${payday}.`;
     return { title: TIMESHEET_SIGNOFF_ESCALATION_NOTICE_TITLE, message, detail: namesDetail(input?.names) };
   }
   function timesheetSignOffEscalationNoticeId(input) {
-    const org = text56(input?.organizationId);
+    const org = text57(input?.organizationId);
     const recipient = idKey(input?.recipientId);
-    const start = text56(input?.startDayKey);
-    const end = text56(input?.endDayKey);
+    const start = text57(input?.startDayKey);
+    const end = text57(input?.endDayKey);
     if (!org || !recipient || !DAY_KEY14.test(start) || !DAY_KEY14.test(end)) return null;
     return derivedDocumentId(`timesheetSignOffEscalation|${org}|${recipient}|${start}|${end}`);
   }
   function namesDetail(list) {
-    const names = (list ?? []).map(text56).filter(Boolean);
+    const names = (list ?? []).map(text57).filter(Boolean);
     const shown = names.slice(0, DETAIL_NAMES_MAX);
     const more = names.length - shown.length;
     return shown.length ? `${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}` : "";
   }
   function timesheetSignOffReminderNotice(input) {
-    const count = Math.max(0, Math.floor(Number(input?.count) || 0));
-    const payday = DAY_KEY14.test(text56(input?.paymentDayKey)) ? formatPaymentRunDay(text56(input.paymentDayKey)) : "";
+    const count2 = Math.max(0, Math.floor(Number(input?.count) || 0));
+    const payday = DAY_KEY14.test(text57(input?.paymentDayKey)) ? formatPaymentRunDay(text57(input.paymentDayKey)) : "";
     const when = payday ? ` before payday ${payday}` : " before payday";
-    const message = count === 1 ? `1 timesheet is waiting for you to sign off${when}.` : `${count} timesheets are waiting for you to sign off${when}.`;
+    const message = count2 === 1 ? `1 timesheet is waiting for you to sign off${when}.` : `${count2} timesheets are waiting for you to sign off${when}.`;
     return { title: TIMESHEET_SIGNOFF_REMINDER_NOTICE_TITLE, message, detail: namesDetail(input?.names) };
   }
   function timesheetSignOffReminderNoticeId(input) {
-    const org = text56(input?.organizationId);
+    const org = text57(input?.organizationId);
     const recipient = idKey(input?.recipientId);
-    const start = text56(input?.startDayKey);
-    const end = text56(input?.endDayKey);
+    const start = text57(input?.startDayKey);
+    const end = text57(input?.endDayKey);
     if (!org || !recipient || !DAY_KEY14.test(start) || !DAY_KEY14.test(end)) return null;
     return derivedDocumentId(`timesheetSignOffReminder|${org}|${recipient}|${start}|${end}`);
+  }
+
+  // lib/canonical/orgCompliance.ts
+  var ORG_COMPLIANCE_COLLECTION = "orgCompliance";
+  var ORG_COMPLIANCE_DOCUMENT_ID = "documents";
+  var ORG_COMPLIANCE_SECTION_KEYS = ["insurance", "trade", "quality"];
+  var ORG_COMPLIANCE_SECTIONS = [
+    {
+      key: "insurance",
+      title: "PI & PL insurance",
+      helper: "Public liability, professional indemnity and employer\u2019s liability",
+      issuerLabel: "Insurer",
+      referenceLabel: "Policy number",
+      coverLabel: "Limit of indemnity",
+      emptyTitle: "No insurance certificates yet",
+      emptyBody: "Upload your PL and PI certificates so they\u2019re ready to send.",
+      documentTypes: [
+        { key: "public_liability", label: "Public liability", short: "PL" },
+        { key: "professional_indemnity", label: "Professional indemnity", short: "PI" },
+        { key: "employers_liability", label: "Employer\u2019s liability", short: "EL" },
+        { key: "contractors_all_risks", label: "Contractor\u2019s all risks", short: "CAR" },
+        { key: "other_insurance", label: "Other insurance", short: "Other" }
+      ]
+    },
+    {
+      key: "trade",
+      title: "Trade-specific accreditations",
+      helper: "e.g. NICEIC, NAPIT, ECA, Gas Safe, F-Gas, BESA",
+      issuerLabel: "Scheme or body",
+      referenceLabel: "Registration number",
+      coverLabel: null,
+      emptyTitle: "No trade accreditations yet",
+      emptyBody: "Upload scheme certificates such as NICEIC, Gas Safe or F-Gas.",
+      documentTypes: [
+        { key: "niceic", label: "NICEIC Approved Contractor", short: "NICEIC" },
+        { key: "napit", label: "NAPIT registration", short: "NAPIT" },
+        { key: "eca", label: "ECA membership", short: "ECA" },
+        { key: "gas_safe", label: "Gas Safe registration", short: "Gas Safe" },
+        { key: "f_gas", label: "F-Gas company certificate", short: "F-Gas" },
+        { key: "besa", label: "BESA membership", short: "BESA" },
+        { key: "other_trade", label: "Other accreditation", short: "Other" }
+      ]
+    },
+    {
+      key: "quality",
+      title: "Quality, information & process management",
+      helper: "ISO 9001, ISO 14001, ISO 27001, ISO 45001",
+      issuerLabel: "Certification body",
+      referenceLabel: "Certificate number",
+      coverLabel: null,
+      emptyTitle: "No quality certificates yet",
+      emptyBody: "Upload ISO 9001, ISO 27001 or similar certificates.",
+      documentTypes: [
+        { key: "iso_9001", label: "ISO 9001 \u2013 Quality management", short: "ISO 9001" },
+        { key: "iso_14001", label: "ISO 14001 \u2013 Environmental management", short: "ISO 14001" },
+        { key: "iso_27001", label: "ISO 27001 \u2013 Information security", short: "ISO 27001" },
+        { key: "iso_45001", label: "ISO 45001 \u2013 Health & safety management", short: "ISO 45001" },
+        { key: "other_quality", label: "Other certificate", short: "Other" }
+      ]
+    }
+  ];
+  var ORG_COMPLIANCE_PAGE_TITLE = "Insurance & accreditations";
+  var ORG_COMPLIANCE_PAGE_SUBTITLE = "Your organisation\u2019s certificates, ready to view and share.";
+  var ORG_COMPLIANCE_HUB_GROUP = "Compliance";
+  var ORG_COMPLIANCE_EXPIRING_SOON_DAYS = 30;
+  var ORG_COMPLIANCE_MAX_YEARS_AHEAD = 10;
+  var ORG_COMPLIANCE_MAX_PER_SECTION = 50;
+  var ORG_COMPLIANCE_FIELD_LIMITS = { title: 120, issuer: 120, reference: 60 };
+  var ORG_COMPLIANCE_COVER_MAX = 1e9;
+  var ORG_COMPLIANCE_LABELS = {
+    docType: "Document type",
+    title: "Name",
+    titlePlaceholder: "e.g. Public liability 2026\u201327",
+    expiryToggle: "Has an expiry date",
+    expiry: "Expiry date",
+    expiryHelper: `Optional. Shows as expiring ${ORG_COMPLIANCE_EXPIRING_SOON_DAYS} days before.`,
+    upload: "Upload",
+    view: "View",
+    replace: "Replace file",
+    edit: "Edit details",
+    remove: "Remove",
+    save: "Save",
+    cancel: "Cancel",
+    replaceHelper: "The new file replaces the current one. Update the expiry date if it\u2019s changed. The old file can be recovered for 30 days.",
+    removeConfirm: "Remove this document? The file can be recovered for 30 days by asking support."
+  };
+  var ORG_COMPLIANCE_MESSAGES = {
+    noAccess: "Only an admin can open insurance & accreditations.",
+    sectionFull: `A section can hold up to ${ORG_COMPLIANCE_MAX_PER_SECTION} documents. Remove an old one first.`,
+    missing: "This document was removed on another device.",
+    docType: "Choose a document type.",
+    title: "Enter a name.",
+    titleLong: `Name can be up to ${ORG_COMPLIANCE_FIELD_LIMITS.title} characters.`,
+    issuerLong: `This can be up to ${ORG_COMPLIANCE_FIELD_LIMITS.issuer} characters.`,
+    referenceLong: `This can be up to ${ORG_COMPLIANCE_FIELD_LIMITS.reference} characters.`,
+    cover: "Enter the cover as a whole amount, or leave it empty.",
+    expiry: "Enter the expiry date as a date, or turn off \u201CHas an expiry date\u201D.",
+    expiryFar: `The expiry date can be at most ${ORG_COMPLIANCE_MAX_YEARS_AHEAD} years ahead.`
+  };
+  var ORG_COMPLIANCE_STATUS_ORDER = ["expired", "expiring_soon", "valid", "no_expiry"];
+  function text58(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function record19(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+  var DAY_KEY15 = /^\d{4}-\d{2}-\d{2}$/;
+  function validDayKey4(value) {
+    if (!DAY_KEY15.test(value)) return false;
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
+  function graphemeLength(value) {
+    return Array.from(value).length;
+  }
+  function isOrgComplianceSectionKey(value) {
+    return typeof value === "string" && ORG_COMPLIANCE_SECTION_KEYS.includes(value);
+  }
+  function orgComplianceSection(key8) {
+    return ORG_COMPLIANCE_SECTIONS.find((section) => section.key === key8) ?? null;
+  }
+  function orgComplianceDocTypeLabel(section, docType) {
+    const type = orgComplianceSection(section)?.documentTypes.find((t) => t.key === docType);
+    return type?.label ?? (text58(docType) || "Document");
+  }
+  function canManageOrganizationCompliance(user) {
+    if (!user || typeof user !== "object") return false;
+    return permissionLevelOf(user) === "admin";
+  }
+  var ORG_COMPLIANCE_ORG_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+  function orgComplianceOrganizationId(organizationId) {
+    const org = text58(organizationId);
+    return ORG_COMPLIANCE_ORG_ID_PATTERN.test(org) ? org : null;
+  }
+  function orgComplianceDocumentPath(organizationId) {
+    const org = orgComplianceOrganizationId(organizationId);
+    if (!org) return null;
+    return `organizations/${encodeURIComponent(org)}/${ORG_COMPLIANCE_COLLECTION}/${ORG_COMPLIANCE_DOCUMENT_ID}`;
+  }
+  function orgComplianceFolder(organizationId) {
+    const org = orgComplianceOrganizationId(organizationId);
+    if (!org) return null;
+    return `organizations/${encodeURIComponent(org)}/compliance`;
+  }
+  function orgComplianceStoragePath(input) {
+    const folder = orgComplianceFolder(input.organizationId);
+    const uid = text58(input.uid);
+    if (!folder || !uid || !/^[A-Za-z0-9-]+$/.test(uid)) return null;
+    const ms = Math.floor(Number(input.unixMs));
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    const ext = text58(input.extension).toLowerCase().replace(/^\.+/, "").replace(/[^a-z0-9]/g, "");
+    return ext ? `${folder}/${uid}_${ms}.${ext}` : `${folder}/${uid}_${ms}`;
+  }
+  function orgCompliancePathBelongsTo(path, organizationId) {
+    const value = text58(path);
+    if (!value || value.includes("..") || value.includes("//")) return false;
+    const parts3 = value.split("/");
+    if (parts3.length !== 4 || parts3[0] !== "organizations" || parts3[2] !== "compliance" || !parts3[3]) return false;
+    if (!ORG_COMPLIANCE_ORG_ID_PATTERN.test(parts3[1])) return false;
+    const org = text58(organizationId);
+    return !org || normalizeDocumentId(parts3[1]) === normalizeDocumentId(org);
+  }
+  function normalizeOrgComplianceExpiry(value) {
+    if (value === null || value === void 0) return null;
+    const raw = text58(value);
+    if (!raw) return null;
+    return validDayKey4(raw) ? raw : void 0;
+  }
+  function normalizeOrgComplianceCover(value) {
+    if (value === null || value === void 0) return null;
+    if (typeof value === "string") {
+      const raw = value.replace(/[£$€,\s]/g, "");
+      if (!raw) return null;
+      if (!/^\d+$/.test(raw)) return void 0;
+      value = Number(raw);
+    }
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > ORG_COMPLIANCE_COVER_MAX) return void 0;
+    return value;
+  }
+  function orgComplianceDetailsError(section, details, todayKey4) {
+    const sec = orgComplianceSection(section);
+    if (!sec) return ORG_COMPLIANCE_MESSAGES.docType;
+    if (!sec.documentTypes.some((t) => t.key === details.docType)) return ORG_COMPLIANCE_MESSAGES.docType;
+    const title = text58(details.title);
+    if (!title) return ORG_COMPLIANCE_MESSAGES.title;
+    if (graphemeLength(title) > ORG_COMPLIANCE_FIELD_LIMITS.title) return ORG_COMPLIANCE_MESSAGES.titleLong;
+    if (graphemeLength(text58(details.issuer)) > ORG_COMPLIANCE_FIELD_LIMITS.issuer) return ORG_COMPLIANCE_MESSAGES.issuerLong;
+    if (graphemeLength(text58(details.reference)) > ORG_COMPLIANCE_FIELD_LIMITS.reference) return ORG_COMPLIANCE_MESSAGES.referenceLong;
+    if (sec.coverLabel && normalizeOrgComplianceCover(details.coverAmount) === void 0) return ORG_COMPLIANCE_MESSAGES.cover;
+    const expiry = normalizeOrgComplianceExpiry(details.expiresOn);
+    if (expiry === void 0) return ORG_COMPLIANCE_MESSAGES.expiry;
+    if (expiry && validDayKey4(todayKey4)) {
+      const limit = `${Number(todayKey4.slice(0, 4)) + ORG_COMPLIANCE_MAX_YEARS_AHEAD}${todayKey4.slice(4)}`;
+      if (expiry > limit) return ORG_COMPLIANCE_MESSAGES.expiryFar;
+    }
+    return null;
+  }
+  function cleanDetails(section, details) {
+    return {
+      docType: text58(details.docType),
+      title: text58(details.title),
+      issuer: text58(details.issuer),
+      reference: text58(details.reference),
+      coverAmount: section.coverLabel ? normalizeOrgComplianceCover(details.coverAmount) ?? null : null,
+      expiresOn: normalizeOrgComplianceExpiry(details.expiresOn) ?? null
+    };
+  }
+  function parseEntry2(entry, index, section, organizationId) {
+    const row3 = record19(entry);
+    const path = text58(row3.path);
+    if (!orgCompliancePathBelongsTo(path, organizationId)) return null;
+    const size = Number(row3.sizeBytes);
+    const cover = section.coverLabel ? normalizeOrgComplianceCover(row3.coverAmount) : null;
+    const docType = text58(row3.docType) || section.documentTypes[section.documentTypes.length - 1].key;
+    return {
+      id: text58(row3.id) || derivedRowId(organizationId ?? "", `documents.${section.key}`, index, [path]),
+      section: section.key,
+      docType,
+      title: text58(row3.title) || orgComplianceDocTypeLabel(section.key, docType),
+      issuer: text58(row3.issuer),
+      reference: text58(row3.reference),
+      coverAmount: cover ?? null,
+      // A stored expiry that is not a date reads as none (never drops the row).
+      expiresOn: normalizeOrgComplianceExpiry(row3.expiresOn) ?? null,
+      path,
+      fileName: text58(row3.fileName) || path.split("/").pop() || "Document",
+      contentType: text58(row3.contentType),
+      sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
+      uploadedAtMs: documentInstantMs(row3.uploadedAtMs),
+      uploadedBy: text58(row3.uploadedBy),
+      updatedAtMs: documentInstantMs(row3.updatedAtMs),
+      updatedBy: text58(row3.updatedBy)
+    };
+  }
+  function parseOrgComplianceDocuments(data, options) {
+    const out = { insurance: [], trade: [], quality: [] };
+    const documents = record19(record19(data).documents);
+    const org = text58(options?.organizationId) || null;
+    for (const section of ORG_COMPLIANCE_SECTIONS) {
+      const list = Array.isArray(documents[section.key]) ? documents[section.key] : [];
+      const seen = /* @__PURE__ */ new Set();
+      list.forEach((entry, index) => {
+        const parsed = parseEntry2(entry, index, section, org);
+        if (!parsed || seen.has(parsed.path)) return;
+        seen.add(parsed.path);
+        out[section.key].push(parsed);
+      });
+    }
+    return out;
+  }
+  function storedList2(stored, section) {
+    const list = record19(record19(stored).documents)[section];
+    return Array.isArray(list) ? list.map((row3) => record19(row3)) : [];
+  }
+  function indexOfEntry(list, section, organizationId, entryId) {
+    return list.findIndex((row3, i) => {
+      const id2 = text58(row3.id) || derivedRowId(organizationId, `documents.${section}`, i, [text58(row3.path)]);
+      return normalizeDocumentId(id2) === normalizeDocumentId(entryId);
+    });
+  }
+  function fileFields(file) {
+    const size = Number(file.sizeBytes);
+    const at = Math.floor(Number(file.uploadedAtMs));
+    return {
+      path: text58(file.path),
+      fileName: text58(file.fileName) || text58(file.path).split("/").pop() || "Document",
+      contentType: text58(file.contentType),
+      sizeBytes: Number.isFinite(size) && size >= 0 ? size : null,
+      uploadedAtMs: Number.isFinite(at) ? at : null,
+      uploadedBy: text58(file.uploadedBy)
+    };
+  }
+  function orgComplianceAddWriteFields(stored, input) {
+    const section = orgComplianceSection(input.section);
+    if (!section) return { set: null, outcome: "invalid", error: ORG_COMPLIANCE_MESSAGES.docType };
+    const error = orgComplianceDetailsError(section.key, input.details, input.todayKey);
+    if (error) return { set: null, outcome: "invalid", error };
+    const file = fileFields(input.file);
+    if (!orgCompliancePathBelongsTo(file.path, input.organizationId) || !file.uploadedBy) return { set: null, outcome: "invalid", error: null };
+    const list = storedList2(stored, section.key);
+    if (list.some((row3) => text58(row3.path) === file.path)) return { set: null, outcome: "alreadyLinked", error: null };
+    if (list.length >= ORG_COMPLIANCE_MAX_PER_SECTION) return { set: null, outcome: "refused", error: ORG_COMPLIANCE_MESSAGES.sectionFull };
+    const entry = {
+      id: text58(input.id) || derivedRowId(input.organizationId, `documents.${section.key}`, list.length, [file.path]),
+      ...cleanDetails(section, input.details),
+      ...file,
+      updatedAtMs: file.uploadedAtMs,
+      updatedBy: file.uploadedBy
+    };
+    return { set: { section: section.key, value: [...list, entry] }, outcome: "added", error: null };
+  }
+  function orgComplianceUpdateWriteFields(stored, input) {
+    const section = orgComplianceSection(input.section);
+    if (!section) return { set: null, outcome: "invalid", error: ORG_COMPLIANCE_MESSAGES.docType };
+    const error = orgComplianceDetailsError(section.key, input.details, input.todayKey);
+    if (error) return { set: null, outcome: "invalid", error };
+    const list = storedList2(stored, section.key);
+    const index = indexOfEntry(list, section.key, input.organizationId, input.entryId);
+    if (index < 0) return { set: null, outcome: "missing", error: ORG_COMPLIANCE_MESSAGES.missing };
+    const line = list[index];
+    const next = cleanDetails(section, input.details);
+    const current = cleanDetails(section, line);
+    if (JSON.stringify(current) === JSON.stringify(next)) return { set: null, outcome: "unchanged", error: null };
+    const value = [...list];
+    value[index] = { ...line, ...next, updatedAtMs: Math.floor(Number(input.updatedAtMs)) || null, updatedBy: text58(input.updatedBy) };
+    return { set: { section: section.key, value }, outcome: "changed", error: null };
+  }
+  function orgComplianceReplaceWriteFields(stored, input) {
+    const section = orgComplianceSection(input.section);
+    if (!section) return { set: null, outcome: "invalid", replacedPath: null, error: ORG_COMPLIANCE_MESSAGES.docType };
+    const error = orgComplianceDetailsError(section.key, input.details, input.todayKey);
+    if (error) return { set: null, outcome: "invalid", replacedPath: null, error };
+    const file = fileFields(input.file);
+    if (!orgCompliancePathBelongsTo(file.path, input.organizationId) || !file.uploadedBy) {
+      return { set: null, outcome: "invalid", replacedPath: null, error: null };
+    }
+    const list = storedList2(stored, section.key);
+    const index = indexOfEntry(list, section.key, input.organizationId, input.entryId);
+    if (index < 0) return { set: null, outcome: "missing", replacedPath: null, error: ORG_COMPLIANCE_MESSAGES.missing };
+    const line = list[index];
+    if (text58(line.path) === file.path) return { set: null, outcome: "alreadyLinked", replacedPath: null, error: null };
+    const value = [...list];
+    const id2 = text58(line.id) || derivedRowId(input.organizationId, `documents.${section.key}`, index, [text58(line.path)]);
+    value[index] = { ...line, id: id2, ...cleanDetails(section, input.details), ...file, updatedAtMs: file.uploadedAtMs, updatedBy: file.uploadedBy };
+    return { set: { section: section.key, value }, outcome: "replaced", replacedPath: text58(line.path) || null, error: null };
+  }
+  function orgComplianceRemoveWriteFields(stored, input) {
+    if (!isOrgComplianceSectionKey(input.section)) return { set: null, removedPath: null };
+    const list = storedList2(stored, input.section);
+    const index = indexOfEntry(list, input.section, input.organizationId, input.entryId);
+    if (index < 0) return { set: null, removedPath: null };
+    return {
+      set: { section: input.section, value: list.filter((_, i) => i !== index) },
+      removedPath: text58(list[index].path) || null
+    };
+  }
+  function orgComplianceMergePayload(write) {
+    return { documents: { [write.section]: write.value } };
+  }
+  function orgComplianceTodayKey(nowMs2, timeZone) {
+    return holidayDocumentDayKey(Number.isFinite(nowMs2) ? nowMs2 : Date.now(), timeZone);
+  }
+  function orgComplianceExpiryStatus(expiresOn, todayKey4) {
+    const expiry = normalizeOrgComplianceExpiry(expiresOn);
+    if (!expiry || !validDayKey4(todayKey4)) return { status: "no_expiry", tone: "grey", daysToExpiry: null, label: "No expiry date" };
+    const days = calendarDaysBetween(todayKey4, expiry);
+    const date = subcontractorDocumentExpiryDateText(expiry);
+    if (days < 0) return { status: "expired", tone: "red", daysToExpiry: days, label: `Expired ${date}` };
+    if (days <= ORG_COMPLIANCE_EXPIRING_SOON_DAYS) {
+      const label = days === 0 ? "Expires today" : days === 1 ? `1 day left \xB7 ${date}` : `${days} days left \xB7 ${date}`;
+      return { status: "expiring_soon", tone: "amber", daysToExpiry: days, label };
+    }
+    return { status: "valid", tone: "green", daysToExpiry: days, label: `Valid to ${date}` };
+  }
+  function orgComplianceSortedEntries(entries, todayKey4) {
+    const rank = (entry) => ORG_COMPLIANCE_STATUS_ORDER.indexOf(orgComplianceExpiryStatus(entry.expiresOn, todayKey4).status);
+    return [...entries].sort(
+      (a, b) => rank(a) - rank(b) || (a.expiresOn ?? "").localeCompare(b.expiresOn ?? "") || a.title.localeCompare(b.title, "en-GB", { sensitivity: "base" })
+    );
+  }
+  function orgComplianceCounts(documents, todayKey4) {
+    const counts = { total: 0, expiringSoon: 0, expired: 0, attention: 0 };
+    for (const key8 of ORG_COMPLIANCE_SECTION_KEYS) {
+      for (const entry of documents?.[key8] ?? []) {
+        counts.total += 1;
+        const status = orgComplianceExpiryStatus(entry.expiresOn, todayKey4).status;
+        if (status === "expiring_soon") counts.expiringSoon += 1;
+        if (status === "expired") counts.expired += 1;
+      }
+    }
+    counts.attention = counts.expiringSoon + counts.expired;
+    return counts;
+  }
+  function orgComplianceHubSubtitle(counts) {
+    const total = counts?.total ?? 0;
+    if (!total) return "PI, PL, trade and ISO certificates";
+    const docs = `${total} document${total === 1 ? "" : "s"}`;
+    const attention = counts?.attention ?? 0;
+    return attention ? `${docs} \xB7 ${attention} need${attention === 1 ? "s" : ""} attention` : docs;
+  }
+  function orgComplianceCoverText(amount, currency) {
+    return typeof amount === "number" && Number.isFinite(amount) ? formatMoney(amount, currency, { decimals: 0 }) : "";
+  }
+  function orgComplianceFileName(pickedName, storedPath) {
+    const objectName = text58(storedPath).split("/").pop() || "Document";
+    const picked = text58(pickedName).split(/[\\/]/).pop()?.trim() ?? "";
+    if (!picked) return objectName;
+    const ext = (name2) => {
+      const dot = name2.lastIndexOf(".");
+      return dot > 0 ? name2.slice(dot + 1).toLowerCase() : "";
+    };
+    const storedExt = ext(objectName);
+    const ownExt = ext(picked);
+    const norm = (e) => e === "jpeg" ? "jpg" : e;
+    let name = picked;
+    if (storedExt && norm(ownExt) !== norm(storedExt)) {
+      const base = ownExt ? picked.slice(0, picked.length - ownExt.length - 1) : picked;
+      name = `${base}.${storedExt}`;
+    }
+    return Array.from(name).slice(0, 200).join("");
+  }
+  function orgComplianceReminder(counts) {
+    const expired = counts?.expired ?? 0;
+    const expiringSoon = counts?.expiringSoon ?? 0;
+    const count2 = expired + expiringSoon;
+    if (!count2) return null;
+    const parts3 = [
+      expired ? `${expired} expired` : "",
+      expiringSoon ? `${expiringSoon} expiring within ${ORG_COMPLIANCE_EXPIRING_SOON_DAYS} days` : ""
+    ].filter(Boolean);
+    return {
+      count: count2,
+      expired,
+      expiringSoon,
+      title: `${count2} insurance or accreditation certificate${count2 === 1 ? "" : "s"} need${count2 === 1 ? "s" : ""} attention`,
+      detail: parts3.join(" \xB7 ")
+    };
+  }
+  var ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS = 50;
+  var ORG_COMPLIANCE_ZIP_MAX_BYTES = 200 * 1024 * 1024;
+  var ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE = "These documents are too large for one zip (200 MB). Choose fewer.";
+  function orgComplianceZipEntryNames(entries) {
+    const used = /* @__PURE__ */ new Set();
+    return entries.map((entry) => {
+      const raw = text58(entry.fileName) || text58(entry.title) || "Document";
+      const safe = raw.replace(/[\u0000-\u001f\u007f/\\:*?"<>|]/g, "_").replace(/^\.+/, "_").slice(0, 150) || "Document";
+      const dot = safe.lastIndexOf(".");
+      const base = dot > 0 ? safe.slice(0, dot) : safe;
+      const ext = dot > 0 ? safe.slice(dot) : "";
+      let name = safe;
+      for (let n = 2; used.has(name.toLowerCase()); n += 1) name = `${base} (${n})${ext}`;
+      used.add(name.toLowerCase());
+      return name;
+    });
+  }
+  function orgComplianceZipFileName(todayKey4) {
+    return `Insurance-and-accreditations-${validDayKey4(todayKey4) ? todayKey4 : "documents"}.zip`;
+  }
+  var ORG_COMPLIANCE_SHARE_LINK_DAYS = 7;
+  var ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS = 20;
+  var ORG_COMPLIANCE_SHARE_LINKS_COLLECTION = "complianceShareLinks";
+  var ORG_COMPLIANCE_AUDIT_COLLECTION = "complianceAudit";
+  var ORG_COMPLIANCE_SIGNED_URL_SECONDS = 60;
+  var ORG_COMPLIANCE_SHARE_MESSAGES = {
+    none: "Choose at least one document to share.",
+    tooMany: `Share up to ${ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS} documents in one link.`,
+    gone: "This link has expired or been turned off. Ask the company for a new one.",
+    helper: `Anyone with the link can view and download the chosen documents for ${ORG_COMPLIANCE_SHARE_LINK_DAYS} days, or until you turn the link off.`
+  };
+  function parseOrgComplianceDocumentRef(value) {
+    if (value && typeof value === "object") {
+      const row3 = value;
+      if (isOrgComplianceSectionKey(row3.section) && text58(row3.id) && !text58(row3.id).includes("/")) return { section: row3.section, id: text58(row3.id) };
+      return null;
+    }
+    const raw = text58(value);
+    const at = raw.indexOf(":");
+    if (at < 0) return null;
+    const section = raw.slice(0, at);
+    const id2 = raw.slice(at + 1);
+    return isOrgComplianceSectionKey(section) && id2 && !id2.includes("/") && id2.length <= 200 ? { section, id: id2 } : null;
+  }
+  function orgComplianceDocumentRefKey(ref) {
+    return `${ref.section}:${ref.id}`;
+  }
+  function findEntry(documents, ref) {
+    return documents[ref.section].find((entry) => normalizeDocumentId(entry.id) === normalizeDocumentId(ref.id)) ?? null;
+  }
+  function orgComplianceShareSelection(documents, refs) {
+    if (refs.length > ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS) return { refs: [], error: ORG_COMPLIANCE_SHARE_MESSAGES.tooMany };
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const value of refs) {
+      const ref = parseOrgComplianceDocumentRef(value);
+      const entry = ref ? findEntry(documents, ref) : null;
+      if (!ref || !entry) continue;
+      const key8 = orgComplianceDocumentRefKey({ section: ref.section, id: entry.id });
+      if (seen.has(key8)) continue;
+      seen.add(key8);
+      out.push({ section: ref.section, id: entry.id });
+    }
+    return { refs: out, error: out.length ? null : ORG_COMPLIANCE_SHARE_MESSAGES.none };
+  }
+  function parseOrgComplianceShareLink(id2, data) {
+    const row3 = record19(data);
+    const org = text58(row3.organizationId);
+    if (!text58(id2) || !org) return null;
+    const docs = Array.isArray(row3.documents) ? row3.documents.map(parseOrgComplianceDocumentRef).filter((r) => r !== null) : [];
+    const num2 = (value) => typeof value === "number" && Number.isFinite(value) ? value : documentInstantMs(value);
+    return {
+      id: text58(id2),
+      organizationId: org,
+      documents: docs,
+      createdBy: text58(row3.createdBy),
+      createdAtMs: num2(row3.createdAtMs),
+      expiresAtMs: num2(row3.expiresAtMs),
+      revokedAtMs: num2(row3.revokedAtMs),
+      openCount: Number.isFinite(Number(row3.openCount)) ? Math.max(0, Math.floor(Number(row3.openCount))) : 0,
+      lastOpenedAtMs: num2(row3.lastOpenedAtMs)
+    };
+  }
+  function orgComplianceShareLinkState(link, nowMs2) {
+    if (!link || link.expiresAtMs == null) return "expired";
+    if (link.revokedAtMs != null) return "revoked";
+    return nowMs2 < link.expiresAtMs ? "active" : "expired";
+  }
+  function orgComplianceShareLinkCreateFields(input) {
+    const expiresAtMs = input.nowMs + ORG_COMPLIANCE_SHARE_LINK_DAYS * 24 * 60 * 60 * 1e3;
+    return {
+      organizationId: input.organizationId,
+      documents: input.documents.map(orgComplianceDocumentRefKey),
+      createdBy: input.createdBy,
+      createdAtMs: input.nowMs,
+      expiresAtMs,
+      revokedAtMs: null,
+      openCount: 0,
+      lastOpenedAtMs: null
+    };
+  }
+  function orgComplianceSharePath(token) {
+    return `/shared/compliance/${encodeURIComponent(token)}`;
+  }
+  function orgCompliancePublicDocuments(documents, refs, todayKey4, currency) {
+    const out = [];
+    for (const ref of refs) {
+      const entry = findEntry(documents, ref);
+      const section = orgComplianceSection(ref.section);
+      if (!entry || !section) continue;
+      const status = orgComplianceExpiryStatus(entry.expiresOn, todayKey4);
+      out.push({
+        key: orgComplianceDocumentRefKey({ section: section.key, id: entry.id }),
+        sectionTitle: section.title,
+        typeLabel: orgComplianceDocTypeLabel(section.key, entry.docType),
+        title: entry.title,
+        issuer: entry.issuer,
+        issuerLabel: section.issuerLabel,
+        reference: entry.reference,
+        referenceLabel: section.referenceLabel,
+        cover: section.coverLabel ? orgComplianceCoverText(entry.coverAmount, currency) : "",
+        coverLabel: section.coverLabel,
+        statusLabel: status.label,
+        tone: status.tone,
+        contentType: entry.contentType
+      });
+    }
+    return out;
+  }
+  function orgComplianceSharedEntry(documents, link, key8) {
+    const ref = parseOrgComplianceDocumentRef(key8);
+    if (!ref) return null;
+    const shared = link.documents.some(
+      (item) => item.section === ref.section && normalizeDocumentId(item.id) === normalizeDocumentId(ref.id)
+    );
+    return shared ? findEntry(documents, ref) : null;
+  }
+  function orgCompliancePathLinked(stored, path) {
+    const target = text58(path);
+    if (!target) return false;
+    const documents = record19(record19(stored).documents);
+    return ORG_COMPLIANCE_SECTION_KEYS.some((key8) => {
+      const list = documents[key8];
+      return Array.isArray(list) && list.some((row3) => text58(record19(row3).path) === target);
+    });
+  }
+  function orgComplianceShareOpen(org, nowMs2) {
+    if (!org || typeof org !== "object") return false;
+    if (organizationDeletionState(org, nowMs2).state !== "active") return false;
+    const raw = org.billing;
+    const billing = record19(raw);
+    if (raw && typeof raw === "object" && !hasAccess(billing, nowMs2)) return false;
+    if (billing.accessOpen === false) return false;
+    const closes = documentInstantMs(billing.accessClosesAt);
+    return !(closes != null && nowMs2 >= closes);
+  }
+  function orgComplianceShareCreatorActive(input) {
+    const uid = text58(input.createdBy);
+    const org = record19(input.organization);
+    if (!uid || !input.organization) return false;
+    const members = record19(org.members);
+    const level = organizationLevelFor({
+      organizationId: input.organizationId,
+      userId: uid,
+      user: input.user ?? null,
+      membership: input.membership ?? null,
+      membersRole: members[uid],
+      creatorUserId: text58(org.creatorUserId) || null
+    });
+    if (level.level !== "admin") return false;
+    const user = input.user ? record19(input.user) : null;
+    if (user && text58(user.organizationId).toLowerCase() === text58(input.organizationId).toLowerCase() && user.isActive === false) return false;
+    const membership = input.membership ? record19(input.membership) : null;
+    if (membership) {
+      const active = "accountActive" in membership ? membership.accountActive : membership.isActive;
+      if (active === false) return false;
+    }
+    return true;
+  }
+
+  // lib/canonical/offlineReplace.ts
+  var OFFLINE_REPLACE_REPLAY_DECISIONS = [
+    "apply",
+    "createOnly",
+    "alreadyApplied",
+    "dropLocal",
+    "refuseChanged",
+    "refusePermission"
+  ];
+  var OFFLINE_REPLACE_TARGET_OUTCOMES = ["delete", "dropLocal", "alreadyGone", "refuseChanged", "refusePermission"];
+  var OFFLINE_REPLACE_CHANGED_MESSAGE = "Changed on another device \u2014 not replaced";
+  var OFFLINE_REPLACE_REFUSED_MESSAGE = "Not replaced \u2014 you can no longer remove the existing booking, so both bookings are as they were";
+  function text59(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function usableId(value) {
+    const id2 = text59(value);
+    return id2 && !id2.includes("/") ? id2 : "";
+  }
+  function isReplaceCollection2(value) {
+    return BOOKING_REPLACE_COLLECTIONS.includes(text59(value));
+  }
+  function refKey2(collection, bookingId) {
+    return `${collection}/${bookingId.toLowerCase()}`;
+  }
+  function offlineReplaceReplayDecision(input) {
+    const nothing = (decision, targets2 = []) => ({
+      decision,
+      deletes: [],
+      targets: targets2,
+      message: decision === "refuseChanged" ? OFFLINE_REPLACE_CHANGED_MESSAGE : decision === "refusePermission" ? OFFLINE_REPLACE_REFUSED_MESSAGE : null
+    });
+    const queued = input?.queued;
+    const bookingId = usableId(queued?.booking?.bookingId);
+    if (!queued || !bookingId || !isReplaceCollection2(queued.booking?.collection)) return nothing("dropLocal");
+    if (queued.newBookingDeleted === true) return nothing("dropLocal");
+    if (input.newBooking?.exists === true || input.newBooking?.tombstoned === true) return nothing("alreadyApplied");
+    const readRows = (input.replaced || []).filter((row3) => !!row3 && !!usableId(row3.bookingId));
+    const readFor = (collection, id2) => readRows.find((row3) => refKey2(text59(row3.collection), usableId(row3.bookingId)) === refKey2(collection, id2)) || readRows.find((row3) => !text59(row3.collection) && usableId(row3.bookingId).toLowerCase() === id2.toLowerCase());
+    const targets = [];
+    const deletes = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const target of queued.replaced || []) {
+      const id2 = usableId(target?.bookingId);
+      const collection = text59(target?.collection);
+      if (!target || !id2) continue;
+      const key8 = refKey2(collection, id2);
+      if (seen.has(key8)) continue;
+      seen.add(key8);
+      if (id2.toLowerCase() === bookingId.toLowerCase()) {
+        targets.push({ collection, bookingId: id2, outcome: "refusePermission" });
+        continue;
+      }
+      if (target.createdOffline === true) {
+        targets.push({ collection, bookingId: id2, outcome: "dropLocal" });
+        continue;
+      }
+      if (!isReplaceCollection2(collection)) {
+        targets.push({ collection, bookingId: id2, outcome: "refusePermission" });
+        continue;
+      }
+      const read = readFor(collection, id2);
+      if (!read) {
+        targets.push({ collection, bookingId: id2, outcome: "refuseChanged" });
+        continue;
+      }
+      if (read.tombstoned === true || read.live === null) {
+        targets.push({ collection, bookingId: id2, outcome: "alreadyGone" });
+        continue;
+      }
+      if (!read.live) {
+        targets.push({ collection, bookingId: id2, outcome: "refuseChanged" });
+        continue;
+      }
+      if (read.mayDelete === false) {
+        targets.push({ collection, bookingId: id2, outcome: "refusePermission" });
+        continue;
+      }
+      const queuedFingerprint = text59(target.fingerprint);
+      const liveFingerprint = bookingDeleteFingerprint({ ...read.live, collection }, input.timeZone);
+      if (!queuedFingerprint || !liveFingerprint || queuedFingerprint !== liveFingerprint) {
+        targets.push({ collection, bookingId: id2, outcome: "refuseChanged" });
+        continue;
+      }
+      targets.push({ collection, bookingId: id2, outcome: "delete" });
+      deletes.push({ collection, bookingId: id2 });
+    }
+    if (input.mayCreate === false || targets.some((t) => t.outcome === "refusePermission")) return nothing("refusePermission", targets);
+    if (targets.some((t) => t.outcome === "refuseChanged")) return nothing("refuseChanged", targets);
+    if (deletes.length === 0) return { decision: "createOnly", deletes: [], targets, message: null };
+    return { decision: "apply", deletes, targets, message: null };
+  }
+  function offlineReplaceRefusalDecision(code) {
+    return offlineDeleteRefusalDecision(code);
+  }
+
+  // lib/canonical/offlineSyncResults.ts
+  var OFFLINE_SYNC_RESULT_TITLE = "Not synced";
+  var OFFLINE_SYNC_RESULT_OPEN_DAY_LABEL = "Open day";
+  var OFFLINE_SYNC_RESULT_DISMISS_LABEL = "Got it";
+  var OFFLINE_SYNC_RESULT_EMPTY = "Everything on this phone has synced.";
+  var OFFLINE_SYNC_RESULT_BANNER = "Some changes from this phone were not synced. Tap to see what happened.";
+  var OFFLINE_SYNC_RESULT_NOTIFICATION_TITLE = "Some changes were not synced";
+  var OFFLINE_SYNC_RESULT_DETAIL_DELETED = "deleted on another device";
+  var OFFLINE_SYNC_RESULT_DETAIL_PERMISSION = "you no longer have permission";
+  var OFFLINE_SYNC_RESULT_DETAIL_CHANGED = "changed on another device";
+  var OFFLINE_SYNC_RESULT_KINDS = ["replace", "delete", "edit"];
+  var OFFLINE_SYNC_RESULT_REASONS = ["changed", "permission", "missing"];
+  var MONTHS6 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var WEEKDAYS4 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  function text60(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function dayText3(dayKey) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text60(dayKey));
+    if (!m) return "";
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    const weekday2 = WEEKDAYS4[new Date(Date.UTC(y, mo - 1, d)).getUTCDay()];
+    return `${weekday2} ${d} ${MONTHS6[mo - 1]}`;
+  }
+  function clock5(value) {
+    const m = /^(\d{1,2}):(\d{2})/.exec(text60(value));
+    return m ? `${m[1].padStart(2, "0")}:${m[2]}` : "";
+  }
+  function offlineSyncTimesText(booking) {
+    const start = clock5(booking?.startTime);
+    const end = clock5(booking?.endTime);
+    if (start && end) return `${start}\u2013${end}`;
+    const slot = text60(booking?.timeSlot).toUpperCase().replace(/[_\s]+/g, " ");
+    if (slot === "FULL DAY") return "Full day";
+    if (slot === "AM" || slot === "PM") return slot;
+    if (slot === "CUSTOM" || slot === "CUSTOM HOURS") return "Custom hours";
+    return slot ? slot.charAt(0) + slot.slice(1).toLowerCase() : "";
+  }
+  function offlineSyncBookingText(booking) {
+    const parts3 = [dayText3(booking?.dayKey), text60(booking?.place), offlineSyncTimesText(booking)].filter(Boolean);
+    return parts3.length ? parts3.join(" \xB7 ") : "a booking";
+  }
+  function whenText(atMs, timeZone) {
+    if (typeof atMs !== "number" || !Number.isFinite(atMs)) return "";
+    const p = partsInZone(new Date(atMs), zoneOrLondon(timeZone));
+    return `${p.d} ${MONTHS6[p.m - 1]}, ${String(p.h).padStart(2, "0")}:${String(p.min).padStart(2, "0")}`;
+  }
+  function changedText(before, live) {
+    const out = [];
+    const liveDay = dayText3(live.dayKey);
+    if (liveDay && liveDay !== dayText3(before?.dayKey)) out.push(`now ${liveDay}`);
+    const livePlace = text60(live.place);
+    if (livePlace && livePlace !== text60(before?.place)) out.push(`now at ${livePlace}`);
+    const liveTimes = offlineSyncTimesText(live);
+    if (liveTimes && liveTimes !== offlineSyncTimesText(before)) out.push(`now ${liveTimes}`);
+    return out.length ? out.join(", ") : OFFLINE_SYNC_RESULT_DETAIL_CHANGED;
+  }
+  function offlineSyncResultRows(results, timeZone) {
+    const rows3 = [];
+    for (const result2 of results || []) {
+      const id2 = text60(result2?.id);
+      if (!result2 || !id2) continue;
+      const replaced = (result2.replaced || []).filter(Boolean);
+      const attempted = result2.attempted || null;
+      const kind = text60(result2.kind);
+      const title = kind === "replace" ? `You tried to replace ${replaced.length ? replaced.map(offlineSyncBookingText).join(" and ") : "a booking"} with ${offlineSyncBookingText(attempted)}` : kind === "delete" ? `You tried to delete ${offlineSyncBookingText(attempted)}` : `You tried to change ${offlineSyncBookingText(attempted)}`;
+      const reason = text60(result2.reason);
+      let detail;
+      if (reason === "permission") detail = OFFLINE_SYNC_RESULT_DETAIL_PERMISSION;
+      else if (reason === "missing" || result2.live === null) detail = OFFLINE_SYNC_RESULT_DETAIL_DELETED;
+      else if (result2.live) detail = changedText(result2.before ?? (kind === "replace" ? replaced[0] : attempted), result2.live);
+      else detail = OFFLINE_SYNC_RESULT_DETAIL_CHANGED;
+      const day = text60(result2.live?.dayKey) || text60(attempted?.dayKey) || text60(replaced[0]?.dayKey);
+      rows3.push({
+        id: id2,
+        title,
+        detail: detail.charAt(0).toUpperCase() + detail.slice(1),
+        whenText: whenText(result2.atMs, timeZone),
+        dayKey: /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null,
+        openDayLabel: OFFLINE_SYNC_RESULT_OPEN_DAY_LABEL,
+        dismissLabel: OFFLINE_SYNC_RESULT_DISMISS_LABEL,
+        at: typeof result2.atMs === "number" && Number.isFinite(result2.atMs) ? result2.atMs : 0
+      });
+    }
+    return rows3.sort((a, b) => b.at - a.at).map(({ at: _at, ...row3 }) => row3);
+  }
+  function offlineSyncResultNotificationText(count2) {
+    const n = Math.max(1, Math.floor(Number(count2) || 1));
+    return {
+      title: OFFLINE_SYNC_RESULT_NOTIFICATION_TITLE,
+      body: `${n === 1 ? "1 change" : `${n} changes`} from this phone ${n === 1 ? "was" : "were"} not saved. Tap to see what happened.`
+    };
+  }
+  function offlineReplaceOrganizationReadDecision(input) {
+    if (input?.exists === false) return "refusePermission";
+    const code = typeof input?.code === "number" ? String(input.code) : text60(input?.code).toLowerCase().replace(/^firestore\//, "");
+    if (code === "permission-denied" || code === "7" || code === "not-found" || code === "5") return "refusePermission";
+    return "wait";
+  }
+
+  // lib/canonical/clientErrors.ts
+  var CLIENT_ERRORS_COLLECTION = "clientErrors";
+  var CLIENT_ERROR_PLATFORMS = ["web", "ios"];
+  var CLIENT_ERROR_SOURCES = ["window", "promise", "boundary", "caught", "uncaught"];
+  var CLIENT_ERRORS_PER_DAY = 20;
+  var CLIENT_ERROR_TTL_DAYS = 30;
+  var CLIENT_ERROR_KIND_MAX = 80;
+  var CLIENT_ERROR_WHERE_MAX = 120;
+  var CLIENT_ERROR_ROUTE_MAX = 120;
+  var CLIENT_ERROR_BUILD_MAX = 40;
+  var CLIENT_ERROR_ORGANIZATION_ID_MAX = 128;
+  var CLIENT_ERROR_DAY_MS = 864e5;
+  var CLIENT_ERROR_OTHER_MESSAGE_KEY = "other";
+  var CLIENT_ERROR_FIELDS = [
+    "platform",
+    "source",
+    "kind",
+    "where",
+    "route",
+    "build",
+    "messageKey",
+    "messageHash",
+    "organizationId",
+    "dayIndex",
+    "createdAt",
+    "expireAt"
+  ];
+  var CLIENT_ERROR_KNOWN_MESSAGES = {
+    "edit-of-missing-document": EDIT_OF_MISSING_DOCUMENT_MESSAGE,
+    "offline-online-only": OFFLINE_ONLINE_ONLY_MESSAGE,
+    "booking-replay-refused": BOOKING_REPLAY_REFUSED_MESSAGE,
+    "offline-delete-changed": OFFLINE_DELETE_CHANGED_MESSAGE,
+    "pay-history-not-loaded": PAY_HISTORY_NOT_LOADED_MESSAGE,
+    "payroll-policy-stale-save": PAYROLL_POLICY_STALE_SAVE_MESSAGE,
+    "timesheet-snapshot-failed": TIMESHEET_SNAPSHOT_FAILED_MESSAGE,
+    "variation-renumber-stale": VARIATION_RENUMBER_STALE_MESSAGE,
+    "firestore-permission-denied": "Missing or insufficient permissions.",
+    "firestore-client-offline": "Failed to get document because the client is offline.",
+    "firestore-unavailable": "The service is currently unavailable. This is a most likely a transient condition and may be corrected by retrying with a backoff.",
+    "fetch-failed": "Failed to fetch",
+    "fetch-load-failed": "Load failed",
+    "network-error": "NetworkError when attempting to fetch resource.",
+    "network-request-failed": "Firebase: Error (auth/network-request-failed).",
+    "resize-observer-loop": "ResizeObserver loop completed with undelivered notifications.",
+    "resize-observer-limit": "ResizeObserver loop limit exceeded",
+    "script-error": "Script error.",
+    "aborted": "The user aborted a request.",
+    "quota-exceeded": "QuotaExceededError"
+  };
+  function clientErrorMessageKey(message) {
+    if (typeof message !== "string") return CLIENT_ERROR_OTHER_MESSAGE_KEY;
+    const text63 = message.trim();
+    for (const [key8, known] of Object.entries(CLIENT_ERROR_KNOWN_MESSAGES)) if (known === text63) return key8;
+    return CLIENT_ERROR_OTHER_MESSAGE_KEY;
+  }
+  function redactClientErrorTokens(text63) {
+    return text63.replace(/[A-Za-z0-9]{16,}/g, "*");
+  }
+  function cap(text63, max) {
+    return text63.length <= max ? text63 : text63.slice(0, max);
+  }
+  function clientErrorKind(name, code) {
+    const t = typeof name === "string" ? name.trim() : "";
+    const n = /^[A-Za-z][A-Za-z_.]{0,59}$/.test(t) || /^[A-Za-z][A-Za-z0-9_.]{0,14}$/.test(t) ? t : "Error";
+    const raw = typeof code === "number" && Number.isInteger(code) ? String(code) : typeof code === "string" ? code.trim() : "";
+    const c = /^-?[A-Za-z0-9/_.-]{1,40}$/.test(raw) ? redactClientErrorTokens(raw) : "";
+    return cap(c ? `${n} ${c}` : n, CLIENT_ERROR_KIND_MAX);
+  }
+  function frameName(file, fn) {
+    const base = file.replace(/[?#].*$/, "").split("/").pop() || "";
+    const f = base.replace(/[^A-Za-z0-9_.-]/g, "");
+    const g = fn.replace(/[^A-Za-z0-9_.$<>]/g, "");
+    return cap(redactClientErrorTokens([f, g].filter(Boolean).join(" ")), CLIENT_ERROR_WHERE_MAX);
+  }
+  function clientErrorWhere(input) {
+    if (typeof input.file === "string" || typeof input.function === "string") {
+      const fn = typeof input.function === "string" ? input.function.replace(/\(.*$/, "") : "";
+      return frameName(typeof input.file === "string" ? input.file : "", fn);
+    }
+    if (typeof input.stack !== "string") return "";
+    const skip = /node_modules|\/framework[-.]|\/main-app[-.]|\/webpack[-.]|\/polyfills[-.]|react-dom|next\/dist|<anonymous>|native code/;
+    for (const line of input.stack.split("\n").slice(0, 30)) {
+      const chrome = line.match(/^\s*at\s+(?:(?:async\s+)?([^\s(]+)\s+\()?([^()\s]+?):\d+(?::\d+)?\)?\s*$/);
+      const gecko = line.match(/^\s*([^@\s]*)@(.+?):\d+(?::\d+)?\s*$/);
+      const m = chrome ? { fn: chrome[1] || "", file: chrome[2] } : gecko ? { fn: gecko[1] || "", file: gecko[2] } : null;
+      if (!m || skip.test(m.file)) continue;
+      const where = frameName(m.file, m.fn.split(".").pop() || "");
+      if (where) return where;
+    }
+    return "";
+  }
+  function clientErrorRoute(value) {
+    if (typeof value !== "string") return "/";
+    let path = value.normalize("NFKC").trim();
+    path = path.replace(/[?#].*$/s, "");
+    path = path.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "");
+    if (!path.startsWith("/")) path = path.includes("/") && /^[^/]*\./.test(path) ? path.replace(/^[^/]*/, "") : "/" + path;
+    const parts3 = path.split("/").map((segment2) => {
+      if (!segment2) return segment2;
+      let s = segment2;
+      try {
+        s = decodeURIComponent(segment2).normalize("NFKC");
+      } catch {
+        return ":id";
+      }
+      return /^[a-z][a-z0-9_-]{0,39}$/.test(s) && !/[0-9]{3,}/.test(s) && s.length < 16 ? s : ":id";
+    });
+    const out = parts3.join("/").replace(/\/{2,}/g, "/") || "/";
+    return cap(out, CLIENT_ERROR_ROUTE_MAX);
+  }
+  function clientErrorBuild(value) {
+    const raw = typeof value === "string" ? value.trim() : "";
+    return cap(redactClientErrorTokens(raw.replace(/[^A-Za-z0-9 .()+_-]/g, "")), CLIENT_ERROR_BUILD_MAX);
+  }
+  function clientErrorDayIndex(nowMs2) {
+    return Math.floor(nowMs2 / CLIENT_ERROR_DAY_MS);
+  }
+  function clientErrorHashInput(uid, dayIndex) {
+    return `${uid}|${dayIndex}`;
+  }
+  function clientErrorDocId(hashHex, slot) {
+    if (typeof hashHex !== "string" || !/^[0-9a-f]{64}$/.test(hashHex)) return null;
+    if (!Number.isInteger(slot) || slot < 0 || slot >= CLIENT_ERRORS_PER_DAY) return null;
+    return `${hashHex}_${slot}`;
+  }
+  function clientErrorSignature(input) {
+    return [input.platform, input.source, input.kind, input.where, input.route, input.build, input.messageHash].join("");
+  }
+  function clientErrorThrottle(state, input) {
+    const sameDay = state && state.dayIndex === input.dayIndex;
+    const current = {
+      dayIndex: input.dayIndex,
+      used: sameDay ? Math.max(0, Math.floor(Number(state.used) || 0)) : 0,
+      sent: Array.isArray(state?.sent) ? state.sent.slice(-200) : []
+    };
+    if (current.sent.includes(input.signature)) return { send: false, slot: null, state: current };
+    if (current.used >= CLIENT_ERRORS_PER_DAY) return { send: false, slot: null, state: current };
+    return {
+      send: true,
+      slot: current.used,
+      state: { dayIndex: input.dayIndex, used: current.used + 1, sent: [...current.sent, input.signature] }
+    };
+  }
+  function clientErrorNextSlot(slot) {
+    return Number.isInteger(slot) && slot + 1 < CLIENT_ERRORS_PER_DAY ? slot + 1 : null;
+  }
+  function clientErrorCreateFields(input) {
+    if (!CLIENT_ERROR_PLATFORMS.includes(input.platform)) return null;
+    if (!CLIENT_ERROR_SOURCES.includes(input.source)) return null;
+    if (typeof input.messageHash !== "string" || !/^[0-9a-f]{64}$/.test(input.messageHash)) return null;
+    const org = typeof input.organizationId === "string" ? input.organizationId.trim() : "";
+    return {
+      platform: input.platform,
+      source: input.source,
+      kind: clientErrorKind(input.name, input.code),
+      where: clientErrorWhere({ stack: input.stack, file: input.file, function: input.function }),
+      route: clientErrorRoute(input.route),
+      build: clientErrorBuild(input.build),
+      messageKey: clientErrorMessageKey(input.message),
+      messageHash: input.messageHash,
+      organizationId: org.length <= CLIENT_ERROR_ORGANIZATION_ID_MAX && /^[A-Za-z0-9_-]+$/.test(org) ? org : "",
+      dayIndex: clientErrorDayIndex(input.nowMs),
+      expireAtMs: input.nowMs + CLIENT_ERROR_TTL_DAYS * CLIENT_ERROR_DAY_MS
+    };
+  }
+  function instantMs5(value) {
+    if (value == null) return null;
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (value instanceof Date) return Number.isFinite(value.getTime()) ? value.getTime() : null;
+    if (typeof value === "string") {
+      const ms = Date.parse(value);
+      return Number.isFinite(ms) ? ms : null;
+    }
+    if (typeof value === "object") {
+      const v = value;
+      if (typeof v.toMillis === "function") return v.toMillis();
+      const seconds = typeof v.seconds === "number" ? v.seconds : typeof v._seconds === "number" ? v._seconds : null;
+      if (seconds != null) return seconds * 1e3 + Math.floor((typeof v.nanoseconds === "number" ? v.nanoseconds : 0) / 1e6);
+    }
+    return null;
+  }
+  function parseClientErrorDocument(id2, data) {
+    const d = data || {};
+    const text63 = (key8) => typeof d[key8] === "string" ? d[key8] : "";
+    return {
+      id: id2,
+      platform: text63("platform"),
+      source: text63("source"),
+      kind: text63("kind"),
+      where: text63("where"),
+      route: text63("route"),
+      build: text63("build"),
+      messageKey: text63("messageKey") || CLIENT_ERROR_OTHER_MESSAGE_KEY,
+      messageHash: text63("messageHash"),
+      organizationId: text63("organizationId"),
+      createdAtMs: instantMs5(d.createdAt)
+    };
+  }
+  function clientErrorGroups(records, filter = {}) {
+    const groups = /* @__PURE__ */ new Map();
+    const add = (list, value) => {
+      if (!list.includes(value)) list.push(value);
+    };
+    for (const r of records) {
+      if (filter.platform && r.platform !== filter.platform) continue;
+      if (filter.organizationId != null && r.organizationId !== filter.organizationId) continue;
+      const message = r.messageKey && r.messageKey !== CLIENT_ERROR_OTHER_MESSAGE_KEY ? r.messageKey : `#${r.messageHash}`;
+      const key8 = [r.platform, r.kind, r.where, message].join("");
+      let g = groups.get(key8);
+      if (!g) {
+        const known = r.messageKey !== CLIENT_ERROR_OTHER_MESSAGE_KEY;
+        g = {
+          key: key8,
+          platform: r.platform,
+          kind: r.kind,
+          where: r.where,
+          messageKey: known ? r.messageKey : CLIENT_ERROR_OTHER_MESSAGE_KEY,
+          messageText: known ? CLIENT_ERROR_KNOWN_MESSAGES[r.messageKey] || "" : "",
+          messageHashShort: r.messageHash.slice(0, 12),
+          routes: [],
+          builds: [],
+          count: 0,
+          firstMs: null,
+          lastMs: null,
+          organizationIds: [],
+          sources: []
+        };
+        groups.set(key8, g);
+      }
+      g.count += 1;
+      if (r.createdAtMs != null) {
+        g.firstMs = g.firstMs == null ? r.createdAtMs : Math.min(g.firstMs, r.createdAtMs);
+        g.lastMs = g.lastMs == null ? r.createdAtMs : Math.max(g.lastMs, r.createdAtMs);
+      }
+      add(g.routes, r.route);
+      add(g.builds, r.build);
+      add(g.organizationIds, r.organizationId);
+      add(g.sources, r.source);
+    }
+    return [...groups.values()].sort((a, b) => (b.lastMs ?? -1) - (a.lastMs ?? -1) || b.count - a.count || a.key.localeCompare(b.key));
+  }
+
+  // lib/canonical/orgComplianceReminders.ts
+  var ORG_COMPLIANCE_REMINDER_LEDGER_ID = "reminders";
+  function orgComplianceReminderLedgerPath(organizationId) {
+    const org = orgComplianceOrganizationId(organizationId);
+    return org ? `organizations/${org}/${ORG_COMPLIANCE_COLLECTION}/${ORG_COMPLIANCE_REMINDER_LEDGER_ID}` : null;
+  }
+  var ORG_COMPLIANCE_REMINDERS_SWITCH_FIELD = "orgComplianceRemindersEnabled";
+  function orgComplianceRemindersEnabled(config) {
+    return !!config && typeof config === "object" && config[ORG_COMPLIANCE_REMINDERS_SWITCH_FIELD] === true;
+  }
+  var ORG_COMPLIANCE_REMINDER_THRESHOLDS = [
+    { key: "twoMonths", months: 2, days: 0, label: "2 months" },
+    { key: "oneMonth", months: 1, days: 0, label: "1 month" },
+    { key: "sevenDays", months: 0, days: 7, label: "7 days" }
+  ];
+  var THRESHOLD_KEYS = ORG_COMPLIANCE_REMINDER_THRESHOLDS.map((t) => t.key);
+  var DAY_KEY16 = /^\d{4}-\d{2}-\d{2}$/;
+  function validDayKey5(value) {
+    if (typeof value !== "string" || !DAY_KEY16.test(value)) return false;
+    const [y, m, d] = value.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+  }
+  function text61(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function record20(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+  function pad4(n) {
+    return String(n).padStart(2, "0");
+  }
+  function orgComplianceReminderDayKey(expiresOn, threshold) {
+    if (!validDayKey5(expiresOn)) return null;
+    const t = typeof threshold === "string" ? ORG_COMPLIANCE_REMINDER_THRESHOLDS.find((row3) => row3.key === threshold) : threshold;
+    if (!t) return null;
+    const [y, m, d] = expiresOn.split("-").map(Number);
+    if (t.months > 0) {
+      const index = y * 12 + (m - 1) - t.months;
+      const ty = Math.floor(index / 12);
+      const tm = index % 12 + 1;
+      const lastDay = new Date(Date.UTC(ty, tm, 0)).getUTCDate();
+      return `${ty}-${pad4(tm)}-${pad4(Math.min(d, lastDay))}`;
+    }
+    return new Date(Date.UTC(y, m - 1, d - t.days)).toISOString().slice(0, 10);
+  }
+  function ledgerKey(section, entryId) {
+    return `${section}:${normalizeDocumentId(entryId)}`;
+  }
+  function parseOrgComplianceReminderLedger(data) {
+    const out = { entries: {} };
+    const entries = record20(record20(data).entries);
+    for (const [key8, raw] of Object.entries(entries)) {
+      const row3 = record20(raw);
+      const section = text61(row3.section);
+      const entryId = text61(row3.entryId);
+      if (!ORG_COMPLIANCE_SECTION_KEYS.includes(section) || !entryId) continue;
+      if (!validDayKey5(row3.expiresOn) || !validDayKey5(row3.setDayKey)) continue;
+      const sent = {};
+      for (const [k, v] of Object.entries(record20(row3.sent))) {
+        if (THRESHOLD_KEYS.includes(k) && validDayKey5(v)) sent[k] = v;
+      }
+      out.entries[key8] = { entryId, section, expiresOn: row3.expiresOn, setDayKey: row3.setDayKey, sent };
+    }
+    return out;
+  }
+  function orgComplianceReminderSetDayKey(input) {
+    const { entry, prior, todayKey: todayKey4, timeZone } = input;
+    if (prior && prior.expiresOn === entry.expiresOn && validDayKey5(prior.setDayKey)) return prior.setDayKey;
+    const ms = entry.updatedAtMs ?? entry.uploadedAtMs;
+    const written = typeof ms === "number" && Number.isFinite(ms) ? holidayDocumentDayKey(ms, timeZone) : "";
+    if (validDayKey5(written) && written <= todayKey4) return written;
+    return todayKey4;
+  }
+  function orgComplianceRemindersDue(input) {
+    const { documents, todayKey: todayKey4, timeZone } = input;
+    const prior = parseOrgComplianceReminderLedger(input.sent && "entries" in record20(input.sent) ? input.sent : { entries: {} });
+    const ledger = { entries: {} };
+    const due = [];
+    if (!validDayKey5(todayKey4)) return { due, ledger: prior };
+    for (const section of ORG_COMPLIANCE_SECTION_KEYS) {
+      for (const entry of documents?.[section] ?? []) {
+        if (!entry || !validDayKey5(entry.expiresOn) || !text61(entry.id)) continue;
+        const key8 = ledgerKey(section, entry.id);
+        if (ledger.entries[key8]) continue;
+        const before = prior.entries[key8];
+        const known = before && before.expiresOn === entry.expiresOn ? before : null;
+        const setDayKey = orgComplianceReminderSetDayKey({ entry, prior: known, todayKey: todayKey4, timeZone });
+        const record22 = {
+          entryId: entry.id,
+          section,
+          expiresOn: entry.expiresOn,
+          setDayKey,
+          sent: { ...known?.sent ?? {} }
+        };
+        ledger.entries[key8] = record22;
+        if (todayKey4 > entry.expiresOn) continue;
+        let current = null;
+        for (const threshold of ORG_COMPLIANCE_REMINDER_THRESHOLDS) {
+          const day = orgComplianceReminderDayKey(entry.expiresOn, threshold);
+          if (day && day <= todayKey4) current = threshold;
+        }
+        if (!current) continue;
+        const currentDay = orgComplianceReminderDayKey(entry.expiresOn, current);
+        if (currentDay < setDayKey) continue;
+        if (record22.sent[current.key]) continue;
+        due.push({
+          section,
+          sectionTitle: orgComplianceSection(section)?.title ?? section,
+          entryId: entry.id,
+          title: entry.title || orgComplianceDocTypeLabel(section, entry.docType),
+          docTypeLabel: orgComplianceDocTypeLabel(section, entry.docType),
+          expiresOn: entry.expiresOn,
+          threshold: current.key,
+          thresholdLabel: current.label,
+          daysLeft: calendarDaysBetween(todayKey4, entry.expiresOn)
+        });
+      }
+    }
+    due.sort((a, b) => a.expiresOn.localeCompare(b.expiresOn) || a.title.localeCompare(b.title, "en-GB", { sensitivity: "base" }));
+    return { due, ledger };
+  }
+  function orgComplianceReminderLedgerAfter(input) {
+    const out = { entries: {} };
+    for (const [key8, row3] of Object.entries(input.ledger.entries)) out.entries[key8] = { ...row3, sent: { ...row3.sent } };
+    for (const reminder of input.sent) {
+      const row3 = out.entries[ledgerKey(reminder.section, reminder.entryId)];
+      if (row3 && row3.expiresOn === reminder.expiresOn) row3.sent[reminder.threshold] = input.todayKey;
+    }
+    return out;
+  }
+  function orgComplianceReminderLedgerFields(ledger) {
+    const entries = {};
+    for (const [key8, row3] of Object.entries(ledger.entries)) {
+      entries[key8] = { entryId: row3.entryId, section: row3.section, expiresOn: row3.expiresOn, setDayKey: row3.setDayKey, sent: { ...row3.sent } };
+    }
+    return { entries };
+  }
+  function orgComplianceReminderBatchTag(reminders) {
+    const parts3 = reminders.map((r) => `${r.section}:${normalizeDocumentId(r.entryId)}:${r.expiresOn}:${r.threshold}`).sort();
+    const hash = (seed) => {
+      let h4 = seed >>> 0;
+      for (const ch of parts3.join("|")) {
+        h4 ^= ch.codePointAt(0) ?? 0;
+        h4 = Math.imul(h4, 16777619) >>> 0;
+      }
+      return h4.toString(16).padStart(8, "0");
+    };
+    return `${hash(2166136261)}${hash(2538058380)}`;
+  }
+  function orgComplianceReminderRecipients(roster) {
+    const members = (roster || []).filter((m) => m && typeof m === "object");
+    const ids = companyActivityRecipients(null, members);
+    const out = [];
+    const seen = /* @__PURE__ */ new Set();
+    for (const id2 of ids) {
+      const member = members.find((m) => normalizeDocumentId(String(m.id ?? "")) === normalizeDocumentId(id2));
+      const email = text61(member?.email).toLowerCase();
+      if (!member || !email || !email.includes("@") || seen.has(email)) continue;
+      const extra = member;
+      if (extra.passwordSet === false || extra.ghost === true) continue;
+      seen.add(email);
+      const first = text61(member.firstName);
+      out.push({ userId: id2, email, firstName: first });
+    }
+    return out;
+  }
+  var ORG_COMPLIANCE_PAGE_PATH = "/dashboard/settings/insurance-accreditations";
+  function whenText2(daysLeft) {
+    if (daysLeft <= 0) return "Expires today";
+    if (daysLeft === 1) return "Expires tomorrow";
+    return `Expires in ${daysLeft} days`;
+  }
+  function orgComplianceReminderEmail(input) {
+    const reminders = input.reminders || [];
+    if (reminders.length === 0) return null;
+    const org = text61(input.organizationName) || "your organisation";
+    const n = reminders.length;
+    const first = reminders[0];
+    const subject = n === 1 ? `${first.title} expires ${subcontractorDocumentExpiryDateText(first.expiresOn)} \u2014 ${org}` : `${n} insurance or accreditation documents expire soon \u2014 ${org}`;
+    return {
+      subject,
+      heading: n === 1 ? "A certificate expires soon" : `${n} certificates expire soon`,
+      intro: `These ${ORG_COMPLIANCE_PAGE_TITLE.toLowerCase()} documents for ${org} expire soon. Upload the renewed certificate in Project Planner so it stays ready to share.`,
+      rows: reminders.map((r) => ({
+        title: r.title,
+        kind: `${r.sectionTitle} \xB7 ${r.docTypeLabel}`,
+        expiryText: subcontractorDocumentExpiryDateText(r.expiresOn),
+        whenText: whenText2(r.daysLeft)
+      })),
+      buttonLabel: `Open ${ORG_COMPLIANCE_PAGE_TITLE}`,
+      path: ORG_COMPLIANCE_PAGE_PATH,
+      footer: `You get this email because you are an admin of ${org}. Reminders are sent 2 months, 1 month and 7 days before a document expires.`
+    };
+  }
+
+  // lib/canonical/onboardingChecklist.ts
+  var ONBOARDING_TITLE = "Getting started";
+  var ONBOARDING_SUBTITLE = "A few steps to set up your company. Each one ticks itself off when it\u2019s done.";
+  var ONBOARDING_DISMISS_LABEL = "Hide";
+  var ONBOARDING_DISMISS_CONFIRM = "Hide the Getting started card? You can still do every step from Settings.";
+  var ONBOARDING_OPTIONAL_LABEL = "Optional";
+  var ONBOARDING_DISMISSED_AT_FIELD = "onboardingDismissedAt";
+  var ONBOARDING_DISMISSED_BY_FIELD = "onboardingDismissedBy";
+  function text62(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+  function record21(value) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  }
+  function count(value) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  function hasOfficeAddress(org) {
+    if (text62(org.officeAddressLine1) || text62(org.officePostcode)) return true;
+    const legacy = record21(org.officeAddress);
+    return !!(text62(legacy.line1) || text62(legacy.addressLine1) || text62(legacy.postcode));
+  }
+  function onboardingChecklist(org, counts) {
+    const o = record21(org);
+    const c = counts ?? {};
+    const people = count(c.people);
+    const invites = count(c.pendingInvites);
+    const jobs = count(c.jobs);
+    const documents = count(c.complianceDocuments);
+    const invoicing = record21(o.invoicing);
+    const policy = record21(o.payrollTimePolicy);
+    const items = [
+      {
+        key: "company",
+        title: "Add your company details and logo",
+        detail: "Name, office address and logo \u2014 shown on reports and emails.",
+        done: !!text62(o.name) && hasOfficeAddress(o) && !!text62(o.companyLogoURL),
+        optional: false,
+        destination: "companyDetails",
+        href: "/dashboard/settings/company-details"
+      },
+      {
+        key: "workingHours",
+        title: "Set your working hours",
+        detail: "The working day, lunch break and overtime rates used for pay.",
+        done: Object.keys(policy).length > 0,
+        optional: false,
+        destination: "workingHours",
+        href: "/dashboard/settings/working-hours"
+      },
+      {
+        key: "payRuns",
+        title: "Set the PAYE payday and payment runs",
+        detail: "When timesheets close and people are paid.",
+        done: !!text62(invoicing.paymentRunMode) && !payePaydayMissing(o),
+        optional: false,
+        destination: "paymentRuns",
+        href: "/dashboard/settings/payment-runs"
+      },
+      {
+        key: "team",
+        title: "Invite your team",
+        detail: "Add your managers and operatives.",
+        done: (people ?? 0) + (invites ?? 0) > 0,
+        optional: false,
+        destination: "manageUsers",
+        href: "/dashboard/settings/users"
+      },
+      {
+        key: "firstJob",
+        title: "Add your first project or small works",
+        detail: "Then book people onto it.",
+        done: (jobs ?? 0) > 0,
+        optional: false,
+        destination: "projects",
+        href: "/dashboard/projects"
+      },
+      {
+        key: "accreditations",
+        title: "Add insurance & accreditations",
+        detail: "Keep your certificates ready to share. We remind you before they expire.",
+        done: (documents ?? 0) > 0,
+        optional: true,
+        destination: "insuranceAccreditations",
+        href: "/dashboard/settings/insurance-accreditations"
+      }
+    ];
+    const doneCount = items.filter((item) => item.done).length;
+    const total = items.length;
+    const complete = items.every((item) => item.optional || item.done);
+    const teamKnown = people != null && people > 0 || invites != null && invites > 0 || people != null && invites != null;
+    const ready = teamKnown && jobs != null;
+    return {
+      items,
+      doneCount,
+      total,
+      progressLabel: `${doneCount} of ${total} done`,
+      progress: total ? doneCount / total : 0,
+      complete,
+      ready,
+      title: ONBOARDING_TITLE,
+      subtitle: ONBOARDING_SUBTITLE
+    };
+  }
+  function onboardingDismissed(org) {
+    const value = record21(org)[ONBOARDING_DISMISSED_AT_FIELD];
+    return value != null && value !== false && value !== "";
+  }
+  function onboardingCardVisible(input) {
+    return input.viewerIsAdmin === true && input.checklist.ready && !input.checklist.complete && !onboardingDismissed(input.org);
+  }
+  function onboardingDismissWriteFields(userId) {
+    const uid = text62(userId);
+    return uid ? { [ONBOARDING_DISMISSED_BY_FIELD]: uid } : null;
   }
   return __toCommonJS(bundleEntry_exports);
 })();
