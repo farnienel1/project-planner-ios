@@ -7,7 +7,9 @@
 //  rulebook's (`Rulebook+OrgCompliance.swift`); this view only shows them.
 //
 
+import Foundation
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct InsuranceAccreditationsView: View {
@@ -19,6 +21,13 @@ struct InsuranceAccreditationsView: View {
     @State private var form: OrgComplianceFormMode?
     @State private var removing: RulebookOrgComplianceEntry?
     @State private var message: String?
+    /// Ticked documents (`section:id`), for the zip and share links (owner decision 24 Nov).
+    @State private var selected: Set<String> = []
+    @State private var working = false
+    @State private var shareFile: IdentifiableURL?
+    @State private var createdLink: OrgComplianceCreatedShareLink?
+    @State private var links: [OrgComplianceShareLinkRow] = []
+    @State private var linksError: String?
 
     private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
     private var todayKey: String { CanonicalBusinessEngine.orgComplianceTodayKey() }
@@ -48,9 +57,11 @@ struct InsuranceAccreditationsView: View {
                             .padding(.top, 8)
                     }
                     if let documents = store.documents {
+                        shareAndZipBar(documents)
                         ForEach(CanonicalBusinessEngine.orgComplianceSections) { section in
                             sectionBlock(section, entries: CanonicalBusinessEngine.orgComplianceSortedEntries(documents.entries(section.key), todayKey: todayKey))
                         }
+                        linksBlock
                     } else if store.loadError == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 24)
                     }
@@ -64,6 +75,12 @@ struct InsuranceAccreditationsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
             if allowed, !organizationId.isEmpty { store.start(organizationId: organizationId, db: firebaseBackend.db) }
+        }
+        .task(id: organizationId) {
+            if allowed, !organizationId.isEmpty { await loadLinks() }
+        }
+        .sheet(item: $shareFile) { item in
+            HSDocumentActivityView(activityItems: [item.url])
         }
         .sheet(item: $form) { mode in
             OrgComplianceDocumentForm(mode: mode, todayKey: todayKey) { details, file in
@@ -149,7 +166,19 @@ struct InsuranceAccreditationsView: View {
             entry.reference.isEmpty ? nil : entry.reference,
             entry.coverAmount.map { CanonicalBusinessEngine.orgComplianceCoverText($0) },
         ].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+        let key = orgComplianceRefKey(section: section.key, id: entry.id)
+        let ticked = selected.contains(key)
         return HStack(spacing: 12) {
+            Button {
+                if ticked { selected.remove(key) } else { selected.insert(key) }
+            } label: {
+                Image(systemName: ticked ? "checkmark.square.fill" : "square")
+                    .font(.title3)
+                    .foregroundStyle(ticked ? PPColor.brand : .secondary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Select \(entry.title)")
+            .accessibilityAddTraits(ticked ? .isSelected : [])
             Image(systemName: entry.contentType == "application/pdf" ? "doc.richtext" : "photo")
                 .foregroundStyle(PPColor.brand)
             VStack(alignment: .leading, spacing: 2) {
@@ -182,6 +211,156 @@ struct InsuranceAccreditationsView: View {
         case "amber": return .orange
         case "green": return .green
         default: return .secondary
+        }
+    }
+
+    /// The ticked documents that still exist, in page order.
+    private func selectedDocuments(_ documents: RulebookOrgComplianceDocuments) -> [OrgComplianceSelectedDocument] {
+        CanonicalBusinessEngine.orgComplianceSections.flatMap { section in
+            documents.entries(section.key)
+                .map { OrgComplianceSelectedDocument(section: section.key, entry: $0) }
+                .filter { selected.contains($0.key) }
+        }
+    }
+
+    @ViewBuilder
+    private func shareAndZipBar(_ documents: RulebookOrgComplianceDocuments) -> some View {
+        let chosen = selectedDocuments(documents)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(chosen.isEmpty ? "Tick documents to download them as a zip or share them with a 7-day link." : "\(chosen.count) selected")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                Button {
+                    Task { await downloadZip(chosen) }
+                } label: {
+                    Label("Download zip", systemImage: "doc.zipper")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .disabled(chosen.isEmpty || working)
+                Button {
+                    Task { await createLink(documents: documents, chosen: chosen) }
+                } label: {
+                    Label("Create share link", systemImage: "link")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(PPColor.brand)
+                .disabled(chosen.isEmpty || working)
+                if working { ProgressView() }
+            }
+            if let createdLink {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Share link (works for 7 days, read only)").font(.footnote.weight(.semibold))
+                    Text(createdLink.url).font(.footnote.monospaced()).textSelection(.enabled).lineLimit(3)
+                    HStack(spacing: 10) {
+                        Button("Copy link") { UIPasteboard.general.string = createdLink.url }
+                        if let url = URL(string: createdLink.url) {
+                            ShareLink(item: url) { Text("Share") }
+                        }
+                    }
+                    .font(.footnote.weight(.semibold))
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(PPColor.card)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(.top, 12)
+    }
+
+    @ViewBuilder
+    private var linksBlock: some View {
+        let active = links.filter { $0.state == "active" }
+        if !active.isEmpty || linksError != nil {
+            PPGroupLabel(text: "Active share links · \(active.count)").padding(.top, 16)
+            if let linksError {
+                Text(linksError).font(.footnote).foregroundStyle(.red).padding(.horizontal, 4)
+            }
+            PPGroupedCard {
+                ForEach(Array(active.enumerated()), id: \.element.id) { index, link in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(link.documents.count) document\(link.documents.count == 1 ? "" : "s")").font(.body)
+                            Text(linkDetail(link)).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Turn off", role: .destructive) { Task { await revoke(link) } }
+                            .font(.subheadline.weight(.semibold))
+                            .disabled(working)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 56)
+                    if index < active.count - 1 { PPRowDivider() }
+                }
+            }
+        }
+    }
+
+    private func linkDetail(_ link: OrgComplianceShareLinkRow) -> String {
+        let expires = link.expiresAtMs.map { Date(timeIntervalSince1970: $0 / 1000) }
+        let formatter = DateFormatter()
+        formatter.timeZone = OrganizationRulebookContext.timeZone
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.dateFormat = "d MMM yyyy, HH:mm"
+        let expiresText = expires.map { "Expires \(formatter.string(from: $0))" } ?? ""
+        let opens = "Opened \(link.openCount) time\(link.openCount == 1 ? "" : "s")"
+        return [expiresText, opens].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private func downloadZip(_ chosen: [OrgComplianceSelectedDocument]) async {
+        working = true
+        defer { working = false }
+        do {
+            let url = try await firebaseBackend.orgComplianceZip(entries: chosen.map(\.entry), todayKey: todayKey)
+            message = nil
+            shareFile = IdentifiableURL(url)
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func createLink(documents: RulebookOrgComplianceDocuments, chosen: [OrgComplianceSelectedDocument]) async {
+        let selection = CanonicalBusinessEngine.orgComplianceShareSelection(documents, refs: chosen.map(\.key))
+        if let error = selection.error {
+            message = error
+            return
+        }
+        working = true
+        defer { working = false }
+        do {
+            createdLink = try await OrgComplianceShareClient.create(organizationId: organizationId, documents: selection.refs)
+            message = nil
+            await loadLinks()
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func revoke(_ link: OrgComplianceShareLinkRow) async {
+        working = true
+        defer { working = false }
+        do {
+            try await OrgComplianceShareClient.revoke(organizationId: organizationId, id: link.id)
+            if createdLink?.id == link.id { createdLink = nil }
+            await loadLinks()
+        } catch {
+            linksError = error.localizedDescription
+        }
+    }
+
+    private func loadLinks() async {
+        let org = organizationId
+        do {
+            let rows = try await OrgComplianceShareClient.list(organizationId: org)
+            guard org == organizationId else { return }
+            links = rows
+            linksError = nil
+        } catch {
+            guard org == organizationId else { return }
+            linksError = error.localizedDescription
         }
     }
 

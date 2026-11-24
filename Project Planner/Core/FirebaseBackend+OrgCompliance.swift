@@ -10,6 +10,7 @@
 //
 
 import Foundation
+import Combine
 import FirebaseAuth
 @preconcurrency import FirebaseFirestore
 #if canImport(FirebaseStorage)
@@ -87,7 +88,8 @@ extension FirebaseBackend {
         _ = try await putVariationEvidenceData(prepared.data, path: path, contentType: checkedType)
         return OrgComplianceFileInput(
             path: path,
-            fileName: Self.subcontractorDocumentDisplayName(fileName: fileName, storedObjectName: prepared.objectName),
+            fileName: CanonicalBusinessEngine.orgComplianceFileName(pickedName: fileName, storedPath: path)
+                ?? Self.subcontractorDocumentDisplayName(fileName: fileName, storedObjectName: prepared.objectName),
             contentType: checkedType,
             sizeBytes: prepared.data.count,
             uploadedAtMs: Int64(nowMs),
@@ -98,6 +100,15 @@ extension FirebaseBackend {
     private func deleteComplianceObject(_ path: String?) async {
         guard let path, !path.isEmpty else { return }
         try? await storage.reference().child(path).delete()
+    }
+
+    /// After a transaction error the write may still have committed (§22 `alreadyLinked` pattern): re-read the document
+    /// from the server and delete the new file only when no entry names it (`orgCompliancePathLinked`). A re-read that
+    /// fails, or no answer from the rulebook, keeps the file.
+    private func deleteUnlinkedComplianceObject(organizationId: String, path: String) async {
+        guard let snapshot = try? await orgComplianceRef(organizationId: organizationId).getDocument(source: .server) else { return }
+        guard CanonicalBusinessEngine.orgCompliancePathLinked(stored: snapshot.data(), path: path) == false else { return }
+        await deleteComplianceObject(path)
     }
 
     func addOrgComplianceDocument(
@@ -113,7 +124,7 @@ extension FirebaseBackend {
                 )
             }
         } catch {
-            await deleteComplianceObject(file.path)
+            await deleteUnlinkedComplianceObject(organizationId: organizationId, path: file.path)
             throw error
         }
         if result.outcome == "added" || result.outcome == "alreadyLinked" { return }
@@ -136,7 +147,7 @@ extension FirebaseBackend {
                 )
             }
         } catch {
-            await deleteComplianceObject(file.path)
+            await deleteUnlinkedComplianceObject(organizationId: organizationId, path: file.path)
             throw error
         }
         guard result.outcome == "replaced" || result.outcome == "alreadyLinked" else {
@@ -158,6 +169,41 @@ extension FirebaseBackend {
     func orgComplianceDownloadURL(path: String) async throws -> URL {
         try await storage.reference().child(path).downloadURL()
     }
+
+    /// The ticked documents as one zip in a temporary folder (names from `orgComplianceZipEntryNames`, the file from
+    /// `orgComplianceZipFileName`, at most `orgComplianceZipMaxDocuments`). Built on the phone from files the admin may
+    /// already read; nothing stored. The caller shares the returned file.
+    func orgComplianceZip(entries: [RulebookOrgComplianceEntry], todayKey: String) async throws -> URL {
+        guard !entries.isEmpty else { throw Self.complianceError("Choose at least one document.") }
+        let max = CanonicalBusinessEngine.orgComplianceZipMaxDocuments
+        guard entries.count <= max else { throw Self.complianceError("Choose up to \(max) documents.") }
+        guard let names = CanonicalBusinessEngine.orgComplianceZipEntryNames(entries) else {
+            throw CanonicalWriteUnavailableError(function: "orgComplianceZipEntryNames")
+        }
+        let fileManager = FileManager.default
+        let work = fileManager.temporaryDirectory.appendingPathComponent("compliance-zip-\(UUID().uuidString)", isDirectory: true)
+        let folder = work.appendingPathComponent("Insurance-and-accreditations", isDirectory: true)
+        try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        for (index, entry) in entries.enumerated() {
+            let data: Data
+            do {
+                data = try await storage.reference().child(entry.path).data(maxSize: 12 * 1024 * 1024)
+            } catch {
+                throw Self.complianceError("\(entry.title) could not be downloaded.")
+            }
+            try data.write(to: folder.appendingPathComponent(names[index]))
+        }
+        let output = work.appendingPathComponent(CanonicalBusinessEngine.orgComplianceZipFileName(todayKey: todayKey))
+        var coordinatorError: NSError?
+        var copyError: Error?
+        // `.forUploading` gives a zip of the folder; it is removed when the block returns, so it is copied out.
+        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &coordinatorError) { zipped in
+            do { try fileManager.copyItem(at: zipped, to: output) } catch { copyError = error }
+        }
+        if let error = coordinatorError ?? copyError { throw error }
+        try? fileManager.removeItem(at: folder)
+        return output
+    }
     #else
     func addOrgComplianceDocument(
         data: Data, fileName: String, contentType: String?, organizationId: String,
@@ -174,6 +220,10 @@ extension FirebaseBackend {
     }
 
     func orgComplianceDownloadURL(path: String) async throws -> URL {
+        throw Self.complianceError("FirebaseStorage is not available.", code: 501)
+    }
+
+    func orgComplianceZip(entries: [RulebookOrgComplianceEntry], todayKey: String) async throws -> URL {
         throw Self.complianceError("FirebaseStorage is not available.", code: 501)
     }
     #endif

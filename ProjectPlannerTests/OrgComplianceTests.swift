@@ -81,4 +81,39 @@ final class OrgComplianceTests: XCTestCase {
         let unchanged = CanonicalBusinessEngine.orgComplianceUpdateWriteFields(stored: stored, section: "insurance", organizationId: org, entryId: id, todayKey: today, details: details, updatedAtMs: 20, updatedBy: "u2")
         XCTAssertEqual(unchanged.outcome, "unchanged")
     }
+
+    // 1.83.0 phase 2 (owner decision 24 Nov) and the review of #441 / #288.
+    func testFileNameAndLinkedCheck() {
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceFileName(pickedName: "Site.heic", storedPath: "organizations/o/compliance/u_1.jpg"), "Site.jpg")
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceFileName(pickedName: "", storedPath: "organizations/o/compliance/u_1.pdf"), "u_1.pdf")
+        let stored: [String: Any] = ["documents": ["trade": [["path": "organizations/o/compliance/u_1.pdf"]], "insurance": "junk"]]
+        XCTAssertEqual(CanonicalBusinessEngine.orgCompliancePathLinked(stored: stored, path: "organizations/o/compliance/u_1.pdf"), true)
+        XCTAssertEqual(CanonicalBusinessEngine.orgCompliancePathLinked(stored: stored, path: "organizations/o/compliance/u_2.pdf"), false)
+        XCTAssertEqual(CanonicalBusinessEngine.orgCompliancePathLinked(stored: nil, path: "organizations/o/compliance/u_1.pdf"), false)
+    }
+
+    func testReminderZipAndShareSelection() {
+        XCTAssertNil(CanonicalBusinessEngine.orgComplianceReminder(RulebookOrgComplianceCounts(total: 3, expiringSoon: 0, expired: 0, attention: 0)))
+        let reminder = CanonicalBusinessEngine.orgComplianceReminder(RulebookOrgComplianceCounts(total: 3, expiringSoon: 1, expired: 1, attention: 2))
+        XCTAssertEqual(reminder?.count, 2)
+        XCTAssertEqual(reminder?.title, "2 insurance or accreditation certificates need attention")
+        XCTAssertEqual(reminder?.detail, "1 expired · 1 expiring within 30 days")
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceZipFileName(todayKey: "2026-11-24"), "Insurance-and-accreditations-2026-11-24.zip")
+        let file = OrgComplianceFileInput(path: path("u1_10.pdf"), fileName: "PL.pdf", contentType: "application/pdf", sizeBytes: 100, uploadedAtMs: 10, uploadedBy: "u1")
+        let added = CanonicalBusinessEngine.orgComplianceAddWriteFields(stored: [:], section: "insurance", organizationId: org, todayKey: today, details: details, file: file)
+        guard let payload = added.payload,
+              let documents = CanonicalBusinessEngine.parseOrgComplianceDocuments(data: payload, organizationId: org),
+              let entry = documents.insurance.first else { return XCTFail("no entry") }
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceZipEntryNames([entry, entry]), ["PL.pdf", "PL (2).pdf"])
+        let key = orgComplianceRefKey(section: "insurance", id: entry.id)
+        let picked = CanonicalBusinessEngine.orgComplianceShareSelection(documents, refs: [key, key, "insurance:gone"])
+        XCTAssertEqual(picked.refs, [key])
+        XCTAssertNil(picked.error)
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceShareSelection(documents, refs: []).error, "Choose at least one document to share.")
+    }
+
+    func testShareEndpointNeverUsesWww() {
+        XCTAssertEqual(OrgComplianceShareClient.endpointURL("share-links")?.absoluteString, "https://projectplanner.us/api/compliance/share-links")
+        XCTAssertEqual(OrgComplianceShareClient.endpointURL("share-links/revoke")?.absoluteString, "https://projectplanner.us/api/compliance/share-links/revoke")
+    }
 }

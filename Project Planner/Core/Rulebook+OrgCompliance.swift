@@ -83,6 +83,23 @@ nonisolated struct RulebookOrgComplianceCounts: Codable, Hashable, Sendable {
     var attention: Int = 0
 }
 
+/// `orgComplianceReminder(counts)`: the admins' Home reminder.
+nonisolated struct RulebookOrgComplianceReminder: Hashable, Sendable {
+    let count: Int
+    let title: String
+    let detail: String
+}
+
+/// `orgComplianceDocumentRefKey` form: `insurance:abc`.
+nonisolated func orgComplianceRefKey(section: String, id: String) -> String { "\(section):\(id)" }
+
+/// The documents the page lets an admin tick.
+nonisolated struct OrgComplianceSelectedDocument: Hashable, Sendable {
+    let section: String
+    let entry: RulebookOrgComplianceEntry
+    var key: String { orgComplianceRefKey(section: section, id: entry.id) }
+}
+
 /// The details a form edits (as typed; the rulebook checks and cleans them).
 nonisolated struct OrgComplianceDetailsInput: Sendable {
     var docType: String
@@ -295,5 +312,70 @@ extension CanonicalBusinessEngine {
             callJSON("orgComplianceRemoveWriteFields", arguments: [peopleDocumentJSON(stored), input]) as? [String: Any],
             oldPathKey: "removedPath"
         )
+    }
+
+    // ── 1.83.0 phase 2 (owner decision 24 Nov): file name, linked check, reminder, zip, share links ──
+
+    /// `orgComplianceFileName(pickedName, storedPath)`: the same stored name as web.
+    nonisolated static func orgComplianceFileName(pickedName: String, storedPath: String) -> String? {
+        callJSON("orgComplianceFileName", arguments: [pickedName, storedPath]) as? String
+    }
+
+    /// `orgCompliancePathLinked(stored, path)`: does any stored entry name this file? Nil when the script did not answer
+    /// (the caller then keeps the file).
+    nonisolated static func orgCompliancePathLinked(stored: [String: Any]?, path: String) -> Bool? {
+        let doc: Any = stored.map { peopleDocumentJSON($0) } ?? NSNull()
+        return callJSON("orgCompliancePathLinked", arguments: [doc, path]) as? Bool
+    }
+
+    /// `orgComplianceReminder(counts)`: nil when nothing needs attention.
+    nonisolated static func orgComplianceReminder(_ counts: RulebookOrgComplianceCounts) -> RulebookOrgComplianceReminder? {
+        guard let arg = try? JSONSerialization.jsonObject(with: JSONEncoder().encode(counts)),
+              let row = callJSON("orgComplianceReminder", arguments: [arg]) as? [String: Any],
+              let title = row["title"] as? String else { return nil }
+        return RulebookOrgComplianceReminder(
+            count: (row["count"] as? NSNumber)?.intValue ?? 0,
+            title: title,
+            detail: row["detail"] as? String ?? ""
+        )
+    }
+
+    nonisolated static var orgComplianceZipMaxDocuments: Int {
+        constant("ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS", as: Int.self) ?? 50
+    }
+
+    nonisolated static var orgComplianceShareMaxDocuments: Int {
+        constant("ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS", as: Int.self) ?? 20
+    }
+
+    /// `ORG_COMPLIANCE_SHARE_MESSAGES[key]`.
+    nonisolated static func orgComplianceShareMessage(_ key: String, fallback: String) -> String {
+        constant("ORG_COMPLIANCE_SHARE_MESSAGES", as: [String: String].self)?[key] ?? fallback
+    }
+
+    /// `orgComplianceZipEntryNames(entries)`: safe, unique names in the order given. Nil when the script did not answer.
+    nonisolated static func orgComplianceZipEntryNames(_ entries: [RulebookOrgComplianceEntry]) -> [String]? {
+        let rows: [[String: Any]] = entries.map { ["fileName": $0.fileName, "title": $0.title] }
+        guard let names = callJSON("orgComplianceZipEntryNames", arguments: [rows]) as? [String], names.count == entries.count else { return nil }
+        return names
+    }
+
+    /// `orgComplianceZipFileName(todayKey)`.
+    nonisolated static func orgComplianceZipFileName(todayKey: String) -> String {
+        callJSON("orgComplianceZipFileName", arguments: [todayKey]) as? String ?? "Insurance-and-accreditations.zip"
+    }
+
+    /// `orgComplianceShareSelection(documents, refs)` → the refs a link may share (as `section:id`) or the message.
+    nonisolated static func orgComplianceShareSelection(_ documents: RulebookOrgComplianceDocuments, refs: [String]) -> (refs: [String], error: String?) {
+        guard let data = try? JSONEncoder().encode(documents),
+              let docs = try? JSONSerialization.jsonObject(with: data),
+              let row = callJSON("orgComplianceShareSelection", arguments: [docs, refs]) as? [String: Any] else {
+            return ([], CanonicalWriteUnavailableError(function: "orgComplianceShareSelection").errorDescription)
+        }
+        let picked = (row["refs"] as? [[String: Any]] ?? []).compactMap { ref -> String? in
+            guard let section = ref["section"] as? String, let id = ref["id"] as? String else { return nil }
+            return orgComplianceRefKey(section: section, id: id)
+        }
+        return (picked, row["error"] as? String)
     }
 }

@@ -714,6 +714,8 @@ struct HomeView: View {
         VStack(alignment: .leading, spacing: 0) {
             quickActionsHeaderRow
             quickActionsIconGrid
+            // RULEBOOK 1.83.0 §31: admins' insurance & accreditations reminder (nothing for anyone else).
+            OrgComplianceHomeReminderCard()
             upNextSection
             if userStore.canViewProjects() && !userStore.isOperativeMode() {
                 maintenanceTeaserCompact
