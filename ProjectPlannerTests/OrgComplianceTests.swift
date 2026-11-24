@@ -130,4 +130,17 @@ final class OrgComplianceTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
         XCTAssertEqual(CanonicalBusinessEngine.orgComplianceZipMaxBytes, 200 * 1024 * 1024)
     }
+
+    /// A link whose creator is no longer an admin reads "Stopped" (the web list route sends `creatorStopped`).
+    func testShareLinkStoppedByCreator() throws {
+        func row(_ json: String) throws -> OrgComplianceShareLinkRow {
+            try JSONDecoder().decode(OrgComplianceShareLinkRow.self, from: Data(json.utf8))
+        }
+        let base = #""id":"l1","documents":["insurance:a"],"openCount":0"#
+        XCTAssertEqual(try row("{\(base),\"state\":\"active\",\"creatorStopped\":true}").statusText,
+                       "Stopped — creator is no longer an admin")
+        XCTAssertNil(try row("{\(base),\"state\":\"active\",\"creatorStopped\":false}").statusText)
+        XCTAssertNil(try row("{\(base),\"state\":\"active\"}").statusText)
+        XCTAssertNil(try row("{\(base),\"state\":\"revoked\",\"creatorStopped\":true}").statusText)
+    }
 }

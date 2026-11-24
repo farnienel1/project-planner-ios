@@ -20,6 +20,17 @@ nonisolated struct OrgComplianceShareLinkRow: Decodable, Hashable, Sendable, Ide
     let lastOpenedAtMs: Double?
     /// `active`, `expired`, `revoked` (`orgComplianceShareLinkState`, worked out on the server).
     let state: String
+    /// Active, but its creator is no longer an active admin here, so the share page refuses it
+    /// (`orgComplianceShareCreatorActive`, worked out by the web list route). Missing from an older server: false.
+    let creatorStopped: Bool?
+
+    /// Shown on an active link whose creator is no longer an active admin (same text as web).
+    static let creatorStoppedText = "Stopped — creator is no longer an admin"
+
+    /// Why a listed link no longer works, or nil when it works.
+    var statusText: String? {
+        state == "active" && creatorStopped == true ? Self.creatorStoppedText : nil
+    }
 }
 
 nonisolated struct OrgComplianceCreatedShareLink: Decodable, Hashable, Sendable {

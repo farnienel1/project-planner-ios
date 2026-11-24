@@ -290,6 +290,9 @@ struct InsuranceAccreditationsView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("\(link.documents.count) document\(link.documents.count == 1 ? "" : "s")").font(.body)
                             Text(linkDetail(link)).font(.footnote).foregroundStyle(.secondary)
+                            if let status = link.statusText {
+                                Text(status).font(.footnote.weight(.semibold)).foregroundStyle(.red)
+                            }
                         }
                         Spacer()
                         Button("Turn off", role: .destructive) { Task { await revoke(link) } }
