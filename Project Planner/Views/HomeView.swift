@@ -716,6 +716,9 @@ struct HomeView: View {
             quickActionsHeaderRow
             quickActionsIconGrid
             upNextSection
+            if !userStore.isOperativeMode() && userStore.hasAdminAccess() {
+                siteMapHomeCard
+            }
             if userStore.canViewProjects() && !userStore.isOperativeMode() {
                 maintenanceTeaserCompact
             }
@@ -1333,6 +1336,53 @@ struct HomeView: View {
                     }
                 }
             }
+        }
+        .padding(.bottom, 10)
+    }
+
+    /// Home "Site map" card for admins (owner 24 Nov, web `SiteMapHomeCard`; same gate as the Site map quick action,
+    /// web `canViewSiteMap`). Opens the full map; the map itself loads nothing until it is opened.
+    private var siteMapHomeCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            PPSectionHeader("Site map") {
+                Button("Open full map") { showingOrgSitesMap = true }
+                    .accessibilityIdentifier("home.siteMap.open")
+                    .foregroundStyle(PPColor.brand)
+            }
+            Button {
+                showingOrgSitesMap = true
+            } label: {
+                HStack(spacing: 12) {
+                    PPIconTile(symbol: "map.fill", family: .sites, size: PPMetrics.menuIcon)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Today's jobs on the map")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(Color.primary)
+                        HStack(spacing: 12) {
+                            HStack(spacing: 5) {
+                                Circle().fill(Color.blue).frame(width: 8, height: 8)
+                                Text("Project")
+                            }
+                            HStack(spacing: 5) {
+                                Circle().fill(Color.red).frame(width: 8, height: 8)
+                                Text("Small works")
+                            }
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(homeMuted)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(homeMuted)
+                        .accessibilityHidden(true)
+                }
+                .padding(12)
+                .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+            .buttonStyle(PPPressableButtonStyle())
+            .accessibilityLabel("Site map: today's jobs on the map, projects blue, small works red")
+            .accessibilityIdentifier("home.siteMap.card")
         }
         .padding(.bottom, 10)
     }

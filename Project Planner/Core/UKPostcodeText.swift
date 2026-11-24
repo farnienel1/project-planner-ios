@@ -53,6 +53,17 @@ nonisolated enum UKPostcodeText {
         lookalikesToX(value).uppercased()
     }
 
+    /// The first UK postcode inside free text, as "SW1X 9HR", or nil (web `extractUkPostcode` + `formatUkPostcode`).
+    static func firstPostcode(in text: String) -> String? {
+        let matches = postcodeInText.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
+        for match in matches {
+            guard let range = Range(match.range(at: 1), in: text) else { continue }
+            let candidate = String(text[range])
+            if isUK(candidate) { return formatUK(candidate) }
+        }
+        return nil
+    }
+
     /// A stored address with every UK postcode in it shown as "SW1X 9HR". Other text is left as stored.
     static func tidyAddress(_ text: String) -> String {
         var result = text
