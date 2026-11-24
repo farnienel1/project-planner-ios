@@ -8,6 +8,7 @@ struct OrgSitesMapView: View {
     @EnvironmentObject var bookingStore: BookingStore
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
+    @EnvironmentObject var holidayStore: HolidayStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedDate: Date = Date()
@@ -19,6 +20,8 @@ struct OrgSitesMapView: View {
     @State private var selectedPinId: String?
     @State private var isLoading = false
     private let defaultMapSpan = MKCoordinateSpan(latitudeDelta: 0.12, longitudeDelta: 0.12)
+    /// Owner report 24 Nov: opened on the office (company details map pin), about a 10-mile radius around it.
+    private static let officeRadiusMeters: CLLocationDistance = 16_093
     private let selectedJobMapSpan = MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
 
     private var selectedPin: SiteMapPin? {
@@ -62,7 +65,7 @@ struct OrgSitesMapView: View {
                         Task {
                             let center = await resolveDefaultCenter()
                             await MainActor.run {
-                                region = MKCoordinateRegion(center: center, span: defaultMapSpan)
+                                region = initialRegion(center: center)
                                 selectedPinId = nil
                                 dismiss()
                             }
@@ -108,10 +111,25 @@ struct OrgSitesMapView: View {
                 infoRow(label: "Job Name", value: pin.siteName)
                 infoRow(label: "Client", value: pin.clientName)
                 infoRow(label: "Manager", value: pin.managerName)
-                infoRow(label: "Operatives On Site", value: "\(pin.operativeCount)")
             }
             .padding(12)
             .background(PPColor.card, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+            // The selected day's summary for this job, from the rulebook rules Daily Overview uses.
+            HStack(spacing: 8) {
+                summaryTile(value: "\(pin.summary.peopleOnSite)", label: "On site", symbol: "person.2.fill")
+                summaryTile(value: pin.summary.hoursText, label: "Hours", symbol: "clock.fill")
+                summaryTile(value: pin.summary.overtimeText, label: "Overtime", symbol: "flame.fill")
+                summaryTile(value: "\(pin.summary.onLeaveCount)", label: "On leave", symbol: "sun.max.fill")
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("orgSitesMap.summary")
+            if !pin.summary.onLeaveNames.isEmpty {
+                Text("On annual leave: " + pin.summary.onLeaveNames.joined(separator: ", "))
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(spacing: 6) {
                 Image(systemName: "calendar")
@@ -167,6 +185,27 @@ struct OrgSitesMapView: View {
         }
     }
 
+    private func summaryTile(value: String, label: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Image(systemName: symbol)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(PPColor.brand)
+                .accessibilityHidden(true)
+            Text(value)
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(2)
+                .minimumScaleFactor(0.7)
+            Text(label)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.secondary)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityElement(children: .combine)
+    }
+
     private func infoRow(label: String, value: String) -> some View {
         HStack {
             Text(label)
@@ -196,10 +235,7 @@ struct OrgSitesMapView: View {
         await MainActor.run {
             // Keep current focus while user is interacting with a selected pin.
             if selectedPinId == nil {
-                region = MKCoordinateRegion(
-                    center: center,
-                    span: defaultMapSpan
-                )
+                region = initialRegion(center: center)
             }
         }
 
@@ -234,6 +270,13 @@ struct OrgSitesMapView: View {
         var builtPins: [SiteMapPin] = []
         let nameOperatives = operativeStore.allOperatives
         let nameUsers = userStore.bookingNameUsers
+        // Working hours in effect on the day shown (RULEBOOK §4.3), as Daily Overview prices it.
+        let dayPolicy = firebaseBackend.payrollPolicy(for: targetDate)
+        let dayManagerBookings = managerScheduleStore.managerSiteBookings.filter {
+            OrganizationRulebookContext.dayKey($0.date) == dayKey
+                && ($0.locationType == .project || $0.locationType == .smallWork)
+        }
+        let leaveOnDay = leaveRecordsOnDay(dayKey: dayKey)
         for project in allProjects {
             guard let coordinate = await GeocodingCacheService.shared.coordinate(for: project.siteAddress) else { continue }
             let siteBookings = dayBookings.filter { $0.projectId == project.id }
@@ -249,6 +292,24 @@ struct OrgSitesMapView: View {
                     )
                     return "\(booking.timeSlot.displayName) - \(name)"
                 }
+            let managerHere = dayManagerBookings.filter { $0.locationId == project.id }
+            let results = siteBookings.map { $0.payrollHoursResult(policy: dayPolicy) }
+                + managerHere.map { $0.payrollHoursResult(policy: dayPolicy) }
+            let bookedPeople: [(id: String, name: String)] =
+                siteBookings.map { booking -> (id: String, name: String) in
+                    (booking.storedOperativeId, rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: nameOperatives, users: nameUsers))
+                }
+                + managerHere.map { booking -> (id: String, name: String) in
+                    let user = userStore.organizationUsers.first { $0.id.caseInsensitiveCompare(booking.userId) == .orderedSame }
+                    let name = user.map { $0.fullName.isEmpty ? $0.email : $0.fullName } ?? "Unknown person"
+                    return (booking.userId, name)
+                }
+            let leaveNames = peopleOnLeave(bookedPeople: bookedPeople, leave: leaveOnDay)
+            let summary = SiteMapJobDaySummary.make(
+                peopleOnSite: operativeCount,
+                results: results.map(SiteMapJobDaySummary.HoursInput.init(result:)),
+                onLeaveNames: leaveNames
+            )
             builtPins.append(
                 SiteMapPin(
                     id: project.id.uuidString,
@@ -259,6 +320,7 @@ struct OrgSitesMapView: View {
                     coordinate: coordinate,
                     scheduleRows: rows,
                     operativeCount: operativeCount,
+                    summary: summary,
                     pinKind: pinKind(for: project),
                     coordinateSpanOnSelect: selectedJobMapSpan
                 )
@@ -271,6 +333,18 @@ struct OrgSitesMapView: View {
                 self.selectedPinId = nil
             }
         }
+    }
+
+    /// About a 10-mile radius around the office when the company details have a map pin; otherwise as before.
+    private func initialRegion(center: CLLocationCoordinate2D) -> MKCoordinateRegion {
+        if let org = firebaseBackend.currentOrganization, org.defaultLatitude != nil, org.defaultLongitude != nil {
+            return MKCoordinateRegion(
+                center: center,
+                latitudinalMeters: Self.officeRadiusMeters * 2,
+                longitudinalMeters: Self.officeRadiusMeters * 2
+            )
+        }
+        return MKCoordinateRegion(center: center, span: defaultMapSpan)
     }
 
     private func resolveDefaultCenter() async -> CLLocationCoordinate2D {
@@ -308,15 +382,62 @@ struct OrgSitesMapView: View {
         return project.manager.displayName
     }
 
+    /// Projects blue, small works red (owner 24 Nov). The collection decides the kind (RULEBOOK §17 `jobKind`), never
+    /// the picker `jobType`.
     private func pinKind(for project: Project) -> SitePinKind {
-        switch project.jobType {
-        case .smallWorks:
-            return .smallWorks
-        case .maintenance:
-            return .maintenance
-        default:
-            return .project
+        project.isSmallWorksDocument ? .smallWorks : .project
+    }
+
+    /// `dailyOverviewLeaveRows` (RULEBOOK 1.53.0, as Daily Overview): approved leave records whose leave days include
+    /// the day. Empty when the rule did not answer.
+    private func leaveRecordsOnDay(dayKey: String) -> [HolidayBooking] {
+        let candidates = holidayStore.bookings.filter { $0.startDayKey <= dayKey && $0.endDayKey >= dayKey }
+        guard let ids = CanonicalBusinessEngine.dailyOverviewLeaveRecordIds(
+            records: candidates.map {
+                (id: $0.documentId, startDayKey: $0.startDayKey, endDayKey: $0.endDayKey, timeSlot: $0.timeSlot.rawValue, status: $0.status.rawValue)
+            },
+            dayKey: dayKey,
+            timeZone: OrganizationRulebookContext.timeZoneIdentifier,
+            bankHolidayDayKeys: OrganizationBankHolidays.dayKeys
+        ) else { return [] }
+        return candidates.filter { ids.contains($0.documentId) }
+    }
+
+    /// The people booked on this job that day who are on annual leave that day (a half day of leave beside a booking),
+    /// each person matched under every id they go by (`personIdSet`, an `operatives` row and its account by email),
+    /// without case. Names as the schedule shows them.
+    private func peopleOnLeave(bookedPeople: [(id: String, name: String)], leave: [HolidayBooking]) -> [String] {
+        guard !leave.isEmpty else { return [] }
+        let users = userStore.organizationUsers
+        let operatives = operativeStore.allOperatives
+        var names: [String] = []
+        var seen = Set<String>()
+        for (personId, name) in bookedPeople {
+            let key = personId.lowercased()
+            guard !key.isEmpty, !seen.contains(key) else { continue }
+            var ids: Set<String> = [key]
+            var emails = Set<String>()
+            if let row = operatives.first(where: { $0.documentId.caseInsensitiveCompare(personId) == .orderedSame }) {
+                if !row.email.isEmpty { emails.insert(row.email.lowercased()) }
+                if let linked = row.linkedUserId, !linked.isEmpty { ids.insert(linked.lowercased()) }
+            }
+            for user in users where ids.contains(user.id.lowercased())
+                || (!user.email.isEmpty && emails.contains(user.email.lowercased())) {
+                ids.formUnion(RulebookPeople.ownerIds(for: user, users: users).map { $0.lowercased() })
+                if !user.email.isEmpty { emails.insert(user.email.lowercased()) }
+            }
+            for row in operatives where !row.email.isEmpty && emails.contains(row.email.lowercased()) {
+                ids.insert(row.documentId.lowercased())
+            }
+            seen.formUnion(ids)
+            let onLeave = leave.contains { record in
+                [record.userId, record.operativeIdRaw].compactMap { $0?.lowercased() }.contains { ids.contains($0) }
+                    || (record.userId.map { emails.contains($0.lowercased()) } ?? false)
+            }
+            guard onLeave else { continue }
+            names.append(name)
         }
+        return names
     }
 }
 
@@ -329,6 +450,7 @@ private struct SiteMapPin: Identifiable {
     let coordinate: CLLocationCoordinate2D
     let scheduleRows: [String]
     let operativeCount: Int
+    let summary: SiteMapJobDaySummary
     let pinKind: SitePinKind
     let coordinateSpanOnSelect: MKCoordinateSpan
 }
@@ -517,5 +639,76 @@ private final class SitePinAnnotation: NSObject, MKAnnotation {
         self.coordinate = coordinate
         self.title = title
         self.subtitle = subtitle
+    }
+}
+
+/// One job's figures for the day shown on the site map (owner 24 Nov): people on site (`siteMapPins.peopleCount`),
+/// hours on site (the pay rule's `payrollHoursResult.totalPaidHours`, as Daily Overview), overtime (the clock hours at
+/// the multiplier with any unpaid break as plain hours — `payrollMultipliedHours` and `overtimeTotalText`, as Daily
+/// Overview's overtime tile) and the people booked there who are on annual leave that day. No figure is worked out
+/// here: it only adds up the rulebook's per-booking answers.
+struct SiteMapJobDaySummary: Equatable {
+    struct HoursInput: Equatable {
+        var totalPaidHours: Double
+        var outsideHours: Double
+        var outsideMultiplier: Double
+        var multipliedClockHours: Double?
+        var multipliedBreakHours: Double?
+
+        init(totalPaidHours: Double, outsideHours: Double, outsideMultiplier: Double, multipliedClockHours: Double?, multipliedBreakHours: Double?) {
+            self.totalPaidHours = totalPaidHours
+            self.outsideHours = outsideHours
+            self.outsideMultiplier = outsideMultiplier
+            self.multipliedClockHours = multipliedClockHours
+            self.multipliedBreakHours = multipliedBreakHours
+        }
+
+        init(result: PayrollHoursResult) {
+            let multiplied = result.multipliedHours
+            self.init(
+                totalPaidHours: result.totalPaidHours,
+                outsideHours: result.outsideHours,
+                outsideMultiplier: result.outsideMultiplier,
+                multipliedClockHours: multiplied?.clockHours,
+                multipliedBreakHours: multiplied?.breakHours
+            )
+        }
+    }
+
+    var peopleOnSite: Int
+    var hours: Double
+    var overtimeClockHours: Double
+    var hoursText: String
+    var overtimeText: String
+    var onLeaveNames: [String]
+    var onLeaveCount: Int { onLeaveNames.count }
+
+    static func make(peopleOnSite: Int, results: [HoursInput], onLeaveNames: [String]) -> SiteMapJobDaySummary {
+        let hours = results.reduce(0) { $0 + $1.totalPaidHours }
+        var clock = 0.0
+        var breakHours = 0.0
+        var multipliers = Set<Double>()
+        for result in results {
+            clock += result.multipliedClockHours ?? result.outsideHours
+            breakHours += result.multipliedBreakHours ?? 0
+            if result.outsideHours > 0 { multipliers.insert(result.outsideMultiplier) }
+        }
+        let overtimeText: String
+        if clock <= 0.0001 {
+            overtimeText = "0h"
+        } else if multipliers.count == 1, let rate = multipliers.first,
+                  let text = CanonicalBusinessEngine.overtimeTotalText(clockHours: clock, multiplier: rate, breakHours: breakHours) {
+            overtimeText = text
+        } else {
+            overtimeText = "\(ScheduleCoverageFormat.hours(clock))h OT"
+        }
+        return SiteMapJobDaySummary(
+            peopleOnSite: peopleOnSite,
+            hours: hours,
+            overtimeClockHours: clock,
+            hoursText: "\(ScheduleCoverageFormat.hours(hours))h",
+            overtimeText: overtimeText,
+            onLeaveNames: onLeaveNames
+        )
     }
 }

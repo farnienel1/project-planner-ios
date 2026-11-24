@@ -83,13 +83,34 @@ struct PayrunSnapshotView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 PPGroupLabel(text: "Period")
-                PPSegmentedPills(
-                    items: [
-                        PPSegmentItem(id: "paye", title: labels["paye"] ?? "Current PAYE period", isEnabled: periods.paye != nil, accessibilityIdentifier: "payrunSnapshot.period.paye"),
-                        PPSegmentItem(id: "paymentRun", title: labels["paymentRun"] ?? "Current payment run period", isEnabled: periods.paymentRun != nil, accessibilityIdentifier: "payrunSnapshot.period.paymentRun"),
-                        PPSegmentItem(id: "custom", title: labels["custom"] ?? "Custom range", accessibilityIdentifier: "payrunSnapshot.period.custom"),
+                // Owner report 24 Nov: three squashed pills truncated the labels ("Current payment run p…") and the
+                // unavailable one looked greyed out with no reason. One full-width row per period, its full label,
+                // its own dates (or why it is not available), and a tick on the chosen one. UI only.
+                PayrunSnapshotPeriodChooser(
+                    options: [
+                        .init(
+                            id: "paye",
+                            title: labels["paye"] ?? "Current PAYE period",
+                            detail: periods.paye?.label ?? periods.payeMessage,
+                            isEnabled: periods.paye != nil,
+                            accessibilityIdentifier: "payrunSnapshot.period.paye"
+                        ),
+                        .init(
+                            id: "paymentRun",
+                            title: labels["paymentRun"] ?? "Current payment run period",
+                            detail: periods.paymentRun?.label ?? periods.paymentRunMessage,
+                            isEnabled: periods.paymentRun != nil,
+                            accessibilityIdentifier: "payrunSnapshot.period.paymentRun"
+                        ),
+                        .init(
+                            id: "custom",
+                            title: labels["custom"] ?? "Custom range",
+                            detail: "Choose a start and end date",
+                            isEnabled: true,
+                            accessibilityIdentifier: "payrunSnapshot.period.custom"
+                        ),
                     ],
-                    isSelected: { $0 == kind },
+                    selection: kind,
                     onSelect: { kind = $0 }
                 )
                 if kind == "custom" {
@@ -442,5 +463,73 @@ struct PayrunSnapshotCellStyle {
             text = .primary
             caption = .secondary
         }
+    }
+}
+
+/// The Payrun Snapshot period choice: one full-width row per period (title, its dates or why it is unavailable, a tick
+/// on the chosen one), in the app's grouped-card style. Text stays at full contrast in light and dark mode; an
+/// unavailable row says why rather than only greying out. Display only.
+struct PayrunSnapshotPeriodChooser: View {
+    struct Option: Identifiable, Hashable {
+        let id: String
+        let title: String
+        let detail: String?
+        let isEnabled: Bool
+        let accessibilityIdentifier: String
+    }
+
+    let options: [Option]
+    let selection: String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        PPGroupedCard {
+            ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                if index > 0 { PPRowDivider() }
+                row(option)
+            }
+        }
+    }
+
+    private func row(_ option: Option) -> some View {
+        let selected = option.id == selection
+        return Button {
+            // Not `.disabled`: that dims the row's text below AA; an unavailable row says why and ignores the tap.
+            guard option.isEnabled else { return }
+            onSelect(option.id)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(selected ? PPColor.brand : Color.secondary)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(option.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let detail = option.detail, !detail.isEmpty {
+                        Text(detail)
+                            .font(.footnote)
+                            .foregroundStyle(Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+                if !option.isEnabled {
+                    Text("Not available")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityIdentifier(option.accessibilityIdentifier)
     }
 }

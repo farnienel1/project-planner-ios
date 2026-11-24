@@ -459,6 +459,16 @@ struct ContentView: View {
                 await notificationService.refreshQualificationExpiryReminders()
             }
         }
+        // Owner report 24 Nov: "Last active" also moves while the app stays open, not only on returning to it.
+        // Every `LastSeenHeartbeat.intervalSeconds` in the foreground; the 2-minute throttle still applies.
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: LastSeenHeartbeat.intervalNanoseconds)
+                guard !Task.isCancelled, scenePhase == .active else { return }
+                await userStore.recordCurrentUserLastSeenIfDue()
+            }
+        }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 notificationService.clearAppIconBadgeIfNeeded()
@@ -1184,4 +1194,9 @@ extension ContentView {
         .environmentObject(SubcontractorStore())
         .environmentObject(AppSettingsStore())
         .environmentObject(NotificationService())
+}
+/// How often an open app records `users/{uid}.lastSeenAt` while it stays in the foreground.
+enum LastSeenHeartbeat {
+    static let intervalSeconds: TimeInterval = 5 * 60
+    static var intervalNanoseconds: UInt64 { UInt64(intervalSeconds * 1_000_000_000) }
 }

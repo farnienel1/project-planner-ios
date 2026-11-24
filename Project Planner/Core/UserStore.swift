@@ -355,6 +355,27 @@ class UserStore: ObservableObject {
         }
     }
 
+    /// "Last active" for a person: the newest `lastSeenAt` across every users document of that person in this
+    /// organisation (`personIdSet` over the unfolded roster — an old invite id or a second same-email document may
+    /// hold the newer heartbeat, e.g. the person signs in on web under one and on iPhone under another).
+    func newestLastSeenAt(for user: AppUser) -> Date? {
+        let documents = unfoldedOrganizationUsers
+        let ids = CanonicalBusinessEngine.personIdSet(person: RulebookPeople.person(user), roster: unfoldedRosterRows)
+            ?? ([user.id] + user.formerUserIds + user.sameEmailUserIds)
+        return Self.newestLastSeenAt(personIds: ids, documents: documents, fallback: user.lastSeenAt)
+    }
+
+    /// Pure part of `newestLastSeenAt(for:)`: ids compared without case (RULEBOOK §1).
+    nonisolated static func newestLastSeenAt(personIds: [String], documents: [AppUser], fallback: Date?) -> Date? {
+        let wanted = Set(personIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        var newest = fallback
+        for document in documents where wanted.contains(document.id.lowercased()) {
+            guard let seen = document.lastSeenAt else { continue }
+            if newest.map({ seen > $0 }) ?? true { newest = seen }
+        }
+        return newest
+    }
+
     /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).
     /// The person's own row is matched by their ids and email only (`operativeRow(for:in:)`, `bookingIdsForAccount`),
     /// never by name. A missing row is created only by staff (never from an operative-level account) and only once the

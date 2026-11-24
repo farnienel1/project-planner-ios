@@ -3734,8 +3734,9 @@ struct EditUserView: View {
 
     private func lastSeenDisplay(for u: AppUser) -> String {
         guard userStore.canManageUsers() else { return "—" }
-        guard let t = u.lastSeenAt else { return "Never recorded" }
-        return t.formatted(date: .abbreviated, time: .shortened)
+        // Newest heartbeat across all of the person's users documents, in the organisation time zone.
+        guard let t = userStore.newestLastSeenAt(for: u) else { return "Never recorded" }
+        return LastActiveText.format(t)
     }
 
     private func calendarStartOfDay(_ date: Date) -> Date {

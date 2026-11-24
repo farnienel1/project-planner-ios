@@ -256,6 +256,7 @@ struct HomeView: View {
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
                 .environmentObject(managerScheduleStore)
+                .environmentObject(holidayStore)
         }
         .sheet(isPresented: $showingMySchedule) {
             MyScheduleView()

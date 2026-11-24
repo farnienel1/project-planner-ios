@@ -83,9 +83,13 @@ struct WarningsDetailView: View {
         WarningsDisplayPhase.phase(
             hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection,
             incompleteDataMessage: warningsService.incompleteDataMessage,
-            activeCount: warningsService.activeWarnings.count
+            activeCount: warningsService.activeWarnings.count,
+            showingSavedResultsFrom: warningsService.savedResultsShownAt
         )
     }
+
+    /// True once the first scan has waited `WarningsWeakSignal.waitSeconds` (weak signal).
+    @State private var weakSignalWaiting = false
 
     private var organisationSubtitle: String {
         firebaseBackend.currentOrganization?.name ?? "Organisation"
@@ -208,6 +212,9 @@ struct WarningsDetailView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.horizontal, PPMetrics.screenGutter)
                             .padding(.bottom, 8)
+                    } else if case .saved(_, let savedAt) = displayPhase {
+                        // Weak signal: the saved list is on screen while the live scan keeps trying.
+                        weakSignalNote(WarningsWeakSignal.savedNote(lastUpdated: OfflinePolicy.lastUpdatedMessage(savedAt)))
                     }
                 }
                 .frame(maxWidth: .infinity)
@@ -220,7 +227,7 @@ struct WarningsDetailView: View {
                         emptyState
                     case .incomplete:
                         Spacer(minLength: 0)
-                    case .ready(let activeCount):
+                    case .ready(let activeCount), .saved(let activeCount, _):
                         if activeCount == 0 {
                             emptyState
                         } else {
@@ -394,7 +401,8 @@ struct WarningsDetailView: View {
                     .frame(height: PPMetrics.headerBottomPadding)
                     .ppNavyHeader()
                 VStack(spacing: 16) {
-                    if isRefreshingWarnings || !warningsService.hasCompletedLiveDetection {
+                    if isRefreshingWarnings
+                        || (!warningsService.hasCompletedLiveDetection && warningsService.savedResultsShownAt == nil) {
                         ProgressView()
                             .controlSize(.large)
                             .padding(.top, 32)
@@ -406,6 +414,20 @@ struct WarningsDetailView: View {
                             .foregroundStyle(WarningsUI.textMuted)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
+                        if weakSignalWaiting, !isRefreshingWarnings, smartCache.isOnline {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(Color.orange)
+                                    .accessibilityHidden(true)
+                                Text(WarningsWeakSignal.waitingNote)
+                                    .foregroundStyle(WarningsUI.textPrimary)
+                            }
+                            .font(.footnote.weight(.medium))
+                            .multilineTextAlignment(.leading)
+                            .padding(.horizontal, 24)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("warnings.weakSignal.waiting")
+                        }
                     } else {
                         PPIconTile(symbol: "checkmark", family: .sites, size: 64, lifted: true)
                         Text("No active warnings")
@@ -1380,6 +1402,8 @@ struct WarningsDetailView: View {
     private func scanWhenInputsHaveLoaded() async {
         guard userStore.canViewStaffWarnings() else { return }
         var pause: UInt64 = WarningsFirstOpenPolicy.firstPauseNanoseconds
+        let waitingSince = Date()
+        defer { weakSignalWaiting = false }
         while WarningsFirstOpenPolicy.keepWaiting(
             cancelled: Task.isCancelled,
             hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection
@@ -1394,6 +1418,15 @@ struct WarningsDetailView: View {
             }
             let readiness = currentInputsReadiness()
             loadingInputsMessage = readiness.waitingMessage
+            if WarningsWeakSignal.shouldShowSaved(
+                waitingSince: waitingSince,
+                now: Date(),
+                hasCompletedLiveDetection: warningsService.hasCompletedLiveDetection
+            ), !weakSignalWaiting {
+                weakSignalWaiting = true
+                // The last complete scan saved on this device, labelled with its time; the loop keeps trying.
+                warningsService.showSavedWarningsWhileWaiting()
+            }
             if readiness.storeInputsReady, !isRefreshingWarnings {
                 let published = await WarningsRefreshHelper.refreshSharedWarnings(
                     operativeStore: operativeStore,
@@ -1418,6 +1451,22 @@ struct WarningsDetailView: View {
             pause = WarningsFirstOpenPolicy.nextPause(after: pause)
         }
         loadingInputsMessage = nil
+    }
+
+    private func weakSignalNote(_ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(PPColor.warningAmber)
+                .accessibilityHidden(true)
+            Text(text)
+                .foregroundStyle(.white)
+        }
+            .font(.caption.weight(.medium))
+            .accessibilityElement(children: .combine)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, PPMetrics.screenGutter)
+            .padding(.bottom, 8)
+            .accessibilityIdentifier("warnings.weakSignal.saved")
     }
 
     private func startManualRefresh() {

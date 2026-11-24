@@ -439,6 +439,13 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
+    /// Attaches the open organisation's live listener again when it is not attached (it failed, or its retries ran
+    /// out). An attached listener is kept, never doubled. Used by screens that must not stand on a stub copy.
+    func ensureOrganizationDocumentListener() {
+        guard isAuthenticated, let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return }
+        startOrganizationDocumentListener(organizationId: orgId)
+    }
+
     private func startOrganizationDocumentListener(organizationId: String) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
@@ -567,6 +574,7 @@ class FirebaseBackend: ObservableObject {
         org.defaultLongitude = parsed.defaultLongitude
         org.companyLogoURL = parsed.companyLogoURL
         org.documentAbbreviation = parsed.documentAbbreviation
+        org.companyDetailsLoaded = true
         if let creator = parsed.creatorUserId, !creator.isEmpty {
             org.creatorUserId = creator
         }
@@ -1442,13 +1450,18 @@ class FirebaseBackend: ObservableObject {
             return
         }
         let cachedBilling = cachedBillingJSON(matching: trimmed)
-        currentOrganization = Organization(
+        var stub = Organization(
             id: Manager.stableId(forFirestoreDocumentId: trimmed),
             firestoreDocumentId: trimmed,
             name: cachedOrganizationName(matching: trimmed) ?? "",
             billingJSON: cachedBilling,
             billingResolved: cachedBilling != nil
         )
+        // The live organisation listener fills every field; until then the saved company details are shown.
+        if let details = Self.cachedCompanyDetailsDocument(matching: trimmed) {
+            stub.applyCompanyDetailsCache(details)
+        }
+        currentOrganization = stub
     }
 
     /// Company last written on `users/{uid}.organizationId`. Web and iOS can sit in different companies, so this is not the phone's session.
@@ -1475,7 +1488,7 @@ class FirebaseBackend: ObservableObject {
                 settings.currencyCode = currencyCode
             }
             let cachedBilling = cachedBillingJSON(matching: organizationId)
-            return Organization(
+            var organization = Organization(
                 id: uuid,
                 firestoreDocumentId: organizationId,
                 name: organizationName,
@@ -1483,8 +1496,35 @@ class FirebaseBackend: ObservableObject {
                 billingJSON: cachedBilling,
                 billingResolved: cachedBilling != nil
             )
+            // Every company-details field from the last document read (abbreviation, logo, office address,
+            // country, map pin), so an offline or slow start never shows blanks or derived initials.
+            if let details = Self.cachedCompanyDetailsDocument(matching: organizationId) {
+                organization.applyCompanyDetailsCache(details)
+            }
+            return organization
         }
         return nil
+    }
+
+    private static func companyDetailsDefaultsKey(_ organizationId: String) -> String {
+        "org_company_details_\(organizationId)"
+    }
+
+    /// The saved company-details fields for this organisation (`Organization.companyDetailsCacheDocument`).
+    static func cachedCompanyDetailsDocument(matching organizationId: String) -> [String: Any]? {
+        let trimmed = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let data = UserDefaults.standard.data(forKey: companyDetailsDefaultsKey(trimmed)),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object
+    }
+
+    /// Saves the company-details fields only when they were read (never a stub's blanks over a good copy).
+    private static func cacheCompanyDetails(_ organization: Organization) {
+        guard let document = organization.companyDetailsCacheDocument,
+              JSONSerialization.isValidJSONObject(document),
+              let data = try? JSONSerialization.data(withJSONObject: document) else { return }
+        UserDefaults.standard.set(data, forKey: companyDetailsDefaultsKey(organization.firestoreDocumentId))
     }
 
     private static func bankHolidayRegionDefaultsKey(_ organizationId: String) -> String {
@@ -1522,6 +1562,7 @@ class FirebaseBackend: ObservableObject {
             UserDefaults.standard.set(currencyCode, forKey: Self.currencyCodeDefaultsKey(organization.firestoreDocumentId))
         }
         cacheBillingJSON(organization)
+        Self.cacheCompanyDetails(organization)
         print("🔥🔥🔥 DEBUG: ✅ Stored organization locally: \(organization.name)")
     }
 

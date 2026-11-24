@@ -77,7 +77,10 @@ struct CompanyDetailsEditView: View {
 
                     SettingsHubChrome.sectionTitle("Abbreviation for site audits and toolbox talks")
                     SettingsHubChrome.card {
-                        TextField("e.g. RM", text: $documentAbbreviation)
+                        // Starts from the stored abbreviation, or blank. The initials worked out from the name are only
+                        // a hint here; they are never written (before 24 Nov the form was pre-filled with them, so a
+                        // save overwrote the real abbreviation, e.g. "RAC" with "RM").
+                        TextField(abbreviationPlaceholder, text: $documentAbbreviation)
                             .accessibilityIdentifier("companyDetailsEdit.eGRM")
                             .font(.subheadline.weight(.medium))
                             .textInputAutocapitalization(.characters)
@@ -187,10 +190,24 @@ struct CompanyDetailsEditView: View {
                                 } else if !logoRemoved,
                                           let logoURL = firebaseBackend.currentOrganization?.companyLogoURL,
                                           let url = CanonicalBusinessEngine.safeExternalURL(logoURL) {
-                                    AsyncImage(url: url) { image in
-                                        image.resizable().scaledToFit()
-                                    } placeholder: {
-                                        ProgressView()
+                                    if CompanyLogoPreviewKind.isPDF(url) {
+                                        CompanyLogoPreviewLabel(systemImage: "doc.fill", text: "PDF logo", tint: PPColor.brand)
+                                    } else {
+                                        AsyncImage(url: url) { phase in
+                                            switch phase {
+                                            case .success(let image):
+                                                image.resizable().scaledToFit()
+                                                    .accessibilityLabel("Company logo")
+                                            case .failure:
+                                                CompanyLogoPreviewLabel(
+                                                    systemImage: "exclamationmark.triangle.fill",
+                                                    text: "Couldn't load",
+                                                    tint: PPColor.danger
+                                                )
+                                            default:
+                                                ProgressView()
+                                            }
+                                        }
                                     }
                                 } else {
                                     Image(systemName: "photo")
@@ -251,6 +268,21 @@ struct CompanyDetailsEditView: View {
                 }
                 .padding(16)
             }
+            .disabled(!didLoad)
+            .overlay {
+                if !didLoad {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading company details…")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Color.secondary)
+                    }
+                    .padding(20)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("companyDetailsEdit.loading")
+                }
+            }
             .background(PPColor.page.ignoresSafeArea())
             .overlay(alignment: .top) {
                 if showAbbreviationLimitToast {
@@ -272,7 +304,8 @@ struct CompanyDetailsEditView: View {
             .interactiveDismissDisabled(isDirty)
             .safeAreaInset(edge: .bottom) {
                 // Save stays off until a region from the new country is chosen (`companyDetailsRegionPrompt`).
-                SettingsStickySaveBar(isDirty: isDirty && !regionBlocksSave, isSaving: isSaving, isOnline: smartCache.isOnline) {
+                // ...and until the company details have been read (never saved from a stub's blank fields).
+                SettingsStickySaveBar(isDirty: isDirty && !regionBlocksSave && didLoad, isSaving: isSaving, isOnline: smartCache.isOnline) {
                     Task { await save() }
                 }
             }
@@ -296,13 +329,16 @@ struct CompanyDetailsEditView: View {
                 Text("You have changes that have not been saved. Leave this page and discard them?")
             }
             .onAppear {
-                guard !didLoad else { return }
-                applyOrganizationToForm()
-                didLoad = true
+                loadFormIfDetailsAreKnown()
+                if !didLoad { firebaseBackend.ensureOrganizationDocumentListener() }
             }
             .onChange(of: serverCompanyDetailsFingerprint) { _, _ in
+                guard didLoad else {
+                    loadFormIfDetailsAreKnown()
+                    return
+                }
                 // §4: keep an unsaved draft; follow the server only while nothing has been changed here.
-                guard didLoad, !isSaving, !isDirty else { return }
+                guard !isSaving, !isDirty else { return }
                 applyOrganizationToForm()
             }
             .fileImporter(
@@ -359,7 +395,7 @@ struct CompanyDetailsEditView: View {
             org.firestoreDocumentId, org.name, org.documentAbbreviation ?? "", org.countryCode,
             org.officeAddressLine1 ?? "", org.officeAddressLine2 ?? "", org.officeCity ?? "",
             org.officeCounty ?? "", org.officePostcode ?? "", org.companyLogoURL ?? "",
-            org.settings.bankHolidayRegionId ?? "",
+            org.settings.bankHolidayRegionId ?? "", org.companyDetailsLoaded ? "loaded" : "stub",
         ].joined(separator: "\u{1F}")
     }
 
@@ -437,11 +473,25 @@ struct CompanyDetailsEditView: View {
         }
     }
 
+    /// Hint in the empty abbreviation field: the initials the badges show when none is stored. Never saved.
+    private var abbreviationPlaceholder: String {
+        "e.g. " + OrganizationDocumentAbbreviation.display(
+            abbreviation: nil,
+            organizationName: firebaseBackend.currentOrganization?.name
+        )
+    }
+
+    /// Fills the form once the company details are known (read from the server, or this device's saved copy).
+    private func loadFormIfDetailsAreKnown() {
+        guard !didLoad, firebaseBackend.currentOrganization?.companyDetailsLoaded == true else { return }
+        applyOrganizationToForm()
+        didLoad = true
+    }
+
     private func applyOrganizationToForm() {
         guard let org = firebaseBackend.currentOrganization else { return }
         organizationName = firebaseBackend.organizationNameForEditing(org)
-        documentAbbreviation = org.documentAbbreviation
-            ?? OrganizationDocumentAbbreviation.display(abbreviation: nil, organizationName: org.name)
+        documentAbbreviation = CompanyDetailsFormSeed.abbreviation(stored: org.documentAbbreviation)
         countryCode = org.countryCode.uppercased()
         let storedRegion = org.settings.bankHolidayRegionId
         bankHolidayRegionId = CanonicalBusinessEngine.normalizeBankHolidayRegionId(storedRegion)
@@ -593,5 +643,46 @@ struct CompanyDetailsEditView: View {
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
         }
+    }
+}
+
+/// What the Company details form starts from. Pure, so it is tested.
+enum CompanyDetailsFormSeed {
+    /// The stored abbreviation (normalised), else blank — never initials worked out from the name.
+    static func abbreviation(stored: String?) -> String {
+        OrganizationDocumentAbbreviation.normalized(stored) ?? ""
+    }
+}
+
+/// How the saved company logo is previewed.
+enum CompanyLogoPreviewKind {
+    /// A logo stored as a PDF (its path ends `.pdf`, query ignored) cannot be drawn by `AsyncImage`.
+    static func isPDF(_ url: URL) -> Bool {
+        let path = (URLComponents(url: url, resolvingAgainstBaseURL: false)?.path ?? url.path).lowercased()
+        let decoded = path.removingPercentEncoding ?? path
+        return decoded.hasSuffix(".pdf")
+    }
+}
+
+/// Icon over a short caption inside the 72pt logo square.
+private struct CompanyLogoPreviewLabel: View {
+    let systemImage: String
+    let text: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: systemImage)
+                .font(.title3)
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(4)
+        .accessibilityElement(children: .combine)
     }
 }

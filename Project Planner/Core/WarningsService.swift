@@ -167,6 +167,9 @@ class WarningsService: ObservableObject {
     var lowCount: Int { totals.low }
     /// True after at least one *live* scan has published (empty = all clear for that window).
     private(set) var hasCompletedLiveDetection = false
+    /// When the list on screen is the last complete scan saved on this device (shown while a slow first scan waits,
+    /// owner report 24 Nov), the time that scan ran. Nil once a live scan publishes. Not @Published (see above).
+    private(set) var savedResultsShownAt: Date?
     private var livePublishScheduled = false
     /// True until the deferred objectWillChange for this live list has been sent.
     var isLivePublishQueued: Bool { livePublishScheduled }
@@ -212,7 +215,25 @@ class WarningsService: ObservableObject {
         activeWarnings = []
         totals = WarningTotals()
         hasCompletedLiveDetection = false
+        savedResultsShownAt = nil
         scheduleLivePublish()
+    }
+
+    /// Puts this organisation's last complete scan saved on this device on screen while the first live scan is still
+    /// waiting for its inputs. Nothing is shown when no complete scan was saved, a live scan has published, or it is
+    /// already shown. The live scan replaces it when it publishes. Returns whether saved results are shown.
+    @discardableResult
+    func showSavedWarningsWhileWaiting() -> Bool {
+        guard self === WarningsService.shared, !hasCompletedLiveDetection else { return false }
+        if savedResultsShownAt != nil { return true }
+        guard let organizationId = cacheOrganizationId, !organizationId.isEmpty else { return false }
+        let cache = WarningsDiskCacheStore.load(organizationId: organizationId)
+        guard cache.organizationId == organizationId,
+              cache.hasCompletedLiveDetection,
+              cache.savedAt > .distantPast else { return false }
+        savedResultsShownAt = cache.savedAt
+        applyLiveWarnings(generated: cache.allGeneratedWarnings, active: cache.activeWarnings, completed: false)
+        return true
     }
 
     /// Drops schedule rows whose organisation day is outside the scan window. Qualification and
@@ -279,6 +300,7 @@ class WarningsService: ObservableObject {
         activeWarnings = active
         totals = Self.totals(for: active)
         hasCompletedLiveDetection = completed
+        if completed { savedResultsShownAt = nil }
         scheduleLivePublish()
     }
 
