@@ -17,6 +17,10 @@ class UserStore: ObservableObject {
     @Published var currentUser: AppUser? {
         // RULEBOOK 1.10.0 §17: the job and booking read plans follow the signed-in profile.
         didSet {
+            // RULEBOOK 1.81.0 §11: the signed-in person's name in the open organisation (`memberNames`).
+            if let user = currentUser, let named = MemberNameOverlay.apply([user], names: memberNames)?.first {
+                currentUser = named
+            }
             refreshJobAccessContext()
             // RULEBOOK §8: the signed-in person's own pay profile (`currentUserWithPay`, `OwnPayOverlay.swift`).
             scheduleOwnPayOverlay()
@@ -26,6 +30,10 @@ class UserStore: ObservableObject {
     @Published var roleTestingPreset: RoleTestingPreset?
     @Published var organizationUsers: [AppUser] = [] {
         didSet {
+            // RULEBOOK 1.81.0 §11: every person's name in the open organisation (`memberNames`), laid over once here so
+            // every screen, PDF and notice that takes names from the roster shows it. (A set inside didSet does not
+            // run didSet again.)
+            if let named = MemberNameOverlay.apply(organizationUsers, names: memberNames) { organizationUsers = named }
             revision &+= 1
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
@@ -58,6 +66,11 @@ class UserStore: ObservableObject {
     private var onlineCancellable: AnyCancellable?
     /// Starts the pay overlays when the open organisation becomes known (review of #240: `.loading` with no organisation).
     private var organizationCancellable: AnyCancellable?
+    /// RULEBOOK 1.81.0 §11: the open organisation's `memberNames` entries (lower-case users id → name), live.
+    private(set) var memberNames: [String: [String: String]] = [:]
+    private var memberNamesOrganizationId = ""
+    private var memberNamesListener: ListenerRegistration?
+    private var memberNamesCancellable: AnyCancellable?
     /// True while a roster pay-profile read is running (the foreground retry never starts a second one).
     private var rosterPayReadInFlight = false
     /// The pay this store laid over each roster row (raw → shown), so the next overlay starts from the raw rows.
@@ -296,6 +309,13 @@ class UserStore: ObservableObject {
     func setFirebaseBackend(_ firebaseBackend: FirebaseBackend) {
         guard LaunchStartupPolicy.shouldRewireStore(isSameInstance: self.firebaseBackend === firebaseBackend) else { return }
         self.firebaseBackend = firebaseBackend
+        memberNamesCancellable = firebaseBackend.$currentOrganization
+            .map { $0?.firestoreDocumentId ?? "" }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] organizationId in
+                Task { @MainActor [weak self] in self?.listenToMemberNames(organizationId: organizationId) }
+            }
         organizationCancellable = firebaseBackend.$currentOrganization
             .map { $0?.firestoreDocumentId ?? "" }
             .removeDuplicates()
@@ -304,6 +324,39 @@ class UserStore: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.organizationDidLoadForPay() }
             }
+    }
+
+    /// RULEBOOK 1.81.0 §11: listens to `organizations/{orgId}/memberNames` for the open organisation and lays the
+    /// entries over the roster and the signed-in user. A refused or failed read keeps the users-document names.
+    private func listenToMemberNames(organizationId: String) {
+        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard org != memberNamesOrganizationId || memberNamesListener == nil else { return }
+        memberNamesListener?.remove()
+        memberNamesListener = nil
+        memberNamesOrganizationId = org
+        applyMemberNames([:])
+        guard !org.isEmpty else { return }
+        memberNamesListener = Firestore.firestore()
+            .collection("organizations").document(org).collection(CanonicalBusinessEngine.memberNamesCollection)
+            .addSnapshotListener { [weak self] snapshot, error in
+                guard let snapshot, error == nil else { return }
+                let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                Task { @MainActor [weak self] in
+                    guard let self, self.memberNamesOrganizationId == org else { return }
+                    self.applyMemberNames(CanonicalBusinessEngine.parseMemberNames(docs))
+                }
+            }
+    }
+
+    private func applyMemberNames(_ names: [String: [String: String]]) {
+        memberNames = names
+        if let named = MemberNameOverlay.apply(organizationUsers, names: names) { organizationUsers = named }
+        if let user = currentUser, let named = MemberNameOverlay.apply([user], names: names)?.first { currentUser = named }
+    }
+
+    /// The open organisation's own name entry for this person, if any (lower-case users id).
+    func hasOrganizationName(for userId: String) -> Bool {
+        memberNames[userId.lowercased()] != nil
     }
 
     /// The open organisation is known: the own read and a roster overlay left loading with no organisation start now.

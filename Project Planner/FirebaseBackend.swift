@@ -6220,7 +6220,73 @@ class FirebaseBackend: ObservableObject {
     /// - Never `organizationId` or `createdAt` (`userProfileWriteFields` create-only), and never a `profilePhotoURL`
     ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
+    /// RULEBOOK 1.81.0 §11 "Names per organisation" (`memberNameEditTarget`): outside the person's home organisation
+    /// (the one their users document names) a name edit is saved as this company's own name for them
+    /// (`organizations/{orgId}/memberNames/{uid}`, `memberNameWriteFields`) and the users document keeps its name —
+    /// the returned names are what the users document write should carry. In the home organisation the users document
+    /// takes the edit (as before) and this company's own entry, if one exists, is removed so the edit shows.
+    func routeNameEdit(
+        subjectUserId: String,
+        firstName: String,
+        surname: String,
+        previous: AppUser?,
+        homeOrganizationId: String?
+    ) async throws -> (firstName: String, surname: String) {
+        let organizationId = currentOrganization?.firestoreDocumentId ?? ""
+        let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Without the copy the editor loaded (a profile being created), the name goes to the users document as before.
+        guard let previous else { return (trimmedFirst, trimmedSurname) }
+        let changed = previous.firstName != trimmedFirst || previous.surname != trimmedSurname
+        guard !organizationId.isEmpty,
+              let target = CanonicalBusinessEngine.memberNameEditTarget(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
+        else { return (trimmedFirst, trimmedSurname) }
+        let ref = db.collection("organizations").document(organizationId)
+            .collection(CanonicalBusinessEngine.memberNamesCollection).document(subjectUserId)
+        if target == "organization" {
+            let account = MemberNameOverlay.accountName(previous)
+            guard changed else { return account }
+            if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
+                throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+            }
+            guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
+                throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
+            }
+            fields["updatedAt"] = FieldValue.serverTimestamp()
+            do {
+                try await ref.setData(fields)
+            } catch {
+                throw NSError(domain: "MemberNames", code: 2, userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.memberNameRefusedMessage])
+            }
+            return account
+        }
+        if changed, previous.orgNameOverlay != nil {
+            // Only an admin or the person may remove it (rules); a refusal leaves the company's entry in place.
+            try? await ref.delete()
+        }
+        return (trimmedFirst, trimmedSurname)
+    }
+
     func saveUser(_ user: AppUser, previous: AppUser? = nil) async throws {
+        // RULEBOOK 1.81.0 §11: outside the home organisation the name goes to this company's entry; the users document
+        // write below keeps the users document's own name.
+        var user = user
+        let accountNames = try await routeNameEdit(
+            subjectUserId: user.id,
+            firstName: user.firstName,
+            surname: user.surname,
+            previous: previous,
+            homeOrganizationId: user.storedOrganizationId ?? (user.id == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+        )
+        user.firstName = accountNames.firstName
+        user.surname = accountNames.surname
+        let previous: AppUser? = previous.map { row in
+            var copy = row
+            let base = MemberNameOverlay.accountName(row)
+            copy.firstName = base.firstName
+            copy.surname = base.surname
+            return copy
+        }
         // The leave figures this editor changed are the person's own even while the defaults were pending.
         var editedLeave: [String] = []
         if let previous, previous.id == user.id {
@@ -6296,7 +6362,8 @@ class FirebaseBackend: ObservableObject {
             firstName: user.firstName,
             surname: user.surname,
             email: user.email,
-            mobileNumber: user.mobileNumber
+            mobileNumber: user.mobileNumber,
+            nameAlreadyRouted: true
         )
         // RULEBOOK 1.10.0 §14: the person never rewrites their own membership (role and permissions are an admin's,
         // `orgMembershipWriteFields`); only the identity fields above are saved.
@@ -6358,11 +6425,30 @@ class FirebaseBackend: ObservableObject {
         surname: String,
         email: String,
         mobileNumber: String?,
-        previous: AppUser? = nil
+        previous: AppUser? = nil,
+        nameAlreadyRouted: Bool = false
     ) async throws {
+        // RULEBOOK 1.81.0 §11 (`routeNameEdit`): outside the home organisation the users document keeps its name.
+        var names = (firstName: firstName, surname: surname)
+        if !nameAlreadyRouted {
+            names = try await routeNameEdit(
+                subjectUserId: userId,
+                firstName: firstName,
+                surname: surname,
+                previous: previous,
+                homeOrganizationId: previous?.storedOrganizationId ?? (userId == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+            )
+        }
+        let previous: AppUser? = previous.map { row in
+            var copy = row
+            let base = MemberNameOverlay.accountName(row)
+            copy.firstName = base.firstName
+            copy.surname = base.surname
+            return copy
+        }
         guard let changes = Self.userIdentityChanges(
-            firstName: firstName,
-            surname: surname,
+            firstName: names.firstName,
+            surname: names.surname,
             email: email,
             mobileNumber: mobileNumber,
             previous: previous

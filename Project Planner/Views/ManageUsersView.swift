@@ -3305,6 +3305,19 @@ struct EditUserView: View {
                 VStack(spacing: 0) {
                     if canEditIdentityDetails {
                         ManageUserNameEditRow(firstName: $editFirstName, surname: $editSurname)
+                        // RULEBOOK 1.81.0 §11 (`memberNameEditTarget`): outside the person's home company the name
+                        // edited here is this company's own name for them.
+                        if CanonicalBusinessEngine.memberNameEditTarget(
+                            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId,
+                            homeOrganizationId: displayedUser.storedOrganizationId
+                        ) == "organization" {
+                            Text("The name \(firebaseBackend.currentOrganization?.name ?? "this company") uses for them. Their other companies keep their own.")
+                                .font(.system(size: 11))
+                                .foregroundStyle(ManageUserProfilePalette.textSecondary)
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                         if !isGhostProfile {
                         ManageUserCardDivider()
                         ManageUserDetailTextFieldRow(
