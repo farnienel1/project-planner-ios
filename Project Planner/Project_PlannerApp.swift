@@ -227,6 +227,8 @@ extension AppDelegate: MessagingDelegate {
 private nonisolated func installAuthUIDNotifications() -> AuthStateDidChangeListenerHandle {
     Auth.auth().addStateDidChangeListener { _, user in
         let uid = user?.uid
+        // RULEBOOK 1.84.0 §32: a crash report kept on the device is sent once someone is signed in (background task).
+        if uid != nil { ClientErrorReporter.sendPendingUncaughtInBackground() }
         DispatchQueue.main.async {
             if let uid, !uid.isEmpty {
                 NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
@@ -311,6 +313,8 @@ struct Project_PlannerApp: App {
 
     init() {
         _ = FirebaseStartup.configureIfNeeded()
+        // RULEBOOK 1.84.0 §32: anonymous error reports (an uncaught exception is sent on the next launch).
+        ClientErrorReporter.install()
         let proxyEnabled = Bundle.main.object(forInfoDictionaryKey: "FirebaseAppDelegateProxyEnabled") as? Bool
         print("🔥🔥🔥 DEBUG: FirebaseAppDelegateProxyEnabled = \(proxyEnabled?.description ?? "nil")")
         print("🔥🔥🔥 DEBUG: PP_LAUNCH_BUILD key-host")

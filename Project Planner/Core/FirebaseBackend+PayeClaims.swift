@@ -338,7 +338,7 @@ extension FirebaseBackend {
             do {
                 try await storage.reference().child(path).delete()
             } catch {
-                print("⚠️ [PayeClaims] evidence kept, delete refused or failed for \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [PayeClaims] evidence kept, delete refused or failed for \(path): \(error.localizedDescription)")
             }
         }
     }
@@ -404,7 +404,7 @@ extension FirebaseBackend {
             do {
                 try await storage.reference().child(path).delete()
             } catch {
-                print("⚠️ [Timesheet] evidence kept, delete refused or failed for \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [Timesheet] evidence kept, delete refused or failed for \(path): \(error.localizedDescription)")
             }
         }
     }
@@ -595,7 +595,7 @@ extension FirebaseBackend {
             do {
                 try await storage.reference().child(path).delete()
             } catch {
-                print("⚠️ [PersonalSiteAudits] photo kept, delete refused or failed for \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [PersonalSiteAudits] photo kept, delete refused or failed for \(path): \(error.localizedDescription)")
             }
         }
     }

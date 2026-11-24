@@ -128,7 +128,7 @@ struct MaterialsView: View {
     
     private func loadMaterials(isInitial: Bool) async {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { 
-            print("❌ [MaterialsView] No organization ID for loading materials")
+            logAndReportError("❌ [MaterialsView] No organization ID for loading materials")
             return 
         }
         if isInitial {
@@ -163,7 +163,7 @@ struct MaterialsView: View {
                 }
             }
         } catch {
-            print("❌ [MaterialsView] Error loading materials: \(error.localizedDescription)")
+            logAndReportError("❌ [MaterialsView] Error loading materials: \(error.localizedDescription)")
             await MainActor.run {
                 if isInitial {
                     isLoading = false
@@ -175,7 +175,7 @@ struct MaterialsView: View {
     private func attachMaterialsListener() async {
         guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         guard let orgId = try? await firebaseBackend.resolveOrganizationIdForMaterials(preferredOrganizationId: organizationId) else {
-            print("❌ [MaterialsView] Could not resolve org for materials listener")
+            logAndReportError("❌ [MaterialsView] Could not resolve org for materials listener")
             return
         }
         await MainActor.run {
@@ -765,7 +765,7 @@ struct AddMaterialView: View {
                         isSmallWorks: project.isSmallWorksDocument
                     )
                 } catch {
-                    print("❌ Error saving material: \(error.localizedDescription)")
+                    logAndReportError("❌ Error saving material: \(error.localizedDescription)")
                     if firstError == nil {
                         firstError = error.localizedDescription
                     }

@@ -139,7 +139,7 @@ struct EditWholesalerView: View {
                 }
             }
         } catch {
-            print("Error refreshing contacts: \(error.localizedDescription)")
+            logAndReportError("Error refreshing contacts: \(error.localizedDescription)")
         }
     }
     
@@ -169,7 +169,7 @@ struct EditWholesalerView: View {
                     NotificationCenter.default.post(name: NSNotification.Name("reloadWholesalers"), object: nil)
                 }
             } catch {
-                print("Error saving wholesaler: \(error.localizedDescription)")
+                logAndReportError("Error saving wholesaler: \(error.localizedDescription)")
                 await MainActor.run {
                     isSaving = false
                 }
@@ -197,7 +197,7 @@ struct EditWholesalerView: View {
                     NotificationCenter.default.post(name: NSNotification.Name("reloadWholesalers"), object: nil)
                 }
             } catch {
-                print("Error deleting wholesaler: \(error.localizedDescription)")
+                logAndReportError("Error deleting wholesaler: \(error.localizedDescription)")
                 await MainActor.run {
                     isDeleting = false
                 }

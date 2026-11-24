@@ -196,7 +196,7 @@ struct EditMaterialView: View {
                     NotificationCenter.default.post(name: NSNotification.Name("reloadMaterials"), object: nil)
                 }
             } catch {
-                print("❌ Error updating material: \(error.localizedDescription)")
+                logAndReportError("❌ Error updating material: \(error.localizedDescription)")
                 await MainActor.run {
                     isSaving = false
                     saveErrorMessage = error.localizedDescription
