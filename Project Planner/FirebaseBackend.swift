@@ -583,6 +583,7 @@ class FirebaseBackend: ObservableObject {
         org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
         org.payrollPolicyStateJSON = parsed.payrollPolicyStateJSON
         org.payePaydayJSON = parsed.payePaydayJSON
+        org.onboardingDocumentJSON = parsed.onboardingDocumentJSON
         guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -1666,6 +1667,8 @@ class FirebaseBackend: ObservableObject {
         organization.payrollPolicyStateJSON = PayrollTimePolicyCatalog.payrollStateJSON(fromOrganizationData: data)
         // RULEBOOK 1.29.0 §4.5: the PAYE payday and its dated history, as stored (read by CanonicalBusinessEngine.payePayrunPeriod).
         organization.payePaydayJSON = OvertimeOrganizationDocument.payePaydayJSON(fromOrganizationData: data)
+        // RULEBOOK 1.85.0 §32: the stored fields the Getting started checklist reads.
+        organization.onboardingDocumentJSON = OnboardingOrganizationDocument.json(fromOrganizationData: data)
         let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
         let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
         guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
