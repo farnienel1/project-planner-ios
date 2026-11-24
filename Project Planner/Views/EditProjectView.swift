@@ -81,11 +81,12 @@ struct EditProjectView: View {
         _projectAddressLine1 = State(initialValue: project.addressLine1)
         _projectAddressLine2 = State(initialValue: project.addressLine2 ?? "")
         _projectTownCity = State(initialValue: project.townCity)
-        _projectPostcode = State(initialValue: project.postcode)
+        // Display only: a stored "Sw1× 9Hr" reads "SW1X 9HR"; it is written only when this form is saved.
+        _projectPostcode = State(initialValue: UKPostcodeText.display(project.postcode))
         _addressBackupLine1 = State(initialValue: project.addressLine1)
         _addressBackupLine2 = State(initialValue: project.addressLine2 ?? "")
         _addressBackupTownCity = State(initialValue: project.townCity)
-        _addressBackupPostcode = State(initialValue: project.postcode)
+        _addressBackupPostcode = State(initialValue: UKPostcodeText.display(project.postcode))
         _projectStartDate = State(initialValue: project.startDate)
         _projectEndDate = State(initialValue: project.endDate)
         _projectDescription = State(initialValue: project.description ?? "")
@@ -337,6 +338,11 @@ struct EditProjectView: View {
         .clipShape(RoundedRectangle(cornerRadius: PPMetrics.cardRadius, style: .continuous))
     }
 
+    /// The postcode as typed: an x look-alike (such as ×) becomes x and letters upper case.
+    private var postcodeBinding: Binding<String> {
+        Binding(get: { projectPostcode }, set: { projectPostcode = UKPostcodeText.inputValue($0) })
+    }
+
     private var addressFieldsCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             TextField("Address line 1", text: $projectAddressLine1)
@@ -345,9 +351,12 @@ struct EditProjectView: View {
                 .accessibilityIdentifier("editProject.addressLine2Optional")
             TextField("Town / City", text: $projectTownCity)
                 .accessibilityIdentifier("editProject.townCity")
-            TextField("Postcode", text: $projectPostcode)
+            TextField("Postcode", text: postcodeBinding)
                 .accessibilityIdentifier("editProject.postcode")
                 .textInputAutocapitalization(.characters)
+                .autocorrectionDisabled()
+                .keyboardType(.asciiCapable)
+                .textContentType(.postalCode)
         }
         .textFieldStyle(.roundedBorder)
         .padding(14)
@@ -586,9 +595,12 @@ struct EditProjectView: View {
                     .accessibilityIdentifier("editProject.addressLine2Optional2")
                 TextField("Town / City", text: $projectTownCity)
                     .accessibilityIdentifier("editProject.townCity2")
-                TextField("Postcode", text: $projectPostcode)
+                TextField("Postcode", text: postcodeBinding)
                     .accessibilityIdentifier("editProject.postcode2")
                     .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                    .keyboardType(.asciiCapable)
+                    .textContentType(.postalCode)
             }
             .scrollContentBackground(.hidden)
             .background(PPColor.page.ignoresSafeArea())
@@ -647,7 +659,7 @@ struct EditProjectView: View {
             addressLine1: projectAddressLine1,
             addressLine2: projectAddressLine2,
             townCity: projectTownCity,
-            postcode: projectPostcode,
+            postcode: UKPostcodeText.display(projectPostcode),
             startDate: projectStartDate,
             endDate: projectEndDate,
             worksType: projectWorksType,

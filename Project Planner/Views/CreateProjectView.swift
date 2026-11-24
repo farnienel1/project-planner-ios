@@ -447,7 +447,7 @@ struct CreateProjectView: View {
                 iconTint: ProjectWorksRevampColors.muted,
                 label: "Postcode",
                 prompt: "e.g. SW7 1DR",
-                text: $projectPostcode,
+                text: Binding(get: { projectPostcode }, set: { projectPostcode = UKPostcodeText.inputValue($0) }),
                 fieldKey: "postcode",
                 required: true,
                 autocapitalization: .characters
@@ -716,6 +716,10 @@ struct CreateProjectView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                     .textInputAutocapitalization(autocapitalization)
+                    // A postcode is never autocorrected ("SW1X" must not become "Sw1×").
+                    .autocorrectionDisabled(fieldKey == "postcode")
+                    .keyboardType(fieldKey == "postcode" ? .asciiCapable : .default)
+                    .textContentType(fieldKey == "postcode" ? .postalCode : nil)
                     .focused($focusedFieldKey, equals: fieldKey)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     .contentShape(Rectangle())
@@ -769,7 +773,7 @@ struct CreateProjectView: View {
                 addressLine1: projectAddressLine1.trimmingCharacters(in: .whitespacesAndNewlines),
                 addressLine2: projectAddressLine2.isEmpty ? nil : projectAddressLine2,
                 townCity: projectTownCity.trimmingCharacters(in: .whitespacesAndNewlines),
-                postcode: projectPostcode.trimmingCharacters(in: .whitespacesAndNewlines),
+                postcode: UKPostcodeText.display(projectPostcode),
                 client: client,
                 startDate: projectStartDate,
                 endDate: projectEndDate,

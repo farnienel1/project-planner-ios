@@ -158,8 +158,15 @@ struct CompanyDetailsEditView: View {
                                 .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                             SettingsHubChrome.divider()
-                            TextField("Postcode (optional)", text: $officePostcode)
+                            TextField("Postcode (optional)", text: Binding(
+                                get: { officePostcode },
+                                set: { officePostcode = UKPostcodeText.inputValue($0) }
+                            ))
                                 .accessibilityIdentifier("companyDetailsEdit.postcodeOptional")
+                                .textInputAutocapitalization(.characters)
+                                .autocorrectionDisabled()
+                                .keyboardType(.asciiCapable)
+                                .textContentType(.postalCode)
                                 .font(.subheadline.weight(.medium))
                                 .padding(.vertical, 11)
                         } else {
