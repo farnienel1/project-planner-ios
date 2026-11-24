@@ -522,8 +522,8 @@ struct AppUser: Identifiable, Codable, Hashable {
     /// RULEBOOK 1.81.0 §11: set while the open organisation's own name (`memberNames`) is laid over `firstName` /
     /// `surname` (`MemberNameOverlay`), with the users document's own name under it. Not written or encoded.
     var orgNameOverlay: OrgNameOverlay? = nil
-    /// RULEBOOK 1.88.0 §8, §11: set while the open organisation's own line manager (the membership's `lineManager`
-    /// map) is laid over the line-manager fields (`OrgLineManagerOverlay`), with the users document's own under it.
+    /// RULEBOOK 1.88.0 §8, §11: set while the open organisation's own line manager (its `memberLineManagers/{uid}`
+    /// record) is laid over the line-manager fields (`OrgLineManagerOverlay`), with the users document's own under it.
     /// Not written or encoded.
     var orgLineManagerOverlay: OrgLineManagerMark? = nil
     /// `users/{uid}.status` as stored (`pending` until sign-up finishes). `unbookedLabourRows` skips pending users (RULEBOOK §5).

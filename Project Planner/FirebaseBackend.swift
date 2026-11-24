@@ -7007,7 +7007,8 @@ class FirebaseBackend: ObservableObject {
         updateDayRate: Bool = true,
         writeLineManager: Bool = true,
         payBasis: String? = nil,
-        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = [],
+        memberLineManagerRecord: (organizationId: String, fields: [String: Any])? = nil
     ) async throws {
         var payload: [String: Any] = [:]
         if writeLineManager {
@@ -7036,7 +7037,12 @@ class FirebaseBackend: ObservableObject {
                 payload[key] = value
             }
         }
-        try await commitProfileWithPayHistory(userId: userId, payload: payload, historyRows: historyRows)
+        try await commitProfileWithPayHistory(
+            userId: userId,
+            payload: payload,
+            historyRows: historyRows,
+            memberLineManagerRecord: memberLineManagerRecord
+        )
     }
 
     /// Rate-only patch on `users/{uid}`: `payBasis` plus one amount (`exclusivePayFields`) and `WriteMetadata`.
@@ -7052,14 +7058,25 @@ class FirebaseBackend: ObservableObject {
 
     /// RULEBOOK 1.10.0 §8: the profile update and its `payRateChangeWrites` history rows in one batch, so a refused
     /// profile write leaves no history row (and a refused history row no profile change).
+    /// RULEBOOK 1.88.0 §8, §11: `memberLineManagerRecord` (this company's line manager for a member whose home is
+    /// another company, `memberLineManagerWriteFields`) is set whole on `organizations/{orgId}/memberLineManagers/{uid}`
+    /// in the SAME batch, with the server `updatedAt`, so the profile, its pay history and the record land together.
     private func commitProfileWithPayHistory(
         userId: String,
         payload: [String: Any],
-        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite]
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite],
+        memberLineManagerRecord: (organizationId: String, fields: [String: Any])? = nil
     ) async throws {
         let uid = auth.currentUser?.uid
         let userRef = db.collection("users").document(userId)
         let batch = db.batch()
+        if let record = memberLineManagerRecord {
+            var fields = record.fields
+            fields["updatedAt"] = FieldValue.serverTimestamp()
+            let recordRef = db.collection("organizations").document(record.organizationId)
+                .collection(CanonicalBusinessEngine.memberLineManagersCollection).document(userId)
+            batch.setData(fields, forDocument: recordRef)
+        }
         // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: pay stays off `users/{uid}` while
         // `privatePay` is on for the organisation (unchanged while it is off).
         let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)

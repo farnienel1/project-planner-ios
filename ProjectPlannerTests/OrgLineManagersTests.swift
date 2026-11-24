@@ -14,33 +14,90 @@ final class OrgLineManagersTests: XCTestCase {
         return user
     }
 
-    private let membership: [String: Any] = [
-        "role": "operative",
+    /// This company's `memberLineManagers/{uid}` record for Jane, as stored (with write metadata).
+    private let record: [String: Any] = [
+        "assignedManagerUserIds": ["carolB"],
+        "assignedManagerUserId": "carolB",
+        "hasNoLineManager": false,
         "updatedAt": Date(),
-        "lineManager": ["assignedManagerUserIds": ["carolB"], "assignedManagerUserId": "carolB", "hasNoLineManager": false],
+        "updatedBy": "TEST-ADMIN-B",
+        "updatedFrom": "web",
     ]
 
-    func testVisitingMemberReadsTheMembershipMapAndComesOffAgain() {
-        let shown = OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", memberships: ["jane": membership])
-        XCTAssertEqual(shown?.first?.assignedManagerUserIds, ["carolB"])
-        XCTAssertEqual(shown.map { OrgLineManagerOverlay.accountFields($0[0]).ids }, ["bobA"])
-        XCTAssertNil(OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", memberships: ["jane": membership]), "idempotent")
-        let back = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", memberships: [:])
-        XCTAssertEqual(back?.first?.assignedManagerUserIds, ["bobA"])
-        XCTAssertNil(back?.first?.orgLineManagerOverlay)
+    private var parsedRecords: [String: [String: Any]] {
+        CanonicalBusinessEngine.parseMemberLineManagerDocuments([(id: "JANE", data: record)])
     }
 
-    func testHomeAndNoMapAreUnchanged() {
-        // Home company: the users document whatever the membership says.
-        XCTAssertNil(OrgLineManagerOverlay.apply([jane(home: "TEST-B")], organizationId: "TEST-B", memberships: ["jane": membership]))
-        // A membership with no `lineManager` map (every membership before 1.88.0, a flat legacy copy): as before.
-        let flat: [String: Any] = ["role": "operative", "assignedManagerUserIds": ["old"]]
-        XCTAssertNil(OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", memberships: ["jane": flat]))
+    func testCollectionNameMatchesTheRulebook() {
+        XCTAssertEqual(
+            CanonicalBusinessEngine.constant("MEMBER_LINE_MANAGERS_COLLECTION", as: String.self),
+            CanonicalBusinessEngine.memberLineManagersCollection
+        )
+    }
+
+    func testRecordsAreKeyedByLowerCaseIdAndKeepOnlyTheThreeKeys() {
+        let parsed = parsedRecords
+        XCTAssertEqual(Array(parsed.keys), ["jane"])
+        XCTAssertEqual(parsed["jane"]?["assignedManagerUserIds"] as? [String], ["carolB"])
+        XCTAssertNil(parsed["jane"]?["updatedBy"])
+        // A record holding none of the three keys is no record.
+        XCTAssertTrue(CanonicalBusinessEngine.parseMemberLineManagerDocuments([(id: "x", data: ["updatedBy": "a"])]).isEmpty)
+    }
+
+    func testVisitingMemberReadsTheRecordAndComesOffAgain() {
+        let shown = OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", records: parsedRecords)
+        XCTAssertEqual(shown?.first?.assignedManagerUserIds, ["carolB"])
+        XCTAssertEqual(shown.map { OrgLineManagerOverlay.accountFields($0[0]).ids }, ["bobA"])
+        XCTAssertNil(OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", records: parsedRecords), "idempotent")
+        let back = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "TEST-B", records: [:])
+        XCTAssertEqual(back?.first?.assignedManagerUserIds, ["bobA"])
+        XCTAssertNil(back?.first?.orgLineManagerOverlay)
+        // No company open (sign-out / switch): the overlay comes off too.
+        let closed = OrgLineManagerOverlay.apply(shown ?? [], organizationId: "", records: parsedRecords)
+        XCTAssertEqual(closed?.first?.assignedManagerUserIds, ["bobA"])
+    }
+
+    func testHomeAndNoRecordShowTheUsersDocument() {
+        // Home company: the users document whatever the record says.
+        XCTAssertNil(OrgLineManagerOverlay.apply([jane(home: "TEST-B")], organizationId: "TEST-B", records: parsedRecords))
+        // No record here: the users document is shown, as before 1.88.0.
+        XCTAssertNil(OrgLineManagerOverlay.apply([jane()], organizationId: "TEST-B", records: [:]))
+        let fields = CanonicalBusinessEngine.organizationLineManagerFields(
+            organizationId: "TEST-B",
+            homeOrganizationId: "TEST-A",
+            assignedManagerUserIds: ["bobA"],
+            assignedManagerUserId: "bobA",
+            hasNoLineManager: false,
+            record: nil
+        )
+        XCTAssertEqual(fields?.source, "users")
+        XCTAssertEqual(fields?.ids, ["bobA"])
+    }
+
+    /// Review of web #455 fix (a): a membership `lineManager` map (a 1.88 draft, or a flat copy an older build made)
+    /// is never read — only the record counts.
+    func testMembershipLineManagerMapIsIgnored() {
+        let membership: [String: Any] = [
+            "role": "operative",
+            "lineManager": ["assignedManagerUserIds": ["carolB"], "assignedManagerUserId": "carolB", "hasNoLineManager": false],
+        ]
+        // The membership is not a record: none of the three keys at its top level → no record.
+        let fromMembership = CanonicalBusinessEngine.organizationLineManagerFields(
+            organizationId: "TEST-B",
+            homeOrganizationId: "TEST-A",
+            assignedManagerUserIds: ["bobA"],
+            assignedManagerUserId: "bobA",
+            hasNoLineManager: false,
+            record: membership
+        )
+        XCTAssertEqual(fromMembership?.source, "users")
+        XCTAssertEqual(fromMembership?.ids, ["bobA"])
+        XCTAssertTrue(CanonicalBusinessEngine.parseMemberLineManagerDocuments([(id: "jane", data: membership)]).isEmpty)
     }
 
     func testEditTarget() {
         XCTAssertEqual(CanonicalBusinessEngine.orgLineManagerEditTarget(organizationId: "TEST-A", homeOrganizationId: "test-a"), "users")
-        XCTAssertEqual(CanonicalBusinessEngine.orgLineManagerEditTarget(organizationId: "TEST-B", homeOrganizationId: "TEST-A"), "membership")
+        XCTAssertEqual(CanonicalBusinessEngine.orgLineManagerEditTarget(organizationId: "TEST-B", homeOrganizationId: "TEST-A"), "record")
         XCTAssertNil(CanonicalBusinessEngine.orgLineManagerEditTarget(organizationId: "TEST-B", homeOrganizationId: nil))
     }
 
@@ -51,10 +108,33 @@ final class OrgLineManagersTests: XCTestCase {
             assignedManagerUserIds: ["bobA"],
             assignedManagerUserId: "bobA",
             hasNoLineManager: false,
-            membership: membership
+            record: record
         )
-        XCTAssertEqual(fields?.source, "membership")
+        XCTAssertEqual(fields?.source, "record")
         XCTAssertEqual(fields?.ids, ["carolB"])
+    }
+
+    func testRecordWriteFields() {
+        let fields = CanonicalBusinessEngine.memberLineManagerWriteFields(
+            assignedManagerUserIds: [" carolB ", "CAROLB", "dave"],
+            assignedManagerUserId: nil,
+            hasNoLineManager: false,
+            writerUserId: "TEST-ADMIN-B"
+        )
+        XCTAssertEqual(fields?["assignedManagerUserIds"] as? [String], ["carolB", "dave"])
+        XCTAssertEqual(fields?["assignedManagerUserId"] as? String, "carolB")
+        XCTAssertEqual(fields?["hasNoLineManager"] as? Bool, false)
+        XCTAssertEqual(fields?["updatedBy"] as? String, "TEST-ADMIN-B")
+        XCTAssertEqual(fields?["updatedFrom"] as? String, "ios")
+        let none = CanonicalBusinessEngine.memberLineManagerWriteFields(
+            assignedManagerUserIds: ["carolB"],
+            assignedManagerUserId: "carolB",
+            hasNoLineManager: true,
+            writerUserId: nil
+        )
+        XCTAssertEqual(none?["assignedManagerUserIds"] as? [String], [])
+        XCTAssertTrue(none?["assignedManagerUserId"] is NSNull)
+        XCTAssertNil(none?["updatedBy"])
     }
 
     /// Owner bug 24 Nov: the profile summary and the Edit user picker read the same line manager (list only, no legacy

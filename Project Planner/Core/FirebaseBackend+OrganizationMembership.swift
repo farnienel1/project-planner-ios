@@ -221,16 +221,21 @@ extension FirebaseBackend {
         return true
     }
 
-    /// RULEBOOK 1.88.0 §8, §11: another person's membership in `organizationId` (a co-member may read it from 1.88.0's
-    /// rules), for this company's line manager of a member whose home is elsewhere. Nil when missing, refused or failed.
-    func readOrgMembershipForLineManager(userId: String, organizationId: String) async -> [String: Any]? {
+    /// RULEBOOK 1.88.0 §8, §11: this company's own line-manager record for `userId` here
+    /// (`organizations/{orgId}/memberLineManagers/{uid}`; every active member may read it). Nil when missing, refused
+    /// or failed — the users document's line manager is then shown, as before 1.88.0.
+    func readMemberLineManagerRecord(userId: String, organizationId: String) async -> [String: Any]? {
         let orgId = normalizedOrganizationId(organizationId)
         guard !userId.isEmpty, !orgId.isEmpty else { return nil }
         do {
-            let snap = try await orgMembershipsCollection(userId: userId).document(orgId).getDocument()
+            let snap = try await getDocumentWithServerTimeoutAndCacheFallback(
+                db.collection("organizations").document(orgId)
+                    .collection(CanonicalBusinessEngine.memberLineManagersCollection).document(userId),
+                timeoutSeconds: 4
+            )
             return snap.exists ? snap.data() : nil
         } catch {
-            print("🔥🔥🔥 DEBUG: [OrgLineManager] membership read failed: \(error.localizedDescription)")
+            print("🔥🔥🔥 DEBUG: [OrgLineManager] record read failed: \(error.localizedDescription)")
             return nil
         }
     }
@@ -607,16 +612,19 @@ extension FirebaseBackend {
             membership: membershipSnap.exists ? membershipSnap.data() : nil,
             creatorUserId: creatorUserId
         )
-        // RULEBOOK 1.88.0 §8, §11 `organizationLineManagerFields`: the line manager here is the membership's
-        // `lineManager` map when it holds one, else the users document's (never a flat copy an older build made of the
-        // users document onto the membership).
+        // RULEBOOK 1.88.0 §8, §11 `organizationLineManagerFields` (the `withOrganizationLineManager` rule with the
+        // home company `sharedUserOrganizationId`): the line manager here is this company's own record for the
+        // signed-in person (`memberLineManagers/{uid}`) when it holds one, else the users document's — never the
+        // membership (a flat copy an older build made of the users document onto it, or a 1.88 draft `lineManager`
+        // map, is ignored).
+        let lineManagerRecord = await readMemberLineManagerRecord(userId: userId, organizationId: orgId)
         if let fields = CanonicalBusinessEngine.organizationLineManagerFields(
             organizationId: orgId,
             homeOrganizationId: sharedUserOrganizationId,
             assignedManagerUserIds: base.assignedManagerUserIds,
             assignedManagerUserId: base.assignedManagerUserId,
             hasNoLineManager: base.hasNoLineManager,
-            membership: membershipSnap.exists ? membershipSnap.data() : nil
+            record: lineManagerRecord
         ) {
             profile.assignedManagerUserIds = fields.ids
             profile.assignedManagerUserId = fields.single
@@ -678,7 +686,7 @@ extension FirebaseBackend {
         ]
         if let mobile = user.mobileNumber { sharedData["mobileNumber"] = mobile }
         if let photo = user.profilePhotoURL { sharedData["profilePhotoURL"] = photo }
-        // RULEBOOK 1.88.0: the users document's line manager, read here when the membership holds none.
+        // RULEBOOK 1.88.0: the users document's line manager, shown here when this company holds no record for them.
         sharedData["assignedManagerUserIds"] = user.assignedManagerUserIds
         if let single = user.assignedManagerUserId { sharedData["assignedManagerUserId"] = single }
         sharedData["hasNoLineManager"] = user.hasNoLineManager
