@@ -553,6 +553,8 @@ struct ProjectPlannerRootView: View {
         .background(ProjectWorksRevampColors.canvas)
         .onReceive(NotificationCenter.default.publisher(for: .plannerHomeDidDraw)) { _ in
             print("🔥🔥🔥 DEBUG: PP_LAUNCH_VISIBLE home")
+            // Sign-in chord: only when a sign-in made just now reaches a usable Home (review of #284).
+            SignInWelcome.sessionReady()
         }
         .onChange(of: lockOverlay, initial: true) { _, overlay in
             lockWindow.update(overlay) {

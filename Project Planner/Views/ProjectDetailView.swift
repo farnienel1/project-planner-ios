@@ -932,7 +932,7 @@ struct ProjectDetailView: View {
     }
 
     private var schedulingClientSubtitle: String {
-        let loc = [project.townCity, project.postcode].filter { !$0.isEmpty }.joined(separator: " ")
+        let loc = [project.townCity, UKPostcodeText.display(project.postcode)].filter { !$0.isEmpty }.joined(separator: " ")
         if loc.isEmpty { return project.client.name }
         return "\(project.client.name) · \(loc)"
     }
@@ -2630,7 +2630,7 @@ struct ProjectDetailView: View {
     }
 
     private var locationDisplayText: String {
-        if hasValidAddress { return project.siteAddress }
+        if hasValidAddress { return project.displaySiteAddress }
         if hasStoredMapCoordinate, let la = project.latitude, let lo = project.longitude {
             return String(format: "%.5f, %.5f", la, lo)
         }
@@ -2955,7 +2955,7 @@ struct ProjectDetailView: View {
         guard hasValidAddress else { return }
 
         let request = MKLocalSearch.Request()
-        request.naturalLanguageQuery = project.siteAddress
+        request.naturalLanguageQuery = project.displaySiteAddress
         let search = MKLocalSearch(request: request)
 
         Task {
@@ -3001,7 +3001,7 @@ struct ProjectDetailView: View {
             }
             return
         }
-        let address = project.siteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let address = project.displaySiteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         if let url = URL(string: "comgooglemaps://?q=\(address)") {
             if UIApplication.shared.canOpenURL(url) {
                 UIApplication.shared.open(url)
@@ -3024,7 +3024,7 @@ struct ProjectDetailView: View {
             return
         }
 
-        let address = project.siteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let address = project.displaySiteAddress.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
         if let url = URL(string: "http://maps.apple.com/?q=\(address)") {
             UIApplication.shared.open(url)
         }

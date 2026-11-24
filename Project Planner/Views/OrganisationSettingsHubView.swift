@@ -19,9 +19,29 @@ struct OrganisationSettingsHubView: View {
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
 
     @State private var showingCompanyDetails = false
+    /// RULEBOOK 1.83.0 §31: live insurance & accreditations (admins only) for the Compliance row and its page.
+    @StateObject private var complianceStore = OrgComplianceStore()
     @State private var showingDeleteInfo = false
 
     private var org: Organization? { firebaseBackend.currentOrganization }
+
+    /// RULEBOOK 1.83.0 §31 `canManageOrganizationCompliance`: admins and super admins only.
+    private var canManageCompliance: Bool {
+        userStore.displayUser.map { CanonicalBusinessEngine.canManageOrganizationCompliance($0.permissionSubject) } ?? false
+    }
+
+    /// Listens for the open organisation (a switch re-points it; never another company's documents, §1).
+    private func startComplianceListener() {
+        guard canManageCompliance, let orgId = org?.firestoreDocumentId, !orgId.isEmpty else {
+            complianceStore.stop()
+            return
+        }
+        complianceStore.start(organizationId: orgId, db: firebaseBackend.db)
+    }
+
+    private var complianceCounts: RulebookOrgComplianceCounts {
+        CanonicalBusinessEngine.orgComplianceCounts(complianceStore.documents, todayKey: CanonicalBusinessEngine.orgComplianceTodayKey())
+    }
 
     private var policy: OrgPayrollTimePolicy {
         org?.settings.payrollTimePolicy ?? .default
@@ -105,6 +125,38 @@ struct OrganisationSettingsHubView: View {
                         }
                         .accessibilityIdentifier("organisationSettingsHub.sterlingsignCircleFill")
                         .buttonStyle(PPMenuRowButtonStyle())
+                    }
+
+                    if canManageCompliance {
+                        hubSectionTitle(CanonicalBusinessEngine.orgComplianceHubGroup)
+                        hubCard {
+                            NavigationLink {
+                                InsuranceAccreditationsView(store: complianceStore)
+                                    .environmentObject(firebaseBackend)
+                                    .environmentObject(userStore)
+                            } label: {
+                                HStack(spacing: 8) {
+                                    hubRowLabel(
+                                        icon: "checkmark.shield.fill",
+                                        family: .sites,
+                                        title: CanonicalBusinessEngine.orgCompliancePageTitle,
+                                        subtitle: CanonicalBusinessEngine.orgComplianceHubSubtitle(complianceCounts)
+                                    )
+                                    if complianceCounts.attention > 0 {
+                                        Text("\(complianceCounts.attention)")
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(.white)
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 2)
+                                            .background(Color.orange, in: Capsule())
+                                            .accessibilityLabel("\(complianceCounts.attention) need attention")
+                                            .padding(.trailing, 12)
+                                    }
+                                }
+                            }
+                            .accessibilityIdentifier("organisationSettingsHub.insuranceAccreditations")
+                            .buttonStyle(PPMenuRowButtonStyle())
+                        }
                     }
 
                     hubSectionTitle("Defaults for new operatives")
@@ -266,6 +318,8 @@ struct OrganisationSettingsHubView: View {
             }
         }
         .background(PPColor.page.ignoresSafeArea())
+        .onAppear { startComplianceListener() }
+        .onChange(of: org?.firestoreDocumentId) { _, _ in startComplianceListener() }
         .navigationTitle("Organisation")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

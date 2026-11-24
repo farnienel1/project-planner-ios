@@ -3307,9 +3307,9 @@ struct EditUserView: View {
                         ManageUserNameEditRow(firstName: $editFirstName, surname: $editSurname)
                             // RULEBOOK 1.81.0 §11 (`canWriteMemberName`): locked for writers the rules refuse.
                             .disabled(!userStore.canEditName(of: displayedUser))
-                        // RULEBOOK 1.81.0 §11 (`memberNameEditTarget`): outside the person's home company the name
-                        // edited here is this company's own name for them.
-                        if userStore.nameEditIsOrganizations(displayedUser) {
+                        // RULEBOOK 1.82.0 §11 (`memberNameEditPlan`): the name edited here is always this company's
+                        // own name for them (their other companies keep their own).
+                        Group {
                             Text(userStore.canEditName(of: displayedUser)
                                  ? "The name \(firebaseBackend.currentOrganization?.name ?? "this company") uses for them. Their other companies keep their own."
                                  : CanonicalBusinessEngine.memberNameRefusedMessage)
@@ -3748,8 +3748,9 @@ struct EditUserView: View {
 
     private func lastSeenDisplay(for u: AppUser) -> String {
         guard userStore.canManageUsers() else { return "—" }
-        guard let t = u.lastSeenAt else { return "Never recorded" }
-        return t.formatted(date: .abbreviated, time: .shortened)
+        // Newest heartbeat across all of the person's users documents, in the organisation time zone.
+        guard let t = userStore.newestLastSeenAt(for: u) else { return "Never recorded" }
+        return LastActiveText.format(t)
     }
 
     private func calendarStartOfDay(_ date: Date) -> Date {
