@@ -484,12 +484,33 @@ class UserStore: ObservableObject {
                 cu.lastSeenAt = now
                 currentUser = cu
             }
-            if let idx = organizationUsers.firstIndex(where: { $0.id == uid }) {
-                organizationUsers[idx].lastSeenAt = now
-            }
+            // The roster is not republished here (review of #284): a whole-roster publish re-runs every roster
+            // consumer (pay overlay read, job access). The live users listener brings the stored value, and the
+            // warnings rescan gate (`WarningsRosterFingerprint`) ignores `lastSeenAt`.
         } catch {
             print("🔥🔥🔥 DEBUG: lastSeenAt heartbeat failed: \(error.localizedDescription)")
         }
+    }
+
+    /// "Last active" for a person: the newest `lastSeenAt` across every users document of that person in this
+    /// organisation (`personIdSet` over the unfolded roster — an old invite id or a second same-email document may
+    /// hold the newer heartbeat, e.g. the person signs in on web under one and on iPhone under another).
+    func newestLastSeenAt(for user: AppUser) -> Date? {
+        let documents = unfoldedOrganizationUsers
+        let ids = CanonicalBusinessEngine.personIdSet(person: RulebookPeople.person(user), roster: unfoldedRosterRows)
+            ?? ([user.id] + user.formerUserIds + user.sameEmailUserIds)
+        return Self.newestLastSeenAt(personIds: ids, documents: documents, fallback: user.lastSeenAt)
+    }
+
+    /// Pure part of `newestLastSeenAt(for:)`: ids compared without case (RULEBOOK §1).
+    nonisolated static func newestLastSeenAt(personIds: [String], documents: [AppUser], fallback: Date?) -> Date? {
+        let wanted = Set(personIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        var newest = fallback
+        for document in documents where wanted.contains(document.id.lowercased()) {
+            guard let seen = document.lastSeenAt else { continue }
+            if newest.map({ seen > $0 }) ?? true { newest = seen }
+        }
+        return newest
     }
 
     /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).

@@ -444,7 +444,7 @@ struct WorksDashboardCard: View {
                     metaRow(systemImage: "building.2", text: project.client.name, emphasize: true)
                 }
                 if !project.siteAddress.isEmpty {
-                    metaRow(systemImage: "mappin.and.ellipse", text: project.siteAddress, emphasize: false)
+                    metaRow(systemImage: "mappin.and.ellipse", text: project.displaySiteAddress, emphasize: false)
                 }
                 if showsClientAndManager, !managerDisplayName.isEmpty {
                     metaRow(systemImage: "person", text: managerDisplayName, emphasize: true)

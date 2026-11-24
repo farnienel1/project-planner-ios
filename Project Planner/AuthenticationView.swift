@@ -403,6 +403,9 @@ struct AuthenticationView: View {
                 )
                 // Signed in with a password just now: don't lock straight away; offer the app lock instead.
                 AppLockService.shared.noteInteractiveSignIn()
+                // Feedback guide §2.1 (owner 24 Nov): the sign-in chord, once, for this sign-in only (never when the
+                // app reopens an existing session), and only while Sounds is on.
+                SignInWelcome.signedIn()
                 if let uid = Auth.auth().currentUser?.uid, !uid.isEmpty {
                     NotificationCenter.default.post(name: .firebaseAuthUIDChanged, object: nil, userInfo: ["uid": uid])
                 }

@@ -729,7 +729,7 @@ struct ProjectDetailRowView: View {
             Text(project.siteName)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(ProjectWorksRevampColors.ink)
-            Text(project.siteAddress)
+            Text(project.displaySiteAddress)
                 .font(.system(size: 11))
                 .foregroundStyle(ProjectWorksRevampColors.muted)
                 .lineLimit(3)
@@ -765,7 +765,7 @@ struct ProjectDetailRowView: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 rowIcon("building.2", project.client.name)
-                rowIcon("mappin.and.ellipse", project.siteAddress)
+                rowIcon("mappin.and.ellipse", project.displaySiteAddress)
                 rowIcon("person", managerDisplayName)
                 rowIcon("calendar", dateRangeDisplay)
             }
