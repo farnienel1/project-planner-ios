@@ -2939,7 +2939,7 @@ private struct MyTimesheetView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(currentUser, period: week.start...week.end),
@@ -2981,7 +2981,7 @@ private struct MyTimesheetView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: lateExtrasPermission.allowed,
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
         )
     }
@@ -4687,6 +4687,8 @@ struct OperativeTimesheetsView: View {
     @State private var exportedSearch = ""
     @State private var exportedSort = "dateNewest"
     @State private var exportedRunKey = "all"
+    /// Owner 24 Nov (web #451): each Exported row's versions list starts collapsed; opened rows are kept for the session.
+    @State private var openVersionRowIds: Set<String> = ExportedVersionsDisclosure.openRowIds
     @State private var awaitingRows: [ManagerTimesheetRow] = []
     /// RULEBOOK 1.66.0 §8: Signed off — every signed, unexported sheet however old (`userTimesheetQueue`, as web).
     @State private var signedRows: [ManagerTimesheetRow] = []
@@ -4826,13 +4828,20 @@ struct OperativeTimesheetsView: View {
                                             Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
-                                            Text(row.week.title)
+                                            // Owner 24 Nov (web #451): pay run and export time on one line, in the
+                                            // organisation's time zone ("16–30 Nov 2026 · Exported 24 Nov, 20:07").
+                                            Text(exportedRowLine(row))
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
-                                            if let exportedAt = row.draft.exportedAt {
-                                                Text("Exported \(exportedAt.formatted(date: .abbreviated, time: .shortened))")
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.85)
+                                            // Owner 24 Nov (parity with web #451): admins see the line manager,
+                                            // named by the rulebook's `lineManagerSummary` like Awaiting / Signed off.
+                                            if isAdminViewer {
+                                                Text("Line manager: \(row.unresolvedPerson ? "—" : lineManagerName(for: live(row.user)))")
                                                     .font(.caption2)
                                                     .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
                                             }
                                         }
                                         Spacer()
@@ -4842,7 +4851,8 @@ struct OperativeTimesheetsView: View {
                                             .foregroundStyle(.tertiary)
                                     }
                                     .padding(.horizontal, 14)
-                                    .padding(.vertical, 11)
+                                    .padding(.top, 9)
+                                    .padding(.bottom, 4)
                                     .contentShape(Rectangle())
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
@@ -4860,23 +4870,47 @@ struct OperativeTimesheetsView: View {
                                     }
                                     .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDF")
                                 }
-                                // Review r318: the same action, visible on every row (not long-press only).
-                                HStack {
+                                // Review r318: the same action, visible on every row (not long-press only). Owner 24 Nov
+                                // (web #451): one line with the "Versions · N" toggle on the left.
+                                HStack(spacing: 12) {
+                                    if !row.earlier.isEmpty {
+                                        let open = openVersionRowIds.contains(row.id)
+                                        let count = max(row.versions.count, row.earlier.count + 1)
+                                        Button {
+                                            openVersionRowIds = TimesheetListDisplay.toggled(openVersionRowIds, rowId: row.id)
+                                            ExportedVersionsDisclosure.openRowIds = openVersionRowIds
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Text("Versions · \(count)")
+                                                Image(systemName: "chevron.right")
+                                                    .rotationEffect(.degrees(open ? 90 : 0))
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .accessibilityLabel("Versions of this pay run, \(count)")
+                                        .accessibilityValue(open ? "Expanded" : "Collapsed")
+                                        .accessibilityHint(open ? "Hides the versions" : "Shows the versions")
+                                        .accessibilityIdentifier("timesheets.row.\(row.id).versionsToggle")
+                                    }
                                     Spacer()
                                     Button {
                                         Task { await downloadExportedPDF(row, confirmedRebuild: false) }
                                     } label: {
-                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                        Label("PDF", systemImage: "arrow.down.doc")
                                             .font(.caption.weight(.semibold))
                                     }
                                     .buttonStyle(.borderless)
+                                    .accessibilityLabel(exportedDownloadLabel(row))
                                     .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDFButton")
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 8)
                                 // RULEBOOK 1.55.0 §8, owner item 23 (23 Nov): every exported version of the pay run,
                                 // oldest first, each with its invoice number, signed date, total, difference and PDF.
-                                if !row.earlier.isEmpty {
+                                // Owner 24 Nov: collapsed until the row's "Versions · N" toggle opens it.
+                                if !row.earlier.isEmpty, openVersionRowIds.contains(row.id) {
                                     if row.versions.count > 1 {
                                         TimesheetExportedVersionsList(
                                             rows: TimesheetExportedVersionRow.rows(
@@ -5917,15 +5951,29 @@ struct OperativeTimesheetsView: View {
         return String(format: "%.1f", rounded)
     }
 
+    /// "16–30 Nov 2026 · Exported 24 Nov, 20:07" in the organisation's time zone (web `formatCompactPayRun`,
+    /// `formatExportedStamp`). Before 24 Nov the export time used the device's zone.
+    private func exportedRowLine(_ row: ExportedTimesheetHistoryRow) -> String {
+        let zone = OrganizationRulebookContext.timeZone
+        let run = TimesheetListDisplay.compactPayRun(start: row.week.start, end: row.week.end, timeZone: zone)
+        guard let exportedAt = row.draft.exportedAt else { return run }
+        return "\(run) · Exported \(TimesheetListDisplay.exportedStamp(exportedAt, timeZone: zone))"
+    }
+
+    /// VoiceOver: "Download PDF of Luke Baldino, 16–30 Nov 2026, REV 1".
+    private func exportedDownloadLabel(_ row: ExportedTimesheetHistoryRow) -> String {
+        let person = live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName
+        let run = TimesheetListDisplay.compactPayRun(start: row.week.start, end: row.week.end, timeZone: OrganizationRulebookContext.timeZone)
+        let revisionNumber = row.draft.revision ?? 0
+        let revision = revisionNumber > 0 ? ", REV \(revisionNumber)" : ""
+        return "Download PDF of \(person), \(run)\(revision)"
+    }
+
+    /// RULEBOOK §11 `lineManagerSummary` over every users document of the organisation (owner 24 Nov, web #451):
+    /// "Not set", "No line manager", a name, "First +N more", or "Unknown person" for an id nobody goes by. Before,
+    /// only `assignedManagerUserId` was matched exactly against the folded roster ("Unknown" / "Unassigned").
     private func lineManagerName(for user: AppUser) -> String {
-        guard let id = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
-            return "Unassigned"
-        }
-        if let manager = userStore.organizationUsers.first(where: { $0.id == id }) {
-            let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? manager.email : name
-        }
-        return "Unknown"
+        LineManagerLabelCache.shared.label(for: user, roster: userStore.unfoldedOrganizationUsers)
     }
 }
 
@@ -6430,7 +6478,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(operative, period: week.start...week.end),
@@ -6454,7 +6502,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: false,
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
         )
     }
