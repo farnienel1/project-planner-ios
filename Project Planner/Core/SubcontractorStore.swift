@@ -43,7 +43,7 @@ class SubcontractorStore: ObservableObject {
             query: { $0.collection("subcontractors") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
-            let firms = FirebaseBackend.subcontractors(fromDocuments: rows)
+            let firms = FirebaseBackend.subcontractors(fromDocuments: rows, organizationId: organizationId)
                 .sorted { $0.name < $1.name }
                 .map { firm -> Subcontractor in
                     // Duplicate contact ids crash SwiftUI ForEach (same as loadData).

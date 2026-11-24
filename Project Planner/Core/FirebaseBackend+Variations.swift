@@ -851,7 +851,8 @@ extension FirebaseBackend {
     /// progress or `variationUploadTotalSeconds` in all — and the download URL read with a bounded retry. A `gs://`
     /// address is never stored: when no download URL can be read the object just uploaded is deleted again (its
     /// uploader, inside the undo window) and the upload fails with the real error.
-    private func putVariationEvidenceData(
+    /// Also used for subcontractor documents (1.80.0): the same watched upload and bounded download-URL read.
+    func putVariationEvidenceData(
         _ data: Data,
         path: String,
         contentType: String

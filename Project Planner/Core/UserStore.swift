@@ -1959,10 +1959,8 @@ class UserStore: ObservableObject {
         if isOperativeMode() { return false }
         if isHomeProfileLoading { return true }
         guard let currentUser = displayUser else { return false }
-        if currentUser.isSuperAdmin || currentUser.permissions.adminAccess || currentUser.role == .admin {
-            return true
-        }
-        return currentUser.permissions.manager && currentUser.effectivePermissions.subContractors
+        // RULEBOOK 1.80.0 §30 `canManageSubcontractors` (one rule for both apps; also who uploads insurance and RAMS).
+        return CanonicalBusinessEngine.canManageSubcontractors(currentUser.permissionSubject)
     }
 
     /// Add projects or small works (`canCreateJob`, RULEBOOK 1.10.0 §16 round 2): admins and super admins outside
