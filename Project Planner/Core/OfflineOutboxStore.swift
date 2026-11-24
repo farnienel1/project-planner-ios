@@ -41,6 +41,40 @@ struct OfflineDeleteBookingPayload: Codable {
     var managerBooking: ManagerSiteBooking? = nil
 }
 
+/// RULEBOOK 1.86.0 §2 / §5: one booking a queued offline Replace removes.
+struct OfflineReplacedBooking: Codable, Equatable {
+    /// `bookings` or `managerSiteBookings`.
+    let collection: String
+    /// The Firestore document id as stored (a lower-case or non-UUID id kept as it is).
+    let documentId: String
+    let bookingId: UUID
+    /// `bookingDeleteFingerprint` of the booking as last synced from the server (a queued edit's baseline).
+    var fingerprint: String
+    /// Its own create was still queued on this phone when Replace was chosen: never sent (`offlineReplaceReplayDecision`
+    /// `dropLocal`); put back as a queued create if the Replace is undone or refused.
+    var createdOffline: Bool = false
+    /// The fields of a queued edit of this booking that the Replace took out of the queue (nil: none). Queued again,
+    /// with `fingerprint` as its baseline, if the Replace is undone or refused, so the edit is not lost.
+    var queuedEditFields: [String]? = nil
+    /// The booking as it was, put back on Undo or when the replay is refused.
+    var labourBooking: Booking? = nil
+    var managerBooking: ManagerSiteBooking? = nil
+}
+
+/// RULEBOOK 1.86.0 §2 / §5 (owner decision 24 Nov): a Replace chosen offline — the new booking (a create) and each
+/// replaced booking's delete with its tombstone, replayed as ONE transaction through `offlineReplaceReplayDecision`.
+/// Exactly one of `labourBooking` / `managerBooking` is the new booking.
+struct OfflineReplaceBookingPayload: Codable {
+    var labourBooking: Booking? = nil
+    var managerBooking: ManagerSiteBooking? = nil
+    var replaced: [OfflineReplacedBooking]
+
+    /// `bookings` or `managerSiteBookings`: where the new booking goes.
+    var collection: String { labourBooking != nil ? "bookings" : "managerSiteBookings" }
+    var newBookingId: UUID? { labourBooking?.id ?? managerBooking?.id }
+    var newDocumentId: String? { labourBooking?.documentKey ?? managerBooking?.documentKey }
+}
+
 struct OfflineSaveManagerSiteBookingPayload: Codable {
     let booking: ManagerSiteBooking
     /// Changed fields (`BookingWritePatch.managerFieldNames`); nil for a create.
@@ -82,6 +116,9 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case saveOwnProfileFields
         /// RULEBOOK §2 allowed offline: the signed-in user's own notification toggles.
         case saveOwnNotificationToggles
+        /// RULEBOOK 1.86.0 §2 / §5: Replace chosen offline (`OfflineReplaceBookingPayload`). `entityId` is the new
+        /// booking's UUID, so it shows "Pending sync".
+        case replaceBooking
     }
 
     let id: UUID
@@ -110,6 +147,7 @@ struct OfflineOutboxEntry: Identifiable, Codable, Equatable {
         case .saveAnnualLeaveRequest: return "Annual leave request"
         case .saveOwnProfileFields: return "My profile"
         case .saveOwnNotificationToggles: return "My notifications"
+        case .replaceBooking: return "Replace booking"
         }
     }
 
@@ -227,6 +265,15 @@ final class OfflineOutboxStore: ObservableObject {
                 if let payload = try? decoder.decode(OfflineDeleteBookingPayload.self, from: entry.payload) {
                     deleted.insert(payload.bookingId)
                 }
+            case .replaceBooking:
+                // RULEBOOK 1.86.0: the new labour booking shows (Pending sync); replaced labour bookings stay gone.
+                if let payload = try? decoder.decode(OfflineReplaceBookingPayload.self, from: entry.payload) {
+                    if let booking = payload.labourBooking {
+                        saves.removeAll { $0.id == booking.id }
+                        saves.append(booking)
+                    }
+                    for row in payload.replaced where row.collection == "bookings" { deleted.insert(row.bookingId) }
+                }
             default:
                 break
             }
@@ -246,7 +293,135 @@ final class OfflineOutboxStore: ObservableObject {
                 ids.insert(id)
             }
         }
+        // RULEBOOK 1.86.0: a booking a queued Replace removes stays gone too.
+        for entry in entries where entry.organizationId == organizationId && entry.operation == .replaceBooking {
+            guard let payload = try? decoder.decode(OfflineReplaceBookingPayload.self, from: entry.payload) else { continue }
+            for row in payload.replaced where row.collection == collection { ids.insert(row.bookingId) }
+        }
         return ids
+    }
+
+    /// The queued Replace for an entry (the outbox sheet's Undo).
+    func queuedReplace(entryId: UUID) -> (entry: OfflineOutboxEntry, payload: OfflineReplaceBookingPayload)? {
+        guard let entry = entries.first(where: { $0.id == entryId }),
+              entry.operation == .replaceBooking,
+              let payload = try? decoder.decode(OfflineReplaceBookingPayload.self, from: entry.payload) else { return nil }
+        return (entry, payload)
+    }
+
+    /// The queued Replace whose new booking is `bookingId`, if any.
+    func queuedReplace(newBookingId bookingId: UUID) -> (entry: OfflineOutboxEntry, payload: OfflineReplaceBookingPayload)? {
+        guard let entry = entries.first(where: {
+            $0.operation == .replaceBooking && $0.entityId.caseInsensitiveCompare(bookingId.uuidString) == .orderedSame
+        }), let payload = try? decoder.decode(OfflineReplaceBookingPayload.self, from: entry.payload) else { return nil }
+        return (entry, payload)
+    }
+
+    /// RULEBOOK 1.86.0 `offlineReplaceReplayDecision` `dropLocal`: the person deleted the new booking of a queued
+    /// Replace before it was sent. The whole item leaves the queue unsent and the replaced bookings come back on this
+    /// device (`OfflineSyncCoordinator.postReplaceUndone`). False when no such item is queued, or while it is being
+    /// replayed (the delete then goes through Firestore after it).
+    @discardableResult
+    func dropQueuedReplace(newBookingId bookingId: UUID) -> Bool {
+        guard !isInFlight(bookingId: bookingId), let queued = queuedReplace(newBookingId: bookingId) else { return false }
+        entries.removeAll { $0.id == queued.entry.id }
+        persistToDisk()
+        OfflineSyncCoordinator.postReplaceUndone(entry: queued.entry, payload: queued.payload, outbox: self)
+        return true
+    }
+
+    /// RULEBOOK 1.86.0 §2 / §5 (owner decision 24 Nov): queues a Replace chosen offline as ONE item — `labour` or
+    /// `manager` is the new booking, `targets` the bookings it removes as this phone showed them. Each replaced
+    /// booking's queued edit is taken into the item (its baseline fingerprint is kept, as for an offline delete); one
+    /// whose own create is still queued is marked `createdOffline` (never sent). Returns nil when queued, else why
+    /// nothing was queued (a replaced booking that is itself the unsent new booking of another queued Replace).
+    func enqueueReplaceBooking(
+        labour: Booking? = nil,
+        manager: ManagerSiteBooking? = nil,
+        replacing targets: [BookingReplaceTarget],
+        organizationId: String
+    ) -> String? {
+        guard let newId = labour?.id ?? manager?.id, !targets.isEmpty else { return "This booking could not be saved." }
+        var labour = labour
+        if var booking = labour, booking.operativeKey == nil, let stored = booking.writableOperativeId {
+            booking.operativeKey = stored
+            labour = booking
+        }
+        for target in targets {
+            let id = target.labour?.id ?? target.manager?.id
+            if let id, queuedReplace(newBookingId: id) != nil {
+                return Self.replaceOfUnsentReplaceMessage
+            }
+        }
+        var replaced: [OfflineReplacedBooking] = []
+        var removedEntryIds = Set<UUID>()
+        for target in targets {
+            guard let id = target.labour?.id ?? target.manager?.id else { return "This booking could not be saved." }
+            var row = OfflineReplacedBooking(
+                collection: target.ref.collection,
+                documentId: target.ref.bookingId,
+                bookingId: id,
+                fingerprint: target.fingerprint,
+                labourBooking: target.labour,
+                managerBooking: target.manager
+            )
+            let saveOperation: OfflineOutboxEntry.Operation = target.ref.collection == "bookings" ? .saveBooking : .saveManagerSiteBooking
+            if let existing = entries.first(where: {
+                $0.operation == saveOperation && $0.entityId.caseInsensitiveCompare(id.uuidString) == .orderedSame
+            }) {
+                var isCreate = false
+                var baseline: String?
+                if saveOperation == .saveBooking, let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
+                    isCreate = old.changedFields == nil
+                    baseline = old.baselineFingerprint
+                } else if let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
+                    isCreate = old.changedFields == nil
+                    baseline = old.baselineFingerprint
+                }
+                if isCreate {
+                    row.createdOffline = true
+                } else {
+                    if let baseline { row.fingerprint = baseline }
+                    if saveOperation == .saveBooking, let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
+                        row.queuedEditFields = old.changedFields
+                    } else if let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
+                        row.queuedEditFields = old.changedFields
+                    }
+                }
+                removedEntryIds.insert(existing.id)
+            }
+            replaced.append(row)
+        }
+        let model = OfflineReplaceBookingPayload(labourBooking: labour, managerBooking: labour == nil ? manager : nil, replaced: replaced)
+        guard let payload = try? encoder.encode(model) else { return "This booking could not be saved." }
+        entries.removeAll { removedEntryIds.contains($0.id) }
+        enqueue(
+            OfflineOutboxEntry(organizationId: organizationId, operation: .replaceBooking, entityId: newId.uuidString, payload: payload),
+            dedupeSameEntity: true
+        )
+        return nil
+    }
+
+    /// Shown when an offline Replace would remove a booking that is itself the unsent new booking of another queued
+    /// Replace: the first must sync (or be undone) first, so no replaced booking is lost without a trace.
+    static let replaceOfUnsentReplaceMessage =
+        "That booking is still waiting to sync from an earlier Replace. Connect to the internet, or undo the earlier Replace, then try again."
+
+    /// RULEBOOK 1.86.0: an offline edit of a queued Replace's new booking goes into that item (it is still a create),
+    /// as an edit after a queued create stays a create. False when no Replace is queued for it.
+    private func mergeIntoQueuedReplace(labour: Booking? = nil, manager: ManagerSiteBooking? = nil) -> Bool {
+        guard let id = labour?.id ?? manager?.id,
+              let index = entries.firstIndex(where: {
+                  $0.operation == .replaceBooking && $0.entityId.caseInsensitiveCompare(id.uuidString) == .orderedSame
+              }),
+              var payload = try? decoder.decode(OfflineReplaceBookingPayload.self, from: entries[index].payload) else { return false }
+        if let labour, payload.labourBooking != nil { payload.labourBooking = labour }
+        else if let manager, payload.managerBooking != nil { payload.managerBooking = manager }
+        else { return false }
+        guard let data = try? encoder.encode(payload) else { return false }
+        entries[index] = entries[index].replacingPayload(data)
+        persistToDisk()
+        return true
     }
 
     /// The queued delete for an entity, if any (the outbox sheet's Undo).
@@ -296,6 +471,8 @@ final class OfflineOutboxStore: ObservableObject {
         // in-memory id map is empty again) still writes that id and never an unresolved one (`BookingPersonResolution`).
         var booking = booking
         if booking.operativeKey == nil, let stored = booking.writableOperativeId { booking.operativeKey = stored }
+        // RULEBOOK 1.86.0: the new booking of a queued Replace is still a create inside that item.
+        if mergeIntoQueuedReplace(labour: booking) { return }
         var fields: [String]? = changedFields.map { Array($0).sorted() }
         // RULEBOOK 1.33.0: the first queued edit keeps the fingerprint of the copy last synced from the server.
         var baseline = changedFields == nil ? nil : baselineFingerprint
@@ -548,6 +725,8 @@ final class OfflineOutboxStore: ObservableObject {
     /// last synced) is the fingerprint kept.
     @discardableResult
     func enqueueDeleteBooking(_ booking: Booking, fingerprint: String, organizationId: String) -> OfflineDeleteQueueResult {
+        // RULEBOOK 1.86.0 `dropLocal`: the new booking of a queued Replace, deleted before it was sent.
+        if dropQueuedReplace(newBookingId: booking.id) { return .droppedLocal }
         let entityId = booking.id.uuidString
         var baseline = fingerprint
         if let existing = entries.first(where: { $0.entityId == entityId && $0.operation == .saveBooking }),
@@ -579,6 +758,8 @@ final class OfflineOutboxStore: ObservableObject {
     /// id written by web is deleted under its own spelling (1.33.0: the lower-case schedule id fix).
     @discardableResult
     func enqueueDeleteManagerSiteBooking(_ booking: ManagerSiteBooking, fingerprint: String, organizationId: String) -> OfflineDeleteQueueResult {
+        // RULEBOOK 1.86.0 `dropLocal`: the new booking of a queued Replace, deleted before it was sent.
+        if dropQueuedReplace(newBookingId: booking.id) { return .droppedLocal }
         let entityId = booking.id.uuidString
         var baseline = fingerprint
         if let existing = entries.first(where: { $0.entityId == entityId && $0.operation == .saveManagerSiteBooking }),
@@ -614,6 +795,8 @@ final class OfflineOutboxStore: ObservableObject {
         baselineFingerprint: String? = nil,
         previous: ManagerSiteBooking? = nil
     ) {
+        // RULEBOOK 1.86.0: the new booking of a queued Replace is still a create inside that item.
+        if mergeIntoQueuedReplace(manager: booking) { return }
         var fields: [String]? = changedFields.map { Array($0).sorted() }
         var baseline = changedFields == nil ? nil : baselineFingerprint
         var previousCopy = changedFields == nil ? nil : previous

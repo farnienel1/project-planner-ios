@@ -204,6 +204,17 @@ struct OfflineSyncQueueSheet: View {
                                     .disabled(smartCache.isSyncing)
                                     .accessibilityIdentifier("offlineSyncQueue.undoDelete")
                                 }
+                                if entry.operation == .replaceBooking {
+                                    // RULEBOOK 1.86.0 (owner decision 24 Nov): a queued Replace can be undone here — the
+                                    // new booking leaves and the replaced bookings come back.
+                                    Button("Undo replace") {
+                                        OfflineSyncCoordinator.undoReplace(entryId: entry.id)
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .font(.caption.weight(.semibold))
+                                    .disabled(smartCache.isSyncing)
+                                    .accessibilityIdentifier("offlineSyncQueue.undoReplace")
+                                }
                                 if OfflineSyncCoordinator.reachedAttemptLimit(entry) {
                                     stuckEntryControls(entry)
                                 }
