@@ -74,6 +74,24 @@ extension FirebaseBackend {
         return SubcontractorDocumentListOutcome(outcome: row["outcome"] as? String ?? "invalid", removedPath: row["removedPath"] as? String)
     }
 
+    /// The name stored on the entry: the picked file's name, with its extension changed to the stored file's when the
+    /// photo was redrawn (a HEIC or PNG becomes a JPEG, so "Site.heic" is stored as "Site.jpg"); the object name when
+    /// the picked file has no name.
+    nonisolated static func subcontractorDocumentDisplayName(fileName: String, storedObjectName: String) -> String {
+        let trimmed = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return storedObjectName }
+        let storedExt = (storedObjectName as NSString).pathExtension.lowercased()
+        guard !storedExt.isEmpty else { return trimmed }
+        let ownExt = (trimmed as NSString).pathExtension.lowercased()
+        let same: (String, String) -> Bool = { a, b in
+            let norm: (String) -> String = { $0 == "jpeg" ? "jpg" : $0 }
+            return norm(a) == norm(b)
+        }
+        if same(ownExt, storedExt) { return trimmed }
+        let base = ownExt.isEmpty ? trimmed : (trimmed as NSString).deletingPathExtension
+        return "\(base).\(storedExt)"
+    }
+
     #if canImport(FirebaseStorage)
     /// Upload one file (photos are redrawn; the bytes are checked with `uploadAllowed`) and link it. A file uploaded
     /// but not linked (list full, failed save) is deleted again by its uploader inside the §24 undo window.
@@ -112,7 +130,7 @@ extension FirebaseBackend {
             storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
         )
         _ = try await putVariationEvidenceData(prepared.data, path: path, contentType: checkedType)
-        let displayName = fileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? prepared.objectName : fileName
+        let displayName = Self.subcontractorDocumentDisplayName(fileName: fileName, storedObjectName: prepared.objectName)
         let size = prepared.data.count
         let outcome: String
         do {

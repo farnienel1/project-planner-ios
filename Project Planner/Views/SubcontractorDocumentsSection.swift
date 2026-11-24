@@ -20,8 +20,11 @@ struct SubcontractorDocumentsSection: View {
 
     @State private var importingKind: String?
     @State private var showingImporter = false
-    @State private var setExpiry = false
-    @State private var expiryDate = Date()
+    /// Expiry for the next upload, one per kind (Insurance and RAMS never share a date).
+    @State private var setExpiry: [String: Bool] = [:]
+    @State private var expiryDate: [String: Date] = [:]
+    /// The document whose expiry is being changed ("Edit expiry").
+    @State private var editingExpiry: SubcontractorDocumentExpiryEdit?
     @State private var busyKind: String?
     @State private var message: String?
 
@@ -32,21 +35,16 @@ struct SubcontractorDocumentsSection: View {
             ForEach(CanonicalBusinessEngine.subcontractorDocumentKinds, id: \.self) { kind in
                 kindBlock(kind)
             }
-            Toggle(CanonicalBusinessEngine.subcontractorDocumentExpiryLabel, isOn: $setExpiry)
-                .font(.subheadline)
-                .padding(.horizontal, 4)
-                .accessibilityIdentifier("subcontractorDocuments.setExpiry")
-            if setExpiry {
-                DatePicker("Expiry date", selection: $expiryDate, displayedComponents: .date)
-                    .environment(\.timeZone, OrganizationRulebookContext.timeZone)
-                    .font(.subheadline)
-                    .padding(.horizontal, 4)
-            }
             if let message {
                 Text(message)
                     .font(.footnote)
                     .foregroundStyle(.red)
                     .padding(.horizontal, 4)
+            }
+        }
+        .sheet(item: $editingExpiry) { edit in
+            SubcontractorDocumentExpirySheet(edit: edit) { expiresOn in
+                await saveExpiry(edit, expiresOn: expiresOn)
             }
         }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: Self.allowedTypes, allowsMultipleSelection: false) { result in
@@ -105,6 +103,25 @@ struct SubcontractorDocumentsSection: View {
                 }
             }
         }
+        Toggle(CanonicalBusinessEngine.subcontractorDocumentExpiryLabel, isOn: expiryToggle(kind))
+            .font(.subheadline)
+            .padding(.horizontal, 4)
+            .accessibilityIdentifier("subcontractorDocuments.setExpiry.\(kind)")
+        if setExpiry[kind] == true {
+            DatePicker("\(label) expiry date", selection: expiryDateBinding(kind), displayedComponents: .date)
+                .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                .font(.subheadline)
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("subcontractorDocuments.expiryDate.\(kind)")
+        }
+    }
+
+    private func expiryToggle(_ kind: String) -> Binding<Bool> {
+        Binding(get: { setExpiry[kind] ?? false }, set: { setExpiry[kind] = $0 })
+    }
+
+    private func expiryDateBinding(_ kind: String) -> Binding<Date> {
+        Binding(get: { expiryDate[kind] ?? Date() }, set: { expiryDate[kind] = $0 })
     }
 
     private func documentRow(_ entry: RulebookSubcontractorDocument, kind: String) -> some View {
@@ -126,6 +143,7 @@ struct SubcontractorDocumentsSection: View {
             Spacer(minLength: 8)
             Menu {
                 Button("View") { Task { await open(entry) } }
+                Button("Edit expiry") { editingExpiry = SubcontractorDocumentExpiryEdit(kind: kind, entry: entry) }
                 Button("Remove", role: .destructive) { Task { await remove(entry, kind: kind) } }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -147,18 +165,20 @@ struct SubcontractorDocumentsSection: View {
     }
 
     private func upload(url: URL, kind: String) async {
+        busyKind = kind
+        defer { busyKind = nil }
         let didStart = url.startAccessingSecurityScopedResource()
         defer { if didStart { url.stopAccessingSecurityScopedResource() } }
         let data: Data
         do {
-            data = try Data(contentsOf: url)
+            // Read the file off the main thread (a large PDF from iCloud can take a while).
+            data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
         } catch {
             message = error.localizedDescription
             return
         }
-        busyKind = kind
-        defer { busyKind = nil }
         let contentType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+        let expiresOn = setExpiry[kind] == true ? OrganizationRulebookContext.dayKey(expiryDate[kind] ?? Date()) : nil
         do {
             try await firebaseBackend.uploadSubcontractorDocument(
                 data: data,
@@ -167,12 +187,30 @@ struct SubcontractorDocumentsSection: View {
                 organizationId: organizationId,
                 subcontractorId: subcontractor.documentId,
                 kind: kind,
-                expiresOn: setExpiry ? OrganizationRulebookContext.dayKey(expiryDate) : nil
+                expiresOn: expiresOn
             )
-            setExpiry = false
+            setExpiry[kind] = false
+            expiryDate[kind] = nil
             message = nil
         } catch {
             message = error.localizedDescription
+        }
+    }
+
+    /// Nil when saved, else the message the sheet shows.
+    private func saveExpiry(_ edit: SubcontractorDocumentExpiryEdit, expiresOn: String?) async -> String? {
+        do {
+            try await firebaseBackend.setSubcontractorDocumentExpiry(
+                organizationId: organizationId,
+                subcontractorId: subcontractor.documentId,
+                kind: edit.kind,
+                entryId: edit.entry.id,
+                expiresOn: expiresOn
+            )
+            message = nil
+            return nil
+        } catch {
+            return error.localizedDescription
         }
     }
 
@@ -205,5 +243,77 @@ struct SubcontractorDocumentsSection: View {
         } catch {
             message = error.localizedDescription
         }
+    }
+}
+
+/// One document whose expiry is being changed.
+struct SubcontractorDocumentExpiryEdit: Identifiable {
+    let kind: String
+    let entry: RulebookSubcontractorDocument
+    var id: String { "\(kind)|\(entry.id)" }
+}
+
+/// "Edit expiry": set, change or clear one document's expiry (`subcontractorDocumentExpiryWriteFields`).
+private struct SubcontractorDocumentExpirySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let edit: SubcontractorDocumentExpiryEdit
+    let save: (String?) async -> String?
+
+    @State private var hasExpiry: Bool
+    @State private var date: Date
+    @State private var saving = false
+    @State private var error: String?
+
+    init(edit: SubcontractorDocumentExpiryEdit, save: @escaping (String?) async -> String?) {
+        self.edit = edit
+        self.save = save
+        let stored = edit.entry.expiresOn.flatMap { OrganizationRulebookContext.date(fromDayKey: $0) }
+        _hasExpiry = State(initialValue: stored != nil)
+        _date = State(initialValue: stored ?? Date())
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(edit.entry.name)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    Toggle(CanonicalBusinessEngine.subcontractorDocumentExpiryLabel, isOn: $hasExpiry)
+                        .accessibilityIdentifier("subcontractorDocuments.editExpiry.toggle")
+                    if hasExpiry {
+                        DatePicker("Expiry date", selection: $date, displayedComponents: .date)
+                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                    }
+                }
+                if let error {
+                    Section {
+                        Text(error)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Edit expiry")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        saving = true
+                        Task {
+                            error = await save(hasExpiry ? OrganizationRulebookContext.dayKey(date) : nil)
+                            saving = false
+                            if error == nil { dismiss() }
+                        }
+                    }
+                    .disabled(saving)
+                    .accessibilityIdentifier("subcontractorDocuments.editExpiry.save")
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

@@ -39,6 +39,58 @@ final class SubcontractorDocumentsTests: XCTestCase {
         XCTAssertEqual(old?.rams.count, 0)
     }
 
+    /// Review of #286: the firm list passes the organisation it read from, so a firm stored without `organizationId`
+    /// keeps its own files and another organisation's file is dropped.
+    func testFirmListPassesTheOrganisation() {
+        let data: [String: Any] = [
+            "name": "Pipes Ltd",
+            "subcontractorType": "Plumbing",
+            "documents": [
+                "insurance": [
+                    ["path": path("u_1.pdf"), "name": "PL.pdf", "uploadedBy": "u"],
+                    ["path": "organizations/other-org/subcontractors/\(sub)/documents/u_2.pdf", "uploadedBy": "u"],
+                ],
+            ],
+        ]
+        let firms = FirebaseBackend.subcontractors(fromDocuments: [(id: sub, data: data)], organizationId: org)
+        XCTAssertEqual(firms.first?.documents?.insurance.map(\.name), ["PL.pdf"])
+        // Without the organisation (and none stored) the reader cannot tell the other organisation's file apart —
+        // the reason the firm list now passes it.
+        let without = FirebaseBackend.subcontractors(fromDocuments: [(id: sub, data: data)], organizationId: nil)
+        XCTAssertEqual(without.first?.documents?.insurance.count, 2)
+    }
+
+    /// Review of #286: a redrawn photo is stored under the picked name with the stored file's extension.
+    func testDisplayNameFollowsTheStoredFile() {
+        XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "Site.HEIC", storedObjectName: "u_1.jpg"), "Site.jpg")
+        XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "Policy.pdf", storedObjectName: "u_1.pdf"), "Policy.pdf")
+        XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "photo.jpeg", storedObjectName: "u_1.jpg"), "photo.jpeg")
+        XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "  ", storedObjectName: "u_1.jpg"), "u_1.jpg")
+        XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "scan", storedObjectName: "u_1.jpg"), "scan.jpg")
+    }
+
+    /// Review of #286: "Edit expiry" changes, clears and refuses through `subcontractorDocumentExpiryWriteFields`.
+    func testEditExpiryWrite() {
+        let stored: [String: Any] = ["documents": ["rams": [["id": "R-1", "path": path("u_2.pdf"), "expiresOn": "2027-01-01"]]]]
+        let changed = CanonicalBusinessEngine.subcontractorDocumentExpiryWriteFields(
+            stored: stored, kind: "rams", subcontractorId: sub, entryId: "R-1", expiresOn: "2027-06-30"
+        )
+        XCTAssertEqual(changed.outcome, "changed")
+        XCTAssertEqual(changed.write?.fieldPath, "documents.rams")
+        let cleared = CanonicalBusinessEngine.subcontractorDocumentExpiryWriteFields(
+            stored: stored, kind: "rams", subcontractorId: sub, entryId: "R-1", expiresOn: nil
+        )
+        XCTAssertEqual(cleared.outcome, "changed")
+        let missing = CanonicalBusinessEngine.subcontractorDocumentExpiryWriteFields(
+            stored: stored, kind: "rams", subcontractorId: sub, entryId: "R-9", expiresOn: nil
+        )
+        XCTAssertEqual(missing.outcome, "missing")
+        let bad = CanonicalBusinessEngine.subcontractorDocumentExpiryWriteFields(
+            stored: stored, kind: "rams", subcontractorId: sub, entryId: "R-1", expiresOn: "soon"
+        )
+        XCTAssertEqual(bad.outcome, "invalid")
+    }
+
     func testAddWriteKeepsStoredEntries() {
         let stored: [String: Any] = ["documents": ["insurance": [["id": "keep", "path": path("other_1.pdf")]]]]
         let answer = CanonicalBusinessEngine.subcontractorDocumentAddWriteFields(

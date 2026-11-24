@@ -10802,11 +10802,13 @@ extension FirebaseBackend {
     func loadSubcontractors(organizationId: String) async throws -> [Subcontractor] {
         let snapshot = try await db.collection("organizations").document(organizationId)
             .collection("subcontractors").getDocuments()
-        return Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) })
+        return Self.subcontractors(fromDocuments: snapshot.documents.map { (id: $0.documentID, data: $0.data()) }, organizationId: organizationId)
             .sorted { $0.name < $1.name }
     }
 
-    static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])]) -> [Subcontractor] {
+    /// `organizationId` is the organisation the documents were read from: `parseSubcontractorDocuments` keeps only files
+    /// in that organisation's own folder for the firm (a firm stored without `organizationId` still reads its files).
+    static func subcontractors(fromDocuments documents: [(id: String, data: [String: Any])], organizationId: String?) -> [Subcontractor] {
         documents.compactMap { doc -> Subcontractor? in
             guard let row = CanonicalBusinessEngine.parseSubcontractorDocument(documentId: doc.id, data: doc.data) else { return nil }
             let createdAt = row.date("createdAtMs") ?? Date(timeIntervalSince1970: 0)
@@ -10837,7 +10839,7 @@ extension FirebaseBackend {
                 updatedAt: row.date("updatedAtMs") ?? createdAt,
                 firestoreDocumentId: row.id,
                 // RULEBOOK 1.80.0 §30: only files in this firm's own folder (`parseSubcontractorDocuments`).
-                documents: CanonicalBusinessEngine.parseSubcontractorDocuments(subcontractorId: row.id, data: doc.data)
+                documents: CanonicalBusinessEngine.parseSubcontractorDocuments(subcontractorId: row.id, data: doc.data, organizationId: organizationId)
             )
         }
     }
