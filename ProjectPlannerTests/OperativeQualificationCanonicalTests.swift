@@ -174,4 +174,20 @@ final class OperativeQualificationCanonicalTests: XCTestCase {
         XCTAssertNotNil(merged?.qualificationExpiryDates["Q-HIDDEN"])
         XCTAssertNil(merged?.qualificationExpiryDates["Q-OLD"])
     }
+
+    /// Scan pass 2 (23 Nov): a qualifications save on an operative deleted elsewhere is refused with the rulebook's
+    /// message, never re-created by a merge-set (RULEBOOK §1 `editOfMissingDocumentIsRefused`).
+    func testQualificationSaveOnADeletedOperativeIsRefusedNotRecreated() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Project Planner/FirebaseBackend.swift")
+        let backend = try String(contentsOf: root, encoding: .utf8)
+        guard let start = backend.range(of: "func patchOperativeQualificationMaps("),
+              let end = backend.range(of: "static func qualificationMapUpdateFields(", range: start.upperBound..<backend.endIndex) else {
+            return XCTFail("patchOperativeQualificationMaps not found")
+        }
+        let body = String(backend[start.lowerBound..<end.lowerBound])
+        XCTAssertFalse(body.contains("setData("), "never re-create a deleted operative")
+        XCTAssertTrue(body.contains("editOfMissingDocumentMessage"))
+        XCTAssertEqual(CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false), true)
+    }
 }

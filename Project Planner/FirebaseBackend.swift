@@ -3708,18 +3708,17 @@ class FirebaseBackend: ObservableObject {
         do {
             try await ref.updateData(fields)
         } catch let error as NSError where error.domain == "FIRFirestoreErrorDomain" && error.code == 5 {
-            // 5 = not-found: the document does not exist on the server yet.
-            var merge: [String: Any] = [
-                "qualifications": qualifications,
-                "updatedAt": Timestamp(date: Date()),
-            ]
-            if !changes.setExpiry.isEmpty {
-                merge["qualificationExpiryDates"] = changes.setExpiry.mapValues { Timestamp(date: $0) }
+            // 5 = not-found: the operative was deleted elsewhere while this editor was open. RULEBOOK §1
+            // (`editOfMissingDocumentIsRefused`): an edit of a missing document is refused, never re-created (a
+            // merge-set here brought a deleted operative back as a nameless row). Same message as web.
+            if CanonicalBusinessEngine.editOfMissingDocumentIsRefused(isCreate: false, exists: false) ?? true {
+                throw NSError(
+                    domain: "FIRFirestoreErrorDomain",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: CanonicalBusinessEngine.editOfMissingDocumentMessage]
+                )
             }
-            if !changes.setCertificates.isEmpty {
-                merge["qualificationCertificateURLs"] = changes.setCertificates
-            }
-            try await ref.setData(merge, merge: true)
+            throw error
         }
     }
 
