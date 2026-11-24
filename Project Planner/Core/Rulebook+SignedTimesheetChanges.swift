@@ -362,6 +362,9 @@ enum SignedTimesheetChangeInputs {
         sheet["operativeSignedBookings"] = draft.operativeSignedBookings.map { rows in rows.map(\.storedMap) as Any } ?? NSNull()
         // RULEBOOK 1.74.0 §8: the reviewer's own booking edits from this sheet's review (as stored, instants as ms).
         sheet["reviewerBookingEdits"] = TimesheetReviewerBookingEdits.stored(draft)
+        // RULEBOOK 1.90.0: a draft revision records the reviewer's edits too (`timesheetReviewerBookingEditRecord`).
+        if let revision = draft.revision, revision > 0 { sheet["revision"] = revision }
+        if draft.revisionDraft == true { sheet["revisionDraft"] = true }
         if let override = draft.weeklyReportOverride {
             let lines: [[String: Any]] = override.lines.map { line in
                 var row: [String: Any] = [

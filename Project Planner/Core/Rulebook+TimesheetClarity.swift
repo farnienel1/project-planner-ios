@@ -210,9 +210,12 @@ extension CanonicalBusinessEngine {
         lateExtrasAllowed: Bool,
         personName: String?,
         lineManagerName: String?,
-        hasLineManager: Bool = true
+        hasLineManager: Bool = true,
+        // RULEBOOK 1.90.0: the app creates the reviewer's revision as a draft — the help says nothing is sent until then.
+        revisionDraft: Bool = false
     ) -> RulebookTimesheetCorrectionOption {
         let input: [String: Any] = [
+            "revisionDraft": revisionDraft,
             "sheet": sheet,
             "viewerIsSubject": viewerIsSubject,
             "viewerIsReviewer": viewerIsReviewer,

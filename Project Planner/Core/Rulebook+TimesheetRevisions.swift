@@ -362,7 +362,9 @@ extension CanonicalBusinessEngine {
         previousData: [String: Any],
         writerUserId: String,
         writerIsSubject: Bool = false,
-        liveLines: [[String: Any]]? = nil
+        liveLines: [[String: Any]]? = nil,
+        // RULEBOOK 1.90.0: a reviewer's revision starts as a draft (`revisionDraft: true`); ignored for the person's own.
+        draft: Bool = false
     ) -> (documentId: String, revision: Int, fields: [String: Any])? {
         // Review of web #344 (M1): the sheet's own person ("Review and sign again") copies `payrollLineReviews`
         // exactly, so they can never drop a line manager's decision (the security rules require the copy).
@@ -372,6 +374,7 @@ extension CanonicalBusinessEngine {
             "previous": ["documentId": previousDocumentId, "data": FirebaseBackend.firestoreJSON(previousData)],
             "writerUserId": writerUserId,
             "writerIsSubject": writerIsSubject,
+            "draft": draft,
         ]
         if let liveLines { input["liveLines"] = liveLines }
         guard let row = callJSON("timesheetRevisionCreateFields", arguments: [input]) as? [String: Any],

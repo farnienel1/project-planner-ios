@@ -393,6 +393,7 @@ enum TimesheetReviewerEditRecorder {
         guard draft.versionDocumentId == nil, let id = read.versionDocumentId, !id.isEmpty else { return }
         draft.versionDocumentId = id
         draft.revision = read.revision
+        draft.revisionDraft = read.revisionDraft
         draft.originalStoredUserId = draft.originalStoredUserId ?? read.originalStoredUserId
         draft.reviewerBookingEditsJSON = read.reviewerBookingEditsJSON
     }
