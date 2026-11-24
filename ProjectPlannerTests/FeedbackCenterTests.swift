@@ -532,7 +532,7 @@ final class FeedbackCenterTests: XCTestCase {
         ("Views/WarningsDetailView.swift", "if !warningsService.approveWarning(warning) {", "FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)", 400),
         ("Views/WarningsDetailView.swift", "dismissedAny = true", "FeedbackDecision.warningResolved(remainingActiveCount: warningsService.activeWarnings.count)", 600),
         // timesheets
-        ("Views/InvoicingView.swift", "let signSave = saveDraft(rebuildSnapshot: rebuild)", "playTimesheetFeedback(signSave, success: .timesheetSigned)", 80),
+        ("Views/InvoicingView.swift", "let signSave = saveDraft(rebuildSnapshot: rebuild, refreshSignedMoney: true)", "playTimesheetFeedback(signSave, success: .timesheetSigned)", 80),
         ("Views/InvoicingView.swift", "let counterSignSave = onCounterSignSave()", "Feedback.play(FeedbackDecision.event(refusal: message, success: .timesheetSigned))", 2_000),
         ("Views/InvoicingView.swift", "let message = await applyEntryChangeSaving(clearingSignatures: clearingSignatures, change)", "Feedback.play(FeedbackDecision.event(refusal: message, success: .timesheetSaved))", 120),
         ("Views/Overtime/OvertimeViews.swift", "message = \"Report saved. Send it to payroll yourself.\"", "Feedback.play(.timesheetSaved)", 200),
