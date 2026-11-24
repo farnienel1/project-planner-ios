@@ -275,6 +275,25 @@ struct ContentView: View {
             )
             .onReceive(NotificationCenter.default.publisher(for: .openWorkCatalogueDetail)) { notification in
                 guard let projectId = notification.userInfo?["projectId"] as? UUID else { return }
+                // RULEBOOK 1.82.0 §13 (owner 24 Nov, item 4): an older toolbox notice carries the talk's issue id. When
+                // no loaded job has that id, find the job whose health & safety documents hold the issue and open it.
+                if notification.userInfo?["section"] as? String == "healthSafety",
+                   let relatedId = notification.userInfo?["relatedId"] as? String,
+                   notification.userInfo?["resolvedFromIssue"] == nil,
+                   !(projectStore.projects + projectStore.smallWorks).contains(where: { $0.id == projectId || $0.documentId.lowercased() == relatedId.lowercased() }) {
+                    let jobs = projectStore.projects + projectStore.smallWorks
+                    Task {
+                        if let job = await firebaseBackend.toolboxNoticeJob(issueId: relatedId, jobs: jobs) {
+                            NotificationCenter.default.post(name: .openWorkCatalogueDetail, object: nil, userInfo: [
+                                "projectId": job.id, "isSmallWorks": job.isSmallWorksDocument, "section": "healthSafety",
+                                "relatedId": job.documentId, "resolvedFromIssue": true,
+                            ])
+                        } else {
+                            NotificationCenter.default.post(name: NSNotification.Name("selectTab"), object: nil, userInfo: ["tab": 1])
+                        }
+                    }
+                    return
+                }
                 // A variation notice may not say which collection its job is in: the loaded jobs answer it.
                 let isSmallWorks = notification.userInfo?["isSmallWorks"] as? Bool
                     ?? projectStore.smallWorks.contains(where: { $0.id == projectId })
@@ -457,6 +476,16 @@ struct ContentView: View {
                 try? await Task.sleep(nanoseconds: 35_000_000_000)
                 await notificationService.refreshDailyMaterialCutOffReminder()
                 await notificationService.refreshQualificationExpiryReminders()
+            }
+        }
+        // Owner report 24 Nov: "Last active" also moves while the app stays open, not only on returning to it.
+        // Every `LastSeenHeartbeat.intervalSeconds` in the foreground; the 2-minute throttle still applies.
+        .task(id: scenePhase) {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: LastSeenHeartbeat.intervalNanoseconds)
+                guard !Task.isCancelled, scenePhase == .active else { return }
+                await userStore.recordCurrentUserLastSeenIfDue()
             }
         }
         .onChange(of: scenePhase) { _, phase in
@@ -1184,4 +1213,10 @@ extension ContentView {
         .environmentObject(SubcontractorStore())
         .environmentObject(AppSettingsStore())
         .environmentObject(NotificationService())
+}
+/// How often an open app records `users/{uid}.lastSeenAt` while it stays in the foreground.
+enum LastSeenHeartbeat {
+    /// 15 minutes, as web (review of #284).
+    static let intervalSeconds: TimeInterval = 15 * 60
+    static var intervalNanoseconds: UInt64 { UInt64(intervalSeconds * 1_000_000_000) }
 }

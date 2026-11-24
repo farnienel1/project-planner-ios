@@ -571,7 +571,7 @@ private struct SubcontractorFirmDetailView: View {
         PPGroupedCard {
             contactRow(icon: "globe", title: "Website", value: subcontractor.website ?? "Not set", family: .plan)
             PPRowDivider()
-            contactRow(icon: "location.fill", title: "Address", value: subcontractor.address ?? "Not set", family: .sites)
+            contactRow(icon: "location.fill", title: "Address", value: subcontractor.address.map(UKPostcodeText.tidyAddress) ?? "Not set", family: .sites)
         }
     }
 

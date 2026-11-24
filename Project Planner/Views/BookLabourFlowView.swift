@@ -1704,10 +1704,10 @@ struct BookLabourFlowView: View {
 
     private func projectLocalitySubtitle(_ project: Project) -> String {
         let town = project.townCity.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pc = project.postcode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pc = UKPostcodeText.display(project.postcode)
         let line = [town, pc].filter { !$0.isEmpty }.joined(separator: " ")
         if !line.isEmpty { return line }
-        let a = project.siteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let a = project.displaySiteAddress.trimmingCharacters(in: .whitespacesAndNewlines)
         return a.isEmpty ? " " : a
     }
 

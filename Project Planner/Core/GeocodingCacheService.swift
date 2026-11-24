@@ -9,7 +9,9 @@ actor GeocodingCacheService {
 
     private init() {}
 
-    func coordinate(for address: String) async -> CLLocationCoordinate2D? {
+    func coordinate(for rawAddress: String) async -> CLLocationCoordinate2D? {
+        // A stored postcode such as "Sw1× 9Hr" is looked up as "SW1X 9HR".
+        let address = UKPostcodeText.tidyAddress(rawAddress)
         let key = normalized(address)
         if let cached = cache[key] { return cached }
         if let persisted = readFromDefaults(for: key) {

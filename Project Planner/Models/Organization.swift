@@ -94,6 +94,11 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     var deletionJSON: String? = nil
     /// True after an organisation document has been read. A stub company is still unresolved.
     var billingResolved: Bool
+    /// True when the company-details fields (RULEBOOK §4.1: abbreviation, logo, office address, country, map pin)
+    /// come from an `organizations/{id}` document read, or from this device's saved copy of one. A stub built from
+    /// the cached name alone is false, so no screen saves company details from blank fields that were never read.
+    /// Not encoded; never written to Firestore.
+    var companyDetailsLoaded: Bool = false
 
     init(
         id: UUID = UUID(),
@@ -268,6 +273,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             deletionJSON: OrganizationBillingMap.storedJSON(field: "deletion", from: data)
         )
         var withCreated = organization
+        withCreated.companyDetailsLoaded = true
         if let created = Organization.storedCreatedAt(fromJSON: raw) {
             withCreated.storedCreatedAt = created
             withCreated.createdAt = created
@@ -305,5 +311,65 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
             }
         }
         return payload
+    }
+}
+
+// MARK: - Offline copy of the company details (RULEBOOK §1: device storage is a cache; §4.1 fields)
+
+extension Organization {
+    /// Keys of the flat organisation-document fields `parseCompanyDetails` reads, as Firestore stores them.
+    static let companyDetailsCacheKeys: [String] = [
+        "officeAddressLine1", "officeAddressLine2", "officeCity", "officeCounty", "officePostcode",
+        "countryCode", "documentAbbreviation", "companyLogoURL", "defaultLatitude", "defaultLongitude",
+    ]
+
+    /// The company-details fields of this organisation in the stored document shape (blank fields left out), for
+    /// the device's offline copy. Nil while the details were never read (`companyDetailsLoaded` false), so a stub
+    /// never overwrites a good saved copy.
+    var companyDetailsCacheDocument: [String: Any]? {
+        guard companyDetailsLoaded else { return nil }
+        var doc: [String: Any] = [:]
+        func put(_ key: String, _ value: String?) {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmed.isEmpty { doc[key] = trimmed }
+        }
+        put("officeAddressLine1", officeAddressLine1)
+        put("officeAddressLine2", officeAddressLine2)
+        put("officeCity", officeCity)
+        put("officeCounty", officeCounty)
+        put("officePostcode", officePostcode)
+        put("countryCode", countryCode)
+        put("documentAbbreviation", documentAbbreviation)
+        put("companyLogoURL", companyLogoURL)
+        if let defaultLatitude, let defaultLongitude, defaultLatitude.isFinite, defaultLongitude.isFinite {
+            doc["defaultLatitude"] = defaultLatitude
+            doc["defaultLongitude"] = defaultLongitude
+        }
+        return doc
+    }
+
+    /// Lays a saved copy (`companyDetailsCacheDocument`) over this organisation, read with the rulebook's
+    /// `parseCompanyDetails` (the same reader as a server document). Marks the details loaded.
+    mutating func applyCompanyDetailsCache(_ document: [String: Any]) {
+        let parsed = CanonicalBusinessEngine.parseCompanyDetails(orgDocument: document)
+        func detail(_ key: String) -> String? {
+            let raw = (parsed?[key] ?? document[key]) as? String
+            let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return value.isEmpty ? nil : value
+        }
+        func number(_ key: String) -> Double? {
+            ((parsed?[key] ?? document[key]) as? NSNumber)?.doubleValue
+        }
+        officeAddressLine1 = detail("officeAddressLine1")
+        officeAddressLine2 = detail("officeAddressLine2")
+        officeCity = detail("officeCity")
+        officeCounty = detail("officeCounty")
+        officePostcode = detail("officePostcode")
+        countryCode = detail("countryCode")?.uppercased() ?? "GB"
+        documentAbbreviation = OrganizationDocumentAbbreviation.normalized(detail("documentAbbreviation"))
+        companyLogoURL = detail("companyLogoURL")
+        defaultLatitude = number("defaultLatitude")
+        defaultLongitude = number("defaultLongitude")
+        companyDetailsLoaded = true
     }
 }
