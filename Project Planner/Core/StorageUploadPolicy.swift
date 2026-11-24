@@ -24,6 +24,8 @@ enum StorageUploadFamily {
     case workFile
     case variationEvidence
     case timesheetPDF
+    /// RULEBOOK 1.80.0 §30: subcontractor insurance and RAMS documents.
+    case subcontractorDocument
 }
 
 struct PreparedStorageUpload {
@@ -57,6 +59,7 @@ enum StorageUploadPolicy {
         case .taskImage, .workFile: return "task_attachment"
         case .variationEvidence: return "variation_evidence"
         case .timesheetPDF: return "timesheet_export"
+        case .subcontractorDocument: return "subcontractor_document"
         }
     }
 
@@ -396,7 +399,7 @@ enum StorageUploadPolicy {
             wantsPNG = sourceType != "image/jpeg"
         case .timesheetPDF:
             wantsPNG = false
-        case .profilePhoto, .qualificationCertificate, .siteAuditPhoto, .taskImage, .workFile, .variationEvidence:
+        case .profilePhoto, .qualificationCertificate, .siteAuditPhoto, .taskImage, .workFile, .variationEvidence, .subcontractorDocument:
             wantsPNG = sourceType == "image/png"
         }
         if wantsPNG {

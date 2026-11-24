@@ -10835,7 +10835,9 @@ extension FirebaseBackend {
                 contacts: contacts,
                 createdAt: createdAt,
                 updatedAt: row.date("updatedAtMs") ?? createdAt,
-                firestoreDocumentId: row.id
+                firestoreDocumentId: row.id,
+                // RULEBOOK 1.80.0 §30: only files in this firm's own folder (`parseSubcontractorDocuments`).
+                documents: CanonicalBusinessEngine.parseSubcontractorDocuments(subcontractorId: row.id, data: doc.data)
             )
         }
     }

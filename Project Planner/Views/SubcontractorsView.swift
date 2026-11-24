@@ -400,6 +400,9 @@ private struct SubcontractorFirmDetailView: View {
                         sectionLabel("Firm contact")
                             .padding(.top, 12)
                         contactCard(subcontractor)
+
+                        // RULEBOOK 1.80.0 §30: insurance and RAMS documents (staff only, like this screen).
+                        SubcontractorDocumentsSection(subcontractor: subcontractor)
                     }
                     .padding(.bottom, 28)
                     .ppContentSheet()
