@@ -798,7 +798,7 @@ struct ScheduleOperativeView: View {
                 code: project.jobNumber,
                 name: project.siteName,
                 detail: "\(project.client.name) · \(bookingJobTypeLabel)",
-                address: project.siteAddress,
+                address: project.displaySiteAddress,
                 isSmallWorks: project.isSmallWorksDocument
             )
             if isReadyToReview {

@@ -1778,7 +1778,7 @@ struct ProjectCardFromStore: View {
                         .fontWeight(.bold)
                         .foregroundColor(.primary)
                     
-                    Text(project.siteAddress)
+                    Text(project.displaySiteAddress)
                         .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
