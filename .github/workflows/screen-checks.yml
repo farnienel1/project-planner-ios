@@ -6,27 +6,83 @@ name: Screen checks
 # Pro Max run the Add User checks only. A missing SE or Pro Max simulator is created with simctl when the runner has
 # the device type; otherwise that leg says so and stops. Screenshots are uploaded as one "screen-checks-<device>"
 # artifact per device, so the screens can be reviewed without opening Xcode.
+#
+# When it runs (owner, 24 Nov: cut the load on the Macs; parity-tests in the Rulebook workflow still runs on every PR):
+# - a PR that has the `screen-checks` label (adding the label starts it);
+# - a PR whose changes touch the screens (UI_PATHS below);
+# - every push to main;
+# - by hand (Actions > Screen checks > Run workflow), or called from a release workflow (workflow_call).
+# A cheap Linux job decides; the three Mac legs start only when it says so. Screen checks are not a required check
+# on main (the "Protect Main" ruleset requires parity-tests, mirror-intact and gitleaks only), so a PR where they
+# do not run can still be merged.
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
   push:
-    branches: ['rulebook-*', 'ios-*']
-    paths:
-      - 'Project Planner/**'
-      - 'ProjectPlannerUITests/**'
-      - '.github/workflows/screen-checks.yml'
+    branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
-concurrency:
-  group: screen-checks-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - name: Should the screen checks run?
+        id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          ADDED_LABEL: ${{ github.event.label.name }}
+          HAS_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'screen-checks') }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Files that change what a screen shows. Anything else (rules, models, stores) can be covered by adding
+          # the screen-checks label, and every push to main runs the checks anyway.
+          UI_PATHS='^(Project Planner/(Views|PPDesign|Navigation|Assets\.xcassets|Resources)/|Project Planner/[^/]*View\.swift$|Project Planner/(UITestingMode|Theme|AppBranding)\.swift$|ProjectPlannerUITests/|\.github/workflows/screen-checks\.yml$|scripts/ci-xcode-summary\.mjs$)'
+          run=false; why=""
+          if [ "$EVENT" != "pull_request" ]; then
+            run=true; why="$EVENT"
+          else
+            ui=false
+            if git diff --name-only "$BASE_SHA...$HEAD_SHA" | grep -Eq "$UI_PATHS"; then ui=true; fi
+            if [ "$ACTION" = "labeled" ]; then
+              # Adding the label starts a run, unless the screens changed: then this commit already has a run
+              # (from opened / synchronize), and a second one would only repeat it. Other labels do nothing.
+              if [ "$ADDED_LABEL" = "screen-checks" ] && [ "$ui" = false ]; then run=true; why="screen-checks label added"; fi
+            elif [ "$HAS_LABEL" = "true" ]; then run=true; why="screen-checks label"
+            elif [ "$ui" = true ]; then run=true; why="screen files changed"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = true ]; then
+            echo "Screen checks will run ($why)." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Screen checks skipped: no screen files changed and no screen-checks label (add the label to run them)." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
   screen-checks:
+    needs: decide
+    if: needs.decide.outputs.run == 'true'
     runs-on: macos-26
+    # A leg takes 30-45 minutes. The test step stops at 60 so the screenshots, log and summary still upload
+    # inside the job's 75. (Time waiting in the queue for a Mac is not counted.)
     timeout-minutes: 75
+    # A newer push to the same PR cancels this PR's older legs (one group per PR and device); runs on other
+    # branches, on main and by hand are never cancelled. Label events that do not start a run never reach here.
+    concurrency:
+      group: ${{ github.event_name == 'pull_request' && format('screen-checks-pr-{0}-{1}', github.event.pull_request.number, matrix.slug) || format('screen-checks-{0}-{1}', github.run_id, matrix.slug) }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -48,7 +104,16 @@ jobs:
           if [ -z "$xcode" ]; then echo "::error::No Xcode 26 on this runner image"; ls -d /Applications/Xcode*.app; exit 1; fi
           sudo xcode-select -s "$xcode/Contents/Developer"
           xcodebuild -version
+      - name: Restore Swift packages
+        # Package checkouts only (never DerivedData); see rulebook.yml.
+        uses: actions/cache@v4
+        with:
+          path: ~/spm-source-packages
+          key: spm-${{ runner.os }}-${{ hashFiles('**/project.pbxproj') }}
+          restore-keys: spm-${{ runner.os }}-
       - name: Run the screen checks
+        id: tests
+        timeout-minutes: 60
         env:
           DEVICE: ${{ matrix.device }}
           ONLY: ${{ matrix.only }}
@@ -98,25 +163,32 @@ jobs:
             -destination "platform=iOS Simulator,id=$sim" \
             $ONLY \
             -parallel-testing-enabled NO \
+            -clonedSourcePackagesDirPath "$HOME/spm-source-packages" \
             -resultBundlePath ScreenChecks.xcresult \
             CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log
           status=${PIPESTATUS[0]}
-          echo "::group::Compiler errors (file:line)"
-          grep -E "^/.*:[0-9]+:[0-9]+: error:" xcodebuild.log | sed 's#^/Users/runner/work/project-planner-ios/project-planner-ios/##' | sort -u | head -100 || true
-          echo "::endgroup::"
-          echo "::group::Check results"
-          grep -E "Test Case .*(passed|failed)|error: -\[" xcodebuild.log | sort -u | head -100 || true
-          echo "::endgroup::"
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
-      - name: Export screenshots
+      - name: Results (pass / fail and why, compile errors)
+        if: always()
+        env:
+          DEVICE: ${{ matrix.device }}
+          STATUS: ${{ steps.tests.outputs.status || steps.tests.outcome }}
+        run: |
+          if [ -d ScreenChecks.xcresult ]; then
+            xcrun xcresulttool get test-results tests --path ScreenChecks.xcresult > results.json 2>/dev/null || rm -f results.json
+          fi
+          node scripts/ci-xcode-summary.mjs --title "Screen checks ($DEVICE)" --log xcodebuild.log --results results.json --status "$STATUS" --all
+      - name: Export screenshots and zip the result bundle
         if: always()
         run: |
           mkdir -p screenshots
           if [ -d ScreenChecks.xcresult ]; then
             xcrun xcresulttool export attachments --path ScreenChecks.xcresult --output-path screenshots > /dev/null || true
+            ditto -c -k --keepParent ScreenChecks.xcresult ScreenChecks.xcresult.zip || true
           fi
           echo "$(ls screenshots | wc -l) files exported"
-      - name: Upload screenshots
+      - name: Upload screenshots, log and result bundle
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -124,28 +196,7 @@ jobs:
           path: |
             screenshots
             xcodebuild.log
+            results.json
+            ScreenChecks.xcresult.zip
           if-no-files-found: warn
-      - name: Results (pass / fail and why)
-        if: always()
-        env:
-          DEVICE: ${{ matrix.device }}
-        run: |
-          [ -d ScreenChecks.xcresult ] || { echo "No result bundle (the build or launch failed; see the Run step)."; exit 0; }
-          xcrun xcresulttool get test-results tests --path ScreenChecks.xcresult > results.json || { echo "xcresulttool could not read the results"; exit 0; }
-          node -e '
-            const r = JSON.parse(require("fs").readFileSync("results.json", "utf8"));
-            const out = [];
-            const walk = (n) => {
-              if (n.nodeType === "Test Case") {
-                const msgs = [];
-                const grab = (c) => { if (c.nodeType === "Failure Message") msgs.push(c.name); (c.children || []).forEach(grab); };
-                (n.children || []).forEach(grab);
-                out.push(`${n.result === "Passed" ? "PASS" : "FAIL"}  ${n.name}${msgs.length ? "\n        " + msgs.join("\n        ") : ""}`);
-              }
-              (n.children || []).forEach(walk);
-            };
-            (r.testNodes || []).forEach(walk);
-            const text = out.join("\n");
-            console.log(text);
-            if (process.env.GITHUB_STEP_SUMMARY) require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY, "## Screen checks (" + process.env.DEVICE + ")\n```\n" + text + "\n```\n");
-          '
+          retention-days: 7
