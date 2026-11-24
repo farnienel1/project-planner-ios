@@ -6252,14 +6252,21 @@ class FirebaseBackend: ObservableObject {
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         let asBefore = NameEditPlan(accountFirstName: trimmedFirst, accountSurname: trimmedSurname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "account")
         let organizationId = currentOrganization?.firestoreDocumentId ?? ""
-        guard let previous, !organizationId.isEmpty,
-              let edit = CanonicalBusinessEngine.memberNameEditPlan(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
-        else { return asBefore }
+        guard let previous else { return asBefore }
         let changed = previous.firstName != trimmedFirst || previous.surname != trimmedSurname
         let account = MemberNameOverlay.accountName(previous)
-        var plan = edit.writeAccount
-            ? asBefore
-            : NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "organization")
+        let keepAccount = NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "organization")
+        // Review of #442 (fail closed): a name belongs to an organisation. With none open, or when the script does not
+        // answer, the users document keeps its name and a changed name is refused — never written to the account alone.
+        guard !organizationId.isEmpty else {
+            if changed { throw NSError(domain: "MemberNames", code: 3, userInfo: [NSLocalizedDescriptionKey: "Open the company first, then change the name there."]) }
+            return keepAccount
+        }
+        guard let edit = CanonicalBusinessEngine.memberNameEditPlan(organizationId: organizationId, homeOrganizationId: homeOrganizationId) else {
+            if changed { throw CanonicalWriteUnavailableError(function: "memberNameEditPlan") }
+            return keepAccount
+        }
+        var plan = edit.writeAccount ? asBefore : keepAccount
         guard changed, edit.writeEntry else { return plan }
         if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
             throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
@@ -6272,6 +6279,19 @@ class FirebaseBackend: ObservableObject {
             .collection(CanonicalBusinessEngine.memberNamesCollection).document(subjectUserId)
         plan.entryFields = fields
         return plan
+    }
+
+    /// The home organisation a name edit is judged against (review of #442, fail closed): the one this device holds,
+    /// else the stored users document's (read now). Nil when unknown — `memberNameEditPlan` then writes this
+    /// organisation's entry only, never the account's name.
+    func homeOrganizationForNameEdit(userId: String, known: String?) async -> String? {
+        if let known, !known.trimmingCharacters(in: .whitespaces).isEmpty { return known }
+        if userId == auth.currentUser?.uid, let shared = sharedUserOrganizationId, !shared.isEmpty { return shared }
+        guard let snap = try? await db.collection("users").document(userId).getDocument(), snap.exists,
+              let data = snap.data() else { return nil }
+        if let text = data["organizationId"] as? String { return text }
+        if let ref = data["organizationId"] as? DocumentReference { return ref.documentID }
+        return nil
     }
 
     /// A refused `memberNames` write reads as the rulebook's message; any other error (offline, network) is kept.
@@ -6304,12 +6324,13 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.81.0 §11: outside the home organisation the name goes to this company's entry; the users document
         // write below keeps the users document's own name.
         var user = user
+        let home: String? = previous == nil ? nil : await homeOrganizationForNameEdit(userId: user.id, known: user.storedOrganizationId)
         let namePlan = try nameEditPlan(
             subjectUserId: user.id,
             firstName: user.firstName,
             surname: user.surname,
             previous: previous,
-            homeOrganizationId: user.storedOrganizationId ?? (user.id == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+            homeOrganizationId: home
         )
         user.firstName = namePlan.accountFirstName
         user.surname = namePlan.accountSurname
@@ -6473,12 +6494,13 @@ class FirebaseBackend: ObservableObject {
         var plan: NameEditPlan? = nil
         var names = (firstName: firstName, surname: surname)
         if !nameAlreadyRouted {
+            let home: String? = previous == nil ? nil : await homeOrganizationForNameEdit(userId: userId, known: previous?.storedOrganizationId)
             let routed = try nameEditPlan(
                 subjectUserId: userId,
                 firstName: firstName,
                 surname: surname,
                 previous: previous,
-                homeOrganizationId: previous?.storedOrganizationId ?? (userId == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+                homeOrganizationId: home
             )
             plan = routed
             names = (routed.accountFirstName, routed.accountSurname)
@@ -12201,7 +12223,7 @@ extension FirebaseBackend {
     /// RULEBOOK 1.82.0 §13 (owner 24 Nov, item 4): the job an older toolbox notice belongs to. Rows written before 1.79
     /// carry the talk's issue id, not the job id; this reads the health & safety documents of the jobs this phone holds
     /// (the settings copies `healthSafetyDocumentIds` and the web nested copy — single-document reads every member may
-    /// make), ten jobs at a time, and asks `healthSafetyIssueJob`. Nothing is written; nil when no job holds the issue.
+    /// make), ten jobs at a time with each batch's reads in parallel, and asks `healthSafetyIssueJob`. Nothing is written; nil when no job holds the issue.
     func toolboxNoticeJob(issueId: String, jobs: [Project]) async -> Project? {
         guard let organizationId = currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return nil }
         let candidates = Array(jobs.prefix(300))
@@ -12209,18 +12231,33 @@ extension FirebaseBackend {
         while start < candidates.count {
             let batch = Array(candidates[start..<min(start + 10, candidates.count)])
             start += 10
-            var rows: [(jobId: String, collection: String, documents: [[String: Any]?])] = []
+            // Review of #442 (item 9): the batch's reads run at the same time (ten jobs, a few documents each), never one
+            // after another; at most 300 jobs are looked at.
+            var refsByJob: [[DocumentReference]] = []
             for project in batch {
                 var refs = hsStateDocumentRefs(organizationId: organizationId, project: project)
                 refs.append(db.collection("organizations").document(organizationId)
                     .collection(hsCollectionName(for: project)).document(project.documentId)
                     .collection("healthSafety").document("data"))
-                var documents: [[String: Any]?] = []
-                for ref in refs {
-                    let snap = try? await ref.getDocument()
-                    documents.append(snap?.data())
+                refsByJob.append(refs)
+            }
+            var documentsByJob: [[[String: Any]?]] = refsByJob.map { Array(repeating: nil, count: $0.count) }
+            await withTaskGroup(of: (Int, Int, [String: Any]?).self) { group in
+                for (jobIndex, refs) in refsByJob.enumerated() {
+                    for (refIndex, ref) in refs.enumerated() {
+                        group.addTask {
+                            let snap = try? await ref.getDocument()
+                            return (jobIndex, refIndex, snap?.data())
+                        }
+                    }
                 }
-                rows.append((project.documentId, hsCollectionName(for: project), documents))
+                for await (jobIndex, refIndex, data) in group {
+                    documentsByJob[jobIndex][refIndex] = data
+                }
+            }
+            var rows: [(jobId: String, collection: String, documents: [[String: Any]?])] = []
+            for (jobIndex, project) in batch.enumerated() {
+                rows.append((project.documentId, hsCollectionName(for: project), documentsByJob[jobIndex]))
             }
             if let found = CanonicalBusinessEngine.healthSafetyIssueJob(issueId: issueId, candidates: rows) {
                 return batch.first { $0.documentId == found.jobId && hsCollectionName(for: $0) == found.collection }

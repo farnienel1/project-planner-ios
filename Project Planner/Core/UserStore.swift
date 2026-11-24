@@ -431,7 +431,10 @@ class UserStore: ObservableObject {
     /// too — the person themself, an admin, or a manager who manages operatives for an operative (never another
     /// manager).
     func canEditName(of user: AppUser) -> Bool {
-        let managesOperative = isActingManagerOperativeManagementOnly() && user.permissionLevel == .operative
+        // Owner correction 24 Nov: an Operatives manager of this organisation, for any operative member of it.
+        let managesOperative = displayUser.map {
+            CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: $0.permissionSubject, subject: user.permissionSubject)
+        } ?? false
         return CanonicalBusinessEngine.canWriteMemberName(
             writerUserId: Auth.auth().currentUser?.uid,
             subjectUserId: user.id,
@@ -2691,9 +2694,12 @@ class UserStore: ObservableObject {
                     }
                     // `userDeleteWrites`: one batch per step, in order; the account batch first, so a refusal there
                     // leaves everything as it was. Later steps stop at the first refusal.
-                    for (index, step) in steps.enumerated() {
+                    // RULEBOOK 1.59.0 / 1.82.0: a write marked `optional` (the former-person record, the person's
+                    // `memberNames` entry) never stops the delete: when older security rules refuse the batch, the same
+                    // batch runs again without it.
+                    func makeBatch(_ writes: [[String: Any]]) -> WriteBatch {
                         let batch = db.batch()
-                        for write in step["writes"] as? [[String: Any]] ?? [] {
+                        for write in writes {
                             guard let path = write["path"] as? String, !path.isEmpty else { continue }
                             let ref = db.document(path)
                             switch write["op"] as? String {
@@ -2711,8 +2717,20 @@ class UserStore: ObservableObject {
                                 continue
                             }
                         }
+                        return batch
+                    }
+                    for (index, step) in steps.enumerated() {
+                        let writes = step["writes"] as? [[String: Any]] ?? []
                         do {
-                            try await batch.commit()
+                            do {
+                                try await makeBatch(writes).commit()
+                            } catch {
+                                let ns = error as NSError
+                                let rest = writes.filter { ($0["optional"] as? Bool) != true }
+                                guard rest.count < writes.count, ns.domain == "FIRFirestoreErrorDomain", ns.code == 7 else { throw error }
+                                print("🔥🔥🔥 DEBUG: ⚠️ optional delete write skipped: \(error.localizedDescription)")
+                                if !rest.isEmpty { try await makeBatch(rest).commit() }
+                            }
                             print("🔥🔥🔥 DEBUG: ✅ userDeleteWrites step \(index) (\(step["step"] as? String ?? "?")) done")
                         } catch {
                             // Any `account` step refused stops the delete (an operatives manager's account step is
@@ -2772,6 +2790,12 @@ class UserStore: ObservableObject {
         let oldEmailNorm = updated.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Review of #442 (item 6): a name change is checked against `canWriteMemberName` before the first write (the
+        // Auth email request, the users document, the entry), so a refused name never leaves the rest half saved.
+        if (updated.firstName != trimmedFirst || updated.surname != trimmedSurname) && !canEditName(of: updated) {
+            errorMessage = CanonicalBusinessEngine.memberNameRefusedMessage
+            return false
+        }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mobileOut: String? = (trimmedMobile?.isEmpty == false) ? trimmedMobile : nil

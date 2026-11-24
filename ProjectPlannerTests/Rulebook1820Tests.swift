@@ -29,6 +29,22 @@ final class Rulebook1820Tests: XCTestCase {
         let other = CanonicalBusinessEngine.memberNameEditPlan(organizationId: "TEST-B", homeOrganizationId: "TEST-A")
         XCTAssertEqual(other?.writeEntry, true)
         XCTAssertEqual(other?.writeAccount, false)
+        // Review of #442 (fail closed): an unknown or blank home writes only the organisation's entry; no organisation
+        // writes nothing.
+        let unknown = CanonicalBusinessEngine.memberNameEditPlan(organizationId: "TEST-B", homeOrganizationId: nil)
+        XCTAssertEqual(unknown?.writeEntry, true)
+        XCTAssertEqual(unknown?.writeAccount, false)
+        XCTAssertEqual(CanonicalBusinessEngine.memberNameEditTarget(organizationId: "TEST-B", homeOrganizationId: ""), "organization")
+        let none = CanonicalBusinessEngine.memberNameEditPlan(organizationId: "", homeOrganizationId: "TEST-A")
+        XCTAssertEqual(none?.writeEntry, false)
+        XCTAssertEqual(none?.writeAccount, false)
+        // Owner correction 24 Nov: an Operatives manager of the organisation, for any operative member of it.
+        let opsManager: [String: Any] = ["role": "manager", "manager": true, "operatives": true, "permissions": ["manager": true, "operatives": true]]
+        let manager: [String: Any] = ["role": "manager", "manager": true, "permissions": ["manager": true]]
+        let operative: [String: Any] = ["role": "operative", "operativeMode": true, "permissions": ["operativeMode": true]]
+        XCTAssertTrue(CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: opsManager, subject: operative))
+        XCTAssertFalse(CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: manager, subject: operative))
+        XCTAssertFalse(CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: opsManager, subject: manager))
         XCTAssertTrue(CanonicalBusinessEngine.canWriteMemberName(writerUserId: "mgr", subjectUserId: "op", writerIsAdmin: false, writerManagesOperative: true))
         XCTAssertFalse(CanonicalBusinessEngine.canWriteMemberName(writerUserId: "mgr", subjectUserId: "op", writerIsAdmin: false))
         XCTAssertTrue(CanonicalBusinessEngine.memberNameEntryMissing(userId: "u9", aliases: [], names: [:], serverRead: true))

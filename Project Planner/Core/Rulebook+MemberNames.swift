@@ -68,6 +68,14 @@ extension CanonicalBusinessEngine {
         ]]) as? Bool) ?? false
     }
 
+    /// RULEBOOK 1.82.0 §11 `memberNameWriterManagesOperative` (owner correction 24 Nov): the writer may manage
+    /// operatives in the open organisation and the subject is at the operative level there, whatever either person's
+    /// home company. Pass both people as read for this organisation (`permissionSubject`). False when the script did
+    /// not answer.
+    nonisolated static func memberNameWriterManagesOperative(writer: [String: Any], subject: [String: Any]) -> Bool {
+        (callJSON("memberNameWriterManagesOperative", arguments: [["writer": writer, "subject": subject]]) as? Bool) ?? false
+    }
+
     /// RULEBOOK 1.82.0 §11 `memberNameEditPlan`: every edit writes the open organisation's entry (`writeEntry`); only the
     /// person's home organisation also the users document (`writeAccount`). Nil when the script did not answer.
     nonisolated static func memberNameEditPlan(organizationId: String?, homeOrganizationId: String?) -> (writeEntry: Bool, writeAccount: Bool)? {
