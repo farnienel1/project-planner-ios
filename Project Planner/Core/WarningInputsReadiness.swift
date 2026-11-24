@@ -105,6 +105,28 @@ nonisolated struct WarningInputsReadiness: Equatable, Sendable {
     )
 }
 
+/// Weak signal on the Warnings screen (owner report 24 Nov). The live scan waits for every input
+/// (`WarningInputsReadiness`); on a weak signal that can take a long time, so after `waitSeconds` the last complete
+/// scan saved on this device is shown with a note, and the live scan keeps trying and replaces it.
+nonisolated enum WarningsWeakSignal {
+    /// How long the first scan may wait before the saved results are shown.
+    static let waitSeconds: TimeInterval = 10
+
+    static func shouldShowSaved(waitingSince: Date, now: Date, hasCompletedLiveDetection: Bool) -> Bool {
+        !hasCompletedLiveDetection && now.timeIntervalSince(waitingSince) >= waitSeconds
+    }
+
+    /// "Weak signal — showing saved warnings. Last updated 24 Nov 2026, 14:05" (the time from the rulebook's
+    /// `offlineLastUpdatedLabel`, organisation zone).
+    static func savedNote(lastUpdated: String?) -> String {
+        guard let lastUpdated, !lastUpdated.isEmpty else { return "Weak signal — showing saved warnings." }
+        return "Weak signal — showing saved warnings. \(lastUpdated)"
+    }
+
+    /// Shown under the spinner while waiting with nothing saved to show.
+    static let waitingNote = "Weak signal — still loading. Warnings appear when the connection catches up."
+}
+
 /// What the Warnings screen and the Home pill show for the live list.
 nonisolated enum WarningsDisplayPhase: Equatable, Sendable {
     /// No complete scan of loaded inputs yet: a loading state, never a count.
@@ -113,16 +135,23 @@ nonisolated enum WarningsDisplayPhase: Equatable, Sendable {
     case incomplete(String)
     /// The last scan ran on loaded inputs; its count is the real count (0 is a real all-clear).
     case ready(activeCount: Int)
+    /// Owner report 24 Nov (weak signal): the first scan is still waiting for its inputs, so the last complete scan
+    /// saved on this device is shown, labelled with when it ran, until the live scan replaces it.
+    case saved(activeCount: Int, savedAt: Date)
 
     static func phase(
         hasCompletedLiveDetection: Bool,
         incompleteDataMessage: String?,
-        activeCount: Int
+        activeCount: Int,
+        showingSavedResultsFrom savedAt: Date? = nil
     ) -> WarningsDisplayPhase {
         if let incompleteDataMessage, !incompleteDataMessage.isEmpty, activeCount == 0 {
             return .incomplete(incompleteDataMessage)
         }
-        guard hasCompletedLiveDetection else { return .loading }
+        guard hasCompletedLiveDetection else {
+            if let savedAt { return .saved(activeCount: activeCount, savedAt: savedAt) }
+            return .loading
+        }
         return .ready(activeCount: activeCount)
     }
 

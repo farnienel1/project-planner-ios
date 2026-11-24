@@ -341,11 +341,50 @@ class UserStore: ObservableObject {
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let snapshot, error == nil else { return }
                 let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                let serverRead = !snapshot.metadata.isFromCache
                 Task { @MainActor [weak self] in
                     guard let self, self.memberNamesOrganizationId == org else { return }
-                    self.applyMemberNames(CanonicalBusinessEngine.parseMemberNames(docs))
+                    let names = CanonicalBusinessEngine.parseMemberNames(docs)
+                    self.applyMemberNames(names)
+                    self.seedOwnMemberName(organizationId: org, names: names, serverRead: serverRead)
                 }
             }
+    }
+
+    /// `orgId/uid` pairs already tried this session (one attempt each).
+    private var seededMemberNames: Set<String> = []
+
+    /// RULEBOOK 1.82.0 §1, §11 (`memberNameEntryMissing`): the signed-in person has no entry in the open organisation
+    /// yet — create it once, with the name this organisation shows them today (the users document's name), so a name
+    /// edit in another of their companies never changes it here. Create-only in a transaction (never over an entry);
+    /// the rules let a member write their own entry. A refusal or a lost race changes nothing.
+    private func seedOwnMemberName(organizationId: String, names: [String: [String: String]], serverRead: Bool) {
+        guard let user = currentUser, firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId else { return }
+        let pair = "\(organizationId)/\(user.id)".lowercased()
+        guard !seededMemberNames.contains(pair) else { return }
+        guard CanonicalBusinessEngine.memberNameEntryMissing(userId: user.id, aliases: user.formerUserIds + user.sameEmailUserIds, names: names, serverRead: serverRead) else { return }
+        let account = MemberNameOverlay.accountName(user)
+        guard let name = CanonicalBusinessEngine.memberNameJoinEntry([account]),
+              var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: name.firstName, surname: name.surname, writerUserId: user.id)
+        else { return }
+        seededMemberNames.insert(pair)
+        fields["updatedAt"] = FieldValue.serverTimestamp()
+        let entry = fields
+        let db = Firestore.firestore()
+        let ref = db.collection("organizations").document(organizationId)
+            .collection(CanonicalBusinessEngine.memberNamesCollection).document(user.id)
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                if try transaction.getDocument(ref).exists { return nil }
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            transaction.setData(entry, forDocument: ref)
+            return nil
+        }) { _, error in
+            if let error { print("[memberNames] own entry not created: \((error as NSError).code)") }
+        }
     }
 
     private func applyMemberNames(_ names: [String: [String: String]]) {
@@ -387,14 +426,20 @@ class UserStore: ObservableObject {
         return copy
     }
 
-    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same):
-    /// always in the person's home organisation (the existing identity rules apply), else only themself or an admin.
+    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same).
+    /// RULEBOOK 1.82.0 §11: every name edit writes this company's own entry, so the check applies in the home company
+    /// too — the person themself, an admin, or a manager who manages operatives for an operative (never another
+    /// manager).
     func canEditName(of user: AppUser) -> Bool {
-        guard nameEditIsOrganizations(user) else { return true }
+        // Owner correction 24 Nov: an Operatives manager of this organisation, for any operative member of it.
+        let managesOperative = displayUser.map {
+            CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: $0.permissionSubject, subject: user.permissionSubject)
+        } ?? false
         return CanonicalBusinessEngine.canWriteMemberName(
             writerUserId: Auth.auth().currentUser?.uid,
             subjectUserId: user.id,
-            writerIsAdmin: hasAdminAccess()
+            writerIsAdmin: hasAdminAccess(),
+            writerManagesOperative: managesOperative
         )
     }
 
@@ -439,12 +484,33 @@ class UserStore: ObservableObject {
                 cu.lastSeenAt = now
                 currentUser = cu
             }
-            if let idx = organizationUsers.firstIndex(where: { $0.id == uid }) {
-                organizationUsers[idx].lastSeenAt = now
-            }
+            // The roster is not republished here (review of #284): a whole-roster publish re-runs every roster
+            // consumer (pay overlay read, job access). The live users listener brings the stored value, and the
+            // warnings rescan gate (`WarningsRosterFingerprint`) ignores `lastSeenAt`.
         } catch {
             print("🔥🔥🔥 DEBUG: lastSeenAt heartbeat failed: \(error.localizedDescription)")
         }
+    }
+
+    /// "Last active" for a person: the newest `lastSeenAt` across every users document of that person in this
+    /// organisation (`personIdSet` over the unfolded roster — an old invite id or a second same-email document may
+    /// hold the newer heartbeat, e.g. the person signs in on web under one and on iPhone under another).
+    func newestLastSeenAt(for user: AppUser) -> Date? {
+        let documents = unfoldedOrganizationUsers
+        let ids = CanonicalBusinessEngine.personIdSet(person: RulebookPeople.person(user), roster: unfoldedRosterRows)
+            ?? ([user.id] + user.formerUserIds + user.sameEmailUserIds)
+        return Self.newestLastSeenAt(personIds: ids, documents: documents, fallback: user.lastSeenAt)
+    }
+
+    /// Pure part of `newestLastSeenAt(for:)`: ids compared without case (RULEBOOK §1).
+    nonisolated static func newestLastSeenAt(personIds: [String], documents: [AppUser], fallback: Date?) -> Date? {
+        let wanted = Set(personIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        var newest = fallback
+        for document in documents where wanted.contains(document.id.lowercased()) {
+            guard let seen = document.lastSeenAt else { continue }
+            if newest.map({ seen > $0 }) ?? true { newest = seen }
+        }
+        return newest
     }
 
     /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).
@@ -2649,9 +2715,12 @@ class UserStore: ObservableObject {
                     }
                     // `userDeleteWrites`: one batch per step, in order; the account batch first, so a refusal there
                     // leaves everything as it was. Later steps stop at the first refusal.
-                    for (index, step) in steps.enumerated() {
+                    // RULEBOOK 1.59.0 / 1.82.0: a write marked `optional` (the former-person record, the person's
+                    // `memberNames` entry) never stops the delete: when older security rules refuse the batch, the same
+                    // batch runs again without it.
+                    func makeBatch(_ writes: [[String: Any]]) -> WriteBatch {
                         let batch = db.batch()
-                        for write in step["writes"] as? [[String: Any]] ?? [] {
+                        for write in writes {
                             guard let path = write["path"] as? String, !path.isEmpty else { continue }
                             let ref = db.document(path)
                             switch write["op"] as? String {
@@ -2669,8 +2738,20 @@ class UserStore: ObservableObject {
                                 continue
                             }
                         }
+                        return batch
+                    }
+                    for (index, step) in steps.enumerated() {
+                        let writes = step["writes"] as? [[String: Any]] ?? []
                         do {
-                            try await batch.commit()
+                            do {
+                                try await makeBatch(writes).commit()
+                            } catch {
+                                let ns = error as NSError
+                                let rest = writes.filter { ($0["optional"] as? Bool) != true }
+                                guard rest.count < writes.count, ns.domain == "FIRFirestoreErrorDomain", ns.code == 7 else { throw error }
+                                print("🔥🔥🔥 DEBUG: ⚠️ optional delete write skipped: \(error.localizedDescription)")
+                                if !rest.isEmpty { try await makeBatch(rest).commit() }
+                            }
                             print("🔥🔥🔥 DEBUG: ✅ userDeleteWrites step \(index) (\(step["step"] as? String ?? "?")) done")
                         } catch {
                             // Any `account` step refused stops the delete (an operatives manager's account step is
@@ -2730,6 +2811,12 @@ class UserStore: ObservableObject {
         let oldEmailNorm = updated.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Review of #442 (item 6): a name change is checked against `canWriteMemberName` before the first write (the
+        // Auth email request, the users document, the entry), so a refused name never leaves the rest half saved.
+        if (updated.firstName != trimmedFirst || updated.surname != trimmedSurname) && !canEditName(of: updated) {
+            errorMessage = CanonicalBusinessEngine.memberNameRefusedMessage
+            return false
+        }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mobileOut: String? = (trimmedMobile?.isEmpty == false) ? trimmedMobile : nil

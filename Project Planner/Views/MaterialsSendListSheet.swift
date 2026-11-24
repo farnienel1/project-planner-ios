@@ -213,7 +213,7 @@ struct MaterialsSendListSheet: View {
                 }
                     .accessibilityIdentifier("materialsSendList.checkmarkSquareFill")
             }
-            Text(project.siteAddress)
+            Text(project.displaySiteAddress)
                 .font(.system(size: 10))
                 .foregroundStyle(MaterialsOrderingTheme.muted)
             if !materials.isEmpty {

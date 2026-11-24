@@ -95,6 +95,8 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
         }
 
         firebaseAuthStateHandle = installAuthUIDNotifications()
+        // RULEBOOK 1.83.0 §31: no certificate zip is left in the temporary folder from an earlier run.
+        DispatchQueue.global(qos: .utility).async { OrgComplianceZipFiles.removeAll() }
 
         UNUserNotificationCenter.current().delegate = self
         requestRemoteNotificationRegistration(application: application)
