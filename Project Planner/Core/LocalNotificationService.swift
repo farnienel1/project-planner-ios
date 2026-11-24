@@ -124,6 +124,11 @@ class LocalNotificationService {
         case .timesheetRevisionToSign:
             content.title = CanonicalBusinessEngine.timesheetRevisionNoticeTitle
             content.body = details.isEmpty ? CanonicalBusinessEngine.timesheetRevisionNoticeMessage : details
+        case .timesheetSignOffReminder:
+            // RULEBOOK 1.78.0: the server writes the message (`timesheetSignOffReminderNotice`, which needs the count);
+            // the title is the rulebook's constant, the body only a fallback for a row without one.
+            content.title = CanonicalBusinessEngine.timesheetSignOffReminderNoticeTitle
+            content.body = details.isEmpty ? "Timesheets are waiting for you to sign off before payday." : details
         case .lineManagerPeerUpdate:
             content.title = "Line manager update"
             content.body = details.isEmpty ? "Another line manager actioned a shared request." : details

@@ -45,6 +45,10 @@ struct AppNotification: Identifiable, Codable, Hashable {
         /// admin or line manager's Create revision). Push, toggle `timesheetSignOff`; opens My Timesheets on that pay run
         /// (`notificationDestination` kind `timesheetMine`), which opens the latest version.
         case timesheetRevisionToSign = "timesheet_revision_to_sign"
+        /// RULEBOOK 1.78.0 §8, §13: "Timesheets waiting for your sign-off" before payday — written by the server
+        /// (Cloud Function `timesheetSignOffReminders`), never by iOS. Push, toggle `timesheetSignOff`; opens User
+        /// Timesheets → Awaiting sign-off on that pay run (`notificationDestination` kind `timesheetTeamAwaiting`).
+        case timesheetSignOffReminder = "timesheet_signoff_reminder"
         case lineManagerPeerUpdate = "line_manager_peer_update"
         /// Older iOS rows. The rulebook has no `material_added`: no device push, no toggle, no destination.
         case materialAdded = "material_added"

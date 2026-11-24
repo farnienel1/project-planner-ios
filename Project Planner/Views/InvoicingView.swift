@@ -7151,13 +7151,6 @@ private struct OperativeTimesheetReviewView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("operativeTimesheetReview.revisionReviewerEditNote")
         }
-        if reviewerBookingEditsOpen, makeChangesAction != .reopenReview {
-            // RULEBOOK 1.76.0 §8 (B1): the reviewer may change an open revision's bookings before the person signs it.
-            Text(CanonicalBusinessEngine.timesheetRevisionReviewerEditNote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("operativeTimesheetReview.revisionReviewerEditNote")
-        }
         if !earlierVersions.isEmpty {
             TimesheetEarlierVersionsList(versions: earlierVersions)
         }
