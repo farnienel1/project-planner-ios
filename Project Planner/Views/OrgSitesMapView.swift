@@ -276,9 +276,16 @@ struct OrgSitesMapView: View {
             OrganizationRulebookContext.dayKey($0.date) == dayKey
                 && ($0.locationType == .project || $0.locationType == .smallWork)
         }
-        let leaveOnDay = leaveRecordsOnDay(dayKey: dayKey)
+        // RULEBOOK 1.82.0 §21 (owner 24 Nov): the whole company's approved leave that day, once for every pin.
+        let companyLeave = companyLeaveOnDay(dayKey: dayKey)
         for project in allProjects {
-            guard let coordinate = await GeocodingCacheService.shared.coordinate(for: project.siteAddress) else { continue }
+            // Web PR #440's order: the job's saved map pin, then an address stored as "lat, lng" text, then geocoding.
+            guard let coordinate = await SiteMapCoordinate.resolve(
+                latitude: project.latitude,
+                longitude: project.longitude,
+                address: project.siteAddress,
+                geocode: { await GeocodingCacheService.shared.coordinate(for: $0) }
+            ) else { continue }
             let siteBookings = dayBookings.filter { $0.projectId == project.id }
             let operativeCount = pinByJob[project.id.uuidString.lowercased()]?.peopleCount ?? 0
             let rows = siteBookings
@@ -295,20 +302,10 @@ struct OrgSitesMapView: View {
             let managerHere = dayManagerBookings.filter { $0.locationId == project.id }
             let results = siteBookings.map { $0.payrollHoursResult(policy: dayPolicy) }
                 + managerHere.map { $0.payrollHoursResult(policy: dayPolicy) }
-            let bookedPeople: [(id: String, name: String)] =
-                siteBookings.map { booking -> (id: String, name: String) in
-                    (booking.storedOperativeId, rosterNameForLabourBooking(operativeId: booking.operativeId, operatives: nameOperatives, users: nameUsers))
-                }
-                + managerHere.map { booking -> (id: String, name: String) in
-                    let user = userStore.organizationUsers.first { $0.id.caseInsensitiveCompare(booking.userId) == .orderedSame }
-                    let name = user.map { $0.fullName.isEmpty ? $0.email : $0.fullName } ?? "Unknown person"
-                    return (booking.userId, name)
-                }
-            let leaveNames = peopleOnLeave(bookedPeople: bookedPeople, leave: leaveOnDay)
             let summary = SiteMapJobDaySummary.make(
                 peopleOnSite: operativeCount,
                 results: results.map(SiteMapJobDaySummary.HoursInput.init(result:)),
-                onLeaveNames: leaveNames
+                onLeaveNames: companyLeave
             )
             builtPins.append(
                 SiteMapPin(
@@ -388,65 +385,38 @@ struct OrgSitesMapView: View {
         project.isSmallWorksDocument ? .smallWorks : .project
     }
 
-    /// `dailyOverviewLeaveRows` (RULEBOOK 1.53.0, as Daily Overview): approved leave records whose leave days include
-    /// the day. Empty when the rule did not answer.
-    private func leaveRecordsOnDay(dayKey: String) -> [HolidayBooking] {
-        let candidates = holidayStore.bookings.filter { $0.startDayKey <= dayKey && $0.endDayKey >= dayKey }
-        guard let ids = CanonicalBusinessEngine.dailyOverviewLeaveRecordIds(
-            records: candidates.map {
-                (id: $0.documentId, startDayKey: $0.startDayKey, endDayKey: $0.endDayKey, timeSlot: $0.timeSlot.rawValue, status: $0.status.rawValue)
-            },
+    /// RULEBOOK 1.82.0 §21 `siteMapLeaveSummary` (owner 24 Nov, item 1): everyone in the company on approved annual
+    /// leave on the day shown — leave is not tied to a job — one per person (the rulebook folds a person's ids and
+    /// records), named as the roster names them. Empty when the rule did not answer (no count of our own).
+    private func companyLeaveOnDay(dayKey: String) -> [String] {
+        let records: [[String: Any]] = holidayStore.bookings.map { booking in
+            [
+                "id": booking.documentId,
+                "userId": booking.userId ?? "",
+                "operativeId": booking.operativeIdRaw ?? "",
+                "startDayKey": booking.startDayKey,
+                "endDayKey": booking.endDayKey,
+                "timeSlot": booking.timeSlot.rawValue,
+                "status": booking.status.rawValue,
+            ]
+        }
+        let roster: [[String: Any]] = userStore.unfoldedOrganizationUsers.map { user in
+            var row = RulebookPeople.person(user)
+            row["name"] = user.fullName.isEmpty ? user.email : user.fullName
+            return row
+        }
+        let operatives: [[String: Any]] = operativeStore.allOperatives.map { row in
+            ["id": row.documentId, "email": row.email, "name": "\(row.firstName) \(row.lastName)".trimmingCharacters(in: .whitespaces)]
+        }
+        guard let summary = CanonicalBusinessEngine.siteMapLeaveSummary(
+            records: records,
             dayKey: dayKey,
             timeZone: OrganizationRulebookContext.timeZoneIdentifier,
-            bankHolidayDayKeys: OrganizationBankHolidays.dayKeys
+            nonWorkingDayKeys: OrganizationBankHolidays.dayKeys,
+            roster: roster,
+            operatives: operatives
         ) else { return [] }
-        return candidates.filter { ids.contains($0.documentId) }
-    }
-
-    /// The people booked on this job that day who are on annual leave that day (a half day of leave beside a booking).
-    /// Who a booked id is comes from the rulebook only (guardrail 1): `personIdSet` over the unfolded roster plus the
-    /// `operatives` rows (every users document, former and same-email ids, rows on the same email), then
-    /// `leaveRecordsForAccount` decides which records are theirs (ids without case, the email as `userId`). An
-    /// operatives row linked to an account speaks for that account. Names as the schedule shows them.
-    private func peopleOnLeave(bookedPeople: [(id: String, name: String)], leave: [HolidayBooking]) -> [String] {
-        guard !leave.isEmpty else { return [] }
-        let users = userStore.unfoldedOrganizationUsers
-        let operatives = operativeStore.allOperatives
-        let operativeRows = operatives.map {
-            CanonicalBusinessEngine.CanonicalBookingPersonOperative(
-                id: $0.documentId,
-                email: $0.email.isEmpty ? nil : $0.email
-            )
-        }
-        let roster = userStore.unfoldedRosterRows
-            + operatives.map { ["id": $0.documentId, "email": $0.email] as [String: Any] }
-        let records = leave.map { (userId: $0.userId, operativeId: $0.operativeIdRaw) }
-        var names: [String] = []
-        var seen = Set<String>()
-        for (personId, name) in bookedPeople {
-            let trimmed = personId.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !seen.contains(trimmed.lowercased()) else { continue }
-            let row = operatives.first { $0.documentId.caseInsensitiveCompare(trimmed) == .orderedSame }
-            let accountId = row?.linkedUserId.flatMap { $0.isEmpty ? nil : $0 } ?? trimmed
-            let user = users.first { $0.id.caseInsensitiveCompare(accountId) == .orderedSame }
-            let email = user.map(\.email) ?? row?.email ?? ""
-            let person: [String: Any] = user.map(RulebookPeople.person) ?? ["id": accountId, "email": email]
-            guard let ids = CanonicalBusinessEngine.personIdSet(person: person, roster: roster) else { continue }
-            let allIds = Array(Set(ids + [trimmed]))
-            seen.formUnion(allIds.map { $0.lowercased() })
-            guard let matched = CanonicalBusinessEngine.leaveRecordsForAccount(
-                records: records,
-                account: CanonicalBusinessEngine.CanonicalBookingPersonAccount(
-                    id: accountId,
-                    email: email.isEmpty ? nil : email,
-                    formerIds: user?.formerUserIds,
-                    aliasIds: allIds
-                ),
-                operatives: operativeRows
-            ), !matched.isEmpty else { continue }
-            names.append(name)
-        }
-        return names
+        return summary.people.map { $0.name ?? "Unknown person" }
     }
 }
 
@@ -654,7 +624,7 @@ private final class SitePinAnnotation: NSObject, MKAnnotation {
 /// One job's figures for the day shown on the site map (owner 24 Nov): people on site (`siteMapPins.peopleCount`),
 /// hours on site (the pay rule's `payrollHoursResult.totalPaidHours`, as Daily Overview), overtime (the clock hours at
 /// the multiplier with any unpaid break as plain hours — `payrollMultipliedHours` and `overtimeTotalText`, as Daily
-/// Overview's overtime tile) and the people booked there who are on annual leave that day. No figure is worked out
+/// Overview's overtime tile) and (RULEBOOK 1.82.0 §21) everyone in the company on annual leave that day. No figure is worked out
 /// here: it only adds up the rulebook's per-booking answers.
 struct SiteMapJobDaySummary: Equatable {
     struct HoursInput: Equatable {
@@ -719,5 +689,37 @@ struct SiteMapJobDaySummary: Equatable {
             overtimeText: overtimeText,
             onLeaveNames: onLeaveNames
         )
+    }
+}
+
+
+/// Where a job sits on the site map (owner 24 Nov, web PR #440's order): a saved map pin (`latitude` / `longitude`)
+/// always wins; else an address stored as "lat, lng" text (how a pin-only job's address reads); else geocoding the
+/// address. Display only — nothing is written.
+enum SiteMapCoordinate {
+    static func valid(_ latitude: Double?, _ longitude: Double?) -> CLLocationCoordinate2D? {
+        guard let latitude, let longitude, latitude.isFinite, longitude.isFinite,
+              abs(latitude) <= 90, abs(longitude) <= 180, !(latitude == 0 && longitude == 0) else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    /// "51.50740, -0.12780" (two numbers, nothing else) → a coordinate.
+    static func fromText(_ text: String) -> CLLocationCoordinate2D? {
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let la = Double(parts[0]), let lo = Double(parts[1]) else { return nil }
+        return valid(la, lo)
+    }
+
+    static func resolve(
+        latitude: Double?,
+        longitude: Double?,
+        address: String,
+        geocode: (String) async -> CLLocationCoordinate2D?
+    ) async -> CLLocationCoordinate2D? {
+        if let pin = valid(latitude, longitude) { return pin }
+        if let typed = fromText(address) { return typed }
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return await geocode(trimmed)
     }
 }
