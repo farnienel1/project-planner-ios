@@ -166,7 +166,35 @@ class PPUITestCase: XCTestCase {
             let tabBarFrame = tabBar.frame
             if !tabBarFrame.isEmpty, frame.maxY > tabBarFrame.minY { return false }
         }
+        if let barTop = stickySaveBarTop(), el.identifier != Self.stickySaveButtonID, frame.maxY > barTop {
+            return false
+        }
         return true
+    }
+
+    private static let stickySaveButtonID = "settingsStickySaveBar.save"
+
+    /// Top edge of the Settings sticky Save bar (`SettingsStickySaveBar`, a `safeAreaInset` at the bottom of
+    /// Settings screens), or nil when the screen has none. Content scrolls under that bar, and `isHittable` still
+    /// passes for an element behind it, so a tap at the element's centre lands on the bar instead: A04 failed this
+    /// way once 1.78 added the line manager reminder to Payment runs and the PAYE payday picker stopped
+    /// scrolling clear of the bar within the time allowed (#285).
+    func stickySaveBarTop() -> CGFloat? {
+        let save = app.buttons.matching(NSPredicate(format: "identifier == %@", Self.stickySaveButtonID)).firstMatch
+        // Not hittable: behind a sheet (the More sheet opened over a Settings screen), so it hides nothing.
+        guard save.exists, save.isHittable else { return nil }
+        let saveFrame = save.frame
+        guard !saveFrame.isEmpty else { return nil }
+        // The bar's note sits 8pt above the button, under 10pt of top padding.
+        let note = app.staticTexts.matching(NSPredicate(
+            format: "label == %@ OR label == %@",
+            "Changes are only saved when you press Save.",
+            "Save your changes, or they will be lost if you leave."
+        )).firstMatch
+        if note.exists, !note.frame.isEmpty, note.frame.minY < saveFrame.minY {
+            return note.frame.minY - 10
+        }
+        return saveFrame.minY - 10
     }
 
     /// Waits (up to `timeout`) until the element's frame is the same on two reads 0.25 s apart, so a tap
