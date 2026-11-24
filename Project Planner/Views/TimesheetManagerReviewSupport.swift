@@ -226,6 +226,9 @@ struct TimesheetManagerReviewActionBar: View {
     /// RULEBOOK 1.72.0: ✕ on a labour line removes its booking, offered only when the line names one
     /// (`timesheetLabourLineReviewActions`). Price work, expenses and late extras keep it.
     var canDecline: Bool = true
+    /// RULEBOOK 1.76.0: ✓ is hidden while only booking edits are open ("Make changes" on a signed-off sheet before its
+    /// first change, or an open revision the person has not signed yet).
+    var canApprove: Bool = true
     let onApprove: () -> Void
     let onDecline: () -> Void
     let onEdit: () -> Void
@@ -234,13 +237,15 @@ struct TimesheetManagerReviewActionBar: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            reviewButton(
-                systemName: "checkmark",
-                activeTint: .green,
-                selected: selection.isReviewApproved,
-                inactive: selection == .declined,
-                action: onApprove
-            )
+            if canApprove {
+                reviewButton(
+                    systemName: "checkmark",
+                    activeTint: .green,
+                    selected: selection.isReviewApproved,
+                    inactive: selection == .declined,
+                    action: onApprove
+                )
+            }
             if canDecline {
                 reviewButton(
                     systemName: "xmark",

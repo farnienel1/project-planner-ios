@@ -592,6 +592,12 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_LATE_EXTRA_ID_TAKEN_LABEL: () => TIMESHEET_LATE_EXTRA_ID_TAKEN_LABEL,
     TIMESHEET_LATE_EXTRA_ID_UNUSABLE_LABEL: () => TIMESHEET_LATE_EXTRA_ID_UNUSABLE_LABEL,
     TIMESHEET_LATE_EXTRA_WAITING_LABEL: () => TIMESHEET_LATE_EXTRA_WAITING_LABEL,
+    TIMESHEET_MAKE_CHANGES_ACTIVE_NOTE: () => TIMESHEET_MAKE_CHANGES_ACTIVE_NOTE,
+    TIMESHEET_MAKE_CHANGES_CANCEL_LABEL: () => TIMESHEET_MAKE_CHANGES_CANCEL_LABEL,
+    TIMESHEET_MAKE_CHANGES_LABEL: () => TIMESHEET_MAKE_CHANGES_LABEL,
+    TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP: () => TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP,
+    TIMESHEET_MAKE_CHANGES_REOPEN_HELP: () => TIMESHEET_MAKE_CHANGES_REOPEN_HELP,
+    TIMESHEET_MAKE_CHANGES_REVISION_HELP: () => TIMESHEET_MAKE_CHANGES_REVISION_HELP,
     TIMESHEET_MANAGER_SIGN_OFF_FIELDS: () => TIMESHEET_MANAGER_SIGN_OFF_FIELDS,
     TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT: () => TIMESHEET_NOTIFY_DAYS_BEFORE_PAYMENT,
     TIMESHEET_NOTIFY_HOUR: () => TIMESHEET_NOTIFY_HOUR,
@@ -636,10 +642,13 @@ var ProjectPlannerCanonical = (() => {
     TIMESHEET_REVISION_NOT_EXPORTED_MESSAGE: () => TIMESHEET_REVISION_NOT_EXPORTED_MESSAGE,
     TIMESHEET_REVISION_NOT_REVIEWER_MESSAGE: () => TIMESHEET_REVISION_NOT_REVIEWER_MESSAGE,
     TIMESHEET_REVISION_OPEN_MESSAGE: () => TIMESHEET_REVISION_OPEN_MESSAGE,
+    TIMESHEET_REVISION_REVIEWER_EDIT_NOTE: () => TIMESHEET_REVISION_REVIEWER_EDIT_NOTE,
     TIMESHEET_REVISION_SUFFIX: () => TIMESHEET_REVISION_SUFFIX,
     TIMESHEET_SELF_SIGNED_OWNER_FIELDS: () => TIMESHEET_SELF_SIGNED_OWNER_FIELDS,
     TIMESHEET_SELF_SIGN_PAYE_NOTE: () => TIMESHEET_SELF_SIGN_PAYE_NOTE,
     TIMESHEET_SIGNED_AFTER_MS: () => TIMESHEET_SIGNED_AFTER_MS,
+    TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE: () => TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE,
+    TIMESHEET_SIGNED_ENTRIES_CHANGED_REVIEWER_MESSAGE: () => TIMESHEET_SIGNED_ENTRIES_CHANGED_REVIEWER_MESSAGE,
     TIMESHEET_SIGNED_NOTICE_TITLE: () => TIMESHEET_SIGNED_NOTICE_TITLE,
     TIMESHEET_SIGNED_NOTICE_TYPE: () => TIMESHEET_SIGNED_NOTICE_TYPE,
     TIMESHEET_SIGNED_OFF_EXTRAS_MESSAGE: () => TIMESHEET_SIGNED_OFF_EXTRAS_MESSAGE,
@@ -1648,6 +1657,7 @@ var ProjectPlannerCanonical = (() => {
     qualificationSearchRecordFromItem: () => qualificationSearchRecordFromItem,
     qualificationSearchScore: () => qualificationSearchScore,
     qualificationSectionChipLabel: () => qualificationSectionChipLabel,
+    qualificationsMissingOwnExpiry: () => qualificationsMissingOwnExpiry,
     rankMaterialRecords: () => rankMaterialRecords,
     rankQualificationRecords: () => rankQualificationRecords,
     rateHistoryQueryPlan: () => rateHistoryQueryPlan,
@@ -1843,6 +1853,8 @@ var ProjectPlannerCanonical = (() => {
     timesheetLineReviewActionsAllowed: () => timesheetLineReviewActionsAllowed,
     timesheetLineShownDeclined: () => timesheetLineShownDeclined,
     timesheetListBucket: () => timesheetListBucket,
+    timesheetMakeChangesAction: () => timesheetMakeChangesAction,
+    timesheetMakeChangesHelp: () => timesheetMakeChangesHelp,
     timesheetNotificationDedupeKey: () => timesheetNotificationDedupeKey,
     timesheetOwnerCanAddExtras: () => timesheetOwnerCanAddExtras,
     timesheetOwnerCanAddLateExtras: () => timesheetOwnerCanAddLateExtras,
@@ -1876,6 +1888,7 @@ var ProjectPlannerCanonical = (() => {
     timesheetRevisionLabourReviews: () => timesheetRevisionLabourReviews,
     timesheetRevisionNoticeKey: () => timesheetRevisionNoticeKey,
     timesheetRevisionReportState: () => timesheetRevisionReportState,
+    timesheetRevisionReviewerMayEditBookings: () => timesheetRevisionReviewerMayEditBookings,
     timesheetRevisionToSignRecipients: () => timesheetRevisionToSignRecipients,
     timesheetRevisionWaitingLabel: () => timesheetRevisionWaitingLabel,
     timesheetSelfSigned: () => timesheetSelfSigned,
@@ -1883,6 +1896,8 @@ var ProjectPlannerCanonical = (() => {
     timesheetSheetHasActivity: () => timesheetSheetHasActivity,
     timesheetSheetIsRevision: () => timesheetSheetIsRevision,
     timesheetSignOffWriteFields: () => timesheetSignOffWriteFields,
+    timesheetSignedCopyTracksBookings: () => timesheetSignedCopyTracksBookings,
+    timesheetSignedEntriesChangedSinceSignOff: () => timesheetSignedEntriesChangedSinceSignOff,
     timesheetSignedEntryKeys: () => timesheetSignedEntryKeys,
     timesheetSignedNoticeText: () => timesheetSignedNoticeText,
     timesheetSignedRecipients: () => timesheetSignedRecipients,
@@ -8738,6 +8753,101 @@ var ProjectPlannerCanonical = (() => {
     const personKey2 = index.keyOf("operative", personId2);
     return rows3.filter((row3) => index.keyOf("operative", row3.id) === personKey2);
   }
+  function hasLibraryEndDate(entry) {
+    if (!entry) return false;
+    if (typeof entry.hasEndDate === "boolean") return entry.hasEndDate;
+    const end = entry.endDate;
+    if (end && typeof end === "object" && typeof end.toDate === "function") return true;
+    if (end && typeof end === "object" && typeof end.seconds === "number") return true;
+    return Boolean(expiryDateFromUnknown(end));
+  }
+  function nameText(first, last) {
+    return `${typeof first === "string" ? first.trim() : ""} ${typeof last === "string" ? last.trim() : ""}`.trim();
+  }
+  function qualificationsMissingOwnExpiry(input) {
+    const rows3 = (input?.operatives || []).filter(
+      (row3) => row3 && trimId(row3.id) && !isPlaceholderOperativeRow(row3) && // As the expiry warnings (`qualificationExpiryRowsUnscoped`): an anonymised deleted profile is never listed.
+      !isAnonymisedDeletedProfile({
+        email: row3.email ?? "",
+        firstName: row3.firstName,
+        lastName: row3.lastName
+      })
+    );
+    const roster = (input?.roster || []).filter((row3) => row3 && trimId(row3.id));
+    const library = (input?.qualifications || []).filter((entry) => entry && trimId(entry.id));
+    const libraryById = new Map(library.map((entry) => [trimId(entry.id).toLowerCase(), entry]));
+    const libraryByName = /* @__PURE__ */ new Map();
+    for (const entry of library) {
+      const name = String(entry.name ?? "").trim().toLowerCase();
+      if (name && !libraryByName.has(name)) libraryByName.set(name, entry);
+    }
+    const { keys } = taskPersonKeys({ managers: [], operatives: rows3, roster });
+    const keyOf2 = (id2) => keys[id2.toLowerCase()] || `id:${id2.toLowerCase()}`;
+    const groups = /* @__PURE__ */ new Map();
+    for (const row3 of rows3) {
+      const k = keyOf2(trimId(row3.id));
+      const list = groups.get(k);
+      if (list) list.push(row3);
+      else groups.set(k, [row3]);
+    }
+    const rosterByKey = /* @__PURE__ */ new Map();
+    for (const person of roster) {
+      const k = keyOf2(trimId(person.id));
+      const list = rosterByKey.get(k);
+      if (list) list.push(person);
+      else rosterByKey.set(k, [person]);
+    }
+    const out = [];
+    for (const [personKey2, personRows] of groups) {
+      const accounts = rosterByKey.get(personKey2) || [];
+      const aliasKeys = /* @__PURE__ */ new Set();
+      for (const member of accounts) {
+        for (const alias of [...member.formerUserIds || [], ...member.sameEmailUserIds || []]) {
+          if (trimId(alias).toLowerCase() !== trimId(member.id).toLowerCase()) aliasKeys.add(trimId(alias).toLowerCase());
+        }
+      }
+      const rank = (member) => (member.isActive !== false && !isAnonymisedDeletedProfile(member) ? 0 : 4) + (member.passwordSet === false ? 2 : 0) + (aliasKeys.has(trimId(member.id).toLowerCase()) ? 1 : 0);
+      const account = [...accounts].sort(
+        (a, b) => rank(a) - rank(b) || trimId(a.id).toLowerCase().localeCompare(trimId(b.id).toLowerCase())
+      )[0];
+      if (account && accounts.every((member) => isAnonymisedDeletedProfile(member))) continue;
+      const personName = account && nameText(account.firstName, account.lastName) || personRows.map((row3) => nameText(row3.firstName, row3.lastName)).find(Boolean) || trimId(account?.email) || personRows.map((row3) => trimId(row3.email)).find(Boolean) || "";
+      const active = personRows.some((row3) => row3.isActive !== false) && (accounts.length === 0 || accounts.some((a) => a.isActive !== false));
+      const activeRows = personRows.filter((row3) => row3.isActive !== false);
+      const judgedRows = activeRows.length > 0 ? activeRows : personRows;
+      const merged = personQualifications({ rows: judgedRows });
+      for (const qual of merged) {
+        if (qual.expiry) continue;
+        if (!String(qual.name ?? "").trim()) continue;
+        const id2 = trimId(qual.id);
+        const libraryEntry = libraryById.get(id2.toLowerCase()) || libraryByName.get(qual.name.trim().toLowerCase());
+        let templated = hasLibraryEndDate(libraryEntry);
+        if (!libraryEntry) {
+          for (const row3 of judgedRows) {
+            const assignment = (row3.qualifications || []).find((entry) => trimId(entry?.id).toLowerCase() === id2.toLowerCase());
+            if (hasLibraryEndDate(assignment)) {
+              templated = true;
+              break;
+            }
+          }
+        }
+        if (!templated) continue;
+        const holder = judgedRows.find((row3) => (row3.qualifications || []).some((entry) => trimId(entry?.id).toLowerCase() === id2.toLowerCase())) || judgedRows[0];
+        out.push({
+          personKey: personKey2,
+          userId: account ? trimId(account.id) : null,
+          operativeId: trimId(holder.id),
+          personName,
+          active,
+          qualificationId: id2,
+          qualificationName: qual.name.trim()
+        });
+      }
+    }
+    return out.sort(
+      (a, b) => a.personName.localeCompare(b.personName) || a.personKey.localeCompare(b.personKey) || a.qualificationName.localeCompare(b.qualificationName)
+    );
+  }
 
   // lib/canonical/materialDelivery.ts
   var DEFAULT_MATERIAL_DELIVERY_HOUR = 8;
@@ -13428,6 +13538,8 @@ var ProjectPlannerCanonical = (() => {
   var TIMESHEET_LATE_EXTRA_ID_TAKEN_LABEL = "Can't be reviewed \u2014 same reference as a signed item";
   var TIMESHEET_LATE_EXTRA_ID_UNUSABLE_LABEL = "Can't be reviewed \u2014 delete it and add it again";
   var TIMESHEET_LATE_EXTRAS_REVIEWER_MESSAGE = "Price work or expenses were added after this timesheet was signed. Approve or decline each one \u2014 only what you approve is paid.";
+  var TIMESHEET_SIGNED_ENTRIES_CHANGED_REVIEWER_MESSAGE = "You changed price work or expenses after signing this timesheet off. Sign it off again to update it \u2014 the person does not sign again.";
+  var TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE = "Your line manager changed your price work or expenses \u2014 Generate Invoice unlocks after they sign it off again.";
   var TIMESHEET_LATE_EXTRAS_EXPORT_SKIPPED_MESSAGE = "Not exported \u2014 price work or expenses added after sign-off are waiting for the line manager.";
   var TIMESHEET_LATE_EXTRA_ADD_CONFIRM_MESSAGE = "Your timesheet is already signed off. This will be sent to your line manager to approve; it is paid only once they approve it.";
   var AMOUNT_EPSILON2 = 5e-3;
@@ -13583,6 +13695,43 @@ var ProjectPlannerCanonical = (() => {
       return paid != null && Math.abs(roundPennies(finite2(row3.amount) ?? 0) - paid) < AMOUNT_EPSILON2;
     });
   }
+  function timesheetSignedEntriesChangedSinceSignOff(sheet, options = {}) {
+    const data = sheet && typeof sheet === "object" ? sheet : {};
+    const exported = typeof options.exportedAtStored === "boolean" ? options.exportedAtStored : timesheetExportedFieldSet(data.exportedAt);
+    if (exported) return false;
+    const signedMs = timesheetTimestampMs(data.managerSignedAt) ?? timesheetTimestampMs(data.approvedAt);
+    if (signedMs == null) return false;
+    const override = data.weeklyReportOverride;
+    if (!override || typeof override !== "object") return false;
+    const snapshot = override;
+    const signedPaid = /* @__PURE__ */ new Map();
+    for (const key7 of ["priceWork", "expenses"]) {
+      for (const row3 of rowsOf(snapshot[key7])) {
+        if (row3.lateExtra === true) continue;
+        const id2 = normalizeDocumentId(row3.id);
+        if (id2) signedPaid.set(id2, roundPennies(finite2(row3.amount) ?? 0));
+      }
+    }
+    const docId = typeof options.sheetDocId === "string" ? options.sheetDocId.trim() : "";
+    for (const [field, kind] of [["priceWorkEntries", "priceWork"], ["expenseEntries", "expense"]]) {
+      const rows3 = Array.isArray(data[field]) ? data[field] : [];
+      for (let index = 0; index < rows3.length; index += 1) {
+        const raw = rows3[index];
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+        const row3 = raw;
+        const storedId = typeof row3.id === "string" ? row3.id.trim() : "";
+        const id2 = storedId || (docId ? timesheetEntryId(docId, kind, index, row3) : "");
+        if (!id2) continue;
+        const signed = signedPaid.get(normalizeDocumentId(id2));
+        if (signed == null) continue;
+        const entry = { ...row3, id: id2 };
+        const decided = timesheetEntryDecision(data, entry, kind, timesheetTrustedFingerprint(options.entryFingerprints ?? null, id2));
+        const paid = roundPennies(timesheetEntryEffectiveAmount(decided.decision, decided.revisedAmount, finite2(row3.amount) ?? 0));
+        if (Math.abs(paid - signed) >= AMOUNT_EPSILON2) return true;
+      }
+    }
+    return false;
+  }
   function timesheetLateExtrasSummary(sheet, options = {}) {
     const data = sheet && typeof sheet === "object" ? sheet : {};
     const rows3 = timesheetLateExtraRows(data, options);
@@ -13605,15 +13754,17 @@ var ProjectPlannerCanonical = (() => {
       snapshotInStep = signedLate.size === approved.size && [...approved].every(([id2, paid]) => signedLate.has(id2) && Math.abs((signedLate.get(id2) ?? 0) - paid) < AMOUNT_EPSILON2);
     }
     const pending = count("pending");
+    const signedEntriesChanged = timesheetSignedEntriesChangedSinceSignOff(data, options);
     return {
       pending,
       approved: count("approved"),
       declined: count("declined"),
       snapshotInStep,
       exported,
+      signedEntriesChanged,
       // 1.55.0 (review of #344): late extras wait for the line manager only once they have signed. On an open revision
       // (copied late extras, nobody has signed yet) the sheet is still with the person — never "Awaiting".
-      waitingForLineManager: !exported && (timesheetTimestampMs(data.managerSignedAt) != null || timesheetTimestampMs(data.approvedAt) != null) && (pending > 0 || !snapshotInStep)
+      waitingForLineManager: !exported && (timesheetTimestampMs(data.managerSignedAt) != null || timesheetTimestampMs(data.approvedAt) != null) && (pending > 0 || !snapshotInStep || signedEntriesChanged)
     };
   }
   var NO_BOOKING_CHANGE = {
@@ -13632,7 +13783,9 @@ var ProjectPlannerCanonical = (() => {
   };
   function timesheetChangesWithLateExtras(bookingChange, late) {
     const waiting = late?.waitingForLineManager === true;
-    if (bookingChange?.reopened) return { ...bookingChange, lateExtrasWaiting: waiting, bookingsChanged: true };
+    const signedEntriesChanged = waiting && late?.signedEntriesChanged === true;
+    const lateWaiting = waiting && (!signedEntriesChanged || (late?.pending ?? 0) > 0 || late?.snapshotInStep === false);
+    if (bookingChange?.reopened) return { ...bookingChange, lateExtrasWaiting: waiting, bookingsChanged: true, signedEntriesChanged };
     if (waiting) {
       return {
         ...bookingChange ?? NO_BOOKING_CHANGE,
@@ -13640,13 +13793,16 @@ var ProjectPlannerCanonical = (() => {
         reopened: true,
         waitingFor: "lineManager",
         message: null,
-        reviewerMessage: TIMESHEET_LATE_EXTRAS_REVIEWER_MESSAGE,
+        reviewerMessage: lateWaiting ? TIMESHEET_LATE_EXTRAS_REVIEWER_MESSAGE : TIMESHEET_SIGNED_ENTRIES_CHANGED_REVIEWER_MESSAGE,
+        // As before 1.76.0: anything the line manager must decide or sign off again without a booking change (the
+        // signed labour stands; reports keep the signed figures). `signedEntriesChanged` says which.
         lateExtrasWaiting: true,
-        bookingsChanged: false
+        bookingsChanged: false,
+        signedEntriesChanged
       };
     }
     if (!bookingChange) return null;
-    return { ...bookingChange, lateExtrasWaiting: false, bookingsChanged: bookingChange.changed };
+    return { ...bookingChange, lateExtrasWaiting: false, bookingsChanged: bookingChange.changed, signedEntriesChanged: false };
   }
   function timesheetLateExtraLabel(decision) {
     if (decision.state === "approved") return TIMESHEET_LATE_EXTRA_APPROVED_LABEL;
@@ -16943,8 +17099,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.74.0" : "",
-      sha256: true ? "cbd428e07f35284a63ea14aceb24e9e2f6833f0eff4b61400a009dc2e62f8609" : ""
+      version: true ? "1.76.0" : "",
+      sha256: true ? "355f20463958f3fdadda7f7ad24e23b3047d946e902a0554cf0fbc8e74c7fcbc" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -17173,6 +17329,78 @@ var ProjectPlannerCanonical = (() => {
     const lines = Array.from(byDay.values()).flat();
     const order = { "FULL DAY": 0, AM: 1, PM: 2 };
     return lines.sort((a, b) => a.dayKey !== b.dayKey ? a.dayKey < b.dayKey ? -1 : 1 : order[a.timeSlot] - order[b.timeSlot]);
+  }
+
+  // lib/canonical/timesheetMakeChanges.ts
+  var TIMESHEET_MAKE_CHANGES_LABEL = "Make changes";
+  var TIMESHEET_MAKE_CHANGES_REOPEN_HELP = "Change or remove bookings, price work or expenses on this timesheet with \u2699 and \u2715, then sign it off again. The person does not sign again; they are told it was changed and signed off.";
+  var TIMESHEET_MAKE_CHANGES_REVISION_HELP = "This timesheet has been exported, so changes go on a new revision. You can change its bookings, then the person signs it again and you sign it off. It is exported as the next REV.";
+  var TIMESHEET_MAKE_CHANGES_ACTIVE_NOTE = "Making changes: use \u2699 to change a booking, price work or expense, or \u2715 to remove it. The timesheet stays signed off until you change something; then sign it off again.";
+  var TIMESHEET_MAKE_CHANGES_CANCEL_LABEL = "Stop making changes";
+  var TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP = "This timesheet was signed before 14 Nov. Export it, then use Make changes to correct it in a revision.";
+  var TIMESHEET_REVISION_REVIEWER_EDIT_NOTE = "You can change or remove this revision\u2019s bookings with \u2699 and \u2715 before the person signs it.";
+  function signedCopyLabourLines(sheet) {
+    const override = sheet?.weeklyReportOverride;
+    if (!override || typeof override !== "object") return null;
+    const lines = override.lines;
+    if (!Array.isArray(lines)) return null;
+    return lines.filter((line) => {
+      if (!line || typeof line !== "object") return false;
+      const row3 = line;
+      if (row3.isLeave === true || row3.isPayeDay === true) return false;
+      return !(typeof row3.reviewPartOf === "string" && row3.reviewPartOf.trim() !== "");
+    });
+  }
+  function hasFingerprint(row3) {
+    return typeof row3.bookingFingerprint === "string" && row3.bookingFingerprint.trim() !== "";
+  }
+  function timesheetSignedCopyTracksBookings(sheet) {
+    const labour = signedCopyLabourLines(sheet);
+    return labour != null && labour.every(hasFingerprint);
+  }
+  function signedCopyHasSignedMoney(sheet) {
+    const override = sheet.weeklyReportOverride;
+    if (!override || typeof override !== "object") return false;
+    return ["priceWork", "expenses"].some((key7) => {
+      const rows3 = override[key7];
+      return Array.isArray(rows3) && rows3.some((row3) => row3 && typeof row3 === "object" && row3.lateExtra !== true);
+    });
+  }
+  function signedCopyHasSomethingToChange(sheet) {
+    const labour = signedCopyLabourLines(sheet);
+    return labour != null && labour.length > 0 || signedCopyHasSignedMoney(sheet);
+  }
+  function signedCopyIsOld(sheet) {
+    const labour = signedCopyLabourLines(sheet);
+    if (labour == null) return true;
+    return labour.some((row3) => !hasFingerprint(row3));
+  }
+  function signedOffForReview(sheet, input) {
+    if (input.viewerIsReviewer !== true || input.viewerIsSubject === true || input.selfSigned === true) return false;
+    if (resolveTimesheetExportedAtMs(sheet) != null) return false;
+    const fields = parseTimesheetStatusFields(sheet);
+    if (!isTimesheetOperativeSigned(fields) || !isTimesheetManagerSigned(fields)) return false;
+    return input.change?.reopened !== true;
+  }
+  function timesheetMakeChangesAction(sheet, input) {
+    if (!sheet || input.viewerIsReviewer !== true || input.viewerIsSubject === true) return null;
+    if (resolveTimesheetExportedAtMs(sheet) != null) return input.revisionAllowed === true ? "createRevision" : null;
+    if (!signedOffForReview(sheet, input)) return null;
+    return timesheetSignedCopyTracksBookings(sheet) && signedCopyHasSomethingToChange(sheet) ? "reopenReview" : null;
+  }
+  function timesheetMakeChangesHelp(action, sheet, input) {
+    if (action === "reopenReview") return TIMESHEET_MAKE_CHANGES_REOPEN_HELP;
+    if (action === "createRevision") return TIMESHEET_MAKE_CHANGES_REVISION_HELP;
+    if (sheet && input && signedOffForReview(sheet, input) && signedCopyIsOld(sheet)) {
+      return TIMESHEET_MAKE_CHANGES_OLD_SHEET_HELP;
+    }
+    return null;
+  }
+  function timesheetRevisionReviewerMayEditBookings(sheet, input) {
+    if (!sheet || input.viewerIsReviewer !== true || input.viewerIsSubject === true) return false;
+    if (!timesheetSheetIsRevision(sheet)) return false;
+    if (resolveTimesheetExportedAtMs(sheet) != null) return false;
+    return !isTimesheetOperativeSigned(parseTimesheetStatusFields(sheet));
   }
 
   // lib/canonical/timesheetLineEdit.ts

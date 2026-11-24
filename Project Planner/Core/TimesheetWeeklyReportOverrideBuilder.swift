@@ -66,7 +66,13 @@ enum TimesheetWeeklyReportOverrideBuilder {
         /// change and this signature completes it again, so the snapshot is built fresh from the live bookings (as at
         /// first approval, with the new signatures) instead of re-applying reviews to the stored lines. Never on an
         /// exported sheet.
-        rebuildSnapshot: Bool = false
+        rebuildSnapshot: Bool = false,
+        /// RULEBOOK 1.76.0 §8 (owner answer 23 Nov, b; web `applyWeeklyReportOverride` `refreshSignedMoney`): the signed
+        /// price work and expense rows are taken afresh from the decided entries only when the sheet is signed off (the
+        /// counter-signature, or a self-signed person's signature). Any other save keeps them exactly as signed, so a
+        /// review written after sign-off waits for the line manager (`timesheetSignedEntriesChangedSinceSignOff`).
+        /// Late extra rows are always refreshed.
+        refreshSignedMoney: Bool = false
     ) -> String? {
         // `timesheetOwnerWriteFields`: the owner writes the approved snapshot only when the sheet is self-signed
         // (`CanonicalBusinessEngine.timesheetSelfSigned` through `TimesheetApprovalPolicy`; 1.28.0: Timesheet self-sign on, or the Super Admin). An owner save (writerIsReviewer == false) with a line manager leaves the
@@ -165,8 +171,11 @@ enum TimesheetWeeklyReportOverrideBuilder {
                         approvedByName: existing.approvedByName,
                         selfSigned: existing.selfSigned,
                         lines: fresh.lines.filter { !optionPlaceIds.contains($0.id.lowercased()) },
-                        priceWork: fresh.priceWork,
-                        expenses: fresh.expenses
+                        // RULEBOOK 1.76.0 (review of #278): the repair rebuilds the labour only — the signed price work
+                        // and expense rows stay as signed (late extra rows fresh), so it never lands a Make changes
+                        // review without a new sign-off.
+                        priceWork: signedMoneyRows(existing.priceWork, fresh: fresh.priceWork, refresh: refreshSignedMoney),
+                        expenses: signedMoneyRows(existing.expenses, fresh: fresh.expenses, refresh: refreshSignedMoney)
                     )
                     return nil
                 }
@@ -178,7 +187,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
                 draft: draft,
                 user: user,
                 viewer: viewer,
-                check: check
+                check: check,
+                refreshSignedMoney: refreshSignedMoney
             )
             if check.failed { return rulebookCheckFailedMessage }
             draft.weeklyReportOverride = reapplied
@@ -383,7 +393,8 @@ enum TimesheetWeeklyReportOverrideBuilder {
         draft: TimesheetDraft,
         user: AppUser,
         viewer: AppUser?,
-        check: RulebookCheck? = nil
+        check: RulebookCheck? = nil,
+        refreshSignedMoney: Bool = false
     ) -> TimesheetWeeklyReportOverride {
         let managerHasSigned = draft.managerSignedAt != nil
         let money = moneyLines(from: draft, managerHasSigned: managerHasSigned, applyLiveReview: true, check: check)
@@ -554,9 +565,20 @@ enum TimesheetWeeklyReportOverrideBuilder {
             approvedByName: approvedByName,
             selfSigned: !TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user),
             lines: lines,
-            priceWork: money.priceWork,
-            expenses: money.expenses
+            priceWork: signedMoneyRows(existing.priceWork, fresh: money.priceWork, refresh: refreshSignedMoney),
+            expenses: signedMoneyRows(existing.expenses, fresh: money.expenses, refresh: refreshSignedMoney)
         )
+    }
+
+    /// RULEBOOK 1.76.0: keep the stored signed money rows unless the sheet is being signed off; late extra rows always
+    /// come fresh (web `signedMoneyRows`).
+    static func signedMoneyRows(
+        _ stored: [TimesheetWeeklyReportMoneyLine],
+        fresh: [TimesheetWeeklyReportMoneyLine],
+        refresh: Bool
+    ) -> [TimesheetWeeklyReportMoneyLine] {
+        if refresh { return fresh }
+        return stored.filter { $0.lateExtra != true } + fresh.filter { $0.lateExtra == true }
     }
 
     private static func moneyLines(
