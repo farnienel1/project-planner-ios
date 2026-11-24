@@ -235,7 +235,13 @@ struct OrgSitesMapView: View {
         let nameOperatives = operativeStore.allOperatives
         let nameUsers = userStore.bookingNameUsers
         for project in allProjects {
-            guard let coordinate = await GeocodingCacheService.shared.coordinate(for: project.siteAddress) else { continue }
+            // Web PR #440's order: the job's saved map pin, then an address stored as "lat, lng" text, then geocoding.
+            guard let coordinate = await SiteMapCoordinate.resolve(
+                latitude: project.latitude,
+                longitude: project.longitude,
+                address: project.siteAddress,
+                geocode: { await GeocodingCacheService.shared.coordinate(for: $0) }
+            ) else { continue }
             let siteBookings = dayBookings.filter { $0.projectId == project.id }
             let operativeCount = pinByJob[project.id.uuidString.lowercased()]?.peopleCount ?? 0
             let rows = siteBookings
@@ -517,5 +523,37 @@ private final class SitePinAnnotation: NSObject, MKAnnotation {
         self.coordinate = coordinate
         self.title = title
         self.subtitle = subtitle
+    }
+}
+
+
+/// Where a job sits on the site map (owner 24 Nov, web PR #440's order): a saved map pin (`latitude` / `longitude`)
+/// always wins; else an address stored as "lat, lng" text (how a pin-only job's address reads); else geocoding the
+/// address. Display only — nothing is written.
+enum SiteMapCoordinate {
+    static func valid(_ latitude: Double?, _ longitude: Double?) -> CLLocationCoordinate2D? {
+        guard let latitude, let longitude, latitude.isFinite, longitude.isFinite,
+              abs(latitude) <= 90, abs(longitude) <= 180, !(latitude == 0 && longitude == 0) else { return nil }
+        return CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
+
+    /// "51.50740, -0.12780" (two numbers, nothing else) → a coordinate.
+    static func fromText(_ text: String) -> CLLocationCoordinate2D? {
+        let parts = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard parts.count == 2, let la = Double(parts[0]), let lo = Double(parts[1]) else { return nil }
+        return valid(la, lo)
+    }
+
+    static func resolve(
+        latitude: Double?,
+        longitude: Double?,
+        address: String,
+        geocode: (String) async -> CLLocationCoordinate2D?
+    ) async -> CLLocationCoordinate2D? {
+        if let pin = valid(latitude, longitude) { return pin }
+        if let typed = fromText(address) { return typed }
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return await geocode(trimmed)
     }
 }
