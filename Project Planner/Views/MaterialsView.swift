@@ -761,7 +761,8 @@ struct AddMaterialView: View {
                         addedByName: addedBy,
                         addedByUserId: material.addedByUserId,
                         extraRecipientUserIds: managerUserIds,
-                        rulebookRecipientUserIds: rulebookRecipients
+                        rulebookRecipientUserIds: rulebookRecipients,
+                        isSmallWorks: project.isSmallWorksDocument
                     )
                 } catch {
                     print("❌ Error saving material: \(error.localizedDescription)")

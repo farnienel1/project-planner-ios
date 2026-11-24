@@ -758,6 +758,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 let notifier = notificationService
                 let projectId = project.id
                 let siteName = project.siteName
+                let isSmallWorks = project.isSmallWorksDocument
                 let materialName = item.material
                 Task {
                     await notifier.notifyMaterialAdded(
@@ -767,7 +768,8 @@ struct MaterialsAddWithCatalogueSheet: View {
                         addedByName: addedBy,
                         addedByUserId: ownerUid,
                         extraRecipientUserIds: managerUserIds,
-                        rulebookRecipientUserIds: rulebookRecipients
+                        rulebookRecipientUserIds: rulebookRecipients,
+                        isSmallWorks: isSmallWorks
                     )
                 }
             }

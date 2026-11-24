@@ -113,7 +113,12 @@ final class Rulebook190WriteDisciplineTests: XCTestCase {
         XCTAssertTrue(row?["createdAt"] is Timestamp, "the native timestamp is restored")
         XCTAssertNil(CanonicalBusinessEngine.notificationRelatedId(type: "push_test", ids: ["jobId": "J"]))
         XCTAssertEqual(CanonicalBusinessEngine.notificationRelatedId(type: "booking_created", ids: ["jobId": "J", "userId": "U"]), "J")
-        XCTAssertEqual(CanonicalBusinessEngine.notificationRelatedId(type: "hs_toolbox_reminder", ids: ["issueId": "I1"]), "I1")
+        // RULEBOOK 1.79.0 §13 `NOTIFICATION_RELATED_ID`: toolbox talk notices carry the job id (was the issue id, 1.10.0–1.78.0).
+        XCTAssertEqual(
+            CanonicalBusinessEngine.notificationRelatedId(type: "hs_toolbox_reminder", ids: ["issueId": "I1", "jobId": "J1"]),
+            "J1"
+        )
+        XCTAssertNil(CanonicalBusinessEngine.notificationRelatedId(type: "hs_toolbox_reminder", ids: ["issueId": "I1"]))
         XCTAssertEqual(
             CanonicalBusinessEngine.notificationRelatedId(type: "timesheet_submission_reminder", ids: ["paymentDayKey": "2026-11-06"]),
             "2026-11-06"

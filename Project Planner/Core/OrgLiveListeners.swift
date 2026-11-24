@@ -573,6 +573,8 @@ nonisolated enum IOSLiveListenerCoverage {
         "personalSiteAudits": "PersonalSiteAuditsView / PersonalSiteAuditPickerSheet (FirebaseBackend.listenPersonalSiteAudits, ownerUserId ==)",
         // RULEBOOK 1.40.0 §4.4: manual annual-leave adjustments.
         "annualLeaveAdjustments": "HolidayView / OperativeAnnualLeaveCalendarView / EditUserView / MyProfileFiguresCard (AnnualLeaveAdjustmentsModel → FirebaseBackend.listenAnnualLeaveAdjustments, one userId == query per person)",
+        // RULEBOOK 1.81.0 §11: the open organisation's names per person, laid over the roster.
+        "memberNames": "UserStore.listenToMemberNames (organizations/{orgId}/memberNames, open organisation)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.

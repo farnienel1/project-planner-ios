@@ -61,7 +61,9 @@ final class NotificationInboxUnreadTests: XCTestCase {
         )
     }
 
-    func testClearingTheIconBadgeLeavesTheInAppCount() {
+    /// RULEBOOK 1.79.0 §13 (owner 24 Nov): coming to the foreground keeps the icon at the unread count — it never clears
+    /// the in-app count, and the script no longer clears the icon.
+    func testForegroundKeepsTheIconAtTheUnreadCount() {
         let service = NotificationService()
         let store = UserStore()
         store.currentUser = AppUser(
@@ -72,12 +74,13 @@ final class NotificationInboxUnreadTests: XCTestCase {
         )
         service.setUserStore(store)
         service.notifications = [notification(userId: "u1"), notification(userId: "u1")]
+        service.markInboxLoadedForTesting()
         service.setUnreadCount(from: service.notifications)
         let before = service.unreadCount
 
         service.clearAppIconBadgeIfNeeded()
 
-        XCTAssertEqual(CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground, true)
+        XCTAssertEqual(CanonicalBusinessEngine.notificationIconBadgeClearsOnForeground, false)
         XCTAssertEqual(service.unreadCount, before)
         XCTAssertEqual(before, 2)
     }
