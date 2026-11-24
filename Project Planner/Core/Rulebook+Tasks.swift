@@ -2,7 +2,7 @@
 //  Rulebook+Tasks.swift
 //  Project Planner
 //
-//  RULEBOOK 1.89.0 §32 "Tasks: words, tabs, actions, the popup and uploads" (web `lib/canonical/taskRules.ts`, the
+//  RULEBOOK 1.89.0 §34 "Tasks: words, tabs, actions, the popup and uploads" (web `lib/canonical/taskRules.ts`, the
 //  owner's Tasks pack). Every task word (status, priority, due date), tab, count, sort order, action and permission
 //  on iOS comes from the packed script through `CanonicalBusinessEngine.callJSON`, memoised by its exact input. Swift
 //  only maps `ProjectTask` into the script's plain rows and maps the answer back (guardrail: no second calculator).
@@ -80,6 +80,9 @@ enum TaskRulebook {
     private static let labelMemo = RulebookAnswerMemo<String, String>(limit: 64)
     private static let dueMemo = RulebookAnswerMemo<String, TaskDueText>(limit: 2048)
     private static let tabMemo = RulebookAnswerMemo<String, [String]>(limit: 2048)
+    private static let accessMemo = RulebookAnswerMemo<String, TaskRulebookAccess>(limit: 64)
+    private static let sortMemo = RulebookAnswerMemo<String, [String]>(limit: 64)
+    private static let roleMemo = RulebookAnswerMemo<String, CanonicalBusinessEngine.CanonicalStaffAccountRole>(limit: 64)
 
     // MARK: Plain rows
 
@@ -92,7 +95,7 @@ enum TaskRulebook {
         (now.timeIntervalSince1970 * 1000).rounded()
     }
 
-    /// The fields the §32 rules read from a task.
+    /// The fields the §34 rules read from a task.
     static func row(_ task: ProjectTask) -> [String: Any] {
         [
             "id": task.id.uuidString,
@@ -115,6 +118,25 @@ enum TaskRulebook {
             "isManager": role.isManager,
             "isOperativeMode": role.isOperativeMode,
         ]
+    }
+
+    /// `taskViewerRole(user)` (review of #299, guardrail 3): the role from the person's level (`permissionLevelOf`,
+    /// §11) — a legacy user with no level flag is a manager and keeps seeing every task. Read from the person as shown
+    /// (`UserStore.displayUser`). Nil when the script did not answer (every task rule then allows nothing).
+    static func viewerRole(_ user: AppUser?) -> CanonicalBusinessEngine.CanonicalStaffAccountRole? {
+        guard let user else { return nil }
+        let subject = user.permissionSubject
+        guard let key = CanonicalBusinessEngine.rulebookMemoKey(subject) else { return nil }
+        return roleMemo.value(for: key) {
+            guard let answer = CanonicalBusinessEngine.callJSON("taskViewerRole", arguments: [subject]) as? [String: Any] else { return nil }
+            func flag(_ name: String) -> Bool { (answer[name] as? NSNumber)?.boolValue ?? false }
+            return CanonicalBusinessEngine.CanonicalStaffAccountRole(
+                isSuperAdmin: flag("isSuperAdmin"),
+                isAdmin: flag("isAdmin"),
+                isManager: flag("isManager"),
+                isOperativeMode: flag("isOperativeMode")
+            )
+        }
     }
 
     // MARK: Words
@@ -148,7 +170,8 @@ enum TaskRulebook {
     ) -> TaskDueText {
         let today = OrganizationRulebookContext.dayKey(now)
         let key = "\(task.status.rawValue)|\(ms(task.dueDate))|\(ms(task.completedAt))|\(today)|\(timeZone)"
-        let fallback = TaskDueText(label: task.dueDate == nil ? "No due date" : "", secondary: nil, tone: "grey", overdue: false)
+        // Script did not answer: no words (never a second copy of the rule).
+        let fallback = TaskDueText(label: "", secondary: nil, tone: "grey", overdue: false)
         return dueMemo.value(for: key) {
             let input: [String: Any] = ["status": task.status.rawValue, "dueDate": ms(task.dueDate), "completedAt": ms(task.completedAt)]
             guard let answer = CanonicalBusinessEngine.callJSON("taskDueLabel", arguments: [input, nowMs(now), timeZone]) as? [String: Any],
@@ -199,29 +222,31 @@ enum TaskRulebook {
     ) -> [ProjectTask] {
         guard tasks.count > 1 else { return tasks }
         let rows = tasks.map(row)
-        guard let answer = CanonicalBusinessEngine.callJSON("sortTasksForTab", arguments: [rows, tab.rawValue, nowMs(now), timeZone]) as? [[String: Any]] else {
+        let arguments: [Any] = [rows, tab.rawValue, nowMs(now), timeZone]
+        // Memoised by the exact input of the redraw (the day, not the instant, so a redraw a second later hits it).
+        let memoInput: [Any] = [rows, tab.rawValue, OrganizationRulebookContext.dayKey(now), timeZone]
+        guard let key = CanonicalBusinessEngine.rulebookMemoKey(memoInput),
+              let ids = sortMemo.value(for: key, compute: {
+                  (CanonicalBusinessEngine.callJSON("sortTasksForTab", arguments: arguments) as? [[String: Any]])?
+                      .compactMap { $0["id"] as? String }
+              }) else {
             return tasks
         }
         var byId: [String: ProjectTask] = [:]
         for task in tasks where byId[task.id.uuidString] == nil { byId[task.id.uuidString] = task }
-        let ordered = answer.compactMap { ($0["id"] as? String).flatMap { byId[$0] } }
+        let ordered = ids.compactMap { byId[$0] }
         return ordered.count == tasks.count ? ordered : tasks
     }
 
     // MARK: Actions
 
-    /// `taskActions(status)`: To do → Start (and Complete); In progress → Complete; Completed → Reopen.
-    static func actions(_ status: ProjectTask.Status) -> (primary: TaskActionKind, available: [TaskActionKind]) {
-        if let answer = CanonicalBusinessEngine.callJSON("taskActions", arguments: [status.rawValue]) as? [String: Any],
-           let primary = (answer["primary"] as? String).flatMap(TaskActionKind.init(rawValue:)) {
-            let available = (answer["available"] as? [String] ?? []).compactMap(TaskActionKind.init(rawValue:))
-            return (primary, available.isEmpty ? [primary] : available)
-        }
-        switch status {
-        case .completed: return (.reopen, [.reopen])
-        case .inProgress: return (.complete, [.complete])
-        case .todo: return (.start, [.start, .complete])
-        }
+    /// `taskActions(status)`: To do → Start (and Complete); In progress → Complete; Completed → Reopen. Nil when the
+    /// script did not answer (no action is offered).
+    static func actions(_ status: ProjectTask.Status) -> (primary: TaskActionKind, available: [TaskActionKind])? {
+        guard let answer = CanonicalBusinessEngine.callJSON("taskActions", arguments: [status.rawValue]) as? [String: Any],
+              let primary = (answer["primary"] as? String).flatMap(TaskActionKind.init(rawValue:)) else { return nil }
+        let available = (answer["available"] as? [String] ?? []).compactMap(TaskActionKind.init(rawValue:))
+        return (primary, available.isEmpty ? [primary] : available)
     }
 
     /// `TASK_ACTION_LABELS`: Start / Complete / Reopen.
@@ -231,40 +256,28 @@ enum TaskRulebook {
         } ?? action.rawValue.capitalized
     }
 
-    /// `taskActionStatus`: the stored status an action moves to (Reopen → In progress).
-    static func actionStatus(_ action: TaskActionKind) -> ProjectTask.Status {
-        if let token = CanonicalBusinessEngine.callJSON("taskActionStatus", arguments: [action.rawValue]) as? String,
-           let status = ProjectTask.Status(rawValue: token) {
-            return status
-        }
-        return action == .complete ? .completed : .inProgress
+    /// `taskActionStatus`: the stored status an action moves to (Reopen → In progress). Nil when the script did not
+    /// answer (nothing is saved).
+    static func actionStatus(_ action: TaskActionKind) -> ProjectTask.Status? {
+        (CanonicalBusinessEngine.callJSON("taskActionStatus", arguments: [action.rawValue]) as? String)
+            .flatMap(ProjectTask.Status.init(rawValue:))
     }
 
     /// `taskStatusChangeFields`: the status with who completed it and when (kept when already completed, set on
-    /// completing, cleared on any other status — RULEBOOK 1.59.0 `taskCompletionFields`). Returns the task to save.
-    static func applyingStatus(_ status: ProjectTask.Status, to task: ProjectTask, by name: String, now: Date = Date()) -> ProjectTask {
-        var updated = task
+    /// completing, cleared on any other status — RULEBOOK 1.59.0 `taskCompletionFields`). Returns the task to save, or
+    /// nil when the script did not answer (the caller saves nothing and says so).
+    static func applyingStatus(_ status: ProjectTask.Status, to task: ProjectTask, by name: String, now: Date = Date()) -> ProjectTask? {
         let completedBy: Any = task.completedBy.map { $0 as Any } ?? NSNull()
         let input: [String: Any] = ["completedAt": ms(task.completedAt), "completedBy": completedBy]
-        let fields = CanonicalBusinessEngine.callJSON(
+        guard let fields = CanonicalBusinessEngine.callJSON(
             "taskStatusChangeFields",
             arguments: [input, status.rawValue, ["completedBy": name, "now": nowMs(now)]]
-        ) as? [String: Any]
-        updated.status = (fields?["status"] as? String).flatMap(ProjectTask.Status.init(rawValue:)) ?? status
-        if let fields {
-            if let at = fields["completedAt"] as? NSNumber {
-                updated.completedAt = Date(timeIntervalSince1970: at.doubleValue / 1000)
-            } else {
-                updated.completedAt = nil
-            }
-            updated.completedBy = fields["completedBy"] as? String
-        } else if status == .completed {
-            updated.completedAt = task.completedAt ?? now
-            updated.completedBy = task.completedBy ?? name
-        } else {
-            updated.completedAt = nil
-            updated.completedBy = nil
-        }
+        ) as? [String: Any],
+            let next = (fields["status"] as? String).flatMap(ProjectTask.Status.init(rawValue:)) else { return nil }
+        var updated = task
+        updated.status = next
+        updated.completedAt = (fields["completedAt"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue / 1000) }
+        updated.completedBy = fields["completedBy"] as? String
         updated.updatedAt = now
         return updated
     }
@@ -273,16 +286,16 @@ enum TaskRulebook {
 
     /// `TASK_EDIT_STATUS_OPTIONS`: Edit offers To do and In progress only (bug B7).
     static var editStatusOptions: [ProjectTask.Status] {
+        // Script did not answer: no choice is offered (the status stays as stored).
         let tokens = CanonicalBusinessEngine.constant("TASK_EDIT_STATUS_OPTIONS", as: [String].self) ?? []
-        let statuses = tokens.compactMap(ProjectTask.Status.init(rawValue:))
-        return statuses.isEmpty ? [.todo, .inProgress] : statuses
+        return tokens.compactMap(ProjectTask.Status.init(rawValue:))
     }
 
     /// `taskEditStatus(stored, chosen)`: a completed task keeps Completed; otherwise the chosen status when Edit
-    /// offers it.
+    /// offers it. The stored status when the script did not answer.
     static func editStatus(stored: ProjectTask.Status, chosen: ProjectTask.Status) -> ProjectTask.Status {
         (CanonicalBusinessEngine.callJSON("taskEditStatus", arguments: [stored.rawValue, chosen.rawValue]) as? String)
-            .flatMap(ProjectTask.Status.init(rawValue:)) ?? (stored == .completed ? .completed : chosen)
+            .flatMap(ProjectTask.Status.init(rawValue:)) ?? stored
     }
 
     /// `taskChecklistAfterEdit`: the ticks kept after an edit (bug B4: an edit never resets ticks; ticks on removed
@@ -292,9 +305,9 @@ enum TaskRulebook {
             "items": items.map { ["id": $0.id.uuidString] },
             "completedItemIds": completedItemIds.map(\.uuidString),
         ]
+        // Script did not answer: the ticks stay exactly as stored (never lost).
         guard let ids = CanonicalBusinessEngine.callJSON("taskChecklistAfterEdit", arguments: [input]) as? [String] else {
-            let keep = Set(items.map(\.id))
-            return completedItemIds.filter { keep.contains($0) }
+            return completedItemIds
         }
         return ids.compactMap(UUID.init(uuidString:))
     }
@@ -309,16 +322,16 @@ enum TaskRulebook {
         ]
         if let answer = CanonicalBusinessEngine.callJSON("taskCompleteStep", arguments: [input]) as? [String: Any] {
             return TaskCompleteStepInfo(
-                total: (answer["total"] as? NSNumber)?.intValue ?? items.count,
+                total: (answer["total"] as? NSNumber)?.intValue ?? 0,
                 done: (answer["done"] as? NSNumber)?.intValue ?? 0,
                 remaining: (answer["remaining"] as? NSNumber)?.intValue ?? 0,
                 completeEnabled: (answer["completeEnabled"] as? NSNumber)?.boolValue ?? false,
                 hint: answer["hint"] as? String,
-                showChecklist: (answer["showChecklist"] as? NSNumber)?.boolValue ?? !items.isEmpty
+                showChecklist: (answer["showChecklist"] as? NSNumber)?.boolValue ?? false
             )
         }
         // Script did not answer: never let Complete through.
-        return TaskCompleteStepInfo(total: items.count, done: 0, remaining: items.count, completeEnabled: false, hint: nil, showChecklist: !items.isEmpty)
+        return TaskCompleteStepInfo(total: 0, done: 0, remaining: 0, completeEnabled: false, hint: nil, showChecklist: false)
     }
 
     // MARK: Who may do what
@@ -326,17 +339,20 @@ enum TaskRulebook {
     /// `taskAccess(role, { isAssignee })`: staff see every task and edit any; only admins delete; anyone creates;
     /// staff and assignees act.
     static func access(role: CanonicalBusinessEngine.CanonicalStaffAccountRole?, isAssignee: Bool = false) -> TaskRulebookAccess {
-        guard let answer = CanonicalBusinessEngine.callJSON("taskAccess", arguments: [roleRow(role), ["isAssignee": isAssignee]]) as? [String: Any] else {
-            return .none
-        }
-        func flag(_ key: String) -> Bool { (answer[key] as? NSNumber)?.boolValue ?? false }
-        return TaskRulebookAccess(
-            seesEveryone: flag("seesEveryone"),
-            canCreate: flag("canCreate"),
-            canEdit: flag("canEdit"),
-            canDelete: flag("canDelete"),
-            canAct: flag("canAct")
-        )
+        let key = role.map { "\($0.isSuperAdmin)|\($0.isAdmin)|\($0.isManager)|\($0.isOperativeMode)|\(isAssignee)" } ?? "none|\(isAssignee)"
+        return accessMemo.value(for: key) {
+            guard let answer = CanonicalBusinessEngine.callJSON("taskAccess", arguments: [roleRow(role), ["isAssignee": isAssignee]]) as? [String: Any] else {
+                return nil
+            }
+            func flag(_ key: String) -> Bool { (answer[key] as? NSNumber)?.boolValue ?? false }
+            return TaskRulebookAccess(
+                seesEveryone: flag("seesEveryone"),
+                canCreate: flag("canCreate"),
+                canEdit: flag("canEdit"),
+                canDelete: flag("canDelete"),
+                canAct: flag("canAct")
+            )
+        } ?? .none
     }
 
     /// `taskScopeFor(role, remembered)`: a remembered scope only when the viewer may have it; else the default for the
@@ -393,7 +409,74 @@ enum TaskRulebook {
            let name = answer["name"] as? String {
             return (name, (answer["removed"] as? NSNumber)?.boolValue ?? false)
         }
-        return exists ? ("\(firstName ?? "") \(lastName ?? "")".trimmingCharacters(in: .whitespaces), false) : (removedUserLabel, true)
+        // Script did not answer: no name (never a second copy of the rule).
+        return ("", false)
+    }
+
+    // MARK: Attachment limits and uploads (issue 1, review of #299)
+
+    /// The parts of `TASK_ATTACHMENT_RULES` iOS reads.
+    nonisolated struct UploadRules: Decodable, Sendable {
+        nonisolated struct Upload: Decodable, Sendable {
+            var parallel: Int
+            var stallTimeoutSeconds: Double
+            var maxRetries: Int
+        }
+
+        var maxFiles: Int
+        var maxDocuments: Int
+        var upload: Upload
+    }
+
+    /// `TASK_ATTACHMENT_RULES`. Nil when the script did not answer (uploads are then refused, never guessed).
+    nonisolated static var uploadRules: UploadRules? {
+        CanonicalBusinessEngine.constant("TASK_ATTACHMENT_RULES", as: UploadRules.self)
+    }
+
+    nonisolated static let rulesNotLoadedMessage = "The app's rules did not load. Close and reopen the app, then try again."
+
+    /// `taskAttachmentCheck`: one file against the task limits (count, type, one PDF, size). The message, or nil when
+    /// the file may be added. Refused when the script did not answer.
+    static func attachmentRefusal(name: String, mime: String, sizeBytes: Int, existingFiles: Int, existingDocuments: Int) -> String? {
+        let input: [String: Any] = [
+            "name": name,
+            "mime": mime,
+            "sizeBytes": sizeBytes,
+            "existingFiles": existingFiles,
+            "existingDocuments": existingDocuments,
+        ]
+        guard let answer = CanonicalBusinessEngine.callJSON("taskAttachmentCheck", arguments: [input]) as? [String: Any],
+              let result = answer["result"] as? String else { return rulesNotLoadedMessage }
+        return result == "ok" ? nil : (answer["message"] as? String ?? rulesNotLoadedMessage)
+    }
+
+    /// The type `taskAttachmentCheck` reads for a picked file (from its extension).
+    static func attachmentMime(fileName: String) -> String {
+        switch (fileName as NSString).pathExtension.lowercased() {
+        case "pdf": return "application/pdf"
+        case "png": return "image/png"
+        case "webp": return "image/webp"
+        case "heic", "heif": return "image/heic"
+        case "jpg", "jpeg": return "image/jpeg"
+        default: return ""
+        }
+    }
+
+    /// How many of `photos` new photos may be added next to the files already there (each checked in turn with
+    /// `taskAttachmentCheck`), and the refusal for the first one that may not.
+    static func photosAllowed(_ photos: Int, existingFiles: Int, existingDocuments: Int) -> (allowed: Int, refusal: String?) {
+        for index in 0..<photos {
+            if let message = attachmentRefusal(
+                name: "Photo \(index + 1)",
+                mime: "image/jpeg",
+                sizeBytes: 0,
+                existingFiles: existingFiles + index,
+                existingDocuments: existingDocuments
+            ) {
+                return (index, message)
+            }
+        }
+        return (photos, nil)
     }
 
     /// `taskAttachmentSources("ios")`: Take photo, Photo library, Files, Site audit.
@@ -401,3 +484,7 @@ enum TaskRulebook {
         CanonicalBusinessEngine.callJSON("taskAttachmentSources", arguments: ["ios"]) as? [String] ?? []
     }
 }
+
+/// A task upload made no progress for `TASK_ATTACHMENT_RULES.upload.stallTimeoutSeconds` and was cancelled (plumbing
+/// for `FirebaseBackend.putTaskData`'s retry; not a rule).
+nonisolated struct TaskUploadStalled: Error, Sendable {}

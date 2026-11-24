@@ -71,10 +71,10 @@ struct ProjectDetailView: View {
         return userStore.canManageWorkCatalogue(catalogue)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskAccess`: admins and managers outside operative mode see every task on the job (before
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: admins and managers outside operative mode see every task on the job (before
     /// 1.89.0 a manager without the job's add/edit toggle saw only their own here, unlike web).
     private var canViewAllTasksOnThisJob: Bool {
-        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).seesEveryone
+        TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser)).seesEveryone
     }
 
     private var canAccessVariations: Bool {
@@ -171,7 +171,7 @@ struct ProjectDetailView: View {
     @State private var isCompactWeekView = false
     @State private var showingAddTask = false
     @State private var showingTaskFilter = false
-    /// RULEBOOK 1.89.0 §32 bug B9: the list opens on Active (it opened on "Assigned to me", empty for most managers).
+    /// RULEBOOK 1.89.0 §34 bug B9: the list opens on Active (it opened on "Assigned to me", empty for most managers).
     @State private var selectedProjectTaskScope: ProjectTaskListScope = .active
     @State private var projectTasksSearchText = ""
     @State private var taskFilter = TaskFilter()
@@ -2718,7 +2718,7 @@ struct ProjectDetailView: View {
                 managers: operativeStore.allManagers
             )
         case .overdue:
-            // RULEBOOK 1.89.0 §32 `taskTabKeys`: due before today on the organisation day (never the phone's).
+            // RULEBOOK 1.89.0 §34 `taskTabKeys`: due before today on the organisation day (never the phone's).
             tasks = tasks.filter { TaskRulebook.tabs(for: $0).contains(.overdue) }
         }
         
@@ -2730,7 +2730,7 @@ struct ProjectDetailView: View {
             }
         }
         
-        // RULEBOOK 1.89.0 §32 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
+        // RULEBOOK 1.89.0 §34 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
         let tab: TaskTab
         switch scope {
         case .completed: tab = .completed
@@ -3058,7 +3058,7 @@ struct ProjectDetailView: View {
     }
     
     private var tasksContent: some View {
-        // RULEBOOK 1.89.0 §32 `taskTabCounts` (bug B13): one count per tab, the definitions Home and the job tile use.
+        // RULEBOOK 1.89.0 §34 `taskTabCounts` (bug B13): one count per tab, the definitions Home and the job tile use.
         let counts = TaskRulebook.tabCounts(myProjectTasksAfterFilters())
         let activeCount = counts[.active] ?? 0
         let overdueCount = counts[.overdue] ?? 0
@@ -3447,9 +3447,9 @@ private struct ProjectTaskRow: View {
     @State private var showingTaskDetail = false
     @State private var showingEditTask = false
     
-    /// RULEBOOK 1.89.0 §32 `taskAccess.canEdit`: the edit button for admins and managers outside operative mode.
+    /// RULEBOOK 1.89.0 §34 `taskAccess.canEdit`: the edit button for admins and managers outside operative mode.
     private var canShowSettingsCog: Bool {
-        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).canEdit
+        TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser)).canEdit
     }
     
     var body: some View {
@@ -3506,7 +3506,7 @@ private struct ProjectTaskRow: View {
                     }
                 }
                 
-                // RULEBOOK 1.89.0 §32 `taskDueLabel`: words first, "No due date" when none (bug B10).
+                // RULEBOOK 1.89.0 §34 `taskDueLabel`: words first, "No due date" when none (bug B10).
                 Label {
                     Text(TaskRulebook.dueText(task).label)
                 } icon: {
@@ -4332,6 +4332,15 @@ private struct AddProjectTaskView: View {
             .sheet(isPresented: $showingCameraPicker) {
                 TaskCameraImagePicker(images: $selectedImages, onRefused: showPhotoRefusal)
             }
+            // RULEBOOK 1.89.0 §34 (review of #299): at most `TASK_ATTACHMENT_RULES.maxFiles` files a task, as web.
+            .onChange(of: selectedImages.count) { _, count in
+                let limit = TaskRulebook.photosAllowed(count, existingFiles: selectedFile == nil ? 0 : 1, existingDocuments: selectedFile == nil ? 0 : 1)
+                if limit.allowed < count {
+                    selectedImages = Array(selectedImages.prefix(limit.allowed))
+                    errorMessage = limit.refusal ?? TaskRulebook.rulesNotLoadedMessage
+                    showingError = true
+                }
+            }
             .sheet(item: $peoplePickRoute) { route in
                 TaskPeoplePickerSheet(
                     route: route,
@@ -4725,7 +4734,7 @@ private struct AddProjectTaskView: View {
         .buttonStyle(.plain)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskPriorityLabel`: Low / Normal / High / Urgent — never "Medium" (bug B5).
+    /// RULEBOOK 1.89.0 §34 `taskPriorityLabel`: Low / Normal / High / Urgent — never "Medium" (bug B5).
     private func priorityShortLabel(_ level: ProjectTask.Priority) -> String {
         TaskRulebook.priorityLabel(level)
     }
@@ -4981,6 +4990,19 @@ private struct AddProjectTaskView: View {
                 showingError = true
                 return
             }
+            // RULEBOOK 1.89.0 §34 (review of #299): the task limits — 10 files, one PDF — as web (`taskAttachmentCheck`).
+            let pickedSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+            if let refusal = TaskRulebook.attachmentRefusal(
+                name: url.lastPathComponent,
+                mime: TaskRulebook.attachmentMime(fileName: url.lastPathComponent),
+                sizeBytes: Int(pickedSize),
+                existingFiles: selectedImages.count,
+                existingDocuments: 0
+            ) {
+                errorMessage = refusal
+                showingError = true
+                return
+            }
             
             let fileName = url.lastPathComponent
             let tempDir = FileManager.default.temporaryDirectory
@@ -5146,9 +5168,9 @@ private struct EditProjectTaskView: View {
         TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskAccess.canDelete`: only admins delete (the security rules refuse anyone else).
+    /// RULEBOOK 1.89.0 §34 `taskAccess.canDelete`: only admins delete (the security rules refuse anyone else).
     private var canDeleteTask: Bool {
-        TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:))).canDelete
+        TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser)).canDelete
     }
 
     /// The assigned people of one kind, one per person (sorted by id so the list is stable), with the ids each one stands for removed
@@ -5365,7 +5387,7 @@ private struct EditProjectTaskView: View {
                     Text(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"))
                 }
                 
-                // RULEBOOK 1.89.0 §32 bug B7: Edit switches To do / In progress only; completing goes through Complete
+                // RULEBOOK 1.89.0 §34 bug B7: Edit switches To do / In progress only; completing goes through Complete
                 // (checklist and proof of work), and a completed task stays completed here (Reopen it instead).
                 Section {
                     if task.status == .completed {
@@ -5412,7 +5434,7 @@ private struct EditProjectTaskView: View {
                 Button(TaskRulebook.copy("form", "cancel", fallback: "Cancel"), role: .cancel) {}
                 Button(TaskRulebook.copy("delete", "confirm", fallback: "Delete"), role: .destructive) { deleteTask() }
             } message: {
-                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task, its checklist and attachments for everyone on iOS and web."))
+                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task and its checklist for everyone on iOS and web. Its files are kept for recovery for 30 days."))
             }
             .navigationTitle("Edit Task")
             .navigationBarTitleDisplayMode(.inline)
@@ -5465,14 +5487,19 @@ private struct EditProjectTaskView: View {
             updatedTask.title = trimmedTitle
             updatedTask.details = detailsValue
             updatedTask.items = items
-            // RULEBOOK 1.89.0 §32 bug B4: an edit never resets ticks; only ticks on removed items go.
+            // RULEBOOK 1.89.0 §34 bug B4: an edit never resets ticks; only ticks on removed items go.
             updatedTask.completedItemIds = TaskRulebook.checklistAfterEdit(items: items, completedItemIds: current.completedItemIds)
             updatedTask.dueDate = dueDate
             updatedTask.priority = priority
             // Bug B7: To do / In progress only; a completed task keeps Completed and its who / when.
             let nextStatus = TaskRulebook.editStatus(stored: current.status, chosen: status)
             if nextStatus != current.status {
-                updatedTask = TaskRulebook.applyingStatus(nextStatus, to: updatedTask, by: userStore.currentUser?.fullName ?? "")
+                guard let changed = TaskRulebook.applyingStatus(nextStatus, to: updatedTask, by: userStore.currentUser?.fullName ?? "") else {
+                    isSaving = false
+                    saveError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+                    return
+                }
+                updatedTask = changed
             }
             updatedTask.updatedAt = Date()
             
@@ -5556,13 +5583,18 @@ struct TaskCompletionPopupView: View {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
     }
     
-    /// RULEBOOK 1.89.0 §32 `taskCompleteStep` (F2, F25): Complete needs every real item ticked; no row is made from
+    /// RULEBOOK 1.89.0 §34 `taskCompleteStep` (F2, F25): Complete needs every real item ticked; no row is made from
     /// the title.
     private var completeStep: TaskCompleteStepInfo {
         TaskRulebook.completeStep(items: displayTask.items, completedItemIds: Array(draftCompletedItemIds))
     }
 
     private var markCompleteEnabled: Bool { completeStep.completeEnabled }
+
+    /// Proof files already there and picked (the count `taskAttachmentCheck` reads).
+    private var proofFileCount: Int {
+        displayTask.completionImages.count + displayTask.completionFiles.count + selectedImages.count + selectedFiles.count
+    }
 
     private var hasUnsavedChanges: Bool {
         let existing = Set(displayTask.completedItemIds)
@@ -5630,7 +5662,7 @@ struct TaskCompletionPopupView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                // RULEBOOK 1.89.0 §32 F2: two clear choices. Save progress keeps ticks, files and notes and never
+                // RULEBOOK 1.89.0 §34 F2: two clear choices. Save progress keeps ticks, files and notes and never
                 // changes the status; Complete task needs every item ticked and records who and when.
                 VStack(spacing: 9) {
                     HStack(spacing: 10) {
@@ -5687,6 +5719,15 @@ struct TaskCompletionPopupView: View {
             }
             .sheet(isPresented: $showingImagePicker) {
                 CompletionImagePicker(images: $selectedImages, onRefused: { photoRefusal = $0 })
+            }
+            // RULEBOOK 1.89.0 §34 (review of #299): at most `TASK_ATTACHMENT_RULES.maxFiles` files, as web.
+            .onChange(of: selectedImages.count) { _, count in
+                let before = displayTask.completionImages.count + displayTask.completionFiles.count + selectedFiles.count
+                let limit = TaskRulebook.photosAllowed(count, existingFiles: before, existingDocuments: 0)
+                if limit.allowed < count {
+                    selectedImages = Array(selectedImages.prefix(limit.allowed))
+                    photoRefusal = limit.refusal ?? TaskRulebook.rulesNotLoadedMessage
+                }
             }
             .alert("Photo not added", isPresented: Binding(
                 get: { photoRefusal != nil },
@@ -6001,6 +6042,19 @@ struct TaskCompletionPopupView: View {
                     byteCount: Int(fileSize)
                    ) {
                     validationMessage = message
+                    continue
+                }
+                // RULEBOOK 1.89.0 §34 (review of #299): the task limits, as web proof of work (`taskAttachmentCheck`).
+                let pickedSize = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int64) ?? 0
+                let newDocuments = selectedFiles.filter { TaskRulebook.attachmentMime(fileName: $0.lastPathComponent) == "application/pdf" }.count
+                if let refusal = TaskRulebook.attachmentRefusal(
+                    name: url.lastPathComponent,
+                    mime: TaskRulebook.attachmentMime(fileName: url.lastPathComponent),
+                    sizeBytes: Int(pickedSize),
+                    existingFiles: proofFileCount,
+                    existingDocuments: newDocuments
+                ) {
+                    validationMessage = refusal
                     continue
                 }
                 let tempDir = FileManager.default.temporaryDirectory
@@ -6359,7 +6413,7 @@ private struct TaskCameraPicker: UIViewControllerRepresentable {
 private struct TaskCompletionFileRow: View {
     let urlString: String
     let label: String
-    /// RULEBOOK 1.89.0 §32 bug B8: opens the in-app viewer when given; otherwise the old behaviour (Safari).
+    /// RULEBOOK 1.89.0 §34 bug B8: opens the in-app viewer when given; otherwise the old behaviour (Safari).
     let onOpen: (() -> Void)?
     
     init(urlString: String, label: String? = nil, onOpen: (() -> Void)? = nil) {
@@ -6465,7 +6519,7 @@ struct CompletedTaskDetailView: View {
     @State private var showingDeleteConfirm = false
     @State private var actionBusy = false
     @State private var actionError: String?
-    /// RULEBOOK 1.89.0 §32 bug B8: the attachment open in the in-app viewer.
+    /// RULEBOOK 1.89.0 §34 bug B8: the attachment open in the in-app viewer.
     @State private var viewing: TaskAttachmentViewerItem?
 
     private var displayTask: ProjectTask {
@@ -6473,10 +6527,10 @@ struct CompletedTaskDetailView: View {
     }
 
     private var viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole? {
-        userStore.currentUser.map(UserStore.staffAccountRole(for:))
+        TaskRulebook.viewerRole(userStore.displayUser)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskAccess`: staff edit; admins delete; staff and assignees act.
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: staff edit; admins delete; staff and assignees act.
     private var access: TaskRulebookAccess {
         let isAssignee = TaskAssignmentRulebook.isAssigned(
             displayTask,
@@ -6500,17 +6554,22 @@ struct CompletedTaskDetailView: View {
     }
 
     /// Start / Complete / Reopen (`taskActions`); "Carry out" is gone.
-    private var canCarryOut: Bool { access.canAct }
+    private var canCarryOut: Bool { access.canAct && primaryAction != nil }
 
-    private var primaryAction: TaskActionKind { TaskRulebook.actions(displayTask.status).primary }
+    /// Nil when the rules did not answer (no action is offered).
+    private var primaryAction: TaskActionKind? { TaskRulebook.actions(displayTask.status)?.primary }
 
     private func runPrimaryAction() {
-        switch primaryAction {
+        guard let action = primaryAction else { return }
+        switch action {
         case .complete:
             showingCarryOut = true
         case .start, .reopen:
-            let status = TaskRulebook.actionStatus(primaryAction)
-            let updated = TaskRulebook.applyingStatus(status, to: displayTask, by: userStore.currentUser?.fullName ?? "")
+            guard let status = TaskRulebook.actionStatus(action),
+                  let updated = TaskRulebook.applyingStatus(status, to: displayTask, by: userStore.currentUser?.fullName ?? "") else {
+                actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+                return
+            }
             actionBusy = true
             actionError = nil
             Task {
@@ -6551,7 +6610,9 @@ struct CompletedTaskDetailView: View {
         TaskPeopleRulebook.assigneeEntries(
             managerIds: displayTask.allAssignedManagerIds,
             operativeIds: displayTask.allAssignedOperativeIds,
-            index: taskPersonIndex
+            index: taskPersonIndex,
+            allManagerRows: operativeStore.managers,
+            loaded: operativeStore.rosterLoaded
         )
     }
 
@@ -6605,7 +6666,8 @@ struct CompletedTaskDetailView: View {
                     summaryHeroCard
                     sectionLabel("Details")
                     detailsCard
-                    if hasRemovedAssignee {
+                    // Review of #299: only people who can edit (and so reassign) see the note.
+                    if hasRemovedAssignee && access.canEdit {
                         Text(TaskRulebook.copy("detail", "reassign", fallback: "Someone on this task was removed. Edit the task to assign someone else."))
                             .font(.footnote)
                             .foregroundStyle(ProjectWorksRevampColors.upcomingAmber)
@@ -6682,7 +6744,7 @@ struct CompletedTaskDetailView: View {
                 Button(TaskRulebook.copy("form", "cancel", fallback: "Cancel"), role: .cancel) {}
                 Button(TaskRulebook.copy("delete", "confirm", fallback: "Delete"), role: .destructive) { deleteTask() }
             } message: {
-                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task, its checklist and attachments for everyone on iOS and web."))
+                Text(TaskRulebook.copy("delete", "body", fallback: "This removes the task and its checklist for everyone on iOS and web. Its files are kept for recovery for 30 days."))
             }
             .alert("Couldn't save", isPresented: Binding(
                 get: { actionError != nil },
@@ -6830,7 +6892,7 @@ struct CompletedTaskDetailView: View {
     private var detailsCard: some View {
         VStack(spacing: 0) {
             detailRow(icon: "person.fill", iconBg: ProjectWorksRevampColors.jobTypePillBg, iconFg: ProjectWorksRevampColors.jobTypePillInk, title: "Created by", value: createdByLine, showDivider: true)
-            // RULEBOOK 1.89.0 §32 `taskDueLabel`: words first ("3 days overdue"), "No due date" when none (bug B10).
+            // RULEBOOK 1.89.0 §34 `taskDueLabel`: words first ("3 days overdue"), "No due date" when none (bug B10).
             detailRow(icon: "flag.fill", iconBg: ProjectWorksRevampColors.endDateBg, iconFg: ProjectWorksRevampColors.endDateFg, title: "Due", value: dueLine, showDivider: true)
             assignedRow
         }
@@ -7027,7 +7089,7 @@ struct CompletedTaskDetailView: View {
             HStack(spacing: 8) {
                 Image(systemName: primaryAction == .reopen ? "arrow.uturn.backward" : (primaryAction == .start ? "play.fill" : "checkmark.circle.fill"))
                     .font(.system(size: 16))
-                Text(actionBusy ? "Saving…" : TaskRulebook.actionLabel(primaryAction))
+                Text(actionBusy ? "Saving…" : primaryAction.map(TaskRulebook.actionLabel) ?? "")
                     .font(.system(size: 15, weight: .semibold))
             }
             .frame(maxWidth: .infinity)
@@ -7200,8 +7262,11 @@ struct CompletedTaskDetailView: View {
     }
 
     private func applyCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
-        // RULEBOOK 1.89.0 §32: who and when from `taskStatusChangeFields`; ticks are the real items (F25), older kept.
-        var updatedTask = TaskRulebook.applyingStatus(.completed, to: displayTask, by: completedBy)
+        // RULEBOOK 1.89.0 §34: who and when from `taskStatusChangeFields`; ticks are the real items (F25), older kept.
+        guard var updatedTask = TaskRulebook.applyingStatus(.completed, to: displayTask, by: completedBy) else {
+            actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+            return
+        }
         var ticks = updatedTask.completedItemIds
         for item in updatedTask.items where !ticks.contains(item.id) { ticks.append(item.id) }
         updatedTask.completedItemIds = ticks
@@ -7209,7 +7274,10 @@ struct CompletedTaskDetailView: View {
         updatedTask.completionFiles = files
         updatedTask.completionNotes = notes
         updatedTask.updatedAt = Date()
-        await taskStore.updateTask(updatedTask)
+        guard await taskStore.updateTaskReportingError(updatedTask) else {
+            actionError = taskStore.lastWriteError
+            return
+        }
         await notificationService.notifyTaskCompleted(task: updatedTask, completedBy: completedBy)
     }
 }

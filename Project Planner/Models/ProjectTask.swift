@@ -154,7 +154,7 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         status == .completed
     }
     
-    /// The checklist rows: the task's real `items` only (RULEBOOK 1.89.0 §32 F25). Before 1.89.0 this added a row made
+    /// The checklist rows: the task's real `items` only (RULEBOOK 1.89.0 §34 F25). Before 1.89.0 this added a row made
     /// from the title (`primaryEffectiveLineItemId`) and stored that id in `completedItemIds`; a task with no items
     /// now has no checklist (`taskCompleteStep` `showChecklist` false). Older ticks of that id are kept on read and
     /// on edit (`taskChecklistAfterEdit`) and never block completion.

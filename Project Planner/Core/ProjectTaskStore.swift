@@ -15,7 +15,7 @@ class ProjectTaskStore: ObservableObject {
     @Published private(set) var tasks: [ProjectTask] = []
     @Published var isLoading = false
     @Published var errorMessage: String?
-    /// RULEBOOK 1.89.0 §32: the last task save or delete the server refused, shown to the person (before 1.89.0 it
+    /// RULEBOOK 1.89.0 §34: the last task save or delete the server refused, shown to the person (before 1.89.0 it
     /// was only printed, so a refused delete or edit looked like it had worked until the next reload).
     @Published var lastWriteError: String?
     
@@ -200,18 +200,11 @@ class ProjectTaskStore: ObservableObject {
         return ok
     }
     
-    func toggleTaskStatus(_ task: ProjectTask, to status: ProjectTask.Status) async {
-        var updatedTask = task
-        updatedTask.status = status
-        updatedTask.updatedAt = Date()
-        await updateTask(updatedTask)
-    }
-    
     func deleteTask(_ task: ProjectTask) async {
         _ = await deleteTaskReportingError(task)
     }
 
-    /// Deletes a task and says whether the server accepted it (RULEBOOK 1.89.0 §32: only admins delete; the security
+    /// Deletes a task and says whether the server accepted it (RULEBOOK 1.89.0 §34: only admins delete; the security
     /// rules refuse anyone else). On a refusal the task comes back and `lastWriteError` says why.
     @discardableResult
     func deleteTaskReportingError(_ task: ProjectTask) async -> Bool {

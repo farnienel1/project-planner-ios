@@ -1,7 +1,7 @@
 import XCTest
 @testable import Project_Planner
 
-/// RULEBOOK 1.89.0 §32 (the owner's Tasks pack, bugs B4–B11 and F1–F25): every task word, tab, action and permission on
+/// RULEBOOK 1.89.0 §34 (the owner's Tasks pack, bugs B4–B11 and F1–F25): every task word, tab, action and permission on
 /// iOS comes from the packed script (`TaskRulebook`), and the screens keep no copy of their own. The rules themselves
 /// are tested on web (`lib/canonical/taskRules.test.ts`) and in the shared parity fixture ("Tasks 1.89.0:" cases, run
 /// here by `CanonicalParityFixtureTests`); these tests check the Swift mapping in and out.
@@ -93,22 +93,22 @@ final class TasksRulebookTests: XCTestCase {
 
     // F1, F3: Start / Complete / Reopen; Reopen goes to In progress.
     func testActions() {
-        XCTAssertEqual(TaskRulebook.actions(.todo).primary, .start)
-        XCTAssertEqual(TaskRulebook.actions(.todo).available, [.start, .complete])
-        XCTAssertEqual(TaskRulebook.actions(.inProgress).primary, .complete)
-        XCTAssertEqual(TaskRulebook.actions(.completed).primary, .reopen)
+        XCTAssertEqual(TaskRulebook.actions(.todo)?.primary, .start)
+        XCTAssertEqual(TaskRulebook.actions(.todo)?.available, [.start, .complete])
+        XCTAssertEqual(TaskRulebook.actions(.inProgress)?.primary, .complete)
+        XCTAssertEqual(TaskRulebook.actions(.completed)?.primary, .reopen)
         XCTAssertEqual(TaskRulebook.actionStatus(.reopen), .inProgress)
         XCTAssertEqual(TaskRulebook.actionLabel(.start), "Start")
     }
 
     // 1.59 `taskCompletionFields`: completing sets who and when; reopening clears them.
-    func testStatusChangeFields() {
+    func testStatusChangeFields() throws {
         let now = day("2026-11-24")
-        let done = TaskRulebook.applyingStatus(.completed, to: task(), by: "Sam", now: now)
+        let done = try XCTUnwrap(TaskRulebook.applyingStatus(.completed, to: task(), by: "Sam", now: now))
         XCTAssertEqual(done.status, .completed)
         XCTAssertEqual(done.completedBy, "Sam")
         XCTAssertNotNil(done.completedAt)
-        let reopened = TaskRulebook.applyingStatus(.inProgress, to: done, by: "Sam", now: now)
+        let reopened = try XCTUnwrap(TaskRulebook.applyingStatus(.inProgress, to: done, by: "Sam", now: now))
         XCTAssertEqual(reopened.status, .inProgress)
         XCTAssertNil(reopened.completedBy)
         XCTAssertNil(reopened.completedAt)
@@ -165,6 +165,31 @@ final class TasksRulebookTests: XCTestCase {
         XCTAssertEqual(TaskRulebook.scope(role: operative, remembered: "everyone"), .mine)
     }
 
+    // Review of #299 (guardrail 3): the role comes from the person's level, so a legacy user with no level flag is a
+    // manager and keeps seeing every task; an admin with a stray operative-mode flag stays an admin.
+    func testViewerRoleFromLevel() throws {
+        let legacy = AppUser(id: "u1", email: "old@x.co", organizationId: "ORG", role: .basic, permissions: UserPermissions())
+        let role = try XCTUnwrap(TaskRulebook.viewerRole(legacy))
+        XCTAssertTrue(role.isManager)
+        XCTAssertFalse(role.isOperativeMode)
+        XCTAssertTrue(TaskRulebook.access(role: role).seesEveryone)
+        XCTAssertNil(TaskRulebook.viewerRole(nil))
+    }
+
+    // Review of #299: the task limits (10 files, one PDF) are the rulebook's, as on web.
+    func testAttachmentLimits() {
+        XCTAssertNil(TaskRulebook.attachmentRefusal(name: "a.pdf", mime: "application/pdf", sizeBytes: 1000, existingFiles: 0, existingDocuments: 0))
+        XCTAssertNotNil(TaskRulebook.attachmentRefusal(name: "b.pdf", mime: "application/pdf", sizeBytes: 1000, existingFiles: 1, existingDocuments: 1))
+        XCTAssertNotNil(TaskRulebook.attachmentRefusal(name: "c.jpg", mime: "image/jpeg", sizeBytes: 0, existingFiles: 10, existingDocuments: 0))
+        let limit = TaskRulebook.photosAllowed(12, existingFiles: 0, existingDocuments: 0)
+        XCTAssertEqual(limit.allowed, 10)
+        XCTAssertNotNil(limit.refusal)
+        let rules = TaskRulebook.uploadRules
+        XCTAssertEqual(rules?.maxFiles, 10)
+        XCTAssertEqual(rules?.upload.stallTimeoutSeconds, 45)
+        XCTAssertEqual(TaskRulebook.attachmentMime(fileName: "Plan.PDF"), "application/pdf")
+    }
+
     // B11: a missing or anonymised person reads "Removed user".
     func testRemovedUser() {
         XCTAssertEqual(TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false).name, "Removed user")
@@ -199,5 +224,13 @@ final class TasksRulebookTests: XCTestCase {
         XCTAssertTrue(detail.contains("TaskRulebook.checklistAfterEdit("))
         XCTAssertTrue(detail.contains("TaskAttachmentViewerItem("))
         XCTAssertTrue(hub.contains("TaskRulebook.tabCounts("))
+        // Review of #299: the role is the rulebook's (`taskViewerRole`), read from the person as shown.
+        for text in [detail, hub] {
+            XCTAssertFalse(text.contains("UserStore.staffAccountRole(for:)"))
+        }
+        let store = try String(contentsOf: root.appendingPathComponent("Project Planner/Core/ProjectTaskStore.swift"), encoding: .utf8)
+        XCTAssertFalse(store.contains("func toggleTaskStatus"))
+        let backend = try String(contentsOf: root.appendingPathComponent("Project Planner/FirebaseBackend.swift"), encoding: .utf8)
+        XCTAssertTrue(backend.contains("putTaskData(prepared.data, path: imagePath"))
     }
 }

@@ -33,7 +33,7 @@ struct TasksDetailView: View {
     @EnvironmentObject var bookingStore: BookingStore
 
     @State private var searchText = ""
-    /// RULEBOOK 1.89.0 §32: the tab (Active / Overdue / Completed) and the My tasks / Everyone scope, remembered on
+    /// RULEBOOK 1.89.0 §34: the tab (Active / Overdue / Completed) and the My tasks / Everyone scope, remembered on
     /// this phone (`taskScopeFor`: staff default to Everyone, operatives always My tasks — bug B9).
     @State private var tab: TaskTab = .active
     @State private var scopeChoice: String? = UserDefaults.standard.string(forKey: TasksDetailView.scopeDefaultsKey)
@@ -66,10 +66,10 @@ struct TasksDetailView: View {
     }
 
     private var viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole? {
-        userStore.currentUser.map(UserStore.staffAccountRole(for:))
+        TaskRulebook.viewerRole(userStore.displayUser)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskAccess`: staff (admins and managers outside operative mode) see every task.
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: staff (admins and managers outside operative mode) see every task.
     private var access: TaskRulebookAccess { TaskRulebook.access(role: viewerRole) }
 
     private var scope: TaskScope { TaskRulebook.scope(role: viewerRole, remembered: scopeChoice) }
@@ -89,7 +89,7 @@ struct TasksDetailView: View {
         scope == .everyone ? taskStore.tasks : userRelevantTasks
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskTabCounts`: the same definitions as Home and the job tile (an overdue task is also
+    /// RULEBOOK 1.89.0 §34 `taskTabCounts`: the same definitions as Home and the job tile (an overdue task is also
     /// active).
     private var tabCounts: [TaskTab: Int] { TaskRulebook.tabCounts(hubScopeTasks) }
 
@@ -111,7 +111,7 @@ struct TasksDetailView: View {
                 return false
             }
         }
-        // RULEBOOK 1.89.0 §32 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
+        // RULEBOOK 1.89.0 §34 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
         return TaskRulebook.sorted(list, tab: tab)
     }
 
@@ -181,7 +181,7 @@ struct TasksDetailView: View {
         }
     }
 
-    /// Home-style navy header: the tab counts (RULEBOOK 1.89.0 §32 bug B13: one count per tab, no overlapping
+    /// Home-style navy header: the tab counts (RULEBOOK 1.89.0 §34 bug B13: one count per tab, no overlapping
     /// To do / In progress / Done cards), search, scope and tab pills.
     private var tasksNavyHeader: some View {
         let counts = tabCounts
@@ -511,7 +511,7 @@ private struct MyTasksRedesignTaskCard: View {
     @State private var actionError: String?
     @State private var actionBusy = false
 
-    /// RULEBOOK 1.89.0 §32 `taskAccess`: staff and the task's assignees start, complete and reopen it.
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: staff and the task's assignees start, complete and reopen it.
     private var canAct: Bool {
         let isAssignee = TaskAssignmentRulebook.isAssigned(
             resolvedTask,
@@ -520,11 +520,12 @@ private struct MyTasksRedesignTaskCard: View {
             operatives: operativeStore.allOperatives,
             managers: operativeStore.allManagers
         )
-        return TaskRulebook.access(role: userStore.currentUser.map(UserStore.staffAccountRole(for:)), isAssignee: isAssignee).canAct
+        return TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser), isAssignee: isAssignee).canAct
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskActions`: Start (To do), Complete (In progress), Reopen (Completed). "Carry out" is gone.
-    private var primaryAction: TaskActionKind { TaskRulebook.actions(resolvedTask.status).primary }
+    /// RULEBOOK 1.89.0 §34 `taskActions`: Start (To do), Complete (In progress), Reopen (Completed). "Carry out" is gone.
+    /// Nil when the rules did not answer (no action is offered).
+    private var primaryAction: TaskActionKind? { TaskRulebook.actions(resolvedTask.status)?.primary }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -621,9 +622,12 @@ private struct MyTasksRedesignTaskCard: View {
     }
 
     private func applyTaskCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
-        // RULEBOOK 1.89.0 §32: who and when come from `taskStatusChangeFields`; ticks are the task's real items only
+        // RULEBOOK 1.89.0 §34: who and when come from `taskStatusChangeFields`; ticks are the task's real items only
         // (F25), older ticks kept.
-        var updatedTask = TaskRulebook.applyingStatus(.completed, to: resolvedTask, by: completedBy)
+        guard var updatedTask = TaskRulebook.applyingStatus(.completed, to: resolvedTask, by: completedBy) else {
+            actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+            return
+        }
         var ticks = updatedTask.completedItemIds
         for item in updatedTask.items where !ticks.contains(item.id) { ticks.append(item.id) }
         updatedTask.completedItemIds = ticks
@@ -631,7 +635,10 @@ private struct MyTasksRedesignTaskCard: View {
         updatedTask.completionFiles = files
         updatedTask.completionNotes = notes
         updatedTask.updatedAt = Date()
-        await taskStore.updateTask(updatedTask)
+        guard await taskStore.updateTaskReportingError(updatedTask) else {
+            actionError = taskStore.lastWriteError
+            return
+        }
         await notificationService.notifyTaskCompleted(task: updatedTask, completedBy: completedBy)
     }
 
@@ -646,7 +653,7 @@ private struct MyTasksRedesignTaskCard: View {
                     .font(.system(size: 11))
                     .foregroundStyle(MyTasksScreenPalette.muted)
                 Spacer()
-                if canAct {
+                if canAct, let primaryAction {
                     Button { runPrimaryAction() } label: {
                         HStack(spacing: 4) {
                             Text(actionBusy ? "Saving…" : TaskRulebook.actionLabel(primaryAction))
@@ -674,13 +681,17 @@ private struct MyTasksRedesignTaskCard: View {
     /// Start and Reopen change the status at once (`taskActionStatus`: Reopen → In progress, completion cleared);
     /// Complete opens the complete step.
     private func runPrimaryAction() {
-        switch primaryAction {
+        guard let action = primaryAction else { return }
+        switch action {
         case .complete:
             showingCarryOut = true
         case .start, .reopen:
-            let status = TaskRulebook.actionStatus(primaryAction)
             let name = userStore.currentUser?.fullName ?? ""
-            let updated = TaskRulebook.applyingStatus(status, to: resolvedTask, by: name)
+            guard let status = TaskRulebook.actionStatus(action),
+                  let updated = TaskRulebook.applyingStatus(status, to: resolvedTask, by: name) else {
+                actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+                return
+            }
             actionBusy = true
             actionError = nil
             Task {
@@ -708,7 +719,7 @@ private struct MyTasksRedesignTaskCard: View {
         return "Unknown job"
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskCompleteStep`: the task's real items only (F25).
+    /// RULEBOOK 1.89.0 §34 `taskCompleteStep`: the task's real items only (F25).
     private var checklistStep: TaskCompleteStepInfo {
         TaskRulebook.completeStep(items: resolvedTask.items, completedItemIds: resolvedTask.completedItemIds)
     }
@@ -736,7 +747,7 @@ private struct MyTasksRedesignTaskCard: View {
         CanonicalBusinessEngine.isTaskOverdue(status: resolvedTask.status.rawValue, dueDate: resolvedTask.dueDate)
     }
 
-    /// RULEBOOK 1.89.0 §32 `taskDueLabel`: "3 days overdue", "Due today", "Due Thu", "No due date" (bug B10), on the
+    /// RULEBOOK 1.89.0 §34 `taskDueLabel`: "3 days overdue", "Due today", "Due Thu", "No due date" (bug B10), on the
     /// organisation day.
     private var dueInfo: TaskDueText { TaskRulebook.dueText(resolvedTask) }
 
@@ -842,11 +853,13 @@ private struct MyTasksRedesignTaskCard: View {
     /// One per person (owner decision 17 Nov, web #364): two stored ids of one person show one avatar.
     private var assigneeInitialsList: [String] {
         let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
-        // RULEBOOK 1.89.0 §32 bug B11: a removed person still shows (as "Removed user", initials "?").
+        // RULEBOOK 1.89.0 §34 bug B11: a removed person still shows (as "Removed user", initials "?").
         let names = TaskPeopleRulebook.assigneeEntries(
             managerIds: resolvedTask.allAssignedManagerIds,
             operativeIds: resolvedTask.allAssignedOperativeIds,
-            index: index
+            index: index,
+            allManagerRows: operativeStore.managers,
+            loaded: operativeStore.rosterLoaded
         )
         return Array(names.map { $0.removed ? "?" : Self.initials(from: $0.name) }.prefix(3))
     }

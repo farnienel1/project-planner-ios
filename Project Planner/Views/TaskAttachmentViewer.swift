@@ -2,7 +2,7 @@
 //  TaskAttachmentViewer.swift
 //  Project Planner
 //
-//  RULEBOOK 1.89.0 §32 bug B8: a task attachment (photo or PDF) opens inside the app with Quick Look, never in
+//  RULEBOOK 1.89.0 §34 bug B8: a task attachment (photo or PDF) opens inside the app with Quick Look, never in
 //  Safari at the raw Storage address. The file is fetched to a temporary file (Quick Look needs a local file), shown,
 //  and can be shared or saved from Quick Look's own share button. Only `https` addresses are opened
 //  (`CanonicalBusinessEngine.safeExternalURL`). Display only: nothing is written.
@@ -76,6 +76,12 @@ struct TaskAttachmentViewerSheet: View {
         }
         do {
             let (temp, response) = try await URLSession.shared.download(from: remote)
+            // Review of #299: an error page (expired link, 403, 404) is never shown as the file.
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                try? FileManager.default.removeItem(at: temp)
+                failed = true
+                return
+            }
             let ext = Self.fileExtension(remote: remote, mimeType: (response as? HTTPURLResponse)?.mimeType ?? response.mimeType)
             let destination = FileManager.default.temporaryDirectory
                 .appendingPathComponent("task-attachment-\(UUID().uuidString)")

@@ -457,14 +457,19 @@ enum TaskPeopleRulebook {
         isSelected(kind, id, managers: Set(task.allAssignedManagerIds), operatives: Set(task.allAssignedOperativeIds), index: index)
     }
 
-    /// RULEBOOK 1.89.0 §32 bug B11: every assignee, one per person, managers first — an id whose row is gone, or an
+    /// RULEBOOK 1.89.0 §34 bug B11: every assignee, one per person, managers first — an id whose row is gone, or an
     /// anonymised deleted profile, reads "Removed user" (`taskAssigneeDisplay`) and is flagged so the task can be
     /// reassigned. Display only.
+    /// Review of #299: nobody is listed until the rosters have loaded (`loaded`), and a placeholder `managers` row the
+    /// pickers leave out (`OperativeStore.isPlaceholderManager`) still reads by its stored name (`allManagerRows`).
     static func assigneeEntries(
         managerIds: [UUID],
         operativeIds: [UUID],
-        index: TaskPersonIndex
+        index: TaskPersonIndex,
+        allManagerRows: [Manager] = [],
+        loaded: Bool = true
     ) -> [(kind: TaskPersonKind, name: String, removed: Bool)] {
+        guard loaded else { return [] }
         var seen = Set<String>()
         var out: [(kind: TaskPersonKind, name: String, removed: Bool)] = []
         func add(_ kind: TaskPersonKind, _ id: UUID) {
@@ -472,7 +477,7 @@ enum TaskPeopleRulebook {
             let display: (name: String, removed: Bool)
             switch kind {
             case .manager:
-                if let row = index.manager(id) {
+                if let row = index.manager(id) ?? allManagerRows.first(where: { $0.id == id }) {
                     display = TaskRulebook.assigneeDisplay(firstName: row.fullName, lastName: nil, email: row.email, exists: true)
                 } else {
                     display = TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false)
