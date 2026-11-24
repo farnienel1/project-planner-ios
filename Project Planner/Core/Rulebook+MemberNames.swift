@@ -59,11 +59,39 @@ extension CanonicalBusinessEngine {
         callJSON("memberNameValidationError", arguments: [["firstName": firstName, "surname": surname]]) as? String
     }
 
-    /// `canWriteMemberName`. False when the script did not answer.
-    nonisolated static func canWriteMemberName(writerUserId: String?, subjectUserId: String, writerIsAdmin: Bool) -> Bool {
+    /// `canWriteMemberName` (1.82.0: an Operatives manager for an operative, `writerManagesOperative`). False when the
+    /// script did not answer.
+    nonisolated static func canWriteMemberName(writerUserId: String?, subjectUserId: String, writerIsAdmin: Bool, writerManagesOperative: Bool = false) -> Bool {
         (callJSON("canWriteMemberName", arguments: [[
             "writerUserId": writerUserId ?? "", "subjectUserId": subjectUserId, "writerIsAdmin": writerIsAdmin,
+            "writerManagesOperative": writerManagesOperative,
         ]]) as? Bool) ?? false
+    }
+
+    /// RULEBOOK 1.82.0 §11 `memberNameEditPlan`: every edit writes the open organisation's entry (`writeEntry`); only the
+    /// person's home organisation also the users document (`writeAccount`). Nil when the script did not answer.
+    nonisolated static func memberNameEditPlan(organizationId: String?, homeOrganizationId: String?) -> (writeEntry: Bool, writeAccount: Bool)? {
+        guard let row = callJSON("memberNameEditPlan", arguments: [["organizationId": organizationId ?? "", "homeOrganizationId": homeOrganizationId ?? ""]]) as? [String: Any],
+              let entry = row["writeEntry"] as? Bool, let account = row["writeAccount"] as? Bool else { return nil }
+        return (entry, account)
+    }
+
+    /// RULEBOOK 1.82.0 §11 `memberNameEntryMissing`: the signed-in person has no entry here yet (server read only).
+    nonisolated static func memberNameEntryMissing(userId: String, aliases: [String], names: [String: [String: String]], serverRead: Bool) -> Bool {
+        let entries: [String: Any] = names.mapValues { row in
+            ["userId": row["userId"] ?? "", "firstName": row["firstName"] ?? "", "surname": row["surname"] ?? "",
+             "displayName": "\(row["firstName"] ?? "") \(row["surname"] ?? "")".trimmingCharacters(in: .whitespaces)]
+        }
+        return (callJSON("memberNameEntryMissing", arguments: [[
+            "person": ["id": userId, "formerUserIds": aliases], "names": entries, "serverRead": serverRead,
+        ]]) as? Bool) ?? false
+    }
+
+    /// RULEBOOK 1.82.0 §11 `memberNameJoinEntry`: the first candidate name that is a valid entry. Nil when none.
+    nonisolated static func memberNameJoinEntry(_ candidates: [(firstName: String, surname: String)]) -> (firstName: String, surname: String)? {
+        let rows: [[String: Any]] = candidates.map { ["firstName": $0.firstName, "surname": $0.surname] }
+        guard let row = callJSON("memberNameJoinEntry", arguments: [rows]) as? [String: Any] else { return nil }
+        return ((row["firstName"] as? String) ?? "", (row["surname"] as? String) ?? "")
     }
 
     /// `MEMBER_NAME_REFUSED_MESSAGE`.

@@ -6221,7 +6221,7 @@ class FirebaseBackend: ObservableObject {
     ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
     /// RULEBOOK 1.81.0 §11: this organisation's `memberNames` entries (lower-case users ids), kept by `UserStore`
-    /// from its live listener, so a home-company edit removes an entry only when one exists.
+    /// from its live listener. (1.82.0: an edit never removes an entry; kept for diagnostics.)
     var memberNameEntryIds: Set<String> = []
 
     /// One name edit routed by `memberNameEditTarget` (RULEBOOK 1.81.0 §11 "Names per organisation"): the names the
@@ -6236,10 +6236,11 @@ class FirebaseBackend: ObservableObject {
         var target: String
     }
 
-    /// The plan for one name edit. Outside the person's home organisation (the one their users document names) the
-    /// name is this company's own entry (`memberNameWriteFields`) and the users document keeps its name; in the home
-    /// organisation the users document takes the edit (as before) and this company's entry, if one exists, is removed.
-    /// Without `previous` (a profile being created) the users document takes the name as before.
+    /// The plan for one name edit (RULEBOOK 1.82.0 §11 `memberNameEditPlan`, owner 24 Nov: a name belongs to each
+    /// organisation separately). The open organisation's entry is always written (`memberNameWriteFields`), so no
+    /// other company ever reads this edit; only in the person's home organisation (the one their users document names)
+    /// does the users document take the name as well. An entry is never removed by an edit. Without `previous` (a
+    /// profile being created) the users document takes the name as before.
     func nameEditPlan(
         subjectUserId: String,
         firstName: String,
@@ -6252,31 +6253,24 @@ class FirebaseBackend: ObservableObject {
         let asBefore = NameEditPlan(accountFirstName: trimmedFirst, accountSurname: trimmedSurname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "account")
         let organizationId = currentOrganization?.firestoreDocumentId ?? ""
         guard let previous, !organizationId.isEmpty,
-              let target = CanonicalBusinessEngine.memberNameEditTarget(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
+              let edit = CanonicalBusinessEngine.memberNameEditPlan(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
         else { return asBefore }
         let changed = previous.firstName != trimmedFirst || previous.surname != trimmedSurname
-        let ref = db.collection("organizations").document(organizationId)
+        let account = MemberNameOverlay.accountName(previous)
+        var plan = edit.writeAccount
+            ? asBefore
+            : NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "organization")
+        guard changed, edit.writeEntry else { return plan }
+        if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
+            throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
+            throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
+        }
+        fields["updatedAt"] = FieldValue.serverTimestamp()
+        plan.entryRef = db.collection("organizations").document(organizationId)
             .collection(CanonicalBusinessEngine.memberNamesCollection).document(subjectUserId)
-        if target == "organization" {
-            let account = MemberNameOverlay.accountName(previous)
-            var plan = NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: target)
-            guard changed else { return plan }
-            if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
-                throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
-            }
-            guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
-                throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
-            }
-            fields["updatedAt"] = FieldValue.serverTimestamp()
-            plan.entryRef = ref
-            plan.entryFields = fields
-            return plan
-        }
-        var plan = asBefore
-        if changed, memberNameEntryIds.contains(subjectUserId.lowercased()) {
-            plan.entryRef = ref
-            plan.deleteEntry = true
-        }
+        plan.entryFields = fields
         return plan
     }
 
@@ -12202,6 +12196,37 @@ extension FirebaseBackend {
         let settings = db.collection("organizations").document(organizationId).collection("settings")
         let refs = ids.map { settings.document($0) }
         return refs.isEmpty ? [hsStateDocumentRef(organizationId: organizationId, project: project)] : refs
+    }
+
+    /// RULEBOOK 1.82.0 §13 (owner 24 Nov, item 4): the job an older toolbox notice belongs to. Rows written before 1.79
+    /// carry the talk's issue id, not the job id; this reads the health & safety documents of the jobs this phone holds
+    /// (the settings copies `healthSafetyDocumentIds` and the web nested copy — single-document reads every member may
+    /// make), ten jobs at a time, and asks `healthSafetyIssueJob`. Nothing is written; nil when no job holds the issue.
+    func toolboxNoticeJob(issueId: String, jobs: [Project]) async -> Project? {
+        guard let organizationId = currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return nil }
+        let candidates = Array(jobs.prefix(300))
+        var start = 0
+        while start < candidates.count {
+            let batch = Array(candidates[start..<min(start + 10, candidates.count)])
+            start += 10
+            var rows: [(jobId: String, collection: String, documents: [[String: Any]?])] = []
+            for project in batch {
+                var refs = hsStateDocumentRefs(organizationId: organizationId, project: project)
+                refs.append(db.collection("organizations").document(organizationId)
+                    .collection(hsCollectionName(for: project)).document(project.documentId)
+                    .collection("healthSafety").document("data"))
+                var documents: [[String: Any]?] = []
+                for ref in refs {
+                    let snap = try? await ref.getDocument()
+                    documents.append(snap?.data())
+                }
+                rows.append((project.documentId, hsCollectionName(for: project), documents))
+            }
+            if let found = CanonicalBusinessEngine.healthSafetyIssueJob(issueId: issueId, candidates: rows) {
+                return batch.first { $0.documentId == found.jobId && hsCollectionName(for: $0) == found.collection }
+            }
+        }
+        return nil
     }
 
     // Row maps a save sends. Nil optionals are left out, so `healthSafetyDocumentWriteFields` keeps the stored value.

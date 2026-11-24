@@ -341,11 +341,50 @@ class UserStore: ObservableObject {
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let snapshot, error == nil else { return }
                 let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                let serverRead = !snapshot.metadata.isFromCache
                 Task { @MainActor [weak self] in
                     guard let self, self.memberNamesOrganizationId == org else { return }
-                    self.applyMemberNames(CanonicalBusinessEngine.parseMemberNames(docs))
+                    let names = CanonicalBusinessEngine.parseMemberNames(docs)
+                    self.applyMemberNames(names)
+                    self.seedOwnMemberName(organizationId: org, names: names, serverRead: serverRead)
                 }
             }
+    }
+
+    /// `orgId/uid` pairs already tried this session (one attempt each).
+    private var seededMemberNames: Set<String> = []
+
+    /// RULEBOOK 1.82.0 §1, §11 (`memberNameEntryMissing`): the signed-in person has no entry in the open organisation
+    /// yet — create it once, with the name this organisation shows them today (the users document's name), so a name
+    /// edit in another of their companies never changes it here. Create-only in a transaction (never over an entry);
+    /// the rules let a member write their own entry. A refusal or a lost race changes nothing.
+    private func seedOwnMemberName(organizationId: String, names: [String: [String: String]], serverRead: Bool) {
+        guard let user = currentUser, firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId else { return }
+        let pair = "\(organizationId)/\(user.id)".lowercased()
+        guard !seededMemberNames.contains(pair) else { return }
+        guard CanonicalBusinessEngine.memberNameEntryMissing(userId: user.id, aliases: user.formerUserIds + user.sameEmailUserIds, names: names, serverRead: serverRead) else { return }
+        let account = MemberNameOverlay.accountName(user)
+        guard let name = CanonicalBusinessEngine.memberNameJoinEntry([account]),
+              var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: name.firstName, surname: name.surname, writerUserId: user.id)
+        else { return }
+        seededMemberNames.insert(pair)
+        fields["updatedAt"] = FieldValue.serverTimestamp()
+        let entry = fields
+        let db = Firestore.firestore()
+        let ref = db.collection("organizations").document(organizationId)
+            .collection(CanonicalBusinessEngine.memberNamesCollection).document(user.id)
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                if try transaction.getDocument(ref).exists { return nil }
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            transaction.setData(entry, forDocument: ref)
+            return nil
+        }) { _, error in
+            if let error { print("[memberNames] own entry not created: \((error as NSError).code)") }
+        }
     }
 
     private func applyMemberNames(_ names: [String: [String: String]]) {
@@ -387,14 +426,17 @@ class UserStore: ObservableObject {
         return copy
     }
 
-    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same):
-    /// always in the person's home organisation (the existing identity rules apply), else only themself or an admin.
+    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same).
+    /// RULEBOOK 1.82.0 §11: every name edit writes this company's own entry, so the check applies in the home company
+    /// too — the person themself, an admin, or a manager who manages operatives for an operative (never another
+    /// manager).
     func canEditName(of user: AppUser) -> Bool {
-        guard nameEditIsOrganizations(user) else { return true }
+        let managesOperative = isActingManagerOperativeManagementOnly() && user.permissionLevel == .operative
         return CanonicalBusinessEngine.canWriteMemberName(
             writerUserId: Auth.auth().currentUser?.uid,
             subjectUserId: user.id,
-            writerIsAdmin: hasAdminAccess()
+            writerIsAdmin: hasAdminAccess(),
+            writerManagesOperative: managesOperative
         )
     }
 
