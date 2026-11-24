@@ -282,7 +282,8 @@ enum NotificationDeepLink {
         case "tasks":
             NotificationCenter.default.post(name: NSNotification.Name("openTasksDetail"), object: nil)
         // RULEBOOK 1.79.0 §13: a toolbox talk notice names the job (relatedId) and its collection: that job's Health &
-        // safety. An older row carries the talk's issue id; the receiver opens the job list when no loaded job has it.
+        // safety. An older row carries the talk's issue id; the receiver finds the job from the health & safety documents
+        // (RULEBOOK 1.82.0 `healthSafetyIssueJob`), else opens the job list.
         case "healthSafety":
             openJob(destination, isSmallWorks: jobCatalogue.map { $0 == "smallWorks" }, section: "healthSafety")
         case "timesheetMine":
@@ -394,6 +395,8 @@ enum NotificationDeepLink {
         ]
         if let dayKey = destination.dayKey { info["dayKey"] = dayKey }
         if let section { info["section"] = section }
+        // RULEBOOK 1.82.0 §13: the stored id, so the receiver can find an older toolbox notice's job by its issue id.
+        info["relatedId"] = relatedId
         NotificationCenter.default.post(name: .openWorkCatalogueDetail, object: nil, userInfo: info)
     }
 

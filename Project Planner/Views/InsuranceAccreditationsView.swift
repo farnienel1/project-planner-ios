@@ -25,6 +25,7 @@ struct InsuranceAccreditationsView: View {
     @State private var selected: Set<String> = []
     @State private var working = false
     @State private var shareFile: IdentifiableURL?
+    @State private var lastZip: URL?
     @State private var createdLink: OrgComplianceCreatedShareLink?
     @State private var links: [OrgComplianceShareLinkRow] = []
     @State private var linksError: String?
@@ -79,7 +80,11 @@ struct InsuranceAccreditationsView: View {
         .task(id: organizationId) {
             if allowed, !organizationId.isEmpty { await loadLinks() }
         }
-        .sheet(item: $shareFile) { item in
+        .sheet(item: $shareFile, onDismiss: {
+            // The zip is only for sharing: its temporary folder goes when the share sheet closes.
+            if let url = lastZip { OrgComplianceZipFiles.remove(containing: url) }
+            lastZip = nil
+        }) { item in
             HSDocumentActivityView(activityItems: [item.url])
         }
         .sheet(item: $form) { mode in
@@ -316,6 +321,7 @@ struct InsuranceAccreditationsView: View {
         do {
             let url = try await firebaseBackend.orgComplianceZip(entries: chosen.map(\.entry), todayKey: todayKey)
             message = nil
+            lastZip = url
             shareFile = IdentifiableURL(url)
         } catch {
             message = error.localizedDescription

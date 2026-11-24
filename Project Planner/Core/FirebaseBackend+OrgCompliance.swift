@@ -181,15 +181,22 @@ extension FirebaseBackend {
             throw CanonicalWriteUnavailableError(function: "orgComplianceZipEntryNames")
         }
         let fileManager = FileManager.default
-        let work = fileManager.temporaryDirectory.appendingPathComponent("compliance-zip-\(UUID().uuidString)", isDirectory: true)
+        let work = OrgComplianceZipFiles.newWorkFolder()
         let folder = work.appendingPathComponent("Insurance-and-accreditations", isDirectory: true)
         try fileManager.createDirectory(at: folder, withIntermediateDirectories: true)
+        var total = 0
         for (index, entry) in entries.enumerated() {
             let data: Data
             do {
                 data = try await storage.reference().child(entry.path).data(maxSize: 12 * 1024 * 1024)
             } catch {
+                try? fileManager.removeItem(at: work)
                 throw Self.complianceError("\(entry.title) could not be downloaded.")
+            }
+            total += data.count
+            guard total <= CanonicalBusinessEngine.orgComplianceZipMaxBytes else {
+                try? fileManager.removeItem(at: work)
+                throw Self.complianceError(CanonicalBusinessEngine.orgComplianceZipTooLargeMessage)
             }
             try data.write(to: folder.appendingPathComponent(names[index]))
         }
@@ -200,8 +207,11 @@ extension FirebaseBackend {
         NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &coordinatorError) { zipped in
             do { try fileManager.copyItem(at: zipped, to: output) } catch { copyError = error }
         }
-        if let error = coordinatorError ?? copyError { throw error }
         try? fileManager.removeItem(at: folder)
+        if let error = coordinatorError ?? copyError {
+            OrgComplianceZipFiles.remove(containing: output)
+            throw error
+        }
         return output
     }
     #else
@@ -291,5 +301,34 @@ final class OrgComplianceStore: ObservableObject {
         organizationId = nil
         documents = nil
         loadError = nil
+    }
+}
+
+/// The temporary folders a compliance zip is built in (security review of #288): removed when the share sheet closes
+/// and at every start, so certificates never stay in the app's temporary folder.
+nonisolated enum OrgComplianceZipFiles {
+    static let prefix = "compliance-zip-"
+
+    static func newWorkFolder() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent(prefix + UUID().uuidString, isDirectory: true)
+    }
+
+    /// Remove the work folder that holds `file` (a zip this app made); anything else is left alone.
+    static func remove(containing file: URL) {
+        let folder = file.deletingLastPathComponent()
+        guard folder.lastPathComponent.hasPrefix(prefix),
+              folder.deletingLastPathComponent().standardizedFileURL == FileManager.default.temporaryDirectory.standardizedFileURL
+        else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    /// Remove every compliance zip work folder (at start).
+    static func removeAll() {
+        let fileManager = FileManager.default
+        let temp = fileManager.temporaryDirectory
+        guard let names = try? fileManager.contentsOfDirectory(atPath: temp.path) else { return }
+        for name in names where name.hasPrefix(prefix) {
+            try? fileManager.removeItem(at: temp.appendingPathComponent(name, isDirectory: true))
+        }
     }
 }

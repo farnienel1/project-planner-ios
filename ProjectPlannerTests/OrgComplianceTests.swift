@@ -116,4 +116,18 @@ final class OrgComplianceTests: XCTestCase {
         XCTAssertEqual(OrgComplianceShareClient.endpointURL("share-links")?.absoluteString, "https://projectplanner.us/api/compliance/share-links")
         XCTAssertEqual(OrgComplianceShareClient.endpointURL("share-links/revoke")?.absoluteString, "https://projectplanner.us/api/compliance/share-links/revoke")
     }
+
+    func testZipWorkFoldersAreRemoved() throws {
+        let work = OrgComplianceZipFiles.newWorkFolder()
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let zip = work.appendingPathComponent("x.zip")
+        try Data([1]).write(to: zip)
+        OrgComplianceZipFiles.remove(containing: zip)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: work.path))
+        let other = OrgComplianceZipFiles.newWorkFolder()
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        OrgComplianceZipFiles.removeAll()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: other.path))
+        XCTAssertEqual(CanonicalBusinessEngine.orgComplianceZipMaxBytes, 200 * 1024 * 1024)
+    }
 }

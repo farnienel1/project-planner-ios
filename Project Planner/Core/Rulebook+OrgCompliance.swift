@@ -344,6 +344,14 @@ extension CanonicalBusinessEngine {
         constant("ORG_COMPLIANCE_ZIP_MAX_DOCUMENTS", as: Int.self) ?? 50
     }
 
+    nonisolated static var orgComplianceZipMaxBytes: Int {
+        constant("ORG_COMPLIANCE_ZIP_MAX_BYTES", as: Int.self) ?? 200 * 1024 * 1024
+    }
+
+    nonisolated static var orgComplianceZipTooLargeMessage: String {
+        constant("ORG_COMPLIANCE_ZIP_TOO_LARGE_MESSAGE", as: String.self) ?? "These documents are too large for one zip (200 MB). Choose fewer."
+    }
+
     nonisolated static var orgComplianceShareMaxDocuments: Int {
         constant("ORG_COMPLIANCE_SHARE_MAX_DOCUMENTS", as: Int.self) ?? 20
     }
