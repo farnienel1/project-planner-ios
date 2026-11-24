@@ -90,7 +90,23 @@ enum PersonTimesheetLookup {
     /// Web `unresolvedTimesheetPerson`: an exported sheet whose stored person is nobody in the organisation is listed for
     /// admins as "Unknown person · <hint>" (`UNKNOWN_BOOKING_PERSON_LABEL`, `bookingPersonIdHint`), never dropped. Its
     /// id is the stored id; it has no profile to open.
-    static func unresolvedPerson(storedUserId: String, organizationId: String) -> AppUser {
+    /// Web #414c (owner 23 Nov, issue 20): when a former-person record (`deletedPeople`, `formerPersonForId`) names the
+    /// stored id, the row reads "Former: Jane Smith" (`formerPersonLabel`) instead. Display only.
+    static func unresolvedPerson(storedUserId: String, organizationId: String, formerPeople: [[String: Any]] = []) -> AppUser {
+        if let former = CanonicalBusinessEngine.formerPersonForId(storedUserId, formerPeople: formerPeople),
+           let label = CanonicalBusinessEngine.formerPersonLabel((former["displayName"] as? String) ?? "") {
+            return AppUser(
+                id: storedUserId,
+                email: "",
+                organizationId: organizationId,
+                role: .operative,
+                createdAt: Date(timeIntervalSince1970: 0),
+                firstName: label,
+                surname: "",
+                isActive: false,
+                passwordSet: false
+            )
+        }
         let hint = (CanonicalBusinessEngine.callJSON("bookingPersonIdHint", arguments: [storedUserId]) as? String)
             ?? String(storedUserId.prefix(8)).uppercased()
         return AppUser(
@@ -104,6 +120,11 @@ enum PersonTimesheetLookup {
             isActive: false,
             passwordSet: false
         )
+    }
+
+    /// Whether `formerPeople` names `storedUserId` (the stand-in reads "Former: …" and carries the "Former person" chip).
+    static func isFormerPerson(storedUserId: String, formerPeople: [[String: Any]]) -> Bool {
+        CanonicalBusinessEngine.formerPersonForId(storedUserId, formerPeople: formerPeople) != nil
     }
 
     // MARK: - Review of #259
@@ -220,6 +241,8 @@ enum PersonTimesheetLookup {
         let user: AppUser
         /// A stored id nobody in the organisation goes by (a deleted person): "Unknown person · <hint>".
         let unresolved: Bool
+        /// Web #414c: an unresolved id a former-person record names ("Former: Jane Smith", chip "Former person").
+        var former: Bool = false
     }
 
     /// Review of #259 (owner data, Raccord MEP; web `exportedSheetOwnerResolver`): the stored person id of a sheet is
@@ -232,7 +255,8 @@ enum PersonTimesheetLookup {
         roster: [AppUser],
         idsOf: @escaping (AppUser) -> [String],
         includeUnresolved: Bool,
-        organizationId: String
+        organizationId: String,
+        formerPeople: [[String: Any]] = []
     ) -> (String) -> ExportedOwner? {
         let fullRoster = roster.isEmpty ? users : roster
         let ownerOf = ownerResolver(candidates: users, idsOf: idsOf)
@@ -254,10 +278,11 @@ enum PersonTimesheetLookup {
                 return ExportedOwner(user: primaryById[key(member.id)] ?? member, unresolved: false)
             }
             guard includeUnresolved, rosterOwnerOf(trimmed) == nil else { return nil }
-            if let stand = unknown[key(trimmed)] { return ExportedOwner(user: stand, unresolved: true) }
-            let stand = unresolvedPerson(storedUserId: trimmed, organizationId: organizationId)
+            let former = isFormerPerson(storedUserId: trimmed, formerPeople: formerPeople)
+            if let stand = unknown[key(trimmed)] { return ExportedOwner(user: stand, unresolved: true, former: former) }
+            let stand = unresolvedPerson(storedUserId: trimmed, organizationId: organizationId, formerPeople: formerPeople)
             unknown[key(trimmed)] = stand
-            return ExportedOwner(user: stand, unresolved: true)
+            return ExportedOwner(user: stand, unresolved: true, former: former)
         }
     }
 
