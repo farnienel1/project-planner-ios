@@ -138,6 +138,14 @@ nonisolated final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNoti
             // RULEBOOK 1.16.0 `pushPayloadFields`: a server push names the type under `type`.
             ?? response.notification.request.content.userInfo["type"] as? String
         DispatchQueue.main.async {
+            // RULEBOOK 1.86.0 "Not synced": a local notification about this phone's queue opens that page, never a
+            // deep link (it is not an inbox row).
+            if type == OfflineSyncResultNotification.type {
+                // A cold launch from the tap: the banner opens the page once it appears (`pendingOpen`).
+                OfflineSyncResultNotification.pendingOpen = true
+                NotificationCenter.default.post(name: .openOfflineSyncResults, object: nil)
+                return
+            }
             if type == AppNotification.NotificationType.timesheetSubmissionReminder.rawValue {
                 NotificationCenter.default.post(name: .timesheetSubmissionNoticeFired, object: nil)
             }

@@ -82,7 +82,25 @@ extension FirebaseBackend {
         let sameOrganization = !openOrgId.isEmpty && openOrgId == orgId
         var entryCountryCode: String?? = .none
         if !sameOrganization {
-            let snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+            // Owner 24 Nov (choice 12 tightened, `offlineReplaceOrganizationReadDecision`): wait only on a network or
+            // timeout failure; access lost or the company gone → refused for permission at once.
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try await db.collection("organizations").document(orgId).getDocument(source: .server)
+            } catch {
+                if CanonicalBusinessEngine.offlineReplaceOrganizationReadDecision(
+                    code: BookingWritePatch.firestoreErrorCode(error), exists: nil
+                ) == "refusePermission" {
+                    return Self.offlineReplaceOrganizationRefused
+                }
+                throw error
+            }
+            guard snapshot.exists else {
+                if CanonicalBusinessEngine.offlineReplaceOrganizationReadDecision(code: nil, exists: false) == "refusePermission" {
+                    return Self.offlineReplaceOrganizationRefused
+                }
+                throw NSError(domain: "FirebaseBackend", code: 503, userInfo: [NSLocalizedDescriptionKey: "Waiting for the company's settings."])
+            }
             entryCountryCode = .some(snapshot.data()?["countryCode"] as? String)
         }
         guard let timeZone = Self.offlineDeleteTimeZone(
@@ -189,6 +207,23 @@ extension FirebaseBackend {
             return nil
         }
         return box.value ?? .unanswered
+    }
+
+    /// A queued Replace for a company this person can no longer read (or that is gone): refused for permission.
+    nonisolated static var offlineReplaceOrganizationRefused: RulebookOfflineReplaceResult {
+        RulebookOfflineReplaceResult(
+            decision: "refusePermission", deletes: [], message: CanonicalBusinessEngine.offlineReplaceRefusedMessage
+        )
+    }
+
+    /// RULEBOOK 1.86.0 "Not synced": the booking as the server has it now, read after a refusal (best effort). `read`
+    /// false when it could not be read; `data` nil with `read` true when it is gone (missing or tombstoned).
+    func offlineSyncLiveBooking(collection: String, documentId: String, organizationId: String) async -> (read: Bool, data: [String: Any]?) {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty, !documentId.isEmpty else { return (false, nil) }
+        let ref = db.collection("organizations").document(orgId).collection(collection).document(documentId)
+        guard let snapshot = try? await Self.boundedServerRead(ref) else { return (false, nil) }
+        return (true, snapshot.exists ? snapshot.data() : nil)
     }
 
     nonisolated static func replaceKey(_ collection: String, _ bookingId: String) -> String {

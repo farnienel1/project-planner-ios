@@ -17,6 +17,8 @@ nonisolated struct RulebookOfflineReplaceResult: Equatable, Sendable {
     let decision: String
     let deletes: [RulebookBookingReplaceRef]
     let message: String?
+    /// The replaced bookings (stored ids) the rule found changed (`targets` outcome `refuseChanged`), for "Not synced".
+    var changedBookingIds: [String] = []
 
     /// Fail closed: nothing is written when the script did not answer, and the item stays queued (retried), never
     /// removed with a refusal message (review of #293).
@@ -100,7 +102,12 @@ extension CanonicalBusinessEngine {
             guard let collection = entry["collection"] as? String, let id = entry["bookingId"] as? String else { return nil }
             return RulebookBookingReplaceRef(collection: collection, bookingId: id)
         }
-        return RulebookOfflineReplaceResult(decision: decision, deletes: deletes, message: row["message"] as? String)
+        let changed = (row["targets"] as? [[String: Any]] ?? []).compactMap { entry -> String? in
+            entry["outcome"] as? String == "refuseChanged" ? entry["bookingId"] as? String : nil
+        }
+        return RulebookOfflineReplaceResult(
+            decision: decision, deletes: deletes, message: row["message"] as? String, changedBookingIds: changed
+        )
     }
 
     /// `offlineReplaceRefusalDecision(code)`: `alreadyGone` (not-found), `refusePermission` (permission-denied) or `retry`.

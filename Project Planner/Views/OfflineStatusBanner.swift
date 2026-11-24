@@ -8,10 +8,27 @@ import SwiftUI
 struct OfflineStatusBanner: View {
     @EnvironmentObject private var smartCache: SmartCacheService
     @ObservedObject private var outbox = OfflineOutboxStore.shared
+    @ObservedObject private var syncResults = OfflineSyncResultStore.shared
     @State private var showingQueue = false
+    @State private var showingNotSynced = false
 
     var body: some View {
         VStack(spacing: 0) {
+            // RULEBOOK 1.86.0 "Not synced": with notifications off, the banner at the top on the next open.
+            if syncResults.showsBanner {
+                Button {
+                    showingNotSynced = true
+                } label: {
+                    statusRow(
+                        icon: "exclamationmark.arrow.triangle.2.circlepath",
+                        tint: .red,
+                        message: CanonicalBusinessEngine.offlineSyncResultBanner,
+                        showsChevron: true
+                    )
+                }
+                .accessibilityIdentifier("offlineStatusBanner.notSynced")
+                .buttonStyle(.plain)
+            }
             if smartCache.showOfflineBanner {
                 bannerContent
                     .transition(.move(edge: .top).combined(with: .opacity))
@@ -19,6 +36,22 @@ struct OfflineStatusBanner: View {
                         OfflineSyncQueueSheet()
                             .environmentObject(smartCache)
                     }
+            }
+        }
+        .sheet(isPresented: $showingNotSynced) {
+            NotSyncedView()
+        }
+        .onAppear {
+            if OfflineSyncResultNotification.pendingOpen { showingNotSynced = true }
+        }
+        // RULEBOOK 1.86.0: a tap on the local notification, or the sync list row, opens "Not synced".
+        .onReceive(NotificationCenter.default.publisher(for: .openOfflineSyncResults)) { _ in
+            // From the sync list: close it first, then open "Not synced" (one sheet at a time).
+            let wasShowingQueue = showingQueue
+            showingQueue = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + (wasShowingQueue ? 0.5 : 0)) {
+                OfflineSyncResultNotification.pendingOpen = false
+                showingNotSynced = true
             }
         }
         // RULEBOOK §2: a refused replay is final; tell the person once (`BOOKING_REPLAY_REFUSED_MESSAGE`; 1.33.0 a
@@ -162,6 +195,7 @@ struct OfflineSyncQueueSheet: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var smartCache: SmartCacheService
     @ObservedObject private var outbox = OfflineOutboxStore.shared
+    @ObservedObject private var syncResults = OfflineSyncResultStore.shared
 
     var body: some View {
         NavigationStack {
@@ -181,6 +215,20 @@ struct OfflineSyncQueueSheet: View {
                     }
                 }
 
+                // RULEBOOK 1.86.0: "Not synced" is reachable from the sync list.
+                if !syncResults.records.isEmpty {
+                    Section {
+                        Button {
+                            NotificationCenter.default.post(name: .openOfflineSyncResults, object: nil)
+                        } label: {
+                            Label(
+                                "\(CanonicalBusinessEngine.offlineSyncResultTitle) (\(syncResults.records.count))",
+                                systemImage: "exclamationmark.triangle"
+                            )
+                        }
+                        .accessibilityIdentifier("offlineSyncQueue.notSynced")
+                    }
+                }
                 if !outbox.entries.isEmpty {
                     Section("Waiting to sync") {
                         ForEach(outbox.entries) { entry in
