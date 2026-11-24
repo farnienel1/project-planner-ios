@@ -282,7 +282,6 @@ struct VariationDetailView: View {
 
     private func applyStatus(_ status: VariationStatus) async {
         guard let opened = variation else { return }
-        var variation = opened
         let orgId = (await firebaseBackend.resolveOrganizationIdForFirebaseWrites(
             preferredFallback: firebaseBackend.currentOrganization?.firestoreDocumentId
         )) ?? ""
@@ -292,19 +291,9 @@ struct VariationDetailView: View {
         }
         let uid = userStore.displayUser?.id ?? ""
         let name = userStore.displayUser?.fullName.isEmpty == false ? (userStore.displayUser?.fullName ?? "") : (userStore.displayUser?.email ?? "")
-        variation.status = status
-        variation.updatedAt = Date()
-        variation.updatedByUid = uid
-        variation.statusHistory.append(VariationStatusHistoryEntry(status: status.rawValue, byUid: uid, byName: name, at: Date()))
         // RULEBOOK 1.63.0 `variationStatusWriteFields`: Submitted / Closed lock the number, Open (a reopen) clears the
         // lock in the same write, so the variation is unpinned and the rules accept its next renumber.
-        variation.voNumberLocked = CanonicalBusinessEngine.variationStatusLocksNumber(status: status.rawValue)
-        if status == .submitted {
-            variation.submittedAt = Date()
-        }
-        if status == .closed {
-            variation.closedAt = Date()
-        }
+        let variation = opened.withStatus(status, byUid: uid, byName: name)
         do {
             // RULEBOOK 1.52.0 §22: only the status fields this change made (against the copy shown).
             try await firebaseBackend.saveVariation(variation, opened: opened, organizationId: orgId)

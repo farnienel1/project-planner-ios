@@ -251,7 +251,7 @@ extension CanonicalBusinessEngine {
 
     // MARK: Annual leave reads (RULEBOOK 1.56.0 §9, §17, owner answers 17 Nov)
 
-    /// `OWN_LEAVE_IDS_PER_QUERY`: own ids per leave `or` query (14). Nil when the script did not answer.
+    /// `OWN_LEAVE_IDS_PER_QUERY`: own ids per leave `or` query (6 from 1.73.2: the rules' lookup budget). Nil when the script did not answer.
     nonisolated static var ownLeaveIdsPerQuery: Int? {
         constant("OWN_LEAVE_IDS_PER_QUERY", as: Int.self)
     }
@@ -735,6 +735,14 @@ extension UserStore {
     func canEditJob(_ job: Project) -> Bool {
         guard let viewer = displayJobAccessViewer else { return false }
         return CanonicalBusinessEngine.canEditJob(viewer, job: job.jobAccessFields, kind: job.jobKind, managers: JobAccessContext.managers)
+    }
+
+    /// RULEBOOK 1.52.0 §22 `canRenumberVariations(role, { managesJob })` with `isJobManager`: who drags variations into
+    /// a new order in the VO tracker (admins and this job's managers; owner decision 23 Nov: the iPhone reorders too).
+    func canRenumberVariations(on job: Project) -> Bool {
+        guard let viewer = displayJobAccessViewer else { return false }
+        let managesJob = CanonicalBusinessEngine.isJobManager(viewer, job: job.jobAccessFields, managers: JobAccessContext.managers)
+        return CanonicalBusinessEngine.canRenumberVariations(viewer.role, managesJob: managesJob)
     }
 
     /// `canChangeJobManagers`: the manager picker on a job of this kind.

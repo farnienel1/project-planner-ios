@@ -106,10 +106,10 @@ final class LaunchStartupPolicyTests: XCTestCase {
     }
 
     func testInvalidApnsTokenIsRemovedAndUnfailedTokensStay() {
+        // Stored newest first: "keep-me" is the newest older token; "older-token-11" the oldest.
         let failed = "dead-token-suffix"
-        var existing = (0..<12).map { "older-token-\($0)" }
-        existing.append(failed)
-        existing.append("keep-me")
+        var existing = ["keep-me", failed]
+        existing.append(contentsOf: (0..<12).map { "older-token-\($0)" })
         let next = LaunchStartupPolicy.nextStoredPushTokens(
             existing: existing,
             currentDeviceToken: "current-device",
@@ -118,11 +118,23 @@ final class LaunchStartupPolicyTests: XCTestCase {
         XCTAssertEqual(next.first, "current-device")
         XCTAssertFalse(next.contains(failed))
         XCTAssertTrue(next.contains("keep-me"))
-        XCTAssertFalse(next.contains("older-token-0"))
+        XCTAssertTrue(next.contains("older-token-0"))
+        XCTAssertFalse(next.contains("older-token-11"))
         XCTAssertEqual(LaunchStartupPolicy.pushTokenStoredLimit, 8)
         XCTAssertEqual(next.count, 8)
         XCTAssertFalse(next.joined(separator: " ").contains("07876643693"))
         XCTAssertFalse(next.joined(separator: " ").contains("172465743"))
+    }
+
+    /// Review of #279: at the cap the newest tokens stay (the list is newest first), the oldest are dropped.
+    func testCapKeepsTheNewestTokens() {
+        let existing = (1...8).map { "t\($0)" } // t1 newest … t8 oldest
+        let next = LaunchStartupPolicy.nextStoredPushTokens(
+            existing: existing,
+            currentDeviceToken: "now",
+            failedTokens: []
+        )
+        XCTAssertEqual(next, ["now", "t1", "t2", "t3", "t4", "t5", "t6", "t7"])
     }
 
     func testTerminalFailureRemovesOnlyThatTokenAndNonTerminalKeepsTheArray() {

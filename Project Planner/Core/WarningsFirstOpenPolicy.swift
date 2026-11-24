@@ -37,6 +37,17 @@ enum WarningsFirstOpenPolicy {
         lastLoadFailed && !isLoading
     }
 
+    /// Owner report 23 Nov: whether the launch quiet (`FirebaseBackend.launchQuietUntil`, 30 s after the organisation's
+    /// data starts loading) holds a booking-driven or readiness-gated scan. It used to hold every such scan, which kept
+    /// Home on "Checking…" for about 30 seconds. Now, inside the quiet, a scan waits only until both clash-approval
+    /// listeners have answered (`WarningResolutionStore.clashApprovalsLoaded`), so a clash approved on another device is
+    /// never counted as open; every input still has to have loaded (`WarningInputsReadiness`), and later input changes
+    /// rescan as they arrive (debounced by `WarningsBookingScanScheduler`). After the quiet nothing waits, as before.
+    static func launchQuietHoldsScan(quietUntil: Date?, now: Date, clashApprovalsLoaded: Bool) -> Bool {
+        guard let quietUntil, now < quietUntil else { return false }
+        return !clashApprovalsLoaded
+    }
+
     /// Whether the scan may use the organisation's warning settings and payment runs: the server re-read answered, or
     /// it did not (timed out or failed) but the live organisation listener has already delivered this organisation's
     /// settings (`warningSettingsLoadedOrganizationId`), which it keeps current.

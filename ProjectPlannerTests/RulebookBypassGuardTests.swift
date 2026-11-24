@@ -60,7 +60,6 @@ final class RulebookBypassGuardTests: XCTestCase {
         "deviceCalendar": [
             "Core/BookingDay.swift": 1,
             "Core/MaterialCatalogStore.swift": 1,
-            "Core/NotificationService.swift": 1,
             "Core/ProjectStore.swift": 8,
             "Core/StaffEmailIdentity.swift": 1,
             "Core/TimesheetPayrollPolicy.swift": 10,
@@ -158,6 +157,8 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Core/LineManagerSupport.swift": 2,
             "Core/NotificationService.swift": 1,
             "Core/UserStore.swift": 6,
+            // Hashed only to notice a roster change; never decides who a line manager is.
+            "Core/WarningsRosterFingerprint.swift": 1,
             "FirebaseBackend.swift": 1,
             "Models/AppModels.swift": 3,
             "Views/HolidayView.swift": 3,

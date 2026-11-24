@@ -168,6 +168,7 @@ enum LaunchStartupPolicy {
 
     /// Keeps the current device token, drops tokens that just failed, and stops the list
     /// growing without a bound. Tokens that have not failed stay until the cap trims the oldest.
+    /// Stored newest first (the current token is always written first), so the cap keeps the front of the list.
     static func nextStoredPushTokens(
         existing: [String],
         currentDeviceToken: String,
@@ -188,7 +189,7 @@ enum LaunchStartupPolicy {
         let currentCount = current.isEmpty || failed.contains(current) ? 0 : 1
         let room = max(0, pushTokenStoredLimit - currentCount)
         if older.count > room {
-            older = Array(older.suffix(room))
+            older = Array(older.prefix(room))
         }
         if currentCount == 0 { return older }
         return [current] + older
