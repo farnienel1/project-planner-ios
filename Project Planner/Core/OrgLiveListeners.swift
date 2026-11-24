@@ -575,6 +575,8 @@ nonisolated enum IOSLiveListenerCoverage {
         "annualLeaveAdjustments": "HolidayView / OperativeAnnualLeaveCalendarView / EditUserView / MyProfileFiguresCard (AnnualLeaveAdjustmentsModel → FirebaseBackend.listenAnnualLeaveAdjustments, one userId == query per person)",
         // RULEBOOK 1.81.0 §11: the open organisation's names per person, laid over the roster.
         "memberNames": "UserStore.listenToMemberNames (organizations/{orgId}/memberNames, open organisation)",
+        // RULEBOOK 1.83.0 §31: insurance & accreditations (admins only), while the Organisation hub, the page or the Home reminder is shown.
+        "orgCompliance": "OrgComplianceStore.start (organizations/{orgId}/orgCompliance/documents, open organisation; OrganisationSettingsHubView, InsuranceAccreditationsView, OrgComplianceHomeReminderCard)",
     ]
 
     /// `LIVE_COLLECTIONS` ids with `listen: true` that have no entry above. Empty when iOS covers them all.
