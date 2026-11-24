@@ -18,12 +18,9 @@ nonisolated struct RulebookOfflineReplaceResult: Equatable, Sendable {
     let deletes: [RulebookBookingReplaceRef]
     let message: String?
 
-    /// Fail closed: nothing is written when the script did not answer.
-    static let unanswered = RulebookOfflineReplaceResult(
-        decision: "refuseChanged",
-        deletes: [],
-        message: CanonicalBusinessEngine.offlineReplaceChangedMessage
-    )
+    /// Fail closed: nothing is written when the script did not answer, and the item stays queued (retried), never
+    /// removed with a refusal message (review of #293).
+    static let unanswered = RulebookOfflineReplaceResult(decision: "unanswered", deletes: [], message: nil)
 }
 
 /// One replaced booking as the device queued it (`OfflineReplacedBooking`, plain values for the script).

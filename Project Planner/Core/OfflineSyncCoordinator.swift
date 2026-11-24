@@ -74,9 +74,15 @@ enum OfflineSyncCoordinator {
                 let fields = row.createdOffline ? nil : row.queuedEditFields.map { Set($0) }
                 let baseline = row.createdOffline ? nil : row.fingerprint
                 if let booking = row.labourBooking {
-                    outbox.enqueueSaveBooking(booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline)
+                    outbox.enqueueSaveBooking(
+                        booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline,
+                        previous: row.createdOffline ? nil : row.queuedEditPreviousLabour
+                    )
                 } else if let booking = row.managerBooking {
-                    outbox.enqueueSaveManagerSiteBooking(booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline)
+                    outbox.enqueueSaveManagerSiteBooking(
+                        booking, changedFields: fields, organizationId: entry.organizationId, baselineFingerprint: baseline,
+                        previous: row.createdOffline ? nil : row.queuedEditPreviousManager
+                    )
                 }
             }
             var info: [String: Any] = [
@@ -94,7 +100,14 @@ enum OfflineSyncCoordinator {
     /// `dropLocal`), or refused with a message (`refuseChanged`, `refusePermission`: both bookings as the server has them).
     private enum OfflineReplaceOutcome: Error {
         case resolved
+        /// `dropLocal`: nothing was sent; the replaced bookings (and any taken create or edit) come back.
+        case dropped
         case refused(message: String)
+    }
+
+    /// Review of #293: the script did not answer (or could not build the batch). Not a refusal: the item stays queued.
+    struct OfflineReplaceNotDecided: LocalizedError {
+        var errorDescription: String? { "Could not check this replace yet. It will be tried again." }
     }
 
     /// The outcome of a queued delete that was not written (`offlineDeleteReplayDecision`): resolved with nothing to
@@ -180,6 +193,12 @@ enum OfflineSyncCoordinator {
                 switch outcome {
                 case .resolved:
                     outbox.removeEntry(id: entry.id)
+                    synced += 1
+                case .dropped:
+                    outbox.removeEntry(id: entry.id)
+                    if let payload = try? JSONDecoder().decode(OfflineReplaceBookingPayload.self, from: entry.payload) {
+                        postReplaceUndone(entry: entry, payload: payload, outbox: outbox)
+                    }
                     synced += 1
                 case .refused(let message):
                     outbox.removeRefused(id: entry.id, message: message)
@@ -524,12 +543,17 @@ enum OfflineSyncCoordinator {
                 }
             }
             return
-        case "alreadyApplied", "dropLocal":
+        case "alreadyApplied":
             throw OfflineReplaceOutcome.resolved
+        case "dropLocal":
+            throw OfflineReplaceOutcome.dropped
         case "refusePermission":
             throw OfflineReplaceOutcome.refused(message: result.message ?? CanonicalBusinessEngine.offlineReplaceRefusedMessage)
-        default:
+        case "refuseChanged":
             throw OfflineReplaceOutcome.refused(message: result.message ?? CanonicalBusinessEngine.offlineReplaceChangedMessage)
+        default:
+            // `unanswered` or a word this build does not know: never removed on a guess, retried.
+            throw OfflineReplaceNotDecided()
         }
     }
 

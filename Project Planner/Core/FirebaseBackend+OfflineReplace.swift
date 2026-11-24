@@ -59,11 +59,9 @@ extension FirebaseBackend {
                 replaced: sendable.map { RulebookBookingReplaceRef(collection: $0.collection, bookingId: $0.documentId) },
                 deletedBy: uid
             )
-            guard plan != nil else {
-                return RulebookOfflineReplaceResult(
-                    decision: "refusePermission", deletes: [], message: CanonicalBusinessEngine.offlineReplaceRefusedMessage
-                )
-            }
+            // Review of #293: no plan (the script did not answer or refused the ids) is not a refusal — nothing is written
+            // and the item stays queued (Retry / Discard after the attempt limit).
+            guard plan != nil else { return .unanswered }
         }
         let bookingPath = plan?.bookingPath ?? "organizations/\(orgId)/\(collection)/\(newDocumentId)"
         let rows: [OfflineReplaceRow] = (plan?.deletes ?? []).map { row in

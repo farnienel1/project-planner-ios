@@ -199,4 +199,48 @@ final class Rulebook1860OfflineReplaceTests: XCTestCase {
         XCTAssertTrue(outbox.entries.isEmpty)
         XCTAssertTrue(outbox.pendingDeletedBookingIds(collection: "bookings", organizationId: "TEST-ORG").isEmpty)
     }
+
+    // MARK: Review of #293
+
+    func testAnEditWhileTheReplaceIsBeingSentIsAnOrdinaryQueuedEdit() throws {
+        let outbox = OfflineOutboxStore.shared
+        let old = LogicFixtures.booking(on: Date())
+        var new = LogicFixtures.booking(on: Date(), operativeId: old.operativeId)
+        XCTAssertNil(outbox.enqueueReplaceBooking(labour: new, replacing: [target(old)], organizationId: "TEST-ORG"))
+        outbox.markInFlight(entityId: new.id.uuidString)
+        defer { outbox.clearInFlight(entityId: new.id.uuidString) }
+        new.notes = "TEST-edited while sending"
+        outbox.enqueueSaveBooking(new, changedFields: ["notes"], organizationId: "TEST-ORG")
+        XCTAssertEqual(outbox.entries.count, 2, "the edit is its own entry, not merged into the one being sent")
+        XCTAssertTrue(outbox.entries.contains { $0.operation == .saveBooking && $0.entityId == new.id.uuidString })
+    }
+
+    func testReplaceIsRefusedWhileAReplacedBookingIsBeingSent() {
+        let outbox = OfflineOutboxStore.shared
+        let local = LogicFixtures.booking(on: Date())
+        outbox.enqueueSaveBooking(local, changedFields: nil, organizationId: "TEST-ORG")
+        outbox.markInFlight(entityId: local.id.uuidString)
+        defer { outbox.clearInFlight(entityId: local.id.uuidString) }
+        let new = LogicFixtures.booking(on: Date(), operativeId: local.operativeId)
+        XCTAssertEqual(
+            outbox.enqueueReplaceBooking(labour: new, replacing: [target(local)], organizationId: "TEST-ORG"),
+            OfflineOutboxStore.replaceWhileSendingMessage
+        )
+        XCTAssertEqual(outbox.entries.count, 1, "its create stays queued")
+        XCTAssertEqual(outbox.entries.first?.operation, .saveBooking)
+    }
+
+    func testAReplacedBookingWithNoAnswerIsNeverReadAsGone() {
+        XCTAssertEqual(RulebookOfflineReplaceResult.unanswered.decision, "unanswered", "kept queued, never removed")
+        let queued = RulebookQueuedReplaceTarget(
+            collection: "bookings", bookingId: "OLD-1",
+            fingerprint: BookingWritePatch.stored(oldLive, collection: "bookings"), createdOffline: false
+        )
+        let noRead = CanonicalBusinessEngine.offlineReplaceReplayDecision(
+            bookingCollection: "bookings", bookingId: "NEW-1", queuedReplaced: [queued],
+            newBookingDeleted: false, newBookingExists: false, newBookingTombstoned: false,
+            replaced: [], timeZone: zone
+        )
+        XCTAssertEqual(noRead.decision, "refuseChanged")
+    }
 }

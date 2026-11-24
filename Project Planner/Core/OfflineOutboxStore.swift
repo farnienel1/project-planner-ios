@@ -56,6 +56,10 @@ struct OfflineReplacedBooking: Codable, Equatable {
     /// The fields of a queued edit of this booking that the Replace took out of the queue (nil: none). Queued again,
     /// with `fingerprint` as its baseline, if the Replace is undone or refused, so the edit is not lost.
     var queuedEditFields: [String]? = nil
+    /// The booking as last synced before that queued edit (`previousBooking`), so the requeued edit keeps the §25
+    /// overtime reopen notice.
+    var queuedEditPreviousLabour: Booking? = nil
+    var queuedEditPreviousManager: ManagerSiteBooking? = nil
     /// The booking as it was, put back on Undo or when the replay is refused.
     var labourBooking: Booking? = nil
     var managerBooking: ManagerSiteBooking? = nil
@@ -352,6 +356,11 @@ final class OfflineOutboxStore: ObservableObject {
             if let id, queuedReplace(newBookingId: id) != nil {
                 return Self.replaceOfUnsentReplaceMessage
             }
+            // Review of #293 (as offline delete, 1.33.1 fix 3): a replaced booking whose queued write is being sent
+            // right now may land on the server mid-way; taking it as "created offline" would skip its delete.
+            if let id, isInFlight(bookingId: id) {
+                return Self.replaceWhileSendingMessage
+            }
         }
         var replaced: [OfflineReplacedBooking] = []
         var removedEntryIds = Set<UUID>()
@@ -384,8 +393,10 @@ final class OfflineOutboxStore: ObservableObject {
                     if let baseline { row.fingerprint = baseline }
                     if saveOperation == .saveBooking, let old = try? decoder.decode(OfflineSaveBookingPayload.self, from: existing.payload) {
                         row.queuedEditFields = old.changedFields
+                        row.queuedEditPreviousLabour = old.previousBooking
                     } else if let old = try? decoder.decode(OfflineSaveManagerSiteBookingPayload.self, from: existing.payload) {
                         row.queuedEditFields = old.changedFields
+                        row.queuedEditPreviousManager = old.previousBooking
                     }
                 }
                 removedEntryIds.insert(existing.id)
@@ -404,13 +415,18 @@ final class OfflineOutboxStore: ObservableObject {
 
     /// Shown when an offline Replace would remove a booking that is itself the unsent new booking of another queued
     /// Replace: the first must sync (or be undone) first, so no replaced booking is lost without a trace.
+    static let replaceWhileSendingMessage =
+        "That booking is being sent right now. Try Replace again in a moment."
+
     static let replaceOfUnsentReplaceMessage =
         "That booking is still waiting to sync from an earlier Replace. Connect to the internet, or undo the earlier Replace, then try again."
 
     /// RULEBOOK 1.86.0: an offline edit of a queued Replace's new booking goes into that item (it is still a create),
     /// as an edit after a queued create stays a create. False when no Replace is queued for it.
     private func mergeIntoQueuedReplace(labour: Booking? = nil, manager: ManagerSiteBooking? = nil) -> Bool {
-        guard let id = labour?.id ?? manager?.id,
+        // Review of #293: while the Replace is being sent, an edit is an ordinary queued edit (it replays after the
+        // create); merged into the entry being removed it would be lost.
+        guard let id = labour?.id ?? manager?.id, !isInFlight(bookingId: id),
               let index = entries.firstIndex(where: {
                   $0.operation == .replaceBooking && $0.entityId.caseInsensitiveCompare(id.uuidString) == .orderedSame
               }),
