@@ -45,6 +45,7 @@ struct DLDeadlinesScreen: View {
     @State private var mode: DLViewMode = .list
     @State private var openItem: DLDeadline? = nil
     @State private var showingAdd = false
+    @State private var showingFilter = false
 
     private let cal = OrganizationRulebookContext.calendar
 
@@ -100,6 +101,10 @@ struct DLDeadlinesScreen: View {
                 contextKind: contextKind,
                 onCommit: onCommit
             )
+        }
+        .sheet(isPresented: $showingFilter) {
+            DLFilterSheet(store: store)
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showingAdd) {
             DLEditDeadlineScreen(
@@ -158,16 +163,12 @@ struct DLDeadlinesScreen: View {
                 HSSegmented<DLFilter>.Item(id: tab, title: tab.label, count: counts[tab.rawValue] ?? 0)
             }, selection: $store.filter, tint: PPColor.brand)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 HSSearchField(placeholder: "Search deadlines, floors, trades", text: $store.search)
+                DLFilterButton(activeCount: store.activeFilterCount) { showingFilter = true }
                 DLGroupingButton(grouping: $store.grouping)
             }
             .hsGutter()
-
-            HSChipRow(chips: store.trades.map { .init(id: $0, title: $0) },
-                      selection: $store.tradeFilter,
-                      tint: PPColor.brand)
-                .hsGutter()
         }
         .padding(.top, HSMetric.sectionGapTop)
     }
@@ -179,13 +180,23 @@ struct DLDeadlinesScreen: View {
         let groups = store.groups()
 
         if groups.isEmpty {
-            HSEmptyState(icon: "calendar.badge.checkmark",
-                         title: emptyTitle,
-                         message: emptyMessage,
-                         actionTitle: canManage && store.filter == .all ? "Add a deadline" : nil,
-                         action: canManage && store.filter == .all ? { HSHaptic.tap(); showingAdd = true } : nil)
-            .hsGutter()
-            .padding(.top, 30)
+            if store.activeFilterCount > 0 && !store.scopedItems.isEmpty {
+                HSEmptyState(icon: "line.3.horizontal.decrease",
+                             title: "Nothing matches",
+                             message: "No deadlines match these filters.",
+                             actionTitle: "Clear filters",
+                             action: { HSHaptic.select(); store.clearFilters() })
+                .hsGutter()
+                .padding(.top, 30)
+            } else {
+                HSEmptyState(icon: "calendar.badge.checkmark",
+                             title: emptyTitle,
+                             message: emptyMessage,
+                             actionTitle: canManage && store.filter == .all ? "Add a deadline" : nil,
+                             action: canManage && store.filter == .all ? { HSHaptic.tap(); showingAdd = true } : nil)
+                .hsGutter()
+                .padding(.top, 30)
+            }
         } else {
             // FIXES I1: a plain VStack, and each card keyed by its group and what it shows. A lazy stack kept the
             // card it had drawn when a deadline moved group (Mark complete, Reschedule), so the list showed the old

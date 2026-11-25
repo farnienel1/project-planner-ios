@@ -447,6 +447,136 @@ enum DLFilter: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// The Filter sheet's Sort (the deadlines spec: due; critical first; least progress first; trade; responsible). Due
+/// date keeps each group's own order; the others reorder the deadlines inside each group, then by due date.
+enum DLSort: String, CaseIterable, Identifiable, Hashable {
+    case dueDate, criticalFirst, leastProgress, trade, responsible
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .dueDate:       return "Due date"
+        case .criticalFirst: return "Critical first"
+        case .leastProgress: return "Least progress first"
+        case .trade:         return "Trade"
+        case .responsible:   return "Responsible"
+        }
+    }
+}
+
+/// One person a deadline can be filtered by ("Responsible"): keyed by their app user id (without case), named from
+/// the deadline's assignee names.
+struct DLResponsibleOption: Identifiable, Hashable {
+    let id: String
+    let name: String
+}
+
+/// The Filter sheet's narrowing and sorting, pure so it can be tested. Display only: nothing here is stored.
+enum DLFilterSort {
+    /// The people on a deadline: each app user id (lower case) with the name at the same position, else the id; a
+    /// name with no id is keyed by the name.
+    static func responsible(of item: DLDeadline) -> [DLResponsibleOption] {
+        var out: [DLResponsibleOption] = []
+        for (i, rawId) in item.assigneeUserIds.enumerated() {
+            let id = rawId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty else { continue }
+            let name = i < item.assignees.count ? item.assignees[i] : id
+            out.append(DLResponsibleOption(id: "id:" + id.lowercased(), name: name))
+        }
+        if item.assignees.count > item.assigneeUserIds.count {
+            for name in item.assignees[item.assigneeUserIds.count...] {
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty else { continue }
+                out.append(DLResponsibleOption(id: "name:" + trimmed.lowercased(), name: trimmed))
+            }
+        }
+        return out
+    }
+
+    /// Every person on the given deadlines, once each, by name.
+    static func responsibleOptions(_ items: [DLDeadline]) -> [DLResponsibleOption] {
+        var seen: [String: DLResponsibleOption] = [:]
+        var order: [String] = []
+        for item in items {
+            for person in responsible(of: item) where seen[person.id] == nil {
+                seen[person.id] = person
+                order.append(person.id)
+            }
+        }
+        return order.compactMap { seen[$0] }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Every floor on the given deadlines, once each (without case), in name order.
+    static func locationOptions(_ items: [DLDeadline]) -> [String] {
+        var unique: [String] = []
+        for item in items {
+            for floor in item.floors {
+                let trimmed = floor.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmed.isEmpty,
+                      !unique.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) else { continue }
+                unique.append(trimmed)
+            }
+        }
+        return unique.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    /// Whether a deadline passes the sheet's filters. Empty strings mean "any". `responsibleIds` are every key the
+    /// chosen person goes by (`DLResponsibleOption.id` form); `onFloor` is `deadlineOnLocation` (any of its floors).
+    static func matches(_ item: DLDeadline,
+                        trade: String,
+                        location: String,
+                        responsibleIds: Set<String>,
+                        criticalOnly: Bool,
+                        onFloor: (DLDeadline, String) -> Bool) -> Bool {
+        if !trade.isEmpty && item.trade != trade { return false }
+        if !location.isEmpty && !onFloor(item, location) { return false }
+        if !responsibleIds.isEmpty && !responsible(of: item).contains(where: { responsibleIds.contains($0.id) }) {
+            return false
+        }
+        if criticalOnly && !item.isCritical { return false }
+        return true
+    }
+
+    /// The deadlines of one group in the chosen order. Due date returns them as given (each group's own order).
+    static func sorted(_ items: [DLDeadline], by sort: DLSort) -> [DLDeadline] {
+        func text(_ value: String?) -> String? {
+            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        /// Present values first, in name order; missing ones last.
+        func compareText(_ a: String?, _ b: String?) -> ComparisonResult {
+            switch (a, b) {
+            case (nil, nil): return .orderedSame
+            case (nil, _):   return .orderedDescending
+            case (_, nil):   return .orderedAscending
+            case let (x?, y?): return x.localizedCaseInsensitiveCompare(y)
+            }
+        }
+        func byDue(_ a: DLDeadline, _ b: DLDeadline) -> Bool {
+            a.due == b.due ? a.title.localizedCaseInsensitiveCompare(b.title) == .orderedAscending : a.due < b.due
+        }
+        switch sort {
+        case .dueDate:
+            return items
+        case .criticalFirst:
+            return items.sorted { a, b in a.isCritical == b.isCritical ? byDue(a, b) : a.isCritical }
+        case .leastProgress:
+            return items.sorted { a, b in a.progress == b.progress ? byDue(a, b) : a.progress < b.progress }
+        case .trade:
+            return items.sorted { a, b in
+                let order = compareText(text(a.trade), text(b.trade))
+                return order == .orderedSame ? byDue(a, b) : order == .orderedAscending
+            }
+        case .responsible:
+            return items.sorted { a, b in
+                let order = compareText(text(a.assignees.first), text(b.assignees.first))
+                return order == .orderedSame ? byDue(a, b) : order == .orderedAscending
+            }
+        }
+    }
+}
+
 /// Colour for a rulebook `tone` (RULEBOOK 1.94.0 §23): red overdue, amber this week / behind pace / blocked, the
 /// app primary on track, green met, grey the rest.
 enum DLTone {
@@ -491,6 +621,12 @@ final class DLStore: ObservableObject {
     @Published var filter: DLFilter = .all
     @Published var search: String = ""
     @Published var tradeFilter: String = "All trades"
+    /// Filter sheet: a floor ("" = every location), a person (`DLResponsibleOption.id`, "" = anyone), critical path
+    /// only, and the sort. They narrow the list and timeline only; counts and the summary read `scopedItems`.
+    @Published var locationFilter: String = ""
+    @Published var responsibleFilter: String = ""
+    @Published var criticalOnly: Bool = false
+    @Published var sort: DLSort = .dueDate
 
     var now: Date = Date()
     /// When set (operative mode), stats and lists only include deadlines assigned to this user.
@@ -532,12 +668,46 @@ final class DLStore: ObservableObject {
         ["All trades"] + Set(scopedItems.compactMap(\.trade)).sorted()
     }
 
+    var locationOptions: [String] { DLFilterSort.locationOptions(scopedItems) }
+
+    var responsibleOptions: [DLResponsibleOption] { DLFilterSort.responsibleOptions(scopedItems) }
+
+    /// How many of Trade, Location, Responsible and Critical path only are on (the Filter button's count).
+    var activeFilterCount: Int {
+        (tradeFilter != "All trades" ? 1 : 0) + (locationFilter.isEmpty ? 0 : 1)
+            + (responsibleFilter.isEmpty ? 0 : 1) + (criticalOnly ? 1 : 0)
+    }
+
+    /// "Clear filters": every sheet filter off and the sort back to Due date.
+    func clearFilters() {
+        tradeFilter = "All trades"
+        locationFilter = ""
+        responsibleFilter = ""
+        criticalOnly = false
+        sort = .dueDate
+    }
+
+    /// Every key the chosen person goes by: their id, plus their other ids (`personIdSet`, as `scopedItems`).
+    private var responsibleKeys: Set<String> {
+        guard !responsibleFilter.isEmpty else { return [] }
+        guard responsibleFilter.hasPrefix("id:") else { return [responsibleFilter] }
+        let uid = String(responsibleFilter.dropFirst(3))
+        let ids = RulebookRosterSnapshot.personIds(forUserId: uid).map { "id:" + $0.lowercased() }
+        return Set(ids + [responsibleFilter])
+    }
+
     private var filtered: [DLDeadline] {
-        scopedItems.filter { item in
+        let keys = responsibleKeys
+        return scopedItems.filter { item in
             // Segment
             if filter != .all && !item.display(now: now).tabs.contains(filter.rawValue) { return false }
-            // Trade chip
-            if tradeFilter != "All trades" && item.trade != tradeFilter { return false }
+            // Filter sheet: Trade, Location (any of its floors), Responsible, Critical path only
+            if !DLFilterSort.matches(item,
+                                     trade: tradeFilter == "All trades" ? "" : tradeFilter,
+                                     location: locationFilter,
+                                     responsibleIds: keys,
+                                     criticalOnly: criticalOnly,
+                                     onFloor: { $0.isOn(floor: $1) }) { return false }
             // Search covers title, location, trade and assignee
             if !search.isEmpty {
                 let hay = [item.title, item.floors.joined(separator: " "), item.trade ?? "",
@@ -552,12 +722,15 @@ final class DLStore: ObservableObject {
     /// The grouped, sorted list the screen renders.
     func groups() -> [DLGroup] {
         let list = filtered
+        let grouped: [DLGroup]
         switch grouping {
-        case .date:     return dateGroups(list)
-        case .location: return floorGroups(list)
-        case .trade:    return keyed(list, key: { $0.trade ?? "No trade" }, icon: nil)
-        case .assignee: return keyed(list, key: { $0.assignees.first ?? "Unassigned" }, icon: nil)
+        case .date:     grouped = dateGroups(list)
+        case .location: grouped = floorGroups(list)
+        case .trade:    grouped = keyed(list, key: { $0.trade ?? "No trade" }, icon: nil)
+        case .assignee: grouped = keyed(list, key: { $0.assignees.first ?? "Unassigned" }, icon: nil)
         }
+        guard sort != .dueDate else { return grouped }
+        return grouped.map { DLGroup(id: $0.id, title: $0.title, items: DLFilterSort.sorted($0.items, by: sort), accent: $0.accent) }
     }
 
     /// Date grouping: the rulebook groups in order (RULEBOOK 1.94.0 §23 `DEADLINE_GROUPS` — Overdue, This week, Next

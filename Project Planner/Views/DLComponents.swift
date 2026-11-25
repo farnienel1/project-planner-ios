@@ -703,6 +703,116 @@ struct DLGroupingButton: View {
     }
 }
 
+/// The "Filter" pill under the band, with the number of filters on.
+struct DLFilterButton: View {
+    let activeCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            HSHaptic.select(); action()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10.5, weight: .bold))
+                Text("Filter").font(.system(size: 12, weight: .bold))
+                if activeCount > 0 {
+                    Text("\(activeCount)")
+                        .font(.system(size: 10.5, weight: .heavy))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(PPColor.brand, in: Capsule())
+                }
+            }
+            .foregroundStyle(PPColor.brand)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(HS.blueBg)
+            .clipShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(activeCount > 0 ? "Filter, \(activeCount) on" : "Filter")
+        .accessibilityIdentifier("dlDeadlinesScreen.filter")
+    }
+}
+
+/// The Filter sheet: Trade, Location, Responsible, Critical path only and Sort (the web toolbar's choices). It
+/// narrows the list and timeline only; the summary and tab counts keep reading every deadline the viewer sees.
+struct DLFilterSheet: View {
+    @ObservedObject var store: DLStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let trades = store.trades
+        let locations = store.locationOptions
+        let people = store.responsibleOptions
+        NavigationStack {
+            Form {
+                Section("Trade") {
+                    Picker("Trade", selection: $store.tradeFilter) {
+                        ForEach(trades, id: \.self) { Text($0).tag($0) }
+                        // A chosen trade no deadline uses any more stays listed, never silently "All trades".
+                        if !trades.contains(store.tradeFilter) { Text(store.tradeFilter).tag(store.tradeFilter) }
+                    }
+                    .accessibilityIdentifier("dlFilter.trade")
+                }
+                Section("Location") {
+                    Picker("Location", selection: $store.locationFilter) {
+                        Text("All locations").tag("")
+                        ForEach(locations, id: \.self) { Text($0).tag($0) }
+                        if !store.locationFilter.isEmpty, !locations.contains(store.locationFilter) {
+                            Text(store.locationFilter).tag(store.locationFilter)
+                        }
+                    }
+                    .accessibilityIdentifier("dlFilter.location")
+                }
+                Section("Responsible") {
+                    Picker("Responsible", selection: $store.responsibleFilter) {
+                        Text("Anyone").tag("")
+                        ForEach(people) { Text($0.name).tag($0.id) }
+                        if !store.responsibleFilter.isEmpty, !people.contains(where: { $0.id == store.responsibleFilter }) {
+                            Text("Selected").tag(store.responsibleFilter)
+                        }
+                    }
+                    .accessibilityIdentifier("dlFilter.responsible")
+                }
+                Section {
+                    Toggle("Critical path only", isOn: $store.criticalOnly)
+                        .tint(PPColor.brand)
+                        .accessibilityIdentifier("dlFilter.criticalOnly")
+                }
+                Section("Sort") {
+                    Picker("Sort", selection: $store.sort) {
+                        ForEach(DLSort.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    .accessibilityIdentifier("dlFilter.sort")
+                }
+                if store.activeFilterCount > 0 || store.sort != .dueDate {
+                    Section {
+                        Button("Clear filters", role: .destructive) {
+                            HSHaptic.select(); store.clearFilters()
+                        }
+                        .accessibilityIdentifier("dlFilter.clear")
+                    }
+                }
+            }
+            .tint(PPColor.brand)
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("dlFilter.done")
+                }
+            }
+        }
+    }
+}
+
 // =====================================================================
 // MARK: - 16. Countdown ring (detail sheet hero)
 // =====================================================================
