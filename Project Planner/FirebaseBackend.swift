@@ -12876,10 +12876,15 @@ extension FirebaseBackend {
     }
 
     private func deadlineMap(_ item: DLDeadline) -> [String: Any] {
-        [
+        let locationFields = CanonicalBusinessEngine.deadlineLocationWriteFields(item.floors)
+            ?? (location: item.floors.first ?? "", locations: item.floors)
+        return [
             "id": WorkDocumentKeys.storedId(for: item.id),
             "title": item.title,
-            "location": item.location ?? "",
+            // RULEBOOK 1.92.0: `deadlineLocationWriteFields` — the list and its first floor, so older builds still read
+            // `location`. The list is always written, so a re-save never drops another device's floors.
+            "location": locationFields.location,
+            "locations": locationFields.locations,
             "trade": item.trade ?? "",
             "detail": item.detail ?? "",
             "start": item.start.map(Timestamp.init(date:)) as Any,
@@ -12922,6 +12927,7 @@ extension FirebaseBackend {
             id: WorkDocumentKeys.inAppId(for: row.id),
             title: row.optionalText("title") ?? "Untitled deadline",
             location: row.optionalText("location"),
+            locations: row.strings("locations"),
             trade: row.optionalText("trade"),
             detail: row.optionalText("detail"),
             start: row.date("startMs"),
@@ -13281,13 +13287,16 @@ extension FirebaseBackend {
             let orgId = try await ensureReadableOrganization(resolved)
             let snap = try await deadlineAssignmentsDocumentRef(organizationId: orgId).getDocument()
             guard let data = snap.data() else { return [] }
+            // Every id the person goes by (`personIdSet`), so a ghost's deadlines follow them after app access
+            // (RULEBOOK 1.92.0).
+            let personIds = RulebookRosterSnapshot.personIds(forUserId: trimmed)
             // `deadlineAssignedProjectIds`: the nested map and older literal `projects.{KEY}` fields, ids compared
             // without case. Keys are upper case (`deadlineProjectKey`); a UUID key is the job's in-app id.
             if let jobIds, !jobIds.isEmpty {
-                let stored = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: [trimmed], jobIds: jobIds) ?? []
+                let stored = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: personIds, jobIds: jobIds) ?? []
                 return Set(stored.map { WorkDocumentKeys.inAppId(for: $0) })
             }
-            let keys = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: [trimmed]) ?? []
+            let keys = CanonicalBusinessEngine.deadlineAssignedProjectIds(data, personIds: personIds) ?? []
             return Set(keys.map { UUID(uuidString: $0) ?? WorkDocumentKeys.inAppId(for: $0) })
         } catch {
             print("🔥🔥🔥 DEBUG: [loadDeadlineAssignedProjectIds] \(error.localizedDescription)")

@@ -58,6 +58,7 @@ struct EditMaterialView: View {
             Form {
                 Section("Material Details") {
                     DatePicker("Date", selection: $selectedDate, displayedComponents: .date)
+                        .closesCalendarOnDayPick(selectedDate)
                         .accessibilityIdentifier("editMaterial.date")
                         .datePickerStyle(.compact)
                     

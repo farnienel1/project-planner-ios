@@ -1511,6 +1511,7 @@ private struct EditUserDialogModifier: ViewModifier {
                         selection: $employmentTypeEffectiveDate,
                         displayedComponents: .date
                     )
+                    .closesCalendarOnDayPick(employmentTypeEffectiveDate)
                     .accessibilityIdentifier("editUserDialogModifier.selectTheDateThisUserStarts")
                     Button("Use this date") {
                         let selected = london.startOfDay(for: employmentTypeEffectiveDate)
@@ -2055,6 +2056,7 @@ struct EditUserView: View {
                 } else {
                     HStack {
                         DatePicker("Start date", selection: employmentStartDateBinding, displayedComponents: .date)
+                            .closesCalendarOnDayPick(employmentStartDateBinding.wrappedValue)
                             .labelsHidden()
                             .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                             .accessibilityIdentifier("editUser.employmentStartDate")

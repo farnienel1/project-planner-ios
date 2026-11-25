@@ -426,6 +426,7 @@ struct EditProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
                 DatePicker("", selection: $projectStartDate, displayedComponents: .date)
+                    .closesCalendarOnDayPick(projectStartDate)
                     .accessibilityIdentifier("editProject.datePicker")
                     .labelsHidden()
             }
@@ -438,6 +439,7 @@ struct EditProjectView: View {
                     .foregroundStyle(ProjectWorksRevampColors.muted)
                 Spacer()
                 DatePicker("", selection: $projectEndDate, displayedComponents: .date)
+                    .closesCalendarOnDayPick(projectEndDate)
                     .accessibilityIdentifier("editProject.datePicker2")
                     .labelsHidden()
             }
