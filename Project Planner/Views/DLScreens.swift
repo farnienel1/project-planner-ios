@@ -43,11 +43,13 @@ struct DLDeadlinesScreen: View {
     var jobSiteAudits: [SiteAudit] = []
 
     @State private var mode: DLViewMode = .list
-    @State private var selectedDay: Date? = nil
     @State private var openItem: DLDeadline? = nil
     @State private var showingAdd = false
 
-    private let cal = Calendar.current
+    private let cal = OrganizationRulebookContext.calendar
+
+    /// Project name and code, the subtitle of every deadline sheet (FIXES I6).
+    private var contextTitle: String { [contextName, contextRef].filter { !$0.isEmpty }.joined(separator: " · ") }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -58,12 +60,7 @@ struct DLDeadlinesScreen: View {
                     contextName: contextName,
                     contextRef: contextRef,
                     contextKind: contextKind,
-                    total: "\(store.scopedItems.count)",
-                    met: "\(store.completeCount)",
-                    overdue: "\(store.overdueCount)",
-                    overdueHighlighted: store.overdueCount > 0,
-                    progress: store.completionRatio,
-                    meta: "\(store.completeCount) of \(store.scopedItems.count) deadlines met"
+                    summary: store.summaryLine
                 )
             }
             .padding(.bottom, PPMetrics.headerBottomPadding)
@@ -72,9 +69,6 @@ struct DLDeadlinesScreen: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
-                    statGrid
-                    riskBanner
-                    weekRail
                     segments
 
                     if mode == .list {
@@ -95,6 +89,7 @@ struct DLDeadlinesScreen: View {
             DLDeadlineDetailSheet(
                 item: item,
                 store: store,
+                contextTitle: contextTitle,
                 canManage: canManage,
                 authorName: authorName,
                 siteAudits: siteAudits,
@@ -109,6 +104,7 @@ struct DLDeadlinesScreen: View {
         .sheet(isPresented: $showingAdd) {
             DLEditDeadlineScreen(
                 contextKind: contextKind,
+                contextTitle: contextTitle,
                 people: people,
                 siteAudits: siteAudits,
                 tradeOptions: tradeOptions,
@@ -152,101 +148,15 @@ struct DLDeadlinesScreen: View {
         }
     }
 
-    // MARK: Stats
-
-    private var statGrid: some View {
-        LazyVGrid(columns: [GridItem(.flexible(), spacing: HSMetric.rowGap),
-                            GridItem(.flexible(), spacing: HSMetric.rowGap)],
-                  spacing: HSMetric.rowGap) {
-
-            HSStatTile(value: "\(store.overdueCount)", label: "Overdue",
-                       accent: HS.red, icon: "exclamationmark.triangle.fill") {
-                HSHaptic.select(); showFilter(.overdue)
-            }
-            HSStatTile(value: "\(store.thisWeekCount)", label: "Due this week",
-                       accent: HS.amber, icon: "calendar") {
-                HSHaptic.select(); showFilter(.thisWeek)
-            }
-            HSStatTile(value: "\(store.atRiskCount)", label: "Behind pace",
-                       accent: HS.violet, icon: "gauge.with.dots.needle.33percent") {
-                HSHaptic.select(); showFilter(.atRisk)
-            }
-            HSStatTile(value: "\(store.completeCount)", label: "Completed",
-                       accent: HS.green, icon: "checkmark.seal.fill") {
-                HSHaptic.select(); showFilter(.complete)
-            }
-        }
-        .hsGutter()
-        .padding(.top, 14)
-    }
-
-    @ViewBuilder
-    private var riskBanner: some View {
-        if store.overdueCount > 0 || store.atRiskCount > 0 {
-            DLRiskBanner(overdue: store.overdueCount,
-                         atRisk: store.atRiskCount,
-                         criticalOpen: store.criticalOpen) {
-                showFilter(store.overdueCount > 0 ? .overdue : .atRisk)
-            }
-            .hsGutter()
-            .padding(.top, 12)
-        }
-    }
-
-    // MARK: Week rail
-
-    private var railDays: [Date] {
-        let start = cal.date(byAdding: .day, value: -3, to: cal.startOfDay(for: Date())) ?? Date()
-        return (0..<21).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-    }
-
-    private var weekRail: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HSSectionHeader(title: "Next three weeks",
-                            trailing: selectedDay == nil ? nil : "Clear") {
-                selectedDay = nil
-            }
-            .hsGutter()
-
-            DLWeekRail(days: railDays,
-                       load: { store.load(on: $0) },
-                       overdueOn: { store.hasOverdue(on: $0) },
-                       selected: $selectedDay)
-        }
-        .padding(.top, HSMetric.sectionGapTop)
-    }
-
     // MARK: Segments + filters
 
-    /// Picking a filter (a segment, a stat tile or the risk banner) shows that whole filter: a day picked on the week
-    /// rail is cleared, so "All" lists every deadline — past, this week, later and complete — and never only the day
-    /// left selected on the rail. Display only.
-    private func showFilter(_ filter: DLFilter) {
-        selectedDay = nil
-        store.filter = filter
-        mode = .list
-    }
-
-    /// The segments' binding: choosing a segment (even the one already chosen) clears the week-rail day.
-    private var filterSelection: Binding<DLFilter> {
-        Binding(
-            get: { store.filter },
-            set: { newValue in
-                selectedDay = nil
-                store.filter = newValue
-            }
-        )
-    }
-
+    /// The tabs (RULEBOOK 1.94.0 §23 `DEADLINE_TABS`) with their `deadlineTabCounts`.
     private var segments: some View {
-        VStack(spacing: 10) {
-            HSSegmented(items: [
-                .init(id: DLFilter.all,      title: "All",       count: store.scopedItems.count),
-                .init(id: DLFilter.overdue,  title: "Overdue",   count: store.overdueCount),
-                .init(id: DLFilter.thisWeek, title: "This week", count: store.thisWeekCount),
-                .init(id: DLFilter.atRisk,   title: "At risk",   count: store.atRiskCount),
-                .init(id: DLFilter.complete, title: "Complete",  count: store.completeCount)
-            ], selection: filterSelection)
+        let counts = store.tabCounts
+        return VStack(spacing: 10) {
+            HSSegmented(items: DLFilter.allCases.map { tab in
+                HSSegmented<DLFilter>.Item(id: tab, title: tab.label, count: counts[tab.rawValue] ?? 0)
+            }, selection: $store.filter, tint: PPColor.brand)
 
             HStack(spacing: 10) {
                 HSSearchField(placeholder: "Search deadlines, floors, trades", text: $store.search)
@@ -255,7 +165,8 @@ struct DLDeadlinesScreen: View {
             .hsGutter()
 
             HSChipRow(chips: store.trades.map { .init(id: $0, title: $0) },
-                      selection: $store.tradeFilter)
+                      selection: $store.tradeFilter,
+                      tint: PPColor.brand)
                 .hsGutter()
         }
         .padding(.top, HSMetric.sectionGapTop)
@@ -263,19 +174,9 @@ struct DLDeadlinesScreen: View {
 
     // MARK: List
 
-    private var visibleGroups: [DLGroup] {
-        let groups = store.groups()
-        guard let day = selectedDay else { return groups }
-        return groups.compactMap { g in
-            let filtered = g.items.filter { cal.isDate($0.due, inSameDayAs: day) }
-            return filtered.isEmpty ? nil : DLGroup(id: g.id, title: g.title,
-                                                    items: filtered, accent: g.accent)
-        }
-    }
-
     @ViewBuilder
     private var listBody: some View {
-        let groups = visibleGroups
+        let groups = store.groups()
 
         if groups.isEmpty {
             HSEmptyState(icon: "calendar.badge.checkmark",
@@ -286,7 +187,10 @@ struct DLDeadlinesScreen: View {
             .hsGutter()
             .padding(.top, 30)
         } else {
-            LazyVStack(spacing: 0) {
+            // FIXES I1: a plain VStack, and each card keyed by its group and what it shows. A lazy stack kept the
+            // card it had drawn when a deadline moved group (Mark complete, Reschedule), so the list showed the old
+            // card while the header already counted the change.
+            VStack(spacing: 0) {
                 ForEach(groups) { group in
                     DLGroupHeader(title: group.title, count: group.items.count, accent: group.accent)
                         .hsGutter()
@@ -298,6 +202,7 @@ struct DLDeadlinesScreen: View {
                                        showLocation: store.grouping != .location,
                                        onOpen: { openItem = item },
                                        onUpdate: canManage ? { openItem = item } : nil)
+                            .id("\(group.id)|\(item.id)|\(item.status.rawValue)|\(item.due.timeIntervalSince1970)|\(item.progress)")
                             .hsGutter()
                             .padding(.bottom, HSMetric.rowGap)
                     }
@@ -308,11 +213,11 @@ struct DLDeadlinesScreen: View {
 
     private var emptyTitle: String {
         switch store.filter {
-        case .overdue:  return "Nothing overdue"
-        case .atRisk:   return "Everything on pace"
-        case .thisWeek: return "Nothing due this week"
-        case .complete: return "Nothing completed yet"
-        case .all:      return "No deadlines yet"
+        case .overdue:    return "Nothing overdue"
+        case .behindPace: return "Everything on pace"
+        case .thisWeek:   return "Nothing due this week"
+        case .completed:  return "Nothing completed yet"
+        case .all:        return "No deadlines yet"
         }
     }
 
@@ -400,6 +305,8 @@ struct DLDeadlineDetailSheet: View {
 
     let item: DLDeadline
     @ObservedObject var store: DLStore
+    /// Project name and code for the subtitle (FIXES I6: never the floor).
+    var contextTitle: String = ""
     var canManage: Bool = true
     var authorName: String = "Unknown"
     var siteAudits: [DLSiteAuditRef] = []
@@ -420,11 +327,13 @@ struct DLDeadlineDetailSheet: View {
     @State private var reportTarget: FileReportTarget?
 
     private var live: DLDeadline { store.items.first(where: { $0.id == item.id }) ?? item }
+    /// RULEBOOK 1.94.0 §23 `deadlineDisplay` of the live copy.
+    private var liveView: RulebookDeadlineDisplay { live.display() }
 
     var body: some View {
         VStack(spacing: 0) {
             HSNavBar(title: "Deadline",
-                     subtitle: live.floorsText,
+                     subtitle: contextTitle.isEmpty ? nil : contextTitle,
                      onBack: { dismiss() },
                      backSymbol: "xmark") {
                 if canManage {
@@ -459,7 +368,8 @@ struct DLDeadlineDetailSheet: View {
             }
             .modifier(DLDeadlinesContentSheet())
 
-            if canManage {
+            // FIXES I2: a completed deadline is locked — no Reschedule or Mark complete.
+            if canManage && live.status != .complete {
                 HSBottomBar {
                     HStack(spacing: 10) {
                         Button {
@@ -479,7 +389,7 @@ struct DLDeadlineDetailSheet: View {
                                 Label("Mark complete", systemImage: "checkmark")
                             }
                             .accessibilityIdentifier("dlDeadlineDetail.markComplete")
-                            .buttonStyle(HSFilledButton(tone: .teal))
+                            .buttonStyle(HSFilledButton(tone: .blue))
                         }
                     }
                 }
@@ -487,12 +397,14 @@ struct DLDeadlineDetailSheet: View {
         }
         .background(PPColor.page.ignoresSafeArea())
         .onAppear { percent = live.progressPercent }
+        .onChange(of: live.progressPercent) { _, newValue in percent = newValue }
         .sheet(isPresented: $showReschedule) {
             DLRescheduleSheet(item: live, store: store, authorName: authorName)
         }
         .sheet(isPresented: $showingEdit) {
             DLEditDeadlineScreen(
                 contextKind: contextKind,
+                contextTitle: contextTitle,
                 existing: live,
                 people: people,
                 siteAudits: siteAudits,
@@ -532,7 +444,8 @@ struct DLDeadlineDetailSheet: View {
 
             DLPacingBlock(item: live)
 
-            if canManage {
+            // FIXES I3: a completed deadline shows 100% and no Save progress.
+            if canManage && live.status != .complete {
                 DLProgressPicker(percent: $percent)
 
                 if percent != live.progressPercent {
@@ -543,12 +456,12 @@ struct DLDeadlineDetailSheet: View {
                         Text("Save progress")
                     }
                     .accessibilityIdentifier("dlDeadlineDetail.saveProgress")
-                    .buttonStyle(HSFilledButton(tone: .teal, size: 12))
+                    .buttonStyle(HSFilledButton(tone: .blue, size: 12))
                 }
             }
 
-            if let gap = live.pacingGap(), gap >= 5, live.status != .complete {
-                Text("At the current rate this finishes around \(DLFormat.day(projectedFinish)). That is \(gap)% behind where the programme expects it to be today.")
+            if let pace = liveView.paceText {
+                Text("\(liveView.statusLabel): \(pace) by today.")
                     .font(.system(size: 12.5))
                     .foregroundStyle(HS.inkSoft)
                     .hsNoClip(4)
@@ -561,15 +474,6 @@ struct DLDeadlineDetailSheet: View {
         .hsCard()
         .hsGutter()
         .padding(.top, HSMetric.sectionGapTop)
-    }
-
-    /// Straight-line extrapolation from progress so far. Crude on purpose —
-    /// it is a prompt to act, not a forecast anybody should plan around.
-    private var projectedFinish: Date {
-        guard let start = live.start, live.progress > 0.02 else { return live.due }
-        let elapsed = Date().timeIntervalSince(start)
-        let total = elapsed / live.progress
-        return start.addingTimeInterval(total)
     }
 
     private func badgeTone(for status: DLStatus) -> HSBadge.Tone {
@@ -661,7 +565,7 @@ struct DLDeadlineDetailSheet: View {
                                 openAudit = audit
                             }
                         } label: {
-                            DLFieldRow(icon: "clipboard.fill", tint: HS.teal, label: "Site audit") {
+                            DLFieldRow(icon: "clipboard.fill", tint: PPColor.brand, label: "Site audit") {
                                 HStack(spacing: 6) {
                                     Text(audit?.title ?? live.siteAuditTitle ?? "Attached site audit")
                                         .font(.system(size: 14.5, weight: .semibold))
@@ -785,10 +689,10 @@ struct DLRescheduleSheet: View {
         _newDate = State(initialValue: item.due)
     }
 
+    /// Whole organisation days moved (sign only: later or earlier). The words are `deadlineMovedNote`.
     private var movedDays: Int {
-        Calendar.current.dateComponents([.day],
-                                        from: Calendar.current.startOfDay(for: item.due),
-                                        to: Calendar.current.startOfDay(for: newDate)).day ?? 0
+        let cal = OrganizationRulebookContext.calendar
+        return cal.dateComponents([.day], from: cal.startOfDay(for: item.due), to: cal.startOfDay(for: newDate)).day ?? 0
     }
 
     private var canSave: Bool { movedDays != 0 && !(picked ?? reason).isEmpty }
@@ -818,9 +722,7 @@ struct DLRescheduleSheet: View {
                     .padding(.top, 8)
 
                     if movedDays != 0 {
-                        Text(movedDays > 0
-                             ? "Pushing back \(movedDays) day\(movedDays == 1 ? "" : "s")"
-                             : "Pulling forward \(-movedDays) day\(movedDays == -1 ? "" : "s")")
+                        Text(CanonicalBusinessEngine.deadlineMovedNote(from: item.due, to: newDate) ?? "")
                             .font(.system(size: 12.5, weight: .bold))
                             .foregroundStyle(movedDays > 0 ? HS.red : HS.green)
                             .hsGutter()
@@ -830,7 +732,7 @@ struct DLRescheduleSheet: View {
                     DatePicker("", selection: $newDate, displayedComponents: .date)
                         .accessibilityIdentifier("dlReschedule.datePicker")
                         .datePickerStyle(.graphical)
-                        .tint(HS.teal)
+                        .tint(PPColor.brand)
                         .hsCard()
                         .hsGutter()
                         .padding(.top, HSMetric.rowGap)
@@ -841,8 +743,8 @@ struct DLRescheduleSheet: View {
                     VStack(alignment: .leading, spacing: HSMetric.sectionGapBot) {
                         HSSectionHeader(title: "Reason — required").hsGutter()
 
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
+                        // FIXES I8: the reasons wrap, so every one is visible.
+                        PPWrapLayout(spacing: 8) {
                                 ForEach(reasons, id: \.self) { r in
                                     let active = picked == r
                                     Button {
@@ -856,15 +758,14 @@ struct DLRescheduleSheet: View {
                                             .fixedSize()
                                             .padding(.horizontal, 13)
                                             .padding(.vertical, 8)
-                                            .background(active ? HS.amber : HS.fill)
+                                            .background(active ? PPColor.brand : HS.fill)
                                             .clipShape(Capsule())
                                     }
                                     .accessibilityIdentifier("dlReschedule.row.\(r).\(AccessibilityID.token(r))")
                                     .buttonStyle(HSPressStyle())
                                 }
-                            }
-                            .hsGutter()
                         }
+                        .hsGutter()
 
                         TextField("Add detail (optional)", text: $reason, axis: .vertical)
                             .accessibilityIdentifier("dlReschedule.addDetailOptional")
@@ -900,7 +801,7 @@ struct DLRescheduleSheet: View {
                         Text("Confirm new date")
                     }
                     .accessibilityIdentifier("dlReschedule.button")
-                    .buttonStyle(HSFilledButton(tone: .teal))
+                    .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.45)
                 }
@@ -968,6 +869,8 @@ struct DLRescheduleSheet: View {
 struct DLEditDeadlineScreen: View {
 
     var contextKind: String = "Project"
+    /// Project name and code for the subtitle (FIXES I6); the kind when not given.
+    var contextTitle: String = ""
     var existing: DLDeadline? = nil
     var people: [DLPerson] = []
     var siteAudits: [DLSiteAuditRef] = []
@@ -1024,7 +927,7 @@ struct DLEditDeadlineScreen: View {
     var body: some View {
         VStack(spacing: 0) {
             HSNavBar(title: existing == nil ? "New deadline" : "Edit deadline",
-                     subtitle: contextKind,
+                     subtitle: contextTitle.isEmpty ? contextKind : contextTitle,
                      onBack: { dismiss() },
                      backSymbol: "xmark") { EmptyView() }
                 .modifier(DLNavyBand())
@@ -1057,7 +960,7 @@ struct DLEditDeadlineScreen: View {
                         Text(existing == nil ? "Add deadline" : "Save changes")
                     }
                     .accessibilityIdentifier("dlEditDeadlineScreen.addDeadline")
-                    .buttonStyle(HSFilledButton(tone: .teal))
+                    .buttonStyle(HSFilledButton(tone: .blue))
                     .disabled(!canSave)
                     .opacity(canSave ? 1 : 0.45)
                 }
@@ -1154,7 +1057,7 @@ struct DLEditDeadlineScreen: View {
                 .foregroundStyle(selected ? HS.onAccent : HS.slate)
                 .fixedSize()
                 .padding(.horizontal, 12).padding(.vertical, 7)
-                .background(selected ? HS.teal : HS.fill)
+                .background(selected ? PPColor.brand : HS.fill)
                 .clipShape(Capsule())
         }
         .accessibilityIdentifier("dlEditDeadlineScreen.\(AccessibilityID.token(title))")
@@ -1175,15 +1078,15 @@ struct DLEditDeadlineScreen: View {
                         DatePicker("", selection: $start, displayedComponents: .date)
                             .closesCalendarOnDayPick(start)
                             .accessibilityIdentifier("dlEditDeadlineScreen.datePicker")
-                            .labelsHidden().tint(HS.teal)
+                            .labelsHidden().tint(PPColor.brand)
                     }
                 }
                 HSDivider(inset: 62)
-                DLFieldRow(icon: "flag.checkered", tint: HS.teal, label: "Due") {
+                DLFieldRow(icon: "flag.checkered", tint: PPColor.brand, label: "Due") {
                     DatePicker("", selection: $due, displayedComponents: .date)
                         .closesCalendarOnDayPick(due)
                         .accessibilityIdentifier("dlEditDeadlineScreen.datePicker2")
-                        .labelsHidden().tint(HS.teal)
+                        .labelsHidden().tint(PPColor.brand)
                 }
             }
             .hsGutter()
@@ -1207,7 +1110,7 @@ struct DLEditDeadlineScreen: View {
                     } label: {
                         Text(livePeople.allSatisfy({ selectedPersonIds.contains($0.id) }) ? "Clear live" : "Select all live users")
                             .font(.system(size: 12, weight: .bold))
-                            .foregroundStyle(HS.teal)
+                            .foregroundStyle(PPColor.brand)
                     }
                     .accessibilityIdentifier("dlEditDeadlineScreen.clearLive")
                     .buttonStyle(HSPressStyle())
@@ -1281,7 +1184,7 @@ struct DLEditDeadlineScreen: View {
                 } label: {
                     HStack(spacing: 12) {
                         HSIconTile(systemName: selectedPersonIds.contains(person.id) ? "checkmark.circle.fill" : "circle",
-                                   tint: selectedPersonIds.contains(person.id) ? HS.teal : HS.slate2,
+                                   tint: selectedPersonIds.contains(person.id) ? PPColor.brand : HS.slate2,
                                    size: 32)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(person.name)
@@ -1329,7 +1232,7 @@ struct DLEditDeadlineScreen: View {
                     HSHaptic.tap()
                     showingAuditPicker = true
                 } label: {
-                    DLFieldRow(icon: "clipboard.fill", tint: HS.teal, label: "Site audit") {
+                    DLFieldRow(icon: "clipboard.fill", tint: PPColor.brand, label: "Site audit") {
                         Text(selectedAudit?.title ?? "None — tap to attach one")
                             .font(.system(size: 14.5, weight: .semibold))
                             .foregroundStyle(HS.ink)
@@ -1355,7 +1258,7 @@ struct DLEditDeadlineScreen: View {
                 HSDivider(inset: 62)
                 DLToggleRow(icon: "bell.fill", tint: HS.amber,
                             title: "Remind me",
-                            subtitle: "Two days before, and again on the day",
+                            subtitle: "2 days before, and on the day",
                             isOn: $reminder)
             }
             .hsGutter()
@@ -1495,7 +1398,7 @@ struct DLSiteAuditAttachSheet: View {
                                     } label: {
                                         Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle.fill")
                                             .font(.system(size: 28, weight: .semibold))
-                                            .foregroundStyle(selected ? HS.teal : HS.slate2)
+                                            .foregroundStyle(selected ? PPColor.brand : HS.slate2)
                                     }
                                     .accessibilityIdentifier("dlSiteAuditAttach.row.\(audit.id)")
                                     .buttonStyle(HSPressStyle())
@@ -1520,7 +1423,7 @@ struct DLSiteAuditAttachSheet: View {
                     Text(selectedId == nil ? "Done" : "Use this site audit")
                 }
                 .accessibilityIdentifier("dlSiteAuditAttach.done")
-                .buttonStyle(HSFilledButton(tone: .teal))
+                .buttonStyle(HSFilledButton(tone: .blue))
             }
         }
         .background(PPColor.page.ignoresSafeArea())
@@ -1531,21 +1434,16 @@ struct DLSiteAuditAttachSheet: View {
 // MARK: - Navy header + light sheet (visual only, Deadlines screens)
 // =====================================================================
 
-/// Site name, job number and kind (as the old context hero showed) plus the
-/// deadline counts the screen already computes. Labels only, no actions.
+/// Site name, job number and kind (as the old context hero showed) plus the one rulebook summary line
+/// (`deadlineSummaryLine`, FIXES I7: no second set of counts). Labels only, no actions.
 private struct DLNavyContextHeader: View {
     let contextName: String
     let contextRef: String
     let contextKind: String
-    let total: String
-    let met: String
-    let overdue: String
-    let overdueHighlighted: Bool
-    let progress: Double
-    let meta: String
+    let summary: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 12) {
                 PPNavyPageTitle(
                     eyebrow: "\(contextRef) · \(contextKind)",
@@ -1555,22 +1453,12 @@ private struct DLNavyContextHeader: View {
                 PPIconTile(symbol: "calendar.badge.clock", family: .plan, size: 40)
             }
 
-            HStack(alignment: .top, spacing: 14) {
-                PPStat(value: total, label: "Deadlines")
-                PPStatDivider()
-                PPStat(value: met, label: "Met")
-                PPStatDivider()
-                PPStat(value: overdue, label: "Overdue", highlight: overdueHighlighted)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            VStack(alignment: .leading, spacing: 6) {
-                PPOnNavyProgressBar(fraction: progress)
-                Text(meta)
-                    .font(.footnote.weight(.medium))
+            if !summary.isEmpty {
+                Text(summary)
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(PPColor.onNavySecondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("dlDeadlinesScreen.summary")
             }
         }
         .padding(.horizontal, PPMetrics.screenGutter)

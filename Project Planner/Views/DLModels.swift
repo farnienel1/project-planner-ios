@@ -294,36 +294,33 @@ extension DLDeadline {
         }
     }
 
-    /// Where progress SHOULD be today if the work were running evenly between
-    /// start and due. This is what makes the pacing bar work: we draw the
-    /// actual fill, then a marker at this value. A gap you can see is a gap
-    /// you act on.
-    func expectedProgress(now: Date = Date()) -> Double? {
-        guard let start, due > start else { return nil }
-        let total = due.timeIntervalSince(start)
-        let done  = now.timeIntervalSince(start)
-        return min(max(done / total, 0), 1)
+    /// When the deadline was added (its "created" history entry), else nil. Read by `deadlineDisplay` as the start of
+    /// the pace line when the deadline has no start date.
+    var createdAt: Date? {
+        for change in history.reversed() { if case .created = change.kind { return change.at } }
+        return nil
     }
 
-    /// Behind pace by more than 15 points, with the finish line in sight.
-    /// Deliberately conservative — an at-risk badge that cries wolf gets ignored.
-    func isAtRisk(now: Date = Date()) -> Bool {
-        guard status != .complete else { return false }
-        if status == .blocked && daysRemaining(now: now) <= 7 { return true }
-        guard let expected = expectedProgress(now: now) else { return false }
-        return expected - progress > 0.15 && daysRemaining(now: now) >= 0
+    /// The fields `deadlineDisplay` reads (RULEBOOK 1.94.0 §23).
+    var displayInput: RulebookDeadlineDisplayInput {
+        RulebookDeadlineDisplayInput(status: status.rawValue, progress: progress, due: due, start: start,
+                                     createdAt: createdAt, completedAt: completedAt, title: title)
     }
 
-    /// How far behind pace, in points, for the "X% behind pace" line.
-    func pacingGap(now: Date = Date()) -> Int? {
-        guard let expected = expectedProgress(now: now), expected > progress else { return nil }
-        return Int(((expected - progress) * 100).rounded())
+    /// RULEBOOK 1.94.0 §23 `CanonicalBusinessEngine.deadlineDisplay`: status, colour, tab, group and words, on the
+    /// organisation day. When the script did not answer: no colour, no words, listed under Later (or Completed).
+    func display(now: Date = Date()) -> RulebookDeadlineDisplay {
+        if let answer = CanonicalBusinessEngine.deadlineDisplay(displayInput, now: now) { return answer }
+        let done = status == .complete
+        return RulebookDeadlineDisplay(status: done ? "met" : "onTrack", statusLabel: "", tone: "grey",
+                                       group: done ? "completed" : "later", tabs: done ? ["all", "completed"] : ["all"],
+                                       daysRemaining: nil, dueText: "", pill: "", progressPercent: progressPercent,
+                                       expectedPercent: nil, paceText: nil)
     }
 
-    /// Total days this deadline has moved since it was first set.
-    var slippageDays: Int {
-        guard let originalDue else { return 0 }
-        return Calendar.current.dateComponents([.day], from: originalDue, to: due).day ?? 0
+    /// RULEBOOK 1.94.0 §23 `deadlineMovedNote(originalDue, due)`: "Moved 1 day from 27 Nov"; "" when it never moved.
+    var movedNote: String {
+        CanonicalBusinessEngine.deadlineMovedNote(from: originalDue, to: due) ?? ""
     }
 
     var timesRescheduled: Int {
@@ -432,17 +429,44 @@ enum DLGrouping: String, CaseIterable, Identifiable, Hashable {
     }
 }
 
+/// The list tabs (RULEBOOK 1.94.0 §23 `DEADLINE_TABS`); raw values are the rulebook tab keys.
 enum DLFilter: String, CaseIterable, Identifiable, Hashable {
-    case all, overdue, thisWeek, atRisk, complete
+    case all, overdue, thisWeek, behindPace, completed
 
     var id: String { rawValue }
     var label: String {
-        switch self {
-        case .all:      return "All"
-        case .overdue:  return "Overdue"
-        case .thisWeek: return "This week"
-        case .atRisk:   return "At risk"
-        case .complete: return "Complete"
+        CanonicalBusinessEngine.deadlineTabs()?.first(where: { $0.key == rawValue })?.label ?? {
+            switch self {
+            case .all:        return "All"
+            case .overdue:    return "Overdue"
+            case .thisWeek:   return "This week"
+            case .behindPace: return "Behind pace"
+            case .completed:  return "Completed"
+            }
+        }()
+    }
+}
+
+/// Colour for a rulebook `tone` (RULEBOOK 1.94.0 §23): red overdue, amber this week / behind pace / blocked, the
+/// app primary on track, green met, grey the rest.
+enum DLTone {
+    static func color(_ tone: String) -> Color {
+        switch tone {
+        case "red":     return HS.red
+        case "amber":   return HS.amber
+        case "primary": return PPColor.brand
+        case "green":   return HS.green
+        default:        return HS.slate
+        }
+    }
+
+    static func tint(_ tone: String) -> Color {
+        switch tone {
+        case "red":     return HS.redBg
+        case "amber":   return HS.amberBg
+        case "primary": return HS.blueBg
+        case "green":   return HS.greenBg
+        default:        return HS.neutralBg
         }
     }
 }
@@ -494,45 +518,24 @@ final class DLStore: ObservableObject {
         return items.filter { item in item.assigneeUserIds.contains { ids.contains($0.lowercased()) } }
     }
 
-    // Counts for the stat tiles and the segment badges.
-    var overdueCount: Int  { scopedItems.filter { $0.urgency(now: now).isOverdue }.count }
-    var thisWeekCount: Int { scopedItems.filter { let d = $0.daysRemaining(now: now)
-                                            return $0.status != .complete && d >= 0 && d <= 7 }.count }
-    var atRiskCount: Int   { scopedItems.filter { $0.isAtRisk(now: now) }.count }
-    var completeCount: Int { scopedItems.filter { $0.status == .complete }.count }
-    var criticalOpen: Int  { scopedItems.filter { $0.isCritical && $0.status != .complete }.count }
+    /// RULEBOOK 1.94.0 §23 `deadlineTabCounts` over the deadlines this person sees.
+    var tabCounts: [String: Int] {
+        CanonicalBusinessEngine.deadlineTabCounts(scopedItems.map(\.displayInput), now: now) ?? ["all": scopedItems.count]
+    }
 
-    var completionRatio: Double {
-        guard !scopedItems.isEmpty else { return 0 }
-        return Double(completeCount) / Double(scopedItems.count)
+    /// RULEBOOK 1.94.0 §23 `deadlineSummaryLine`: "2 of 3 complete · 1 on time · Next: Fit-out, Fri 27 Nov".
+    var summaryLine: String {
+        CanonicalBusinessEngine.deadlineSummaryLine(scopedItems.map(\.displayInput), now: now) ?? ""
     }
 
     var trades: [String] {
         ["All trades"] + Set(scopedItems.compactMap(\.trade)).sorted()
     }
 
-    /// Number of open deadlines falling on a given day — drives the week rail.
-    func load(on day: Date) -> Int {
-        let cal = Calendar.current
-        return scopedItems.filter { $0.status != .complete && cal.isDate($0.due, inSameDayAs: day) }.count
-    }
-
-    func hasOverdue(on day: Date) -> Bool {
-        let cal = Calendar.current
-        return scopedItems.contains { $0.urgency(now: now).isOverdue && cal.isDate($0.due, inSameDayAs: day) }
-    }
-
     private var filtered: [DLDeadline] {
         scopedItems.filter { item in
             // Segment
-            switch filter {
-            case .all:      break
-            case .overdue:  if !item.urgency(now: now).isOverdue { return false }
-            case .thisWeek: let d = item.daysRemaining(now: now)
-                            if item.status == .complete || d < 0 || d > 7 { return false }
-            case .atRisk:   if !item.isAtRisk(now: now) { return false }
-            case .complete: if item.status != .complete { return false }
-            }
+            if filter != .all && !item.display(now: now).tabs.contains(filter.rawValue) { return false }
             // Trade chip
             if tradeFilter != "All trades" && item.trade != tradeFilter { return false }
             // Search covers title, location, trade and assignee
@@ -557,34 +560,29 @@ final class DLStore: ObservableObject {
         }
     }
 
+    /// Date grouping: the rulebook groups in order (RULEBOOK 1.94.0 §23 `DEADLINE_GROUPS` — Overdue, This week, Next
+    /// week, Later, Completed), each deadline in the one `deadlineDisplay` gives it, earliest due first.
     private func dateGroups(_ list: [DLDeadline]) -> [DLGroup] {
-        var buckets: [(String, Color?, [DLDeadline])] = [
-            ("Overdue",   HS.red,   []),
-            ("Today",     HS.amber, []),
-            ("Tomorrow",  HS.amber, []),
-            ("This week", HS.blue,  []),
-            ("Next week", HS.slate, []),
-            ("Later",     HS.slate, []),
-            ("Complete",  HS.green, [])
+        let order = CanonicalBusinessEngine.deadlineGroups() ?? [
+            (key: "overdue", label: "Overdue"), (key: "thisWeek", label: "This week"), (key: "nextWeek", label: "Next week"),
+            (key: "later", label: "Later"), (key: "completed", label: "Completed"),
         ]
-        for item in list {
-            let d = item.daysRemaining(now: now)
-            let idx: Int
-            if item.status == .complete { idx = 6 }
-            else if d < 0   { idx = 0 }
-            else if d == 0  { idx = 1 }
-            else if d == 1  { idx = 2 }
-            else if d <= 7  { idx = 3 }
-            else if d <= 14 { idx = 4 }
-            else            { idx = 5 }
-            buckets[idx].2.append(item)
+        let byGroup = Dictionary(grouping: list, by: { $0.display(now: now).group })
+        return order.compactMap { group -> DLGroup? in
+            guard let items = byGroup[group.key], !items.isEmpty else { return nil }
+            return DLGroup(id: group.key, title: group.label,
+                           items: items.sorted { $0.due < $1.due },
+                           accent: Self.groupAccent(group.key))
         }
-        return buckets.compactMap { bucket -> DLGroup? in
-            guard !bucket.2.isEmpty else { return nil }
-            return DLGroup(id: bucket.0,
-                           title: bucket.0,
-                           items: bucket.2.sorted { $0.due < $1.due },
-                           accent: bucket.1)
+    }
+
+    /// Group header colour from the group's meaning (overdue red, this week amber, completed green, else grey).
+    static func groupAccent(_ group: String) -> Color {
+        switch group {
+        case "overdue":   return HS.red
+        case "thisWeek":  return HS.amber
+        case "completed": return HS.green
+        default:          return HS.slate
         }
     }
 
