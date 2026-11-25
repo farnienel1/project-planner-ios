@@ -154,9 +154,12 @@ final class RulebookBypassGuardTests: XCTestCase {
         ],
         "rawLineManagerIds": [
             "Core/DeferredLeaveNotices.swift": 1,
+            // Passes the stored fields into `organizationLineManagerFields` and stores its answer; decides nothing itself.
+            "Core/FirebaseBackend+OrganizationMembership.swift": 5,
             "Core/LineManagerSupport.swift": 2,
             "Core/NotificationService.swift": 1,
-            "Core/UserStore.swift": 6,
+            // 1.88.0: +2 pass the edited choice into `memberLineManagerWriteFields` (the record writer).
+            "Core/UserStore.swift": 8,
             // Hashed only to notice a roster change; never decides who a line manager is.
             "Core/WarningsRosterFingerprint.swift": 1,
             "FirebaseBackend.swift": 1,
