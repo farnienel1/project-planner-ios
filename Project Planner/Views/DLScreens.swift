@@ -424,7 +424,7 @@ struct DLDeadlineDetailSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HSNavBar(title: "Deadline",
-                     subtitle: live.location,
+                     subtitle: live.floorsText,
                      onBack: { dismiss() },
                      backSymbol: "xmark") {
                 if canManage {
@@ -587,7 +587,7 @@ struct DLDeadlineDetailSheet: View {
         VStack(spacing: 0) {
             HSRowGroup {
                 DLFieldRow(icon: "building.2.fill", tint: HS.inkSoft, label: "Location") {
-                    Text(live.location ?? "Not set")
+                    Text(live.floorsText ?? "Not set")
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(HS.ink).hsNoClip(2)
                 }
@@ -982,8 +982,11 @@ struct DLEditDeadlineScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var title = ""
+    /// Custom floors typed by the person (comma-separated for several); preset floors are in `presetFloors`.
     @State private var location = ""
     @State private var locationIsCustom = false
+    /// RULEBOOK 1.92.0: a deadline may be on several floors — the preset floors picked, in the order picked.
+    @State private var presetFloors: [String] = []
     @State private var trade = "General"
     @State private var due = Date()
     @State private var start = Date()
@@ -1113,18 +1116,16 @@ struct DLEditDeadlineScreen: View {
                         HStack(spacing: 8) {
                             locationChip(title: "Custom", selected: locationIsCustom) {
                                 HSHaptic.select()
-                                if !locationIsCustom {
-                                    if locationPresets.contains(location) {
-                                        location = ""
-                                    }
-                                    locationIsCustom = true
-                                }
+                                locationIsCustom.toggle()
                             }
                             ForEach(locationPresets, id: \.self) { area in
-                                locationChip(title: area, selected: !locationIsCustom && location == area) {
+                                locationChip(title: area, selected: presetFloors.contains(area)) {
                                     HSHaptic.select()
-                                    locationIsCustom = false
-                                    location = area
+                                    if let i = presetFloors.firstIndex(of: area) {
+                                        presetFloors.remove(at: i)
+                                    } else {
+                                        presetFloors.append(area)
+                                    }
                                 }
                             }
                         }
@@ -1133,7 +1134,7 @@ struct DLEditDeadlineScreen: View {
                 }
 
             if locationIsCustom {
-                TextField("Type floor or area", text: $location)
+                TextField("Type floor or area (comma for several)", text: $location)
                     .accessibilityIdentifier("dlEditDeadlineScreen.typeFloorOrArea")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(HS.ink)
@@ -1376,11 +1377,10 @@ struct DLEditDeadlineScreen: View {
     private func hydrateFromExisting() {
         guard let e = existing else { return }
         title = e.title
-        location = e.location ?? ""
-        locationIsCustom = {
-            guard let loc = e.location, !loc.isEmpty else { return false }
-            return !locationPresets.contains(loc)
-        }()
+        presetFloors = e.floors.filter { locationPresets.contains($0) }
+        let custom = e.floors.filter { !locationPresets.contains($0) }
+        location = custom.joined(separator: ", ")
+        locationIsCustom = !custom.isEmpty
         trade = e.trade ?? (tradeOptions.first ?? "General")
         due = e.due
         hasStart = e.start != nil
@@ -1396,7 +1396,17 @@ struct DLEditDeadlineScreen: View {
     private func builtDeadline() -> DLDeadline {
         var d = existing ?? DLDeadline(title: title, due: due)
         d.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        d.location = location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : location
+        // RULEBOOK 1.92.0 `deadlineLocationWriteFields`: the floors picked, the first one also as `location`.
+        let custom = locationIsCustom
+            ? location.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            : []
+        var floors: [String] = []
+        for floor in presetFloors + custom where !floors.contains(where: { $0.caseInsensitiveCompare(floor) == .orderedSame }) {
+            floors.append(floor)
+        }
+        let fields = CanonicalBusinessEngine.deadlineLocationWriteFields(floors) ?? (location: floors.first ?? "", locations: floors)
+        d.locations = fields.locations
+        d.location = fields.location.isEmpty ? nil : fields.location
         d.trade = trade
         d.detail = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : detail
         d.start = hasStart ? start : nil

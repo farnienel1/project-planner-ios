@@ -224,7 +224,9 @@ struct DLDeadline: Identifiable, Hashable {
 
     // What and where
     var title: String                 // "3rd Floor WC 1st Fix"
-    var location: String?             // "3rd Floor"  — the spine of the Floor grouping
+    var location: String?             // "3rd Floor"  — the first floor (older builds read only this)
+    /// RULEBOOK 1.92.0: every floor the deadline is on (`parseDeadlineItem` `locations`; empty on items built before).
+    var locations: [String] = []
     var trade: String?                // "Plumbing & Gas" — matches the H&S Trade enum labels
     var detail: String?               // free text shown on the detail sheet
 
@@ -336,9 +338,25 @@ extension DLDeadline {
         }
     }
 
+    /// Every floor the deadline is on: `locations`, else the single `location` (RULEBOOK 1.92.0).
+    var floors: [String] {
+        if !locations.isEmpty { return locations }
+        if let location, !location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return [location] }
+        return []
+    }
+
+    /// The floors joined for display, nil when none.
+    var floorsText: String? { floors.isEmpty ? nil : floors.joined(separator: ", ") }
+
+    /// `CanonicalBusinessEngine.deadlineOnLocation`; a case-insensitive match only when the script did not answer.
+    func isOn(floor: String) -> Bool {
+        CanonicalBusinessEngine.deadlineOnLocation(location: location, locations: locations, on: floor)
+            ?? floors.contains { $0.caseInsensitiveCompare(floor) == .orderedSame }
+    }
+
     /// One-line summary used by the widget/notification copy and the share sheet.
     func summaryLine(now: Date = Date()) -> String {
-        let where_ = location.map { "\($0) · " } ?? ""
+        let where_ = floorsText.map { "\($0) · " } ?? ""
         return "\(where_)\(title) — \(urgency(now: now).phrase)"
     }
 }
@@ -459,7 +477,10 @@ final class DLStore: ObservableObject {
 
     var scopedItems: [DLDeadline] {
         guard let uid = restrictToAssigneeUserId, !uid.isEmpty else { return items }
-        return items.filter { $0.assigneeUserIds.contains(uid) }
+        // Every id the person goes by (`personIdSet`: former invite ids, same-email ids), without case, so a deadline
+        // assigned to a ghost follows them once they get app access (RULEBOOK 1.92.0).
+        let ids = Set(RulebookRosterSnapshot.personIds(forUserId: uid).map { $0.lowercased() } + [uid.lowercased()])
+        return items.filter { item in item.assigneeUserIds.contains { ids.contains($0.lowercased()) } }
     }
 
     // Counts for the stat tiles and the segment badges.
@@ -505,7 +526,7 @@ final class DLStore: ObservableObject {
             if tradeFilter != "All trades" && item.trade != tradeFilter { return false }
             // Search covers title, location, trade and assignee
             if !search.isEmpty {
-                let hay = [item.title, item.location ?? "", item.trade ?? "",
+                let hay = [item.title, item.floors.joined(separator: " "), item.trade ?? "",
                            item.company ?? "", item.assignees.joined(separator: " ")]
                     .joined(separator: " ").lowercased()
                 if !hay.contains(search.lowercased()) { return false }
@@ -519,7 +540,7 @@ final class DLStore: ObservableObject {
         let list = filtered
         switch grouping {
         case .date:     return dateGroups(list)
-        case .location: return keyed(list, key: { $0.location ?? "Unassigned area" }, icon: nil)
+        case .location: return floorGroups(list)
         case .trade:    return keyed(list, key: { $0.trade ?? "No trade" }, icon: nil)
         case .assignee: return keyed(list, key: { $0.assignees.first ?? "Unassigned" }, icon: nil)
         }
@@ -554,6 +575,35 @@ final class DLStore: ObservableObject {
                            items: bucket.2.sorted { $0.due < $1.due },
                            accent: bucket.1)
         }
+    }
+
+    /// Floor grouping (RULEBOOK 1.92.0): a deadline on several floors is listed under each of its floors
+    /// (`deadlineOnLocation`); one with none under "Unassigned area".
+    private func floorGroups(_ list: [DLDeadline]) -> [DLGroup] {
+        var names: [String] = []
+        for item in list {
+            for floor in item.floors where !names.contains(where: { $0.caseInsensitiveCompare(floor) == .orderedSame }) {
+                names.append(floor)
+            }
+        }
+        var rows: [(String, DLDeadline)] = []
+        for item in list {
+            let on = names.filter { item.isOn(floor: $0) }
+            if on.isEmpty { rows.append(("Unassigned area", item)) } else { rows += on.map { ($0, item) } }
+        }
+        return Dictionary(grouping: rows, by: { $0.0 })
+            .map { k, pairs in
+                DLGroup(id: k, title: k, items: pairs.map { $0.1 }.sorted {
+                    $0.urgency(now: now).rank == $1.urgency(now: now).rank
+                        ? $0.due < $1.due
+                        : $0.urgency(now: now).rank < $1.urgency(now: now).rank
+                })
+            }
+            .sorted { a, b in
+                let ra = a.items.first?.urgency(now: now).rank ?? 99
+                let rb = b.items.first?.urgency(now: now).rank ?? 99
+                return ra == rb ? a.title < b.title : ra < rb
+            }
     }
 
     private func keyed(_ list: [DLDeadline],

@@ -19,6 +19,7 @@ struct OfflineDeadlineRecord: Codable {
     var id: UUID
     var title: String
     var location: String?
+    var locations: [String]?
     var trade: String?
     var detail: String?
     var start: Date?
@@ -93,6 +94,7 @@ enum OfflineDeadlineCodec {
             id: item.id,
             title: item.title,
             location: item.location,
+            locations: item.locations,
             trade: item.trade,
             detail: item.detail,
             start: item.start,
@@ -132,6 +134,7 @@ enum OfflineDeadlineCodec {
             id: record.id,
             title: record.title,
             location: record.location,
+            locations: record.locations ?? [],
             trade: record.trade,
             detail: record.detail,
             start: record.start,

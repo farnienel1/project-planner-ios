@@ -250,7 +250,7 @@ struct DLDeadlineCard: View {
 
                 // Row 3 — where and who
                 HStack(spacing: 6) {
-                    if showLocation, let location = item.location {
+                    if showLocation, let location = item.floorsText {
                         DLMetaChip(icon: "building.2.fill", text: location, tint: HS.inkSoft)
                     }
                     if let trade = item.trade {
