@@ -217,9 +217,9 @@ struct DLDeadlineCard: View {
     private var behindPace: Bool { view.status == "behindPace" }
     private var moved: String { item.movedNote }
 
-    // Press feedback without a wrapping Button — a Button here would swallow
-    // taps on the "Update" pill nested inside it.
-    @State private var pressed = false
+    // No wrapping Button (it would swallow taps on the "Update" pill inside) and no press-shrink drag
+    // gesture: a DragGesture(minimumDistance: 0) on every card took the finger before the ScrollView,
+    // so the Deadlines list could not be scrolled by dragging on a card.
 
     /// Words first, then the day: "Due in 2 days · Fri 27 Nov 2026"; completed "Met on time" / "Done 3 days late".
     private var dueLine: String {
@@ -327,18 +327,11 @@ struct DLDeadlineCard: View {
                     .padding(.leading, 7)
             }
             .opacity(view.isCompleted ? 0.72 : 1)
-            .scaleEffect(pressed ? 0.985 : 1)
-            .animation(.spring(response: 0.25, dampingFraction: 0.75), value: pressed)
             .contentShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
             
             .accessibilityIdentifier("dlDeadlineCard.tap").onTapGesture {
                 HSHaptic.tap(); onOpen()
             }
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in if !pressed { pressed = true } }
-                    .onEnded   { _ in pressed = false }
-            )
     }
 }
 
