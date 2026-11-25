@@ -140,3 +140,74 @@ struct TaskFilterChips: View {
         }
     }
 }
+
+/// Filters (n), Sort, and the active filter chips — one bar for the main Tasks screen and a job's Tasks tab (web
+/// `TaskList` modes `main` and `location`). On a job's tab the job is fixed, so its sheet has no project / small works
+/// filter. The chips show only once everything has loaded (web review of #459).
+struct TaskFilterSortBar: View {
+    @Binding var filters: TaskFilterSet
+    @Binding var sort: TaskSortChoice
+    let tab: TaskTab
+    let ready: Bool
+    let options: (projects: [TaskFilterChoice], smallWorks: [TaskFilterChoice], creators: [TaskFilterChoice])
+    let assignees: [TaskFilterChoice]
+    /// Accessibility identifier prefix ("tasksDetail" on the main screen, "projectDetail" on a job's tab).
+    let identifierPrefix: String
+    let onShowFilters: () -> Void
+
+    var body: some View {
+        let count = TaskViewingRulebook.activeFilterCount(filters)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button(action: onShowFilters) {
+                    Label(count > 0 ? "Filters (\(count))" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .accessibilityIdentifier("\(identifierPrefix).filters")
+                Spacer()
+                Menu {
+                    ForEach(TaskViewingRulebook.sortChoices(tab: tab), id: \.choice) { row in
+                        Button {
+                            sort = row.choice
+                        } label: {
+                            if row.choice == sort { Label(row.label, systemImage: "checkmark") } else { Text(row.label) }
+                        }
+                    }
+                } label: {
+                    Label(TaskViewingRulebook.sortLabel(sort, tab: tab), systemImage: "arrow.up.arrow.down")
+                        .font(.subheadline)
+                }
+                .accessibilityIdentifier("\(identifierPrefix).sort")
+            }
+            if count > 0, ready {
+                TaskFilterChips(filters: $filters, options: options, assignees: assignees)
+            }
+        }
+    }
+}
+
+/// The people a task can be filtered by ("Assigned to"): one choice per person over the given tasks, named from the
+/// assignee names (`TaskPeopleRulebook.assigneeNames`), keyed by `taskPersonKeys` (web `TaskList` assignee options).
+enum TaskAssigneeFilterChoices {
+    static func build(_ tasks: [ProjectTask], keys: [String: String], index: TaskPersonIndex) -> [TaskFilterChoice] {
+        var seen: [String: TaskFilterChoice] = [:]
+        func add(_ kind: TaskPersonKind, _ id: UUID, stored: String, counted: inout Set<String>) {
+            let key = keys[stored.lowercased()] ?? "id:\(stored.lowercased())"
+            guard counted.insert(key).inserted else { return }
+            let name = TaskPeopleRulebook.assigneeNames(
+                managerIds: kind == .manager ? [id] : [],
+                operativeIds: kind == .operative ? [id] : [],
+                index: index
+            ).first?.name ?? TaskRulebook.removedUserLabel
+            var choice = seen[key] ?? TaskFilterChoice(value: key, label: name, count: 0)
+            choice.count += 1
+            seen[key] = choice
+        }
+        for task in tasks {
+            var counted = Set<String>()
+            for id in task.allAssignedManagerIds { add(.manager, id, stored: id.uuidString, counted: &counted) }
+            for id in task.allAssignedOperativeIds { add(.operative, id, stored: Booking.operativeMatchKey(for: id), counted: &counted) }
+        }
+        return seen.values.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+}

@@ -21,29 +21,6 @@ fileprivate enum ProjectTaskListScope: String, Identifiable, Hashable {
     static let orderedScopes: [ProjectTaskListScope] = [.assignedToMe, .active, .overdue, .completed]
 }
 
-fileprivate enum TaskFilterType: String, CaseIterable, Identifiable {
-    case all = "All Tasks"
-    case operative = "By Operative"
-    case manager = "By Manager"
-    case dateRange = "Date Range"
-    
-    var id: String { rawValue }
-}
-
-fileprivate struct TaskFilter {
-    var type: TaskFilterType = .all
-    var operativeId: UUID?
-    var managerId: UUID?
-    var dateRange: ClosedRange<Date>?
-    
-    mutating func reset() {
-        type = .all
-        operativeId = nil
-        managerId = nil
-        dateRange = nil
-    }
-}
-
 struct ProjectDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var bookingStore: BookingStore
@@ -190,7 +167,12 @@ struct ProjectDetailView: View {
     /// RULEBOOK 1.89.0 §34 bug B9: the list opens on Active (it opened on "Assigned to me", empty for most managers).
     @State private var selectedProjectTaskScope: ProjectTaskListScope = .active
     @State private var projectTasksSearchText = ""
-    @State private var taskFilter = TaskFilter()
+    /// RULEBOOK 1.91.0 §34 (decision B, web `TaskList` mode `location`): the job's Tasks tab has the main screen's
+    /// filters and sort (no project / small works filter: the job is fixed), remembered per organisation under the
+    /// "location" scope, apart from the main Tasks screen.
+    @State private var jobTaskFilters: TaskFilterSet = .none
+    @State private var jobTaskSort: TaskSortChoice = .overdueFirst
+    @State private var jobTaskFiltersLoadedFor: String? = nil
     @State private var openVariationCount = 0
     @State private var openedManageTile: DetailTile?
     @State private var showingLocationPage = false
@@ -2670,39 +2652,85 @@ struct ProjectDetailView: View {
         OrganizationWeekSupport.weekDays(containing: selectedWeek)
     }
     
-    /// Tasks on this project that belong in “My tasks” (assigned to you and/or created by you), after advanced filters.
+    /// The job's tasks this viewer may see (RULEBOOK 1.91.0 §34 `visibleTasksForViewer`, decision A), before the
+    /// filters: the filter options and pruning read these.
+    private func jobVisibleTasks() -> [ProjectTask] {
+        visibleJobTasks(taskStore.tasks(for: project.id, includeCompleted: true))
+    }
+
+    /// The job's visible tasks with the filters on (`filterTasks`); tab counts follow the filters, as on the main
+    /// Tasks screen and web.
     private func myProjectTasksAfterFilters() -> [ProjectTask] {
-        var tasks = taskStore.tasks(for: project.id, includeCompleted: true)
-        
-        switch taskFilter.type {
-        case .all:
-            break
-        case .operative:
-            // Owner decision 17 Nov (web #364): a person filter matches tasks under any of that person's records,
-            // of either kind (`personIdSet` through `TaskPersonIndex`).
-            if let operativeId = taskFilter.operativeId {
-                let index = taskPersonIndex
-                tasks = tasks.filter { TaskPeopleRulebook.task($0, isAssignedTo: .operative, operativeId, index: index) }
-            }
-        case .manager:
-            if let managerId = taskFilter.managerId {
-                let index = taskPersonIndex
-                tasks = tasks.filter { TaskPeopleRulebook.task($0, isAssignedTo: .manager, managerId, index: index) }
-            }
-        case .dateRange:
-            if let range = taskFilter.dateRange {
-                tasks = tasks.filter { task in
-                    if let dueDate = task.dueDate {
-                        return range.contains(dueDate)
-                    }
-                    return false
-                }
-            }
+        TaskViewingRulebook.filter(
+            jobVisibleTasks(),
+            filters: jobTaskEffectiveFilters,
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            personKeys: jobTaskPersonKeys
+        )
+    }
+
+    /// The job is fixed on its own tab: a remembered project / small works value never applies here (web
+    /// `effectiveFilters` in location mode).
+    private var jobTaskEffectiveFilters: TaskFilterSet {
+        var next = jobTaskFilters
+        next.projectId = ""
+        next.smallWorksId = ""
+        return next
+    }
+
+    private var jobTaskPersonKeys: [String: String] {
+        TaskStoreAnswers.personKeys(operativeStore: operativeStore, userStore: userStore)
+    }
+
+    private var jobTaskVisibilityReady: Bool {
+        if case .ready = jobTaskVisibility { return true }
+        return false
+    }
+
+    private var jobTaskFilterOptions: (projects: [TaskFilterChoice], smallWorks: [TaskFilterChoice], creators: [TaskFilterChoice]) {
+        TaskViewingRulebook.filterOptions(
+            tasks: jobVisibleTasks(),
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            personKeys: jobTaskPersonKeys,
+            users: userStore.unfoldedOrganizationUsers
+        )
+    }
+
+    private var jobTaskAssigneeChoices: [TaskFilterChoice] {
+        TaskAssigneeFilterChoices.build(jobVisibleTasks(), keys: jobTaskPersonKeys, index: taskPersonIndex)
+    }
+
+    private static let jobTaskFilterScope = "location"
+
+    private var jobTaskOrganizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
+
+    private func loadJobRememberedFilters() {
+        let organizationId = jobTaskOrganizationId
+        guard !organizationId.isEmpty, jobTaskFiltersLoadedFor != organizationId else { return }
+        jobTaskFiltersLoadedFor = organizationId
+        jobTaskFilters = TaskViewingRulebook.rememberedFilters(scope: Self.jobTaskFilterScope, organizationId: organizationId)
+        jobTaskSort = TaskViewingRulebook.rememberedSort(scope: Self.jobTaskFilterScope, organizationId: organizationId)
+        if jobTaskVisibilityReady { pruneJobRememberedFilters() }
+    }
+
+    /// Drop remembered values no longer offered — only once every store has loaded (web review of #459).
+    private func pruneJobRememberedFilters() {
+        guard jobTaskVisibilityReady else { return }
+        let next = TaskViewingRulebook.pruned(
+            jobTaskFilters,
+            options: jobTaskFilterOptions,
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            personKeys: jobTaskPersonKeys
+        )
+        if next != jobTaskFilters { jobTaskFilters = next }
+    }
+
+    private var jobTaskTab: TaskTab {
+        switch selectedProjectTaskScope {
+        case .completed: return .completed
+        case .overdue: return .overdue
+        case .active, .assignedToMe: return .active
         }
-        
-        // RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): the one visibility rule (it replaces 1.89.0's
-        // "staff see every task on the job"; a manager who does not manage this job sees only their own tasks here).
-        return visibleJobTasks(tasks)
     }
     
     private func filteredTasks(for scope: ProjectTaskListScope) -> [ProjectTask] {
@@ -2735,14 +2763,14 @@ struct ProjectDetailView: View {
             }
         }
         
-        // RULEBOOK 1.89.0 §34 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
+        // RULEBOOK 1.91.0 §34 `sortTasks`: overdue first (the 1.89.0 tab order) or by due date.
         let tab: TaskTab
         switch scope {
         case .completed: tab = .completed
         case .overdue: tab = .overdue
         case .active, .assignedToMe: tab = .active
         }
-        return TaskRulebook.sorted(tasks, tab: tab)
+        return TaskViewingRulebook.sort(tasks, sort: jobTaskSort, tab: tab)
     }
     
     private var projectTasksListForCurrentScope: [ProjectTask] {
@@ -2815,11 +2843,6 @@ struct ProjectDetailView: View {
         }
     }
     
-    private func operativeName(for id: UUID?) -> String? {
-        guard let id = id else { return nil }
-        return operativeStore.allOperatives.first(where: { $0.id == id })?.name
-    }
-    
     /// Owner decision 17 Nov (web #364): one entry per person over every row, old and inactive ones included.
     private var taskPersonIndex: TaskPersonIndex {
         TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
@@ -2835,11 +2858,6 @@ struct ProjectDetailView: View {
         return (names.filter { $0.kind == .manager }.map(\.name), names.filter { $0.kind == .operative }.map(\.name))
     }
     
-    private func managerName(for id: UUID?) -> String? {
-        guard let id = id else { return nil }
-        return operativeStore.allManagers.first(where: { $0.id == id })?.fullName
-    }
-    
     private var managerDisplayName: String {
         let names = project.allAssignedManagerIds.compactMap { id in
             operativeStore.allManagers.first(where: { $0.id == id })?.fullName
@@ -2852,30 +2870,6 @@ struct ProjectDetailView: View {
             return manager.fullName
         }
         return project.manager.displayName
-    }
-    
-    private var taskFilterDescription: String {
-        switch taskFilter.type {
-        case .all:
-            return "Showing all tasks"
-        case .operative:
-            if let name = operativeName(for: taskFilter.operativeId) {
-                return "Filtered by operative: \(name)"
-            }
-            return "Filtered by operative"
-        case .manager:
-            if let name = managerName(for: taskFilter.managerId) {
-                return "Filtered by manager: \(name)"
-            }
-            return "Filtered by manager"
-        case .dateRange:
-            if let range = taskFilter.dateRange {
-                let formatter = DateFormatter()
-                formatter.dateStyle = .medium
-                return "Filtered by date: \(formatter.string(from: range.lowerBound)) - \(formatter.string(from: range.upperBound))"
-            }
-            return "Filtered by date range"
-        }
     }
     
     @ViewBuilder
@@ -3098,15 +3092,6 @@ struct ProjectDetailView: View {
                     .accessibilityIdentifier("projectDetail.searchTasks")
                     .font(.system(size: 12))
                 Spacer(minLength: 0)
-                Button { showingTaskFilter = true } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.system(size: 15))
-                        .foregroundStyle(ProjectMyTasksPalette.blue)
-                }
-                .accessibilityIdentifier("projectDetail.filter")
-                .buttonStyle(.plain)
-                .opacity(userStore.isOperativeMode() ? 0.35 : 1)
-                .disabled(userStore.isOperativeMode())
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -3114,12 +3099,16 @@ struct ProjectDetailView: View {
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(ProjectWorksRevampColors.searchBorder, lineWidth: 0.5))
             
-            if !userStore.isOperativeMode() {
-                Text(taskFilterDescription)
-                    .font(.system(size: 10))
-                    .foregroundStyle(ProjectMyTasksPalette.muted)
-                    .lineLimit(2)
-            }
+            TaskFilterSortBar(
+                filters: $jobTaskFilters,
+                sort: $jobTaskSort,
+                tab: jobTaskTab,
+                ready: jobTaskVisibilityReady,
+                options: jobTaskFilterOptions,
+                assignees: jobTaskAssigneeChoices,
+                identifierPrefix: "projectDetail",
+                onShowFilters: { showingTaskFilter = true }
+            )
             
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -3225,13 +3214,23 @@ struct ProjectDetailView: View {
             .environmentObject(firebaseBackend)
         }
         .sheet(isPresented: $showingTaskFilter) {
-            // One option per person (inactive and ghost people kept: they may have tasks).
-            ProjectTaskFilterSheet(
-                filter: $taskFilter,
-                isPresented: $showingTaskFilter,
-                operatives: TaskPeopleRulebook.filterOperatives(operativeStore.allOperatives, index: taskPersonIndex),
-                managers: TaskPeopleRulebook.filterManagers(operativeStore.allManagers, index: taskPersonIndex)
+            TaskFilterSheet(
+                filters: $jobTaskFilters,
+                options: jobTaskFilterOptions,
+                showsJobFilters: false,
+                assignees: jobTaskAssigneeChoices
             )
+        }
+        .onAppear { loadJobRememberedFilters() }
+        .onChange(of: jobTaskOrganizationId) { _, _ in loadJobRememberedFilters() }
+        .onChange(of: jobTaskFilters) { _, next in
+            TaskViewingRulebook.rememberFilters(next, scope: Self.jobTaskFilterScope, organizationId: jobTaskOrganizationId)
+        }
+        .onChange(of: jobTaskSort) { _, next in
+            TaskViewingRulebook.rememberSort(next, scope: Self.jobTaskFilterScope, organizationId: jobTaskOrganizationId)
+        }
+        .onChange(of: jobTaskVisibilityReady) { _, ready in
+            if ready { pruneJobRememberedFilters() }
         }
     }
     
@@ -3619,137 +3618,6 @@ private struct ProjectTaskRow: View {
     }
 }
 
-private struct ProjectTaskFilterSheet: View {
-    @Binding var filter: TaskFilter
-    @Binding var isPresented: Bool
-    let operatives: [Operative]
-    let managers: [Manager]
-    
-    @State private var localFilter: TaskFilter
-    
-    init(filter: Binding<TaskFilter>, isPresented: Binding<Bool>, operatives: [Operative], managers: [Manager]) {
-        self._filter = filter
-        self._isPresented = isPresented
-        self.operatives = operatives
-        self.managers = managers
-        var initialFilter = filter.wrappedValue
-        if initialFilter.type == .dateRange && initialFilter.dateRange == nil {
-            let today = Date()
-            initialFilter.dateRange = today...today
-        }
-        _localFilter = State(initialValue: initialFilter)
-    }
-    
-    var body: some View {
-        NavigationView {
-            Form {
-                Section("Filter Type") {
-                    Picker("Filter", selection: $localFilter.type) {
-                        ForEach(TaskFilterType.allCases) { type in
-                            Text(type.rawValue).tag(type)
-                        }
-                    }
-                    .accessibilityIdentifier("projectTaskFilter.filter")
-                    .pickerStyle(.inline)
-                }
-                
-                if localFilter.type == .operative {
-                    Section("Operative") {
-                        Picker("Operative", selection: Binding(
-                            get: { localFilter.operativeId ?? operatives.first?.id },
-                            set: { localFilter.operativeId = $0 }
-                        )) {
-                            ForEach(operatives) { operative in
-                                Text(operative.name).tag(operative.id as UUID?)
-                            }
-                        }
-                            .accessibilityIdentifier("projectTaskFilter.operative")
-                    }
-                }
-                
-                if localFilter.type == .manager {
-                    Section("Manager") {
-                        Picker("Manager", selection: Binding(
-                            get: { localFilter.managerId ?? managers.first?.id },
-                            set: { localFilter.managerId = $0 }
-                        )) {
-                            ForEach(managers) { manager in
-                                Text(manager.fullName).tag(manager.id as UUID?)
-                            }
-                        }
-                            .accessibilityIdentifier("projectTaskFilter.manager")
-                    }
-                }
-                
-                if localFilter.type == .dateRange {
-                    Section("Date Range") {
-                        DatePicker(
-                            "Start Date",
-                            selection: Binding(
-                                get: { localFilter.dateRange?.lowerBound ?? Date() },
-                                set: { newValue in
-                                    if let upper = localFilter.dateRange?.upperBound {
-                                        localFilter.dateRange = newValue...upper
-                                    } else {
-                                        localFilter.dateRange = newValue...newValue
-                                    }
-                                }
-                            ),
-                            displayedComponents: .date
-                        )
-                            .accessibilityIdentifier("projectTaskFilter.startDate")
-                        DatePicker(
-                            "End Date",
-                            selection: Binding(
-                                get: { localFilter.dateRange?.upperBound ?? Date() },
-                                set: { newValue in
-                                    if let lower = localFilter.dateRange?.lowerBound {
-                                        localFilter.dateRange = lower...newValue
-                                    } else {
-                                        localFilter.dateRange = newValue...newValue
-                                    }
-                                }
-                            ),
-                            displayedComponents: .date
-                        )
-                            .accessibilityIdentifier("projectTaskFilter.endDate")
-                    }
-                }
-                
-                Section {
-                    Button("Reset Filters") {
-                        localFilter.reset()
-                    }
-                        .accessibilityIdentifier("projectTaskFilter.resetFilters")
-                }
-            }
-            .navigationTitle("Task Filters")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
-                        .accessibilityIdentifier("projectTaskFilter.cancel")
-                }
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Apply") {
-                        filter = localFilter
-                        isPresented = false
-                    }
-                        .accessibilityIdentifier("projectTaskFilter.apply")
-                }
-            }
-            .onChange(of: localFilter.type) { oldValue, newValue in
-                if newValue == .dateRange && localFilter.dateRange == nil {
-                    let today = Date()
-                    localFilter.dateRange = today...today
-                }
-            }
-        }
-    }
-}
-
 private struct TaskItemForm: Identifiable {
     var id: UUID = UUID()
     var title: String = ""
@@ -3800,6 +3668,7 @@ private enum NewTaskScreenPalette {
     static let priorityMediumInk = ProjectWorksRevampColors.upcomingAmber
     static let disabledButton = ProjectWorksRevampColors.placeholderInk
 }
+
 
 private struct TaskPeoplePickerSheet: View {
     let route: TaskPeoplePickRoute
