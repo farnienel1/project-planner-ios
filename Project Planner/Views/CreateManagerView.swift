@@ -149,7 +149,15 @@ struct CreateManagerView: View {
         )
         
         Task {
-            await operativeStore.addManager(manager)
+            // A failed save keeps this screen open with the reason; nobody is told a manager was added.
+            guard await operativeStore.addManager(manager) else {
+                let message = operativeStore.errorMessage ?? "The manager was not added. Try again."
+                await MainActor.run {
+                    isLoading = false
+                    errorMessage = message
+                }
+                return
+            }
             
             // Send notification
             let creatorName = userStore.currentUser?.fullName ?? userStore.currentUser?.email ?? "Unknown User"

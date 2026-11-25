@@ -1152,7 +1152,12 @@ struct EditOperativeView: View {
                 }
                 historyRows = change.rows
             }
-            await operativeStore.updateOperative(updatedOperative)
+            // The rate history is written only once the operative itself saved (owner 25 Nov save sweep).
+            guard await operativeStore.updateOperative(updatedOperative) else {
+                let message = operativeStore.errorMessage ?? "The rate was not saved. Try again."
+                await MainActor.run { payErrorMessage = message }
+                return
+            }
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
                 for row in historyRows {
                     do {

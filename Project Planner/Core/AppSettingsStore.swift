@@ -203,6 +203,7 @@ class AppSettingsStore: ObservableObject {
     
     /// Keeps the full local map. Firestore receives only `changedKeys`, each as its own dotted field.
     func updateNotifications(_ notificationSettings: NotificationSettings, changedKeys: [String: Bool]) async {
+        let previousNotifications = settings.notifications
         settings.notifications = notificationSettings
         if let backend = firebaseBackend, let userId = backend.currentUser?.uid, !changedKeys.isEmpty,
            smartCache?.isOnline == false {
@@ -221,6 +222,8 @@ class AppSettingsStore: ObservableObject {
             do {
                 try await backend.saveUserNotificationPreferenceKeys(changedKeys, userId: userId)
             } catch {
+                // Not saved: the stored toggles are kept, never shown as saved.
+                settings.notifications = previousNotifications
                 errorMessage = "Failed to sync notification preferences: \(error.localizedDescription)"
             }
         }
@@ -236,6 +239,7 @@ class AppSettingsStore: ObservableObject {
     /// Saves exactly `options` (`scheduleOptionsWriteFields` in the backend). Nothing is merged with the
     /// previous list, so removing a custom item removes it.
     func updateMyScheduleOptions(_ options: MyScheduleOptions) async {
+        let previousOptions = settings.myScheduleOptions
         settings.myScheduleOptions = options
 
         if let backend = firebaseBackend {
@@ -245,6 +249,7 @@ class AppSettingsStore: ObservableObject {
                     settings.myScheduleOptions = saved
                 }
             } catch {
+                settings.myScheduleOptions = previousOptions
                 errorMessage = "Failed to sync My Schedule options: \(error.localizedDescription)"
             }
         }

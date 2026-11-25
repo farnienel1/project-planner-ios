@@ -369,6 +369,8 @@ private struct SubcontractorFirmDetailView: View {
     @State private var showingEdit = false
     @State private var showingAddOperative = false
     @State private var editingContact: SubcontractorContact?
+    /// A failed operative save, shown so it is never silent (owner 25 Nov save sweep).
+    @State private var saveError: String?
 
     private var subcontractor: Subcontractor? {
         subcontractorStore.subcontractors.first(where: { $0.id == subcontractorId })
@@ -438,6 +440,11 @@ private struct SubcontractorFirmDetailView: View {
                     .padding()
             }
         }
+        .alert("Not saved", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
         .sheet(isPresented: $showingAddOperative) {
             if let subcontractor {
                 SubcontractorOperativeEditorSheet(firmName: subcontractor.name) { newContact in
@@ -467,7 +474,7 @@ private struct SubcontractorFirmDetailView: View {
         guard var subcontractor else { return }
         subcontractor.contacts.append(contact)
         subcontractor.updatedAt = Date()
-        Task { await subcontractorStore.saveSubcontractor(subcontractor, mode: .update) }
+        save(subcontractor, person: contact)
     }
 
     private func upsertOperative(_ contact: SubcontractorContact) {
@@ -478,7 +485,19 @@ private struct SubcontractorFirmDetailView: View {
             subcontractor.contacts.append(contact)
         }
         subcontractor.updatedAt = Date()
-        Task { await subcontractorStore.saveSubcontractor(subcontractor, mode: .update) }
+        save(subcontractor, person: contact)
+    }
+
+    /// Saves the firm with the operative added or changed; the store changes its list only once saved, so a failed
+    /// save would otherwise leave the person missing with no message.
+    private func save(_ subcontractor: Subcontractor, person contact: SubcontractorContact) {
+        Task {
+            subcontractorStore.errorMessage = nil
+            await subcontractorStore.saveSubcontractor(subcontractor, mode: .update)
+            if let message = subcontractorStore.errorMessage, !message.isEmpty {
+                saveError = "\(contact.name.isEmpty ? "This operative" : contact.name) was not saved. \(message) Try again."
+            }
+        }
     }
 
     private func sectionLabel(_ text: String) -> some View {
