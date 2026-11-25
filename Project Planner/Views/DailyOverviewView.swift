@@ -868,25 +868,26 @@ struct DailyOverviewView: View {
                 let detail = warning.annualLeave
                 let name = detail?.personName ?? ""
                 PPRowDivider()
-                HStack(spacing: 13) {
+                // Owner 25 Nov: the same person-row size as Annual leave and By project (26pt circle, 13 / 11 pt).
+                HStack(spacing: 9) {
                     Text(PlannerUIInitials.from(name))
-                        .font(.caption2.weight(.bold))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                        .frame(width: 26, height: 26)
                         .background(PPFamily.trade.gradient, in: Circle())
                     VStack(alignment: .leading, spacing: 2) {
                         Text(name)
-                            .font(.body)
-                            .foregroundStyle(.primary)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
                             .lineLimit(1)
                         Text("\(detail?.leaveLabel ?? "") annual leave · Not booked: \((detail?.missingRanges ?? []).joined(separator: ", "))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 11))
+                            .foregroundStyle(ProjectWorksRevampColors.muted)
                     }
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 14)
-                .frame(minHeight: 48)
+                .padding(.vertical, 8)
             }
         }
         .background(PPColor.card)
@@ -928,20 +929,21 @@ struct DailyOverviewView: View {
             ForEach(unbookedAllRows) { entry in
                 let name = entry.name
                 PPRowDivider()
-                HStack(spacing: 13) {
+                // Owner 25 Nov: the same person-row size as Annual leave and By project (26pt circle, 13 pt name).
+                HStack(spacing: 9) {
                     Text(PlannerUIInitials.from(name))
-                        .font(.caption2.weight(.bold))
+                        .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.white)
-                        .frame(width: PPMetrics.menuIcon, height: PPMetrics.menuIcon)
+                        .frame(width: 26, height: 26)
                         .background(PPFamily.people.gradient, in: Circle())
                     Text(name)
-                        .font(.body)
-                        .foregroundStyle(.primary)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(ProjectWorksRevampColors.ink)
                         .lineLimit(1)
                     Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 14)
-                .frame(minHeight: 48)
+                .padding(.vertical, 10)
             }
         }
         .background(PPColor.card)
@@ -1682,19 +1684,19 @@ struct OnHolidayRowView: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(PlannerUIInitials.from(displayName))
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Color.white)
-                .frame(width: 22, height: 22)
+                .frame(width: 26, height: 26)
                 .background(
                     LinearGradient(colors: initialsGradient, startPoint: .topLeading, endPoint: .bottomTrailing)
                 )
                 .clipShape(Circle())
             VStack(alignment: .leading, spacing: 2) {
                 Text(displayName)
-                    .font(.system(size: 13, weight: .regular))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(ProjectWorksRevampColors.ink)
                 Text(slotLabel.map { "Annual leave · \($0)" } ?? "Annual leave")
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundStyle(ProjectWorksRevampColors.muted)
             }
             Spacer(minLength: 0)
