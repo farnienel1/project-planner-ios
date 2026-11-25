@@ -1422,7 +1422,11 @@ struct HomeView: View {
             isHomeProfileLoading: userStore.isHomeProfileLoading,
             currentUserId: userStore.currentUser?.id,
             worksRevision: worksRevision,
-            orgDataReady: firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad
+            orgDataReady: firebaseBackend.hasBootstrappedOrgDataLoad && !firebaseBackend.isBootstrappingOrgDataLoad,
+            tasksKnown: TaskStoreAnswers.inputsLoaded(
+                taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore, userStore: userStore,
+                organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+            )
         )
     }
 
@@ -1479,7 +1483,16 @@ struct HomeView: View {
         let userEmail = userStore.currentUser?.email
         let accentBlue = Color(red: 0.094, green: 0.373, blue: 0.647)
         let accentPurple = Color(red: 0.325, green: 0.29, blue: 0.718)
-        let tasks = taskStore.tasks
+        // RULEBOOK 1.91.0 §34 `visibleTasksForViewer`: Home's task figures count the tasks this viewer may see.
+        // Review of #305: never a zero task count while the stores load or when the rulebook did not answer — the task
+        // figures keep their last values until the visible tasks are known (the other figures refresh as before).
+        let taskVisibility = TaskStoreAnswers.visibility(
+            taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore, userStore: userStore,
+            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+        )
+        let tasksKnown: Bool
+        if case .ready = taskVisibility { tasksKnown = true } else { tasksKnown = false }
+        let tasks = taskVisibility.tasks
         let managers = operativeStore.allManagers
         let holidays = holidayStore.bookings
         let signedIn = userStore.displayUser ?? userStore.currentUser
@@ -1530,7 +1543,16 @@ struct HomeView: View {
         )
 
         // Paint Home first. Warnings are heavy (main-actor snapshot + scan) — never block first frame on them.
-        cachedOverviewMetrics = await metricsTask
+        var metrics = await metricsTask
+        if !tasksKnown {
+            let previous = cachedOverviewMetrics
+            metrics.tasksDueToday = previous.tasksDueToday
+            metrics.tasksDueThisWeek = previous.tasksDueThisWeek
+            metrics.tasksOverdue = previous.tasksOverdue
+            metrics.outstandingTasksAllUsers = previous.outstandingTasksAllUsers
+            metrics.liveProjectCount = previous.liveProjectCount
+        }
+        cachedOverviewMetrics = metrics
         cachedUpNextSections = await upNextTask
         guard !Task.isCancelled else { return }
 
@@ -2015,6 +2037,8 @@ private struct HomeDataRefreshTrigger: Equatable {
     var currentUserId: String?
     var worksRevision: Int
     var orgDataReady: Bool
+    /// Review of #305: Home refreshes once the visible tasks are known.
+    var tasksKnown: Bool = false
 }
 
 private struct HomeOverviewMetrics: Equatable {

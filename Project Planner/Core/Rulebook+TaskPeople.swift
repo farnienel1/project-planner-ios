@@ -39,8 +39,35 @@ final class TaskPersonIndex {
     private var parent: [String: String] = [:]
     private var keyByRoot: [String: String] = [:]
     private var ghostKeys: Set<String> = []
+    /// RULEBOOK 1.91.0 §34: the rows and roster the assignee candidates are worked out from.
+    private let candidateManagers: [Manager]
+    private let candidateOperatives: [Operative]
+    private let candidateUsers: [AppUser]
+    /// Review of #305: the roster and the `operatives` / `managers` rows have a server answer (never "the roster is
+    /// empty" as a stand-in).
+    private let rosterLoaded: Bool
+    private var candidatesMemo: TaskAssigneeCandidateIds??
 
-    init(managers: [Manager], operatives: [Operative], users: [AppUser]) {
+    /// RULEBOOK 1.91.0 §34 `taskAssigneeCandidates` (owner report 25 Nov: Edit task's Managers picker listed a deleted
+    /// user): the `managers` / `operatives` row ids a picker offers and the rows whose person is gone. Nil when the
+    /// script did not answer. Until the roster has loaded nothing is offered and nothing reads "Removed user".
+    var candidates: TaskAssigneeCandidateIds? {
+        if let memo = candidatesMemo { return memo }
+        let answer: TaskAssigneeCandidateIds?
+        if !rosterLoaded {
+            answer = TaskAssigneeCandidateIds(managerIds: [], operativeIds: [], goneIds: [])
+        } else {
+            answer = TaskViewingRulebook.assigneeCandidates(managers: candidateManagers, operatives: candidateOperatives, users: candidateUsers)
+        }
+        candidatesMemo = .some(answer)
+        return answer
+    }
+
+    init(managers: [Manager], operatives: [Operative], users: [AppUser], rosterLoaded: Bool = true) {
+        candidateManagers = managers
+        candidateOperatives = operatives
+        candidateUsers = users
+        self.rosterLoaded = rosterLoaded
         var managersById: [UUID: Manager] = [:]
         var managersByStoredId: [String: Manager] = [:]
         for row in managers {
@@ -202,6 +229,7 @@ final class TaskPersonIndex {
         operativeRevision: Int,
         userStore: ObjectIdentifier,
         userRevision: Int,
+        rosterLoaded: Bool,
         contentHash: Int,
         index: TaskPersonIndex
     )?
@@ -219,6 +247,7 @@ final class TaskPersonIndex {
             hasher.combine(row.linkedUserId)
             hasher.combine(row.firstName)
             hasher.combine(row.lastName)
+            hasher.combine(row.isActive)
         }
         hasher.combine(operatives.count)
         for row in operatives {
@@ -228,6 +257,7 @@ final class TaskPersonIndex {
             hasher.combine(row.linkedUserId)
             hasher.combine(row.firstName)
             hasher.combine(row.lastName)
+            hasher.combine(row.isActive)
         }
         hasher.combine(users.count)
         for user in users {
@@ -236,6 +266,10 @@ final class TaskPersonIndex {
             hasher.combine(user.formerUserIds)
             hasher.combine(user.sameEmailUserIds)
             hasher.combine(user.isGhost)
+            // RULEBOOK 1.91.0: the assignee candidates read the level, the active flag and sign-up.
+            hasher.combine(user.isActive)
+            hasher.combine(user.passwordSet)
+            hasher.combine(String(describing: user.permissionSubject.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }))
         }
         return hasher.finalize()
     }
@@ -246,9 +280,11 @@ final class TaskPersonIndex {
     static func current(operativeStore: OperativeStore, userStore: UserStore) -> TaskPersonIndex {
         let operativeId = ObjectIdentifier(operativeStore)
         let userId = ObjectIdentifier(userStore)
+        let rosterLoaded = userStore.organizationUsersFinishedLoadOrganizationId != nil
+            && operativeStore.finishedLoadOrganizationId != nil
         if let cached,
            cached.operativeStore == operativeId, cached.operativeRevision == operativeStore.revision,
-           cached.userStore == userId, cached.userRevision == userStore.revision {
+           cached.userStore == userId, cached.userRevision == userStore.revision, cached.rosterLoaded == rosterLoaded {
             return cached.index
         }
         let managers = operativeStore.allManagers
@@ -256,12 +292,12 @@ final class TaskPersonIndex {
         let users = userStore.organizationUsers
         let hash = contentHash(managers: managers, operatives: operatives, users: users)
         let index: TaskPersonIndex
-        if let cached, cached.contentHash == hash {
+        if let cached, cached.contentHash == hash, cached.rosterLoaded == rosterLoaded {
             index = cached.index
         } else {
-            index = TaskPersonIndex(managers: managers, operatives: operatives, users: users)
+            index = TaskPersonIndex(managers: managers, operatives: operatives, users: users, rosterLoaded: rosterLoaded)
         }
-        cached = (operativeId, operativeStore.revision, userId, userStore.revision, hash, index)
+        cached = (operativeId, operativeStore.revision, userId, userStore.revision, rosterLoaded, hash, index)
         return index
     }
 }
@@ -310,8 +346,17 @@ enum TaskPeopleRulebook {
     ) -> (managers: [Manager], operatives: [Operative]) {
         let currentManagers = currentLabourIds(allManagers.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
         let currentOperatives = currentLabourIds(allOperatives.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
-        let managers = allManagers.filter { currentManagers?.contains($0.id.uuidString) ?? true }
-        let operatives = allOperatives.filter { currentOperatives?.contains($0.id.uuidString) ?? true }
+        // RULEBOOK 1.91.0 §34 `taskAssigneeCandidates`: only current people — never a deleted, inactive or pending
+        // person, a placeholder or a ghost (script silent: nobody new is offered rather than a deleted person).
+        let candidates = index.candidates
+        let managers = allManagers.filter {
+            (currentManagers?.contains($0.id.uuidString) ?? true)
+                && (candidates?.managerIds.contains($0.id.uuidString.lowercased()) ?? false)
+        }
+        let operatives = allOperatives.filter {
+            (currentOperatives?.contains($0.id.uuidString) ?? true)
+                && (candidates?.operativeIds.contains(Booking.operativeMatchKey(for: $0.id).lowercased()) ?? false)
+        }
         var managerKeys = Set<String>()
         var uniqueManagers: [Manager] = []
         for row in managers {
@@ -407,7 +452,11 @@ enum TaskPeopleRulebook {
         func add(_ kind: TaskPersonKind, _ id: UUID) {
             let key = index.key(kind, id)
             guard !shownKeys.contains(key), seen.insert(key).inserted else { return }
-            out.append(TaskPickerExtra(kind: kind, id: id, label: rowName(kind, id, index: index) ?? unknownLabel(id)))
+            // RULEBOOK 1.91.0 §34: an assignee whose person is gone (`goneIds`) reads "Removed user".
+            let stored = kind == .manager ? id.uuidString : Booking.operativeMatchKey(for: id)
+            let gone = index.candidates?.goneIds.contains(stored.lowercased()) == true
+            let label = gone ? TaskRulebook.removedUserLabel : (rowName(kind, id, index: index) ?? unknownLabel(id))
+            out.append(TaskPickerExtra(kind: kind, id: id, label: label))
         }
         for id in managers { add(.manager, id) }
         for id in operatives { add(.operative, id) }
@@ -455,6 +504,45 @@ enum TaskPeopleRulebook {
         index: TaskPersonIndex
     ) -> Bool {
         isSelected(kind, id, managers: Set(task.allAssignedManagerIds), operatives: Set(task.allAssignedOperativeIds), index: index)
+    }
+
+    /// RULEBOOK 1.89.0 §34 bug B11: every assignee, one per person, managers first — an id whose row is gone, or an
+    /// anonymised deleted profile, reads "Removed user" (`taskAssigneeDisplay`) and is flagged so the task can be
+    /// reassigned. Display only.
+    /// Review of #299: nobody is listed until the rosters have loaded (`loaded`), and a placeholder `managers` row the
+    /// pickers leave out (`OperativeStore.isPlaceholderManager`) still reads by its stored name (`allManagerRows`).
+    static func assigneeEntries(
+        managerIds: [UUID],
+        operativeIds: [UUID],
+        index: TaskPersonIndex,
+        allManagerRows: [Manager] = [],
+        loaded: Bool = true
+    ) -> [(kind: TaskPersonKind, name: String, removed: Bool)] {
+        guard loaded else { return [] }
+        var seen = Set<String>()
+        var out: [(kind: TaskPersonKind, name: String, removed: Bool)] = []
+        func add(_ kind: TaskPersonKind, _ id: UUID) {
+            guard seen.insert(index.key(kind, id)).inserted else { return }
+            let display: (name: String, removed: Bool)
+            switch kind {
+            case .manager:
+                if let row = index.manager(id) ?? allManagerRows.first(where: { $0.id == id }) {
+                    display = TaskRulebook.assigneeDisplay(firstName: row.fullName, lastName: nil, email: row.email, exists: true)
+                } else {
+                    display = TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false)
+                }
+            case .operative:
+                if let row = index.operative(id) {
+                    display = TaskRulebook.assigneeDisplay(firstName: row.name, lastName: nil, email: row.email, exists: true)
+                } else {
+                    display = TaskRulebook.assigneeDisplay(firstName: nil, lastName: nil, email: nil, exists: false)
+                }
+            }
+            out.append((kind, display.name, display.removed))
+        }
+        for id in managerIds { add(.manager, id) }
+        for id in operativeIds { add(.operative, id) }
+        return out
     }
 
     /// The names of a task's assignees, one per person (two stored ids of one person show one name), managers first.

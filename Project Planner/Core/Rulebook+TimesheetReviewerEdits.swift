@@ -84,14 +84,21 @@ extension CanonicalBusinessEngine {
         bookingId: String,
         after: [String: Any]?,
         deleted: Bool,
-        editedBy: String
+        editedBy: String,
+        before: [String: Any]? = nil,
+        existing: Any? = nil
     ) -> RulebookTimesheetReviewerBookingEdit? {
+        // RULEBOOK 1.90.0 (Cancel changes): `before` the booking's values before this edit
+        // (`timesheetReviewerEditBefore`), `existing` the record already stored under this key (the session's first
+        // before-values are kept).
         let input: [String: Any] = [
             "sheet": sheet,
             "booking": ["collection": collection, "bookingId": bookingId],
             "after": after.map { $0 as Any } ?? NSNull(),
             "deleted": deleted,
             "editedBy": editedBy,
+            "before": before.map { $0 as Any } ?? NSNull(),
+            "existing": existing ?? NSNull(),
         ]
         guard let row = callJSON("timesheetReviewerBookingEditRecord", arguments: [input]) as? [String: Any],
               let key = row["key"] as? String, !key.isEmpty,
@@ -376,13 +383,20 @@ enum TimesheetReviewerEditRecorder {
             else { return nil }
             after = edited
         }
+        // RULEBOOK 1.90.0 (Cancel changes): the values before this edit — for ✕ the WHOLE stored booking read fresh, so
+        // Cancel changes can re-create it — and the record already stored under this key.
+        let before = booking.flatMap { CanonicalBusinessEngine.timesheetReviewerEditBefore(data: $0, deleted: write == nil) }
+        let existing: Any? = CanonicalBusinessEngine.timesheetReviewerBookingEditKey(collection: collection, bookingId: bookingId)
+            .flatMap { key in (TimesheetReviewerBookingEdits.stored(draft) as? [String: Any])?[key] }
         guard let edit = CanonicalBusinessEngine.timesheetReviewerBookingEditRecord(
             sheet: SignedTimesheetChangeInputs.sheet(draft, keys: [:]),
             collection: collection,
             bookingId: bookingId,
             after: after,
             deleted: write == nil,
-            editedBy: editedBy
+            editedBy: editedBy,
+            before: before,
+            existing: existing
         ) else { return nil }
         return TimesheetReviewerEditSheetRecord(sheetDocumentId: documentId, edit: edit)
     }
@@ -393,6 +407,7 @@ enum TimesheetReviewerEditRecorder {
         guard draft.versionDocumentId == nil, let id = read.versionDocumentId, !id.isEmpty else { return }
         draft.versionDocumentId = id
         draft.revision = read.revision
+        draft.revisionDraft = read.revisionDraft
         draft.originalStoredUserId = draft.originalStoredUserId ?? read.originalStoredUserId
         draft.reviewerBookingEditsJSON = read.reviewerBookingEditsJSON
     }

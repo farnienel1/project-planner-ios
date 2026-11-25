@@ -373,10 +373,31 @@ final class IOSScanFixesTests: XCTestCase {
         XCTAssertNil(DailyOverviewScopeSupport.scope(users: [], operatives: []))
     }
 
+    /// RULEBOOK 1.89.0 §34: the job Tasks tile counts with `TaskRulebook.tabCounts` / `tabs(for:)` (the rulebook's
+    /// `taskTabKeys`, which calls the same `isTaskOverdue`) instead of calling `isTaskOverdue` directly; the rule is
+    /// unchanged — overdue is judged on the organisation day, never the phone's.
     func testTheJobTasksTileUsesTheOrganisationDay() throws {
         let page = try source("Project Planner/Views/ProjectDetailView.swift")
         XCTAssertFalse(page.contains("return cal.startOfDay(for: due) < startOfToday"))
-        XCTAssertTrue(page.contains("CanonicalBusinessEngine.isTaskOverdue(status: $0.status.rawValue, dueDate: $0.dueDate)"))
+        XCTAssertFalse(page.contains("Calendar.current.startOfDay(for: due)"))
+        XCTAssertTrue(page.contains("TaskRulebook.tabCounts(myProjectTasksAfterFilters())"))
+        XCTAssertTrue(page.contains("TaskRulebook.tabs(for: $0).contains(.overdue)"))
+        // The wrapper reads the organisation zone unless told otherwise (`tabs(for:)` and `sorted`).
+        let rules = try source("Project Planner/Core/Rulebook+Tasks.swift")
+        let tabsBody = try functionBody("tabs", in: rules)
+        XCTAssertTrue(tabsBody.contains("taskTabKeys"))
+        XCTAssertTrue(rules.contains("timeZone: String = OrganizationRulebookContext.timeZoneIdentifier"))
+        // Behaviour: due 23:00 on 24 Nov in London, checked at 00:30 on 25 Nov London (19:30 on 24 Nov in New York).
+        // On the London organisation day it is overdue; on a New York day it would not be.
+        let due = Date(timeIntervalSince1970: 1_795_561_200) // 2026-11-24T23:00:00Z
+        let now = Date(timeIntervalSince1970: 1_795_566_600) // 2026-11-25T00:30:00Z
+        let task = ProjectTask(projectId: UUID(), title: "Fit board", createdBy: "Test", dueDate: due)
+        XCTAssertTrue(TaskRulebook.tabs(for: task, now: now, timeZone: "Europe/London").contains(.overdue))
+        XCTAssertFalse(TaskRulebook.tabs(for: task, now: now, timeZone: "America/New_York").contains(.overdue))
+        XCTAssertEqual(
+            TaskRulebook.tabs(for: task, now: now, timeZone: "Europe/London").contains(.overdue),
+            CanonicalBusinessEngine.isTaskOverdue(status: task.status.rawValue, dueDate: due, now: now, timeZone: "Europe/London")
+        )
     }
 
     func testTheBookingLoadStartUsesTheOrganisationWeek() throws {

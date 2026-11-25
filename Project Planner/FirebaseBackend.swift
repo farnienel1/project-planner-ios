@@ -3058,6 +3058,12 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         let fileData = try Data(contentsOf: fileURL)
+        // RULEBOOK 1.91.0 §34 (hand-off v1.91.0, as web): a HEIC / HEIF photo picked as a file is turned into a JPEG
+        // (the photo path: redrawn, location dropped) so every browser can open it.
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        if ext == "heic" || ext == "heif", let image = UIImage(data: fileData) {
+            return try await uploadTaskImage(image, taskId: taskId, organizationId: organizationId)
+        }
         let prepared = try StorageUploadPolicy.prepareFileData(
             fileData,
             originalFileName: fileName,
@@ -3067,7 +3073,68 @@ class FirebaseBackend: ObservableObject {
             unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
         )
         let filePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/files/\(prepared.objectName)"
-        return try await putStorageData(prepared.data, path: filePath, contentType: prepared.contentType)
+        return try await putTaskData(prepared.data, path: filePath, contentType: prepared.contentType)
+    }
+
+    /// RULEBOOK 1.89.0 §34 issue 1 (review of #299, the same as web `startTrackedUpload`): a task attachment or proof
+    /// of work upload that sends nothing for `TASK_ATTACHMENT_RULES.upload.stallTimeoutSeconds` is cancelled and tried
+    /// again up to `maxRetries` times, then fails with a real message — never the Storage SDK's silent 10-minute retry.
+    /// The same object path each try (this person's own upload, inside the §24 overwrite window).
+    private func putTaskData(_ data: Data, path: String, contentType: String) async throws -> String {
+        guard let rules = TaskRulebook.uploadRules else {
+            throw NSError(domain: "FirebaseBackend", code: 503, userInfo: [NSLocalizedDescriptionKey: TaskRulebook.rulesNotLoadedMessage])
+        }
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: contentType
+        )
+        var attempt = 0
+        while true {
+            let watch = VariationUploadWatch()
+            do {
+                let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                    let task = storageRef.putData(data, metadata: metadata) { metadata, error in
+                        guard watch.finish() else { return }
+                        if watch.timedOut {
+                            continuation.resume(throwing: TaskUploadStalled())
+                        } else if let error {
+                            continuation.resume(throwing: error)
+                        } else if let metadata {
+                            continuation.resume(returning: metadata)
+                        } else {
+                            continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                        }
+                    }
+                    task.observe(.progress) { _ in watch.touch() }
+                    Task {
+                        while !watch.isFinished {
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            if watch.shouldGiveUp(stallSeconds: rules.upload.stallTimeoutSeconds, totalSeconds: .infinity) {
+                                task.cancel()
+                                break
+                            }
+                        }
+                    }
+                }
+                break
+            } catch is TaskUploadStalled {
+                attempt += 1
+                if attempt > rules.upload.maxRetries {
+                    throw NSError(
+                        domain: "FirebaseBackend",
+                        code: 408,
+                        userInfo: [NSLocalizedDescriptionKey: "A file stopped uploading. Check your connection and try again."]
+                    )
+                }
+            } catch {
+                // A retry refused because the object is already there (an earlier try finished on the server).
+                if attempt > 0, let existing = await Self.existingDownloadURLAfterRefusal(error, storageRef: storageRef) { return existing }
+                throw error
+            }
+        }
+        return try await storageRef.downloadURL().absoluteString
     }
 
     func uploadHealthSafetyFile(
@@ -3182,21 +3249,8 @@ class FirebaseBackend: ObservableObject {
             oversizedMessage: "Image is too large. It must be 10 MB or smaller."
         )
         let imagePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/images/\(prepared.objectName)"
-        let storageRef = storage.reference().child(imagePath)
-        let imageData = prepared.data
-        
-        // Upload image using async/await wrapper
-        let metadata = StorageMetadata()
-        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
-        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
-            storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
-        )
-        // 25 Nov: stall-watched (cancelled only after a minute with nothing sent, no overall limit).
-        try await putStallWatched(storageRef: storageRef, data: imageData, metadata: metadata)
-        
-        // Get download URL
-        let downloadURL = try await storageRef.downloadURL()
-        return downloadURL.absoluteString
+        // RULEBOOK 1.89.0 §34 issue 1: stall cancel and retry (`putTaskData`).
+        return try await putTaskData(prepared.data, path: imagePath, contentType: prepared.contentType)
     }
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
@@ -11717,7 +11771,8 @@ extension FirebaseBackend {
         organizationId: String,
         previousDocumentId: String,
         writerIsSubject: Bool,
-        liveLines: [[String: Any]]
+        liveLines: [[String: Any]],
+        draft: Bool = false
     ) async throws -> (status: String, documentId: String?, revision: Int?) {
         let writerId = Auth.auth().currentUser?.uid ?? ""
         let settings = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings")
@@ -11728,7 +11783,8 @@ extension FirebaseBackend {
             previousRef: previousRef,
             writerId: writerId,
             writerIsSubject: writerIsSubject,
-            liveLines: RulebookJSONBox(object: ["lines": liveLines])
+            liveLines: RulebookJSONBox(object: ["lines": liveLines]),
+            draft: draft
         )
         let parts = answer.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
         let status = parts.first ?? "missing"
@@ -11745,7 +11801,8 @@ extension FirebaseBackend {
         previousRef: DocumentReference,
         writerId: String,
         writerIsSubject: Bool,
-        liveLines: RulebookJSONBox
+        liveLines: RulebookJSONBox,
+        draft: Bool
     ) async throws -> String {
         let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
             let previous: DocumentSnapshot
@@ -11761,7 +11818,8 @@ extension FirebaseBackend {
                 previousData: data,
                 writerUserId: writerId,
                 writerIsSubject: writerIsSubject,
-                liveLines: liveLines.object["lines"] as? [[String: Any]] ?? []
+                liveLines: liveLines.object["lines"] as? [[String: Any]] ?? [],
+                draft: draft
             ) else { return "not-exported||" }
             let targetRef = settings.document(made.documentId)
             let target: DocumentSnapshot
@@ -11778,6 +11836,50 @@ extension FirebaseBackend {
             return "created|\(made.documentId)|\(made.revision)"
         }
         return (answer as? String) ?? "missing||"
+    }
+
+    /// RULEBOOK 1.90.0 §8: Send — end a reviewer's draft revision so the person can sign it. One transaction re-reads the
+    /// revision and deletes `revisionDraft` only while it is still a draft (`timesheetRevisionDraftSendWriteFields`).
+    /// False when it was no longer a draft (sent, cancelled or exported elsewhere).
+    func sendTimesheetRevisionDraft(organizationId: String, documentId: String) async throws -> Bool {
+        let writerId = Auth.auth().currentUser?.uid ?? ""
+        let ref = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings").document(documentId)
+        return try await Self.runTimesheetRevisionDraftWrite(db: db, ref: ref, writerId: writerId, cancel: false)
+    }
+
+    /// RULEBOOK 1.90.0 §8: Cancel revision — delete a reviewer's draft revision, only while it is still a draft (one
+    /// transaction re-reads it). Callers undo its changes first (`cancelTimesheetReviewerChanges`). False when it was no longer a draft.
+    func cancelTimesheetRevisionDraft(organizationId: String, documentId: String) async throws -> Bool {
+        let ref = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings").document(documentId)
+        return try await Self.runTimesheetRevisionDraftWrite(db: db, ref: ref, writerId: "", cancel: true)
+    }
+
+    nonisolated private static func runTimesheetRevisionDraftWrite(db: Firestore, ref: DocumentReference, writerId: String, cancel: Bool) async throws -> Bool {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snap: DocumentSnapshot
+            do {
+                snap = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard var data = snap.data() else { return false }
+            if data["revision"] == nil, let revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(snap.documentID)?.revision {
+                data["revision"] = revision
+            }
+            let sheet = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+            if cancel {
+                guard CanonicalBusinessEngine.timesheetRevisionIsDraft(sheet) else { return false }
+                transaction.deleteDocument(ref)
+                return true
+            }
+            guard let removed = CanonicalBusinessEngine.timesheetRevisionDraftSendRemovedFields(sheet), !removed.isEmpty else { return false }
+            var fields: [String: Any] = [:]
+            for key in removed { fields[key] = FieldValue.delete() }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: writerId.isEmpty ? nil : writerId), forDocument: ref)
+            return true
+        }
+        return (answer as? Bool) ?? false
     }
 
     /// Writes the changed timesheet fields only (rulebook §6, §1 "Writes carry metadata").
