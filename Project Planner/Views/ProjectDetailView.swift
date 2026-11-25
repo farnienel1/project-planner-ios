@@ -231,7 +231,10 @@ struct ProjectDetailView: View {
                 // 1.39.0: the seed booking state was never set (dead code removed); editing goes through
                 // `scheduleOperativeGroupId` or the booking edit sheet.
                 editingBooking: nil,
-                editingGroupId: scheduleOperativeGroupId
+                editingGroupId: scheduleOperativeGroupId,
+                onBooked: { days in
+                    if let week = OrganizationWeekSupport.returnWeekStart(forBookedDays: days) { selectedWeek = week }
+                }
             )
                 .environmentObject(bookingStore)
                 .environmentObject(operativeStore)
@@ -271,7 +274,9 @@ struct ProjectDetailView: View {
             )
         }
         .sheet(isPresented: $showingScheduleSubcontractor) {
-            ScheduleSubcontractorView(project: project)
+            ScheduleSubcontractorView(project: project, onBooked: { days in
+                if let week = OrganizationWeekSupport.returnWeekStart(forBookedDays: days) { selectedWeek = week }
+            })
                 .environmentObject(subcontractorStore)
                 .preference(key: HideBottomMenuKey.self, value: true)
         }
