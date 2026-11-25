@@ -368,8 +368,8 @@ struct DLDeadlineDetailSheet: View {
             }
             .modifier(DLDeadlinesContentSheet())
 
-            // FIXES I2: a completed deadline is locked — no Reschedule or Mark complete.
-            if canManage && live.status != .complete {
+            // Owner 25 Nov: Reschedule stays on a completed deadline (no Reopen yet), as on web; Mark complete is hidden.
+            if canManage {
                 HSBottomBar {
                     HStack(spacing: 10) {
                         Button {
