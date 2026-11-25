@@ -4696,6 +4696,7 @@ private struct AddProjectTaskView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(NewTaskScreenPalette.muted)
                 DatePicker("", selection: $dueDate, displayedComponents: .date)
+                    .closesCalendarOnDayPick(dueDate)
                     .accessibilityIdentifier("addProjectTask.datePicker")
                     .labelsHidden()
                     .tint(NewTaskScreenPalette.blue)
@@ -5329,6 +5330,7 @@ private struct EditProjectTaskView: View {
                 
                 Section {
                     DatePicker(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"), selection: $dueDate, displayedComponents: .date)
+                        .closesCalendarOnDayPick(dueDate)
                         .accessibilityIdentifier("editProjectTask.schedule")
                 } header: {
                     Text(TaskRulebook.copy("form", "dueDateLabel", fallback: "Due date"))

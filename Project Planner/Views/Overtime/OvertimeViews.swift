@@ -578,7 +578,9 @@ struct OvertimeCustomRangeView: View {
     var body: some View {
         OvertimeScreenScaffold(title: "Custom date range") {
             DatePicker("Start", selection: $start, displayedComponents: .date)
+                .closesCalendarOnDayPick(start)
             DatePicker("End", selection: $end, displayedComponents: .date)
+                .closesCalendarOnDayPick(end)
             Button {
                 if let range = CanonicalBusinessEngine.payeCustomRange(
                     start: OrganizationRulebookContext.dayKey(start),

@@ -161,19 +161,19 @@ struct DLDeadlinesScreen: View {
 
             HSStatTile(value: "\(store.overdueCount)", label: "Overdue",
                        accent: HS.red, icon: "exclamationmark.triangle.fill") {
-                HSHaptic.select(); store.filter = .overdue; mode = .list
+                HSHaptic.select(); showFilter(.overdue)
             }
             HSStatTile(value: "\(store.thisWeekCount)", label: "Due this week",
                        accent: HS.amber, icon: "calendar") {
-                HSHaptic.select(); store.filter = .thisWeek; mode = .list
+                HSHaptic.select(); showFilter(.thisWeek)
             }
             HSStatTile(value: "\(store.atRiskCount)", label: "Behind pace",
                        accent: HS.violet, icon: "gauge.with.dots.needle.33percent") {
-                HSHaptic.select(); store.filter = .atRisk; mode = .list
+                HSHaptic.select(); showFilter(.atRisk)
             }
             HSStatTile(value: "\(store.completeCount)", label: "Completed",
                        accent: HS.green, icon: "checkmark.seal.fill") {
-                HSHaptic.select(); store.filter = .complete; mode = .list
+                HSHaptic.select(); showFilter(.complete)
             }
         }
         .hsGutter()
@@ -186,8 +186,7 @@ struct DLDeadlinesScreen: View {
             DLRiskBanner(overdue: store.overdueCount,
                          atRisk: store.atRiskCount,
                          criticalOpen: store.criticalOpen) {
-                store.filter = store.overdueCount > 0 ? .overdue : .atRisk
-                mode = .list
+                showFilter(store.overdueCount > 0 ? .overdue : .atRisk)
             }
             .hsGutter()
             .padding(.top, 12)
@@ -219,6 +218,26 @@ struct DLDeadlinesScreen: View {
 
     // MARK: Segments + filters
 
+    /// Picking a filter (a segment, a stat tile or the risk banner) shows that whole filter: a day picked on the week
+    /// rail is cleared, so "All" lists every deadline — past, this week, later and complete — and never only the day
+    /// left selected on the rail. Display only.
+    private func showFilter(_ filter: DLFilter) {
+        selectedDay = nil
+        store.filter = filter
+        mode = .list
+    }
+
+    /// The segments' binding: choosing a segment (even the one already chosen) clears the week-rail day.
+    private var filterSelection: Binding<DLFilter> {
+        Binding(
+            get: { store.filter },
+            set: { newValue in
+                selectedDay = nil
+                store.filter = newValue
+            }
+        )
+    }
+
     private var segments: some View {
         VStack(spacing: 10) {
             HSSegmented(items: [
@@ -227,7 +246,7 @@ struct DLDeadlinesScreen: View {
                 .init(id: DLFilter.thisWeek, title: "This week", count: store.thisWeekCount),
                 .init(id: DLFilter.atRisk,   title: "At risk",   count: store.atRiskCount),
                 .init(id: DLFilter.complete, title: "Complete",  count: store.completeCount)
-            ], selection: $store.filter)
+            ], selection: filterSelection)
 
             HStack(spacing: 10) {
                 HSSearchField(placeholder: "Search deadlines, floors, trades", text: $store.search)
@@ -323,7 +342,7 @@ struct DLDeadlinesScreen: View {
             if items.isEmpty {
                 HSEmptyState(icon: "chart.bar.doc.horizontal",
                              title: "Nothing to plot",
-                             message: "Open deadlines with a start and due date appear here as bars.")
+                             message: "Deadlines with a start and due date appear here as bars.")
                     .hsGutter()
                     .padding(.top, 20)
             } else {
@@ -405,7 +424,7 @@ struct DLDeadlineDetailSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HSNavBar(title: "Deadline",
-                     subtitle: live.location,
+                     subtitle: live.floorsText,
                      onBack: { dismiss() },
                      backSymbol: "xmark") {
                 if canManage {
@@ -568,7 +587,7 @@ struct DLDeadlineDetailSheet: View {
         VStack(spacing: 0) {
             HSRowGroup {
                 DLFieldRow(icon: "building.2.fill", tint: HS.inkSoft, label: "Location") {
-                    Text(live.location ?? "Not set")
+                    Text(live.floorsText ?? "Not set")
                         .font(.system(size: 14.5, weight: .semibold))
                         .foregroundStyle(HS.ink).hsNoClip(2)
                 }
@@ -963,8 +982,11 @@ struct DLEditDeadlineScreen: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var title = ""
+    /// Custom floors typed by the person (comma-separated for several); preset floors are in `presetFloors`.
     @State private var location = ""
     @State private var locationIsCustom = false
+    /// RULEBOOK 1.92.0: a deadline may be on several floors — the preset floors picked, in the order picked.
+    @State private var presetFloors: [String] = []
     @State private var trade = "General"
     @State private var due = Date()
     @State private var start = Date()
@@ -1094,18 +1116,16 @@ struct DLEditDeadlineScreen: View {
                         HStack(spacing: 8) {
                             locationChip(title: "Custom", selected: locationIsCustom) {
                                 HSHaptic.select()
-                                if !locationIsCustom {
-                                    if locationPresets.contains(location) {
-                                        location = ""
-                                    }
-                                    locationIsCustom = true
-                                }
+                                locationIsCustom.toggle()
                             }
                             ForEach(locationPresets, id: \.self) { area in
-                                locationChip(title: area, selected: !locationIsCustom && location == area) {
+                                locationChip(title: area, selected: presetFloors.contains(area)) {
                                     HSHaptic.select()
-                                    locationIsCustom = false
-                                    location = area
+                                    if let i = presetFloors.firstIndex(of: area) {
+                                        presetFloors.remove(at: i)
+                                    } else {
+                                        presetFloors.append(area)
+                                    }
                                 }
                             }
                         }
@@ -1114,7 +1134,7 @@ struct DLEditDeadlineScreen: View {
                 }
 
             if locationIsCustom {
-                TextField("Type floor or area", text: $location)
+                TextField("Type floor or area (comma for several)", text: $location)
                     .accessibilityIdentifier("dlEditDeadlineScreen.typeFloorOrArea")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(HS.ink)
@@ -1153,6 +1173,7 @@ struct DLEditDeadlineScreen: View {
                     HSDivider(inset: 62)
                     DLFieldRow(icon: "calendar", tint: HS.blue, label: "Starts") {
                         DatePicker("", selection: $start, displayedComponents: .date)
+                            .closesCalendarOnDayPick(start)
                             .accessibilityIdentifier("dlEditDeadlineScreen.datePicker")
                             .labelsHidden().tint(HS.teal)
                     }
@@ -1160,6 +1181,7 @@ struct DLEditDeadlineScreen: View {
                 HSDivider(inset: 62)
                 DLFieldRow(icon: "flag.checkered", tint: HS.teal, label: "Due") {
                     DatePicker("", selection: $due, displayedComponents: .date)
+                        .closesCalendarOnDayPick(due)
                         .accessibilityIdentifier("dlEditDeadlineScreen.datePicker2")
                         .labelsHidden().tint(HS.teal)
                 }
@@ -1355,11 +1377,10 @@ struct DLEditDeadlineScreen: View {
     private func hydrateFromExisting() {
         guard let e = existing else { return }
         title = e.title
-        location = e.location ?? ""
-        locationIsCustom = {
-            guard let loc = e.location, !loc.isEmpty else { return false }
-            return !locationPresets.contains(loc)
-        }()
+        presetFloors = e.floors.filter { locationPresets.contains($0) }
+        let custom = e.floors.filter { !locationPresets.contains($0) }
+        location = custom.joined(separator: ", ")
+        locationIsCustom = !custom.isEmpty
         trade = e.trade ?? (tradeOptions.first ?? "General")
         due = e.due
         hasStart = e.start != nil
@@ -1375,7 +1396,17 @@ struct DLEditDeadlineScreen: View {
     private func builtDeadline() -> DLDeadline {
         var d = existing ?? DLDeadline(title: title, due: due)
         d.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        d.location = location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : location
+        // RULEBOOK 1.92.0 `deadlineLocationWriteFields`: the floors picked, the first one also as `location`.
+        let custom = locationIsCustom
+            ? location.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            : []
+        var floors: [String] = []
+        for floor in presetFloors + custom where !floors.contains(where: { $0.caseInsensitiveCompare(floor) == .orderedSame }) {
+            floors.append(floor)
+        }
+        let fields = CanonicalBusinessEngine.deadlineLocationWriteFields(floors) ?? (location: floors.first ?? "", locations: floors)
+        d.locations = fields.locations
+        d.location = fields.location.isEmpty ? nil : fields.location
         d.trade = trade
         d.detail = detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : detail
         d.start = hasStart ? start : nil

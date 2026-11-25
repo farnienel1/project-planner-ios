@@ -259,6 +259,7 @@ struct PersonalSiteAuditCreateView: View {
                     TextField(CanonicalBusinessEngine.siteAuditFieldLabel("customTitle") ?? "Title (optional)", text: $customTitle)
                     PersonalSiteAuditFieldCounter(field: "customTitle", value: customTitle)
                     DatePicker("Date", selection: $date, displayedComponents: .date)
+                        .closesCalendarOnDayPick(date)
                         .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                 }
                 ForEach($items) { $item in

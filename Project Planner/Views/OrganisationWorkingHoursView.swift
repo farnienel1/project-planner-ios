@@ -1204,6 +1204,7 @@ struct OrganisationWorkingHoursView: View {
                     in: Self.firstSchedulableDay...,
                     displayedComponents: .date
                 )
+                    .closesCalendarOnDayPick(scheduleEffectiveDate)
                     .accessibilityIdentifier("organisationWorkingHours.effectiveFrom")
                 Section {
                     Text("Bookings before this date keep the current working hours. From this date onward, these draft settings apply.")

@@ -440,6 +440,7 @@ struct OperativeQualificationsEditorView: View {
                         ),
                         displayedComponents: .date
                     )
+                        .closesCalendarOnDayPick(expiry)
                     // A business date: the organisation's calendar and zone, never the phone's (RULEBOOK §1).
                     .environment(\.calendar, OrganizationRulebookContext.calendar)
                     .environment(\.timeZone, OrganizationRulebookContext.timeZone)

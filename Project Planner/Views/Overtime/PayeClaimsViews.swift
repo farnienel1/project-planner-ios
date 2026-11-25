@@ -260,8 +260,10 @@ struct PayeClaimsCustomRangeView: View {
     var body: some View {
         OvertimeScreenScaffold(title: "Custom date range") {
             DatePicker("Start", selection: $start, displayedComponents: .date)
+                .closesCalendarOnDayPick(start)
                 .environment(\.timeZone, OrganizationRulebookContext.timeZone)
             DatePicker("End", selection: $end, displayedComponents: .date)
+                .closesCalendarOnDayPick(end)
                 .environment(\.timeZone, OrganizationRulebookContext.timeZone)
             Button {
                 if let range = CanonicalBusinessEngine.payeCustomRange(
@@ -1024,6 +1026,7 @@ struct AddPayeClaimSheet: View {
         PayeClaimFormCard(title: priceWork ? "Dates" : "Date", symbol: "calendar", family: .plan, message: message, identifier: "payeClaims.add.dates") {
             PayeClaimLabeledField(priceWork ? "From" : "Date") {
                 DatePicker(priceWork ? "From" : "Date", selection: $from, displayedComponents: .date)
+                    .closesCalendarOnDayPick(from)
                     .labelsHidden()
                     .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                     .onChange(of: from) { _, value in
@@ -1034,6 +1037,7 @@ struct AddPayeClaimSheet: View {
             if priceWork {
                 PayeClaimLabeledField("To") {
                     DatePicker("To", selection: $to, in: from..., displayedComponents: .date)
+                        .closesCalendarOnDayPick(to)
                         .labelsHidden()
                         .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .accessibilityIdentifier("payeClaims.add.to")

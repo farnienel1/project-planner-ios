@@ -512,6 +512,7 @@ struct CreateSmallWorksView: View {
             }
             Spacer()
             DatePicker("", selection: date, displayedComponents: .date)
+                .closesCalendarOnDayPick(date.wrappedValue)
                 .accessibilityIdentifier("createSmallWorks.dateRow")
                 .labelsHidden()
             Image(systemName: "chevron.right")

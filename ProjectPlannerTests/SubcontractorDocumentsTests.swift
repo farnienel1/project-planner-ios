@@ -61,6 +61,15 @@ final class SubcontractorDocumentsTests: XCTestCase {
     }
 
     /// Review of #286: a redrawn photo is stored under the picked name with the stored file's extension.
+    /// A save that committed while the app saw an error keeps its file: only an unlinked upload is deleted again.
+    func testLinkedPathIsFoundInEitherList() {
+        let path = "organizations/o/subcontractors/s/documents/u_1.pdf"
+        let stored: [String: Any] = ["documents": ["insurance": [["path": "other"]], "rams": [["path": path]]]]
+        XCTAssertTrue(FirebaseBackend.subcontractorDocumentPathIsLinked(stored, path: path))
+        XCTAssertFalse(FirebaseBackend.subcontractorDocumentPathIsLinked(stored, path: path + "x"))
+        XCTAssertFalse(FirebaseBackend.subcontractorDocumentPathIsLinked(["name": "Firm"], path: path))
+    }
+
     func testDisplayNameFollowsTheStoredFile() {
         XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "Site.HEIC", storedObjectName: "u_1.jpg"), "Site.jpg")
         XCTAssertEqual(FirebaseBackend.subcontractorDocumentDisplayName(fileName: "Policy.pdf", storedObjectName: "u_1.pdf"), "Policy.pdf")

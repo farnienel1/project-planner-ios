@@ -830,6 +830,7 @@ private struct MaterialEntrySection: View {
                     }
                 }
             ), displayedComponents: .date)
+            .closesCalendarOnDayPick(entry.selectedDate)
             .accessibilityIdentifier("materialEntrySection.date")
             .datePickerStyle(.compact)
             

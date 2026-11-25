@@ -109,6 +109,7 @@ struct SubcontractorDocumentsSection: View {
             .accessibilityIdentifier("subcontractorDocuments.setExpiry.\(kind)")
         if setExpiry[kind] == true {
             DatePicker("\(label) expiry date", selection: expiryDateBinding(kind), displayedComponents: .date)
+                .closesCalendarOnDayPick(expiryDateBinding(kind).wrappedValue)
                 .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                 .font(.subheadline)
                 .padding(.horizontal, 4)
@@ -283,6 +284,7 @@ private struct SubcontractorDocumentExpirySheet: View {
                         .accessibilityIdentifier("subcontractorDocuments.editExpiry.toggle")
                     if hasExpiry {
                         DatePicker("Expiry date", selection: $date, displayedComponents: .date)
+                            .closesCalendarOnDayPick(date)
                             .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                     }
                 }
