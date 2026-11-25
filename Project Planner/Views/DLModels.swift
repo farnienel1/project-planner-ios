@@ -345,6 +345,17 @@ extension DLDeadline {
         return []
     }
 
+    /// Fallback for `deadlineFloorGroup` when the script did not answer: the floor, "Multiple floors", or "".
+    static func localFloorGroup(_ floors: [String]) -> String {
+        var unique: [String] = []
+        for floor in floors.map({ $0.trimmingCharacters(in: .whitespaces) }) where !floor.isEmpty
+            && !unique.contains(where: { $0.caseInsensitiveCompare(floor) == .orderedSame }) {
+            unique.append(floor)
+        }
+        if unique.isEmpty { return "" }
+        return unique.count == 1 ? unique[0] : "Multiple floors"
+    }
+
     /// The floors joined for display, nil when none.
     var floorsText: String? { floors.isEmpty ? nil : floors.joined(separator: ", ") }
 
@@ -577,19 +588,13 @@ final class DLStore: ObservableObject {
         }
     }
 
-    /// Floor grouping (RULEBOOK 1.92.0): a deadline on several floors is listed under each of its floors
-    /// (`deadlineOnLocation`); one with none under "Unassigned area".
+    /// Floor grouping (RULEBOOK 1.93.0, owner 25 Nov): a deadline on one floor is listed under that floor, one on
+    /// two or more floors once under "Multiple floors" (`deadlineFloorGroup`), one with none under "Unassigned area".
     private func floorGroups(_ list: [DLDeadline]) -> [DLGroup] {
-        var names: [String] = []
-        for item in list {
-            for floor in item.floors where !names.contains(where: { $0.caseInsensitiveCompare(floor) == .orderedSame }) {
-                names.append(floor)
-            }
-        }
-        var rows: [(String, DLDeadline)] = []
-        for item in list {
-            let on = names.filter { item.isOn(floor: $0) }
-            if on.isEmpty { rows.append(("Unassigned area", item)) } else { rows += on.map { ($0, item) } }
+        let rows: [(String, DLDeadline)] = list.map { item in
+            let group = CanonicalBusinessEngine.deadlineFloorGroup(location: item.location, locations: item.locations)
+                ?? DLDeadline.localFloorGroup(item.floors)
+            return (group.isEmpty ? "Unassigned area" : group, item)
         }
         return Dictionary(grouping: rows, by: { $0.0 })
             .map { k, pairs in

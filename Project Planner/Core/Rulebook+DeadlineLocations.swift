@@ -17,4 +17,13 @@ extension CanonicalBusinessEngine {
         let item: [String: Any] = ["location": location.map { $0 as Any } ?? NSNull(), "locations": locations]
         return callJSON("deadlineOnLocation", arguments: [item, floor]) as? Bool
     }
+
+    /// RULEBOOK 1.93.0 `deadlineFloorGroup(item)`: the one floor-grouping section — the floor when there is one,
+    /// "Multiple floors" for two or more, "" for none. Nil when the script did not answer.
+    nonisolated static func deadlineFloorGroup(location: String?, locations: [String]) -> String? {
+        let item: [String: Any] = ["location": location.map { $0 as Any } ?? NSNull(), "locations": locations]
+        let value = callJSON("deadlineFloorGroup", arguments: [item])
+        if value is NSNull { return "" }
+        return value as? String
+    }
 }
