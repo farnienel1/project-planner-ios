@@ -1,2 +1,4 @@
 # Test data, not secrets: warning resolution keys in the parity fixture mirrored from web lib/canonical.
 0de5cb19d15ce58581061f0679fe5d58a0b6819d:ProjectPlannerTests/CanonicalParityFixture.json:generic-api-key:910
+# Not a secret: an early sync of web rulebook 1.94.0 had a packed helper renamed in a way that read like a key; fixed in the later sync.
+8695995c6078f1a417606575bfe23e56d4b02860:Project Planner/Canonical/canonical-business.js:generic-api-key:4804
