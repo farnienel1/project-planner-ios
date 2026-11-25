@@ -154,6 +154,8 @@ final class RulebookBypassGuardTests: XCTestCase {
         ],
         "rawLineManagerIds": [
             "Core/DeferredLeaveNotices.swift": 1,
+            // Passes the stored fields into `organizationLineManagerFields` and stores its answer; decides nothing itself.
+            "Core/FirebaseBackend+OrganizationMembership.swift": 5,
             "Core/LineManagerSupport.swift": 2,
             "Core/NotificationService.swift": 1,
             "Core/UserStore.swift": 6,
