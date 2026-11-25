@@ -158,7 +158,8 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Core/FirebaseBackend+OrganizationMembership.swift": 5,
             "Core/LineManagerSupport.swift": 2,
             "Core/NotificationService.swift": 1,
-            "Core/UserStore.swift": 6,
+            // 1.88.0: +2 pass the edited choice into `memberLineManagerWriteFields` (the record writer).
+            "Core/UserStore.swift": 8,
             // Hashed only to notice a roster change; never decides who a line manager is.
             "Core/WarningsRosterFingerprint.swift": 1,
             "FirebaseBackend.swift": 1,
