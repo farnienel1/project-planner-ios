@@ -74,6 +74,13 @@ nonisolated enum OrganizationWeekSupport {
         weekDays(containing: date, timeZone: timeZone).first ?? date
     }
 
+    /// Owner decision 25 Nov: after a booking is saved from a job's Scheduling, the grid opens on the organisation week
+    /// holding the FIRST booked day (several weeks: the earliest). Nil when nothing was booked.
+    static func returnWeekStart(forBookedDays days: [Date], timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Date? {
+        guard let first = days.min(by: { dayKey($0, timeZone: timeZone) < dayKey($1, timeZone: timeZone) }) else { return nil }
+        return weekStart(containing: first, timeZone: timeZone)
+    }
+
     /// The Monday of the week `weeks` weeks before (negative) or after the week containing `date`.
     static func shiftedWeekStart(from date: Date, by weeks: Int, timeZone: String = OrganizationRulebookContext.timeZoneIdentifier) -> Date {
         let start = weekStart(containing: date, timeZone: timeZone)

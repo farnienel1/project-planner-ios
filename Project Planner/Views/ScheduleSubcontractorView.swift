@@ -6,6 +6,8 @@ struct ScheduleSubcontractorView: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     
     let project: Project
+    /// Owner decision 25 Nov: the booked days once something saved, so Scheduling opens on the first booked day's week.
+    var onBooked: (([Date]) -> Void)? = nil
     
     @State private var selectedSubcontractorId: UUID?
     @State private var selectedContactIds: Set<UUID> = []
@@ -652,8 +654,10 @@ struct ScheduleSubcontractorView: View {
                 results.append(result)
             }
             let savedResults = results
+            let bookedDays = Array(selectedDates)
             await MainActor.run {
                 isSaving = false
+                if savedResults.contains(where: { $0.keepsBooking }) { onBooked?(bookedDays) }
                 dismiss()
                 Feedback.play(results: savedResults, success: .bookingSaved)
             }
