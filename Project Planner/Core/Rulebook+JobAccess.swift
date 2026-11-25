@@ -565,8 +565,18 @@ nonisolated enum JobAccessContext {
     /// The jobs this device loaded: their ids for `bookingQueryPlan` and their manager fields for `canWriteBooking`.
     @MainActor static func updateJobs(_ projects: [Project]) {
         var fields: [String: [String: Any]] = [:]
-        for job in projects { fields[job.documentId.lowercased()] = job.jobAccessFields }
+        var labels: [String: String] = [:]
+        for job in projects {
+            fields[job.documentId.lowercased()] = job.jobAccessFields
+            // RULEBOOK 1.86.0 "Not synced": the job's label on a summary row (display only).
+            let label = [job.jobNumber, job.siteName]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " · ")
+            labels[job.documentId.lowercased()] = label.isEmpty ? "Job" : label
+        }
         jobFieldsById = fields
+        OfflineSyncSummary.jobLabelsById = labels
         updateVisibleJobIds(projects.map(\.documentId))
         BookingJobCollectionContext.update(projects)
     }

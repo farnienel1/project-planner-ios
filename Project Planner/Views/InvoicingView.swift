@@ -2946,7 +2946,7 @@ private struct MyTimesheetView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(currentUser, period: week.start...week.end),
@@ -2988,7 +2988,7 @@ private struct MyTimesheetView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: lateExtrasPermission.allowed,
             personName: TimesheetClarityNames.personName(currentUser),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: currentUser, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(currentUser, roster: userStore.organizationUsers)
         )
     }
@@ -4740,6 +4740,8 @@ struct OperativeTimesheetsView: View {
     @State private var exportedSearch = ""
     @State private var exportedSort = "dateNewest"
     @State private var exportedRunKey = "all"
+    /// Owner 24 Nov (web #451): each Exported row's versions list starts collapsed; opened rows are kept for the session.
+    @State private var openVersionRowIds: Set<String> = ExportedVersionsDisclosure.openRowIds
     @State private var awaitingRows: [ManagerTimesheetRow] = []
     /// RULEBOOK 1.66.0 §8: Signed off — every signed, unexported sheet however old (`userTimesheetQueue`, as web).
     @State private var signedRows: [ManagerTimesheetRow] = []
@@ -4879,13 +4881,27 @@ struct OperativeTimesheetsView: View {
                                             Text(live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName)
                                                 .font(.subheadline.weight(.semibold))
                                                 .foregroundStyle(.primary)
-                                            Text(row.week.title)
+                                            // Web #414c: a deleted person's row carries the "Former person" chip.
+                                            if row.formerPerson {
+                                                Text(CanonicalBusinessEngine.formerPersonChip)
+                                                    .font(.caption2.weight(.semibold))
+                                                    .foregroundStyle(PPColor.warningAmber)
+                                                    .accessibilityIdentifier("timesheets.exported.formerChip")
+                                            }
+                                            // Owner 24 Nov (web #451): pay run and export time on one line, in the
+                                            // organisation's time zone ("16–30 Nov 2026 · Exported 24 Nov, 20:07").
+                                            Text(exportedRowLine(row))
                                                 .font(.caption)
                                                 .foregroundStyle(.secondary)
-                                            if let exportedAt = row.draft.exportedAt {
-                                                Text("Exported \(exportedAt.formatted(date: .abbreviated, time: .shortened))")
+                                                .lineLimit(1)
+                                                .minimumScaleFactor(0.85)
+                                            // Owner 24 Nov (parity with web #451): admins see the line manager,
+                                            // named by the rulebook's `lineManagerSummary` like Awaiting / Signed off.
+                                            if isAdminViewer {
+                                                Text("Line manager: \(row.unresolvedPerson ? "—" : lineManagerName(for: live(row.user)))")
                                                     .font(.caption2)
                                                     .foregroundStyle(.secondary)
+                                                    .lineLimit(1)
                                             }
                                         }
                                         Spacer()
@@ -4895,7 +4911,8 @@ struct OperativeTimesheetsView: View {
                                             .foregroundStyle(.tertiary)
                                     }
                                     .padding(.horizontal, 14)
-                                    .padding(.vertical, 11)
+                                    .padding(.top, 9)
+                                    .padding(.bottom, 4)
                                     .contentShape(Rectangle())
                                 }
                                 .accessibilityIdentifier("timesheets.row.\(row.id).exported")
@@ -4913,23 +4930,47 @@ struct OperativeTimesheetsView: View {
                                     }
                                     .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDF")
                                 }
-                                // Review r318: the same action, visible on every row (not long-press only).
-                                HStack {
+                                // Review r318: the same action, visible on every row (not long-press only). Owner 24 Nov
+                                // (web #451): one line with the "Versions · N" toggle on the left.
+                                HStack(spacing: 12) {
+                                    if !row.earlier.isEmpty {
+                                        let open = openVersionRowIds.contains(row.id)
+                                        let count = max(row.versions.count, row.earlier.count + 1)
+                                        Button {
+                                            openVersionRowIds = TimesheetListDisplay.toggled(openVersionRowIds, rowId: row.id)
+                                            ExportedVersionsDisclosure.openRowIds = openVersionRowIds
+                                        } label: {
+                                            HStack(spacing: 3) {
+                                                Text("Versions · \(count)")
+                                                Image(systemName: "chevron.right")
+                                                    .rotationEffect(.degrees(open ? 90 : 0))
+                                            }
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .accessibilityLabel("Versions of this pay run, \(count)")
+                                        .accessibilityValue(open ? "Expanded" : "Collapsed")
+                                        .accessibilityHint(open ? "Hides the versions" : "Shows the versions")
+                                        .accessibilityIdentifier("timesheets.row.\(row.id).versionsToggle")
+                                    }
                                     Spacer()
                                     Button {
                                         Task { await downloadExportedPDF(row, confirmedRebuild: false) }
                                     } label: {
-                                        Label("Download PDF", systemImage: "arrow.down.doc")
+                                        Label("PDF", systemImage: "arrow.down.doc")
                                             .font(.caption.weight(.semibold))
                                     }
                                     .buttonStyle(.borderless)
+                                    .accessibilityLabel(exportedDownloadLabel(row))
                                     .accessibilityIdentifier("timesheets.row.\(row.id).downloadPDFButton")
                                 }
                                 .padding(.horizontal, 14)
                                 .padding(.bottom, 8)
                                 // RULEBOOK 1.55.0 §8, owner item 23 (23 Nov): every exported version of the pay run,
                                 // oldest first, each with its invoice number, signed date, total, difference and PDF.
-                                if !row.earlier.isEmpty {
+                                // Owner 24 Nov: collapsed until the row's "Versions · N" toggle opens it.
+                                if !row.earlier.isEmpty, openVersionRowIds.contains(row.id) {
                                     if row.versions.count > 1 {
                                         TimesheetExportedVersionsList(
                                             rows: TimesheetExportedVersionRow.rows(
@@ -5970,15 +6011,29 @@ struct OperativeTimesheetsView: View {
         return String(format: "%.1f", rounded)
     }
 
+    /// "16–30 Nov 2026 · Exported 24 Nov, 20:07" in the organisation's time zone (web `formatCompactPayRun`,
+    /// `formatExportedStamp`). Before 24 Nov the export time used the device's zone.
+    private func exportedRowLine(_ row: ExportedTimesheetHistoryRow) -> String {
+        let zone = OrganizationRulebookContext.timeZone
+        let run = TimesheetListDisplay.compactPayRun(start: row.week.start, end: row.week.end, timeZone: zone)
+        guard let exportedAt = row.draft.exportedAt else { return run }
+        return "\(run) · Exported \(TimesheetListDisplay.exportedStamp(exportedAt, timeZone: zone))"
+    }
+
+    /// VoiceOver: "Download PDF of Luke Baldino, 16–30 Nov 2026, REV 1".
+    private func exportedDownloadLabel(_ row: ExportedTimesheetHistoryRow) -> String {
+        let person = live(row.user).fullName.isEmpty ? live(row.user).email : live(row.user).fullName
+        let run = TimesheetListDisplay.compactPayRun(start: row.week.start, end: row.week.end, timeZone: OrganizationRulebookContext.timeZone)
+        let revisionNumber = row.draft.revision ?? 0
+        let revision = revisionNumber > 0 ? ", REV \(revisionNumber)" : ""
+        return "Download PDF of \(person), \(run)\(revision)"
+    }
+
+    /// RULEBOOK §11 `lineManagerSummary` over every users document of the organisation (owner 24 Nov, web #451):
+    /// "Not set", "No line manager", a name, "First +N more", or "Unknown person" for an id nobody goes by. Before,
+    /// only `assignedManagerUserId` was matched exactly against the folded roster ("Unknown" / "Unassigned").
     private func lineManagerName(for user: AppUser) -> String {
-        guard let id = user.assignedManagerUserId?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
-            return "Unassigned"
-        }
-        if let manager = userStore.organizationUsers.first(where: { $0.id == id }) {
-            let name = manager.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-            return name.isEmpty ? manager.email : name
-        }
-        return "Unknown"
+        LineManagerLabelCache.shared.label(for: user, roster: userStore.unfoldedOrganizationUsers)
     }
 }
 
@@ -6014,6 +6069,21 @@ private enum ExportedTimesheetHistoryLoader {
         let ids = userIds.map { $0.lowercased() }.sorted().joined(separator: ",")
         let week = extraWeekStart.map { String(Int($0.timeIntervalSince1970)) } ?? "-"
         return [organizationId ?? "-", viewerId ?? "-", ids, rosterLoaded ? "roster" : "noRoster", week].joined(separator: "|")
+    }
+
+    /// Web #414c / review of #414: the organisation's `deletedPeople` records (admins and managers may read them), never
+    /// waiting more than 5 s. A refused, failed or slow read gives [] (the rows keep "Unknown person · <hint>").
+    static func formerPeople(firebaseBackend: FirebaseBackend, organizationId: String) async -> [[String: Any]] {
+        await withTaskGroup(of: [[String: Any]]?.self) { group -> [[String: Any]] in
+            group.addTask { await firebaseBackend.loadFormerPeople(organizationId: organizationId) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first ?? []
+        }
     }
 
     /// Drops every cached answer (after an export, which adds rows).
@@ -6094,12 +6164,21 @@ private enum ExportedTimesheetHistoryLoader {
         // Guardrail 1 (`w-timesheet-lookups`): a sheet belongs to a person under every id they go by (`personIdSet` via
         // `RulebookPeople.ownerIds`), and one person's several records are one person (web `exportedSheetOwnerResolver`).
         let idsOf: (AppUser) -> [String] = { RulebookPeople.ownerIds(for: $0, users: roster) }
+        // Web #414c (owner 23 Nov, issue 20): an admin's "Unknown person" row of a deleted person reads "Former: <name>"
+        // (`formerPersonForId` over `deletedPeople`). A refused, failed or slow (over 5 s) read gives none, and the rows
+        // keep "Unknown person · <hint>".
+        let includeUnresolved = viewerIsAdmin && rosterLoaded
+        var formerPeople: [[String: Any]] = []
+        if includeUnresolved, let orgId {
+            formerPeople = await ExportedTimesheetHistoryLoader.formerPeople(firebaseBackend: firebaseBackend, organizationId: orgId)
+        }
         let owner = PersonTimesheetLookup.exportedOwnerResolver(
             users: users,
             roster: roster,
             idsOf: idsOf,
-            includeUnresolved: viewerIsAdmin && rosterLoaded,
-            organizationId: orgId ?? ""
+            includeUnresolved: includeUnresolved,
+            organizationId: orgId ?? "",
+            formerPeople: formerPeople
         )
         // The people on the list once each (their records folded).
         var people: [AppUser] = []
@@ -6110,7 +6189,7 @@ private enum ExportedTimesheetHistoryLoader {
         }
 
         // Cloud rows per listed person (keyed by their id), plus admins' unresolved people.
-        var cloudByUser: [String: (user: AppUser, rows: [[String: Any]], unresolved: Bool)] = [:]
+        var cloudByUser: [String: (user: AppUser, rows: [[String: Any]], unresolved: Bool, former: Bool)] = [:]
         /// Whether the rows hold every version of each pay run (the per-person read). Only then is a version chain
         /// remembered (`TimesheetVersionChainCache`); the organisation-wide read holds exported versions only (S4).
         var complete = false
@@ -6121,7 +6200,7 @@ private enum ExportedTimesheetHistoryLoader {
                 let all = try await firebaseBackend.listExportedTimesheets(organizationId: orgId)
                 for row in all {
                     guard let found = owner((row["__subjectId"] as? String) ?? "") else { continue }
-                    cloudByUser[found.user.id.lowercased(), default: (found.user, [], found.unresolved)].rows.append(row)
+                    cloudByUser[found.user.id.lowercased(), default: (found.user, [], found.unresolved, found.former)].rows.append(row)
                 }
             } catch {
                 complete = true
@@ -6149,7 +6228,7 @@ private enum ExportedTimesheetHistoryLoader {
                 for (person, rows) in results {
                     // A sheet goes to the one person it names (exact id first, records folded).
                     let mine = rows.filter { owner(($0["__subjectId"] as? String) ?? "")?.user.id == person.id }
-                    cloudByUser[person.id.lowercased()] = (person, mine, false)
+                    cloudByUser[person.id.lowercased()] = (person, mine, false, false)
                 }
             }
         }
@@ -6201,6 +6280,7 @@ private enum ExportedTimesheetHistoryLoader {
                     earlier: item.earlier,
                     versions: item.chain.firstIndex { $0.documentId == item.documentId }.map { Array(item.chain[...$0]) } ?? [],
                     unresolvedPerson: entry.unresolved,
+                    formerPerson: entry.former,
                     opensReview: opens
                 )
             }
@@ -6277,6 +6357,9 @@ private struct ExportedTimesheetHistoryRow: Identifiable {
     /// Web `isUnresolvedTimesheetPerson`: the stored person is nobody in the organisation (admins only) — the row shows
     /// "Unknown person · <hint>" and has no profile or review screen to open; Download PDF still works.
     var unresolvedPerson: Bool = false
+    /// Web #414c: an unresolved person a former-person record names — the row reads "Former: Jane Smith" and carries the
+    /// "Former person" chip (`FORMER_PERSON_CHIP`).
+    var formerPerson: Bool = false
     /// Review of #259 (B1): the review screen opens `timesheet_{uid}_{start}` (and its revisions) only; a row whose
     /// stored document is another one (a former id, another record of the person, an unknown person) never opens it,
     /// so it can never show a blank sheet or save a second copy. Download PDF still works from the listed copy.
@@ -6483,7 +6566,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDueLabel: revisionDue.label,
             revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             changedDayLabel: details.firstDayLabel,
             changedBookingCount: details.bookingRows,
             hasInvoiceDays: TimesheetClarityNames.hasInvoiceDays(operative, period: week.start...week.end),
@@ -6507,7 +6590,7 @@ private struct OperativeTimesheetReviewView: View {
             revisionDue: revisionDue.due,
             lateExtrasAllowed: false,
             personName: TimesheetClarityNames.personName(operative),
-            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.organizationUsers),
+            lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
             hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers),
             // RULEBOOK 1.90.0: the reviewer's revision is created as a draft.
             revisionDraft: true
@@ -9499,6 +9582,10 @@ enum TimesheetInvoiceRows {
                     )
                     item.isOverlapping = live.isOverlapping
                     item.bookingId = live.bookingId
+                    // RULEBOOK 1.70.0 §8 `timesheetLineDisplay` (web #414b, owner 23 Nov): a live Full day / AM / PM
+                    // line reads its window on that day on the invoice and the Email and export PDF. Live rows only: a
+                    // signed snapshot row keeps its stored wording exactly.
+                    item.liveSlotTimes = InvoiceLineItem.liveSlotTimes(details: live.details, projectName: live.projectName, date: live.date)
                     // RULEBOOK 1.61.0 §8 (review of #378, S2): Generate invoice and Export read a day-rate overtime line in
                     // hours like web — the live line's multiplier, the person's own day rate and its divisor.
                     item.applyLiveOvertimeFigures(from: live)
@@ -9623,6 +9710,26 @@ struct InvoiceLineItem {
 
     /// A price work or expense row (no hours, no rate): its description ('' when none). Nil on labour rows.
     var moneyDescription: String? = nil
+
+    /// RULEBOOK 1.70.0 §8 `timesheetLineDisplay` (web #414b `invoiceLinesForTimesheet`): a live booking line stored as
+    /// a named slot ("FULL DAY", "AM", "PM") with no clock times, read as its window on that day under the working hours
+    /// in effect ("Full day 07:30–16:00"). Nil for a line with clock times, a signed snapshot row (kept as stored) and
+    /// every money row. Display only: the amount, hours and stored details never change.
+    var liveSlotTimes: String? = nil
+
+    /// The window text `liveSlotTimes` carries, worked out as web does: `timesheetLineDisplay` times when they differ
+    /// from the stored details and the stored clock part has no clock times. Nil when the script did not answer.
+    static func liveSlotTimes(details: String, projectName: String, date: Date) -> String? {
+        let stored = details.trimmingCharacters(in: .whitespacesAndNewlines)
+        let storedClock = CanonicalBusinessEngine.timesheetLineClockText(stored)
+        guard storedClock.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) == nil,
+              let display = CanonicalBusinessEngine.timesheetLineDisplay(
+                jobNumber: "", projectName: projectName, details: stored, date: date
+              ) else { return nil }
+        let times = display.times.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !times.isEmpty, times != stored else { return nil }
+        return times
+    }
 
     /// Web 1.57.0 (owner, 17 Nov; web `extraInvoiceDetails`): a price work or expense row's details on the PDF read its
     /// title, then its description when it has one — never "0h · rate not set" (no rate prices those amounts).
@@ -10009,7 +10116,8 @@ private enum InvoicePDFBuilder {
                 // RULEBOOK 1.43.0 §8: the clock part of the details (`timesheetLineClockText`), then the hours
                 // (`payLineHoursText`: an overtime line with a break reads "6.5h × 2 − 0.5h break = 12.5h") — never both.
                 // RULEBOOK 1.61.0 §8: a day-rate overtime line reads in hours (`dayRateOvertimeCalcText`).
-                let clockPart = TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
+                // RULEBOOK 1.70.0 §8 (web #414b): a live Full day / AM / PM line names its window on that day.
+                let clockPart = item.liveSlotTimes ?? TimesheetPayrollCollector.lineClockLabel(item.details) ?? ""
                 let hoursPart = CanonicalBusinessEngine.payLineHoursText(details: item.details, paidHours: item.paidHours, isOvertimeLine: item.isOvertimeLine)
                 let ratePart = item.dayRateOvertimeText.map { [$0] } ?? [hoursPart, item.timesheetRateAnnotation]
                 detail = ([clockPart] + ratePart).filter { !$0.isEmpty }.joined(separator: " · ")

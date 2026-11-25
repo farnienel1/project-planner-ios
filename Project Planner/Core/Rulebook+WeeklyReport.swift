@@ -225,6 +225,26 @@ extension CanonicalBusinessEngine {
         callJSON("parseFormerPersonDocument", arguments: [docId, data]) as? [String: Any]
     }
 
+    /// RULEBOOK 1.59.0 §11 `formerPersonForId(personId, formerPeople)`: the former-person record (from
+    /// `parseFormerPersonDocument`) whose id or `personIds` name `personId` (without case; the latest deleted wins). Nil
+    /// when none does or the script did not answer.
+    nonisolated static func formerPersonForId(_ personId: String, formerPeople: [[String: Any]]) -> [String: Any]? {
+        guard !formerPeople.isEmpty else { return nil }
+        return callJSON("formerPersonForId", arguments: [personId, formerPeople]) as? [String: Any]
+    }
+
+    /// RULEBOOK 1.59.0 §11 `formerPersonLabel(name)`: "Former: Jane Smith" ("Former: Deleted user" for an anonymised
+    /// record). Nil when the script did not answer.
+    nonisolated static func formerPersonLabel(_ name: String) -> String? {
+        let text = callJSON("formerPersonLabel", arguments: [name]) as? String
+        return text?.isEmpty == false ? text : nil
+    }
+
+    /// RULEBOOK 1.59.0 §11 `FORMER_PERSON_CHIP` ("Former person").
+    nonisolated static var formerPersonChip: String {
+        constant("FORMER_PERSON_CHIP", as: String.self) ?? "Former person"
+    }
+
     // MARK: Warnings (Q4d)
 
     /// RULEBOOK 1.51.0 §7 `weeklyReportClashDetail({ dayText, places })`: "Booked in two places on 10 Nov 2026:

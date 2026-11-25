@@ -6,8 +6,9 @@
 //  An orange double-booking row offers Replace beside ✓ and ✕ only when the viewer may delete every overlapping
 //  booking on it (`bookingReplaceOffer`, `canDeleteBooking` through `JobAccessContext.bookingRemoveAction`); the save is
 //  ONE Firestore batch — the new booking and each replaced booking's delete with its tombstone
-//  (`bookingReplaceWrites`). Online only (`booking.replace`, `OfflineAction.replaceBooking`). Swift only maps inputs and
-//  writes the batch; every decision is the script's.
+//  (`bookingReplaceWrites`). Offline (RULEBOOK 1.86.0, `booking.replace` allowed offline) it is one queued outbox item
+//  replayed through `offlineReplaceReplayDecision` (`Rulebook+OfflineReplace.swift`). Swift only maps inputs and writes
+//  the batch; every decision is the script's.
 //
 
 import Foundation
@@ -261,6 +262,21 @@ enum BookingReplaceNotices {
                 return
             }
         }
+    }
+
+    /// RULEBOOK 1.86.0: a Replace queued offline — the replaced bookings leave both stores on this device at once
+    /// (`.offlineReplaceHidBookings`); the outbox keeps them gone until the item replays.
+    @MainActor
+    static func hideReplacedLocally(_ targets: [BookingReplaceTarget], organizationId: String) {
+        NotificationCenter.default.post(
+            name: .offlineReplaceHidBookings,
+            object: nil,
+            userInfo: [
+                "organizationId": organizationId,
+                "labourBookingIds": targets.compactMap { $0.labour?.id.uuidString },
+                "managerBookingIds": targets.compactMap { $0.manager?.id.uuidString },
+            ]
+        )
     }
 
     /// RULEBOOK 1.33.0 §25 reopen: each replaced booking's PAYE overtime line, as after a normal delete.

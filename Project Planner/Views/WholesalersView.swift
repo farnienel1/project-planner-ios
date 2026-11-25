@@ -32,7 +32,7 @@ struct WholesalersView: View {
         do {
             wholesalers = try await firebaseBackend.loadWholesalers(organizationId: organizationId)
         } catch {
-            print("Error loading wholesalers: \(error.localizedDescription)")
+            logAndReportError("Error loading wholesalers: \(error.localizedDescription)")
         }
     }
 }

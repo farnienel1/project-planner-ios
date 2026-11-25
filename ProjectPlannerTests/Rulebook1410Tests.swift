@@ -133,9 +133,11 @@ final class Rulebook1410Tests: XCTestCase {
         ), "a booking never replaces itself")
     }
 
-    func testReplaceIsOnlineOnly() {
-        XCTAssertEqual(OfflinePolicy.availability(.replaceBooking), .onlineOnly)
-        XCTAssertFalse(OfflinePolicy.isEnabled(.replaceBooking, isOnline: false))
+    /// RULEBOOK 1.86.0 (owner decision 24 Nov): Replace is queued offline (it was online only from 1.41.0).
+    func testReplaceIsAllowedOffline() {
+        XCTAssertEqual(OfflinePolicy.availability(.replaceBooking), .allowedOffline)
+        XCTAssertTrue(OfflinePolicy.isEnabled(.replaceBooking, isOnline: false))
+        XCTAssertTrue(OfflinePolicy.queuesWhileOffline(.replaceBooking, isOnline: false))
         XCTAssertTrue(OfflinePolicy.isEnabled(.replaceBooking, isOnline: true))
         XCTAssertTrue(OfflinePolicy.isEnabled(.createBooking, isOnline: false), "✓ and ✕ still work offline")
     }
