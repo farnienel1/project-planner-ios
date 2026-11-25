@@ -25,7 +25,10 @@ class ProjectStore: ObservableObject {
     /// The last read of the `smallWorks` collection (load or listener), every document the rulebook reader accepted.
     /// `smallWorks` lists from `projects`, plus any of these whose id a `projects` document also holds (that id is
     /// kept once in `projects`, as the project): web lists each collection on its own screen, so neither is lost.
-    @Published private(set) var smallWorksDocuments: [Project] = []
+    @Published private(set) var smallWorksDocuments: [Project] = [] {
+        // RULEBOOK 1.91.0 (review of #305): small works feed the Tasks visibility memo too.
+        didSet { revision &+= 1 }
+    }
     @Published var clients: [Client] = []
     @Published var jobTypes: Set<String> = []
     @Published var isLoading: Bool = false

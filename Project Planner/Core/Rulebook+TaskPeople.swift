@@ -43,6 +43,9 @@ final class TaskPersonIndex {
     private let candidateManagers: [Manager]
     private let candidateOperatives: [Operative]
     private let candidateUsers: [AppUser]
+    /// Review of #305: the roster and the `operatives` / `managers` rows have a server answer (never "the roster is
+    /// empty" as a stand-in).
+    private let rosterLoaded: Bool
     private var candidatesMemo: TaskAssigneeCandidateIds??
 
     /// RULEBOOK 1.91.0 §34 `taskAssigneeCandidates` (owner report 25 Nov: Edit task's Managers picker listed a deleted
@@ -51,7 +54,7 @@ final class TaskPersonIndex {
     var candidates: TaskAssigneeCandidateIds? {
         if let memo = candidatesMemo { return memo }
         let answer: TaskAssigneeCandidateIds?
-        if candidateUsers.isEmpty {
+        if !rosterLoaded {
             answer = TaskAssigneeCandidateIds(managerIds: [], operativeIds: [], goneIds: [])
         } else {
             answer = TaskViewingRulebook.assigneeCandidates(managers: candidateManagers, operatives: candidateOperatives, users: candidateUsers)
@@ -60,10 +63,11 @@ final class TaskPersonIndex {
         return answer
     }
 
-    init(managers: [Manager], operatives: [Operative], users: [AppUser]) {
+    init(managers: [Manager], operatives: [Operative], users: [AppUser], rosterLoaded: Bool = true) {
         candidateManagers = managers
         candidateOperatives = operatives
         candidateUsers = users
+        self.rosterLoaded = rosterLoaded
         var managersById: [UUID: Manager] = [:]
         var managersByStoredId: [String: Manager] = [:]
         for row in managers {
@@ -225,6 +229,7 @@ final class TaskPersonIndex {
         operativeRevision: Int,
         userStore: ObjectIdentifier,
         userRevision: Int,
+        rosterLoaded: Bool,
         contentHash: Int,
         index: TaskPersonIndex
     )?
@@ -275,9 +280,11 @@ final class TaskPersonIndex {
     static func current(operativeStore: OperativeStore, userStore: UserStore) -> TaskPersonIndex {
         let operativeId = ObjectIdentifier(operativeStore)
         let userId = ObjectIdentifier(userStore)
+        let rosterLoaded = userStore.organizationUsersFinishedLoadOrganizationId != nil
+            && operativeStore.finishedLoadOrganizationId != nil
         if let cached,
            cached.operativeStore == operativeId, cached.operativeRevision == operativeStore.revision,
-           cached.userStore == userId, cached.userRevision == userStore.revision {
+           cached.userStore == userId, cached.userRevision == userStore.revision, cached.rosterLoaded == rosterLoaded {
             return cached.index
         }
         let managers = operativeStore.allManagers
@@ -285,12 +292,12 @@ final class TaskPersonIndex {
         let users = userStore.organizationUsers
         let hash = contentHash(managers: managers, operatives: operatives, users: users)
         let index: TaskPersonIndex
-        if let cached, cached.contentHash == hash {
+        if let cached, cached.contentHash == hash, cached.rosterLoaded == rosterLoaded {
             index = cached.index
         } else {
-            index = TaskPersonIndex(managers: managers, operatives: operatives, users: users)
+            index = TaskPersonIndex(managers: managers, operatives: operatives, users: users, rosterLoaded: rosterLoaded)
         }
-        cached = (operativeId, operativeStore.revision, userId, userStore.revision, hash, index)
+        cached = (operativeId, operativeStore.revision, userId, userStore.revision, rosterLoaded, hash, index)
         return index
     }
 }

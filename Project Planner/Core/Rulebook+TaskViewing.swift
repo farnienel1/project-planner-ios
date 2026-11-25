@@ -346,3 +346,123 @@ enum TaskViewingRulebook {
         return TaskAssigneeCandidateIds(managerIds: ids("managerIds"), operativeIds: ids("operativeIds"), goneIds: ids("goneIds"))
     }
 }
+
+// MARK: - Store answers, memoised (review of #305)
+
+/// What a Tasks screen shows for its inputs: loading (some store has no server answer yet for the open
+/// organisation), failed (a load failed, or the rulebook did not answer), or the visible tasks.
+enum TaskVisibilityState: Equatable {
+    case loading
+    case failed(String)
+    case ready([ProjectTask])
+
+    var tasks: [ProjectTask] {
+        if case .ready(let tasks) = self { return tasks }
+        return []
+    }
+}
+
+/// RULEBOOK 1.91.0 §34 (review of #305): `visibleTasksForViewer` and `taskPersonKeys` for the open stores, worked out
+/// once per store change (keyed by the stores' revisions) instead of several bridge calls on every redraw. Shared by
+/// the Tasks hub, a job's Tasks tab and badge, and Home.
+@MainActor
+enum TaskStoreAnswers {
+    static let failedMessage = "Tasks did not finish loading. Check the connection and try again."
+
+    /// Every store `visibleTasksForViewer` reads has a server answer for this organisation (tasks, jobs, the
+    /// `operatives` / `managers` rows, the roster) and the viewer's profile has loaded.
+    static func inputsLoaded(
+        taskStore: ProjectTaskStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        userStore: UserStore,
+        organizationId: String
+    ) -> Bool {
+        func done(_ finished: String?) -> Bool { organizationIdsMatch(finished, organizationId) }
+        return !organizationId.isEmpty
+            && done(taskStore.finishedLoadOrganizationId)
+            && !projectStore.isLoading && done(projectStore.finishedLoadOrganizationId)
+            && !operativeStore.isLoading && done(operativeStore.finishedLoadOrganizationId)
+            && done(userStore.organizationUsersFinishedLoadOrganizationId)
+            && !JobAccessContext.viewerPending
+    }
+
+    private struct Key: Equatable {
+        let tasks: Int
+        let projects: Int
+        let operatives: Int
+        let users: Int
+        let viewer: Int
+        let organizationId: String
+        let loaded: Bool
+        let taskError: String?
+        let taskLoading: Bool
+    }
+
+    private static var visibilityMemo: (key: Key, state: TaskVisibilityState)?
+    private static var personKeysMemo: (operatives: Int, users: Int, keys: [String: String])?
+
+    static func visibility(
+        taskStore: ProjectTaskStore,
+        projectStore: ProjectStore,
+        operativeStore: OperativeStore,
+        userStore: UserStore,
+        organizationId: String
+    ) -> TaskVisibilityState {
+        let viewer = userStore.displayUser ?? userStore.currentUser
+        let loaded = inputsLoaded(
+            taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore,
+            userStore: userStore, organizationId: organizationId
+        )
+        let key = Key(
+            tasks: taskStore.revision, projects: projectStore.revision, operatives: operativeStore.revision,
+            users: userStore.revision, viewer: viewer?.hashValue ?? 0, organizationId: organizationId, loaded: loaded,
+            taskError: taskStore.errorMessage, taskLoading: taskStore.isLoading
+        )
+        if let memo = visibilityMemo, memo.key == key { return memo.state }
+        let state: TaskVisibilityState
+        if !loaded {
+            // A load that failed with nothing to show is failed, not loading forever.
+            if let error = taskStore.errorMessage, !taskStore.isLoading, taskStore.tasks.isEmpty {
+                state = .failed(error)
+            } else {
+                state = .loading
+            }
+        } else if let visible = TaskViewingRulebook.visibleTasks(
+            taskStore.tasks,
+            viewer: viewer,
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            users: userStore.unfoldedOrganizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ) {
+            state = .ready(visible)
+        } else {
+            state = .failed(failedMessage)
+        }
+        visibilityMemo = (key, state)
+        return state
+    }
+
+    static func personKeys(operativeStore: OperativeStore, userStore: UserStore) -> [String: String] {
+        if let memo = personKeysMemo, memo.operatives == operativeStore.revision, memo.users == userStore.revision {
+            return memo.keys
+        }
+        let keys = TaskViewingRulebook.personKeys(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.unfoldedOrganizationUsers
+        )
+        personKeysMemo = (operativeStore.revision, userStore.revision, keys)
+        return keys
+    }
+
+    /// Retry after a failed load: the stores read again.
+    static func retry(taskStore: ProjectTaskStore, projectStore: ProjectStore, operativeStore: OperativeStore, userStore: UserStore) async {
+        visibilityMemo = nil
+        projectStore.loadData()
+        operativeStore.loadData()
+        await taskStore.loadData()
+        await userStore.loadOrganizationUsers(forceRefresh: true)
+    }
+}

@@ -106,7 +106,8 @@ struct TaskFilterChips: View {
             out.append(("assignee", label(filters.assigneeKey, in: assignees, prefix: "Assigned to"), { filters.assigneeKey = "" }))
         }
         if !filters.priority.isEmpty {
-            out.append(("priority", "Priority: \(filters.priority)", { filters.priority = "" }))
+            let priority = ProjectTask.Priority(rawValue: filters.priority).map(TaskRulebook.priorityLabel) ?? filters.priority
+            out.append(("priority", "Priority: \(priority)", { filters.priority = "" }))
         }
         if !filters.due.isEmpty {
             let name = TaskViewingRulebook.dueFilterChoices().first { $0.choice.rawValue == filters.due }?.label ?? filters.due

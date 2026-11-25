@@ -46,6 +46,8 @@ struct TasksDetailView: View {
     @State private var sortChoice: TaskSortChoice = .overdueFirst
     @State private var showingFilters = false
     @State private var rememberedLoadedFor: String? = nil
+    /// Review of #305: the scoped / filtered lists and the filter options, built once per store change.
+    @State private var hubMemo = TaskHubMemo()
     private static let filterScope = "main"
 
     private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
@@ -97,48 +99,69 @@ struct TasksDetailView: View {
 
     /// RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): admins every task, managers the tasks on the jobs they
     /// manage plus tasks assigned to or created by them, operatives the tasks assigned to them.
-    private var visibleTasks: [ProjectTask] {
-        TaskViewingRulebook.visibleTasks(
-            taskStore.tasks,
-            viewer: userStore.displayUser ?? userStore.currentUser,
-            jobs: jobs,
-            users: userStore.unfoldedOrganizationUsers,
-            operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers
-        ) ?? []
+    /// Review of #305: loading until every store has a server answer; failed (with Retry) when a load failed or the
+    /// rulebook did not answer — never "No tasks".
+    private var visibility: TaskVisibilityState {
+        TaskStoreAnswers.visibility(
+            taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore,
+            userStore: userStore, organizationId: organizationId
+        )
     }
+
+    private var visibleTasks: [ProjectTask] { visibility.tasks }
 
     private var jobs: [Project] { TaskViewingRulebook.allJobs(projectStore) }
 
     /// The jobs, the people rows and the roster have loaded (web review of #459: nothing is shown as "No tasks" and no
     /// remembered filter is dropped on a partial load).
     private var visibilityReady: Bool {
-        !projectStore.isLoading && !operativeStore.isLoading && !userStore.isLoading && !taskStore.isLoading
+        if case .ready = visibility { return true }
+        return false
     }
 
     private var personKeys: [String: String] {
-        TaskViewingRulebook.personKeys(
-            managers: operativeStore.allManagers,
-            operatives: operativeStore.allOperatives,
-            users: userStore.unfoldedOrganizationUsers
-        )
+        TaskStoreAnswers.personKeys(operativeStore: operativeStore, userStore: userStore)
     }
 
-    private var hubScopeTasks: [ProjectTask] {
+    /// The scoped list, the filtered list, the filter options and the assignee choices, built once per store /
+    /// scope / filter change (review of #305: several rulebook calls each).
+    private var hub: TaskHubModel {
+        let key = TaskHubMemo.Key(
+            tasks: taskStore.revision, projects: projectStore.revision, operatives: operativeStore.revision,
+            users: userStore.revision, viewer: (userStore.displayUser ?? userStore.currentUser)?.hashValue ?? 0,
+            ready: visibilityReady, scope: scope, filters: filters, organizationId: organizationId
+        )
+        if let model = hubMemo.model, hubMemo.key == key { return model }
         let visible = visibleTasks
-        if scope == .everyone { return visible }
-        let mine = Set(userRelevantTasks.map(\.id))
-        return visible.filter { mine.contains($0.id) }
+        let scoped: [ProjectTask]
+        if scope == .everyone {
+            scoped = visible
+        } else {
+            let mine = Set(userRelevantTasks.map(\.id))
+            scoped = visible.filter { mine.contains($0.id) }
+        }
+        let keys = personKeys
+        let model = TaskHubModel(
+            scopeTasks: scoped,
+            filtered: TaskViewingRulebook.filter(scoped, filters: filters, jobs: jobs, personKeys: keys),
+            options: TaskViewingRulebook.filterOptions(tasks: scoped, jobs: jobs, personKeys: keys, users: userStore.unfoldedOrganizationUsers),
+            assignees: buildAssigneeChoices(scoped, keys: keys)
+        )
+        hubMemo.key = key
+        hubMemo.model = model
+        return model
     }
+
+    private var hubScopeTasks: [ProjectTask] { hub.scopeTasks }
 
     /// The scoped list with the filters on (counts and tabs follow the filters, as web).
-    private var filteredScopeTasks: [ProjectTask] {
-        TaskViewingRulebook.filter(hubScopeTasks, filters: filters, jobs: jobs, personKeys: personKeys)
-    }
+    private var filteredScopeTasks: [ProjectTask] { hub.filtered }
 
     private var filterOptions: (projects: [TaskFilterChoice], smallWorks: [TaskFilterChoice], creators: [TaskFilterChoice]) {
-        TaskViewingRulebook.filterOptions(tasks: hubScopeTasks, jobs: jobs, personKeys: personKeys, users: userStore.unfoldedOrganizationUsers)
+        hub.options
     }
+
+    private var assigneeChoices: [TaskFilterChoice] { hub.assignees }
 
     /// RULEBOOK 1.89.0 §34 `taskTabCounts`: the same definitions as Home and the job tile (an overdue task is also
     /// active).
@@ -182,12 +205,12 @@ struct TasksDetailView: View {
 
                         filterBar
 
-                        if (taskStore.isLoading || !visibilityReady) && hubScopeTasks.isEmpty {
+                        if case .failed(let message) = visibility {
+                            errorState(message)
+                        } else if !visibilityReady {
                             ProgressView()
                                 .frame(maxWidth: .infinity)
                                 .padding(40)
-                        } else if let err = taskStore.errorMessage, hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
-                            errorState(err)
                         } else if displayedTasks.isEmpty {
                             emptyStateCard
                         } else {
@@ -270,8 +293,7 @@ struct TasksDetailView: View {
     }
 
     /// The people a task can be filtered by (one per person, from the assignee names).
-    private var assigneeChoices: [TaskFilterChoice] {
-        let keys = personKeys
+    private func buildAssigneeChoices(_ tasks: [ProjectTask], keys: [String: String]) -> [TaskFilterChoice] {
         let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
         var seen: [String: TaskFilterChoice] = [:]
         func add(_ kind: TaskPersonKind, _ id: UUID, stored: String, counted: inout Set<String>) {
@@ -286,7 +308,7 @@ struct TasksDetailView: View {
             choice.count += 1
             seen[key] = choice
         }
-        for task in hubScopeTasks {
+        for task in tasks {
             var counted = Set<String>()
             for id in task.allAssignedManagerIds { add(.manager, id, stored: id.uuidString, counted: &counted) }
             for id in task.allAssignedOperativeIds { add(.operative, id, stored: Booking.operativeMatchKey(for: id), counted: &counted) }
@@ -462,7 +484,11 @@ struct TasksDetailView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             Button("Retry") {
-                Task { await taskStore.loadData() }
+                Task {
+                    await TaskStoreAnswers.retry(
+                        taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore, userStore: userStore
+                    )
+                }
             }
             .accessibilityIdentifier("tasksDetail.retry")
             .buttonStyle(.borderedProminent)
@@ -754,6 +780,7 @@ private struct MyTasksRedesignTaskCard: View {
         // Start / Complete button inside keeps its own action (a Button wins over the card's tap gesture).
         .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
         .onTapGesture { showingTaskDetail = true }
+        .accessibilityAddTraits(.isButton)
         .sheet(isPresented: $showingTaskDetail) {
             CompletedTaskDetailView(task: resolvedTask)
                 .environmentObject(taskStore)
@@ -1116,4 +1143,30 @@ struct TaskTileView: View {
         .environmentObject(HolidayStore())
         .environmentObject(NotificationService())
         .environmentObject(FirebaseBackend())
+}
+
+/// Review of #305: what the Tasks hub builds from the stores, memoised per store / scope / filter change.
+struct TaskHubModel {
+    var scopeTasks: [ProjectTask]
+    var filtered: [ProjectTask]
+    var options: (projects: [TaskFilterChoice], smallWorks: [TaskFilterChoice], creators: [TaskFilterChoice])
+    var assignees: [TaskFilterChoice]
+}
+
+/// Held in `@State`; written while the body is read (no publishing), so a redraw with the same stores reuses it.
+final class TaskHubMemo {
+    struct Key: Equatable {
+        let tasks: Int
+        let projects: Int
+        let operatives: Int
+        let users: Int
+        let viewer: Int
+        let ready: Bool
+        let scope: TaskScope
+        let filters: TaskFilterSet
+        let organizationId: String
+    }
+
+    var key: Key?
+    var model: TaskHubModel?
 }
