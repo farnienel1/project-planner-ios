@@ -1479,7 +1479,15 @@ struct HomeView: View {
         let userEmail = userStore.currentUser?.email
         let accentBlue = Color(red: 0.094, green: 0.373, blue: 0.647)
         let accentPurple = Color(red: 0.325, green: 0.29, blue: 0.718)
-        let tasks = taskStore.tasks
+        // RULEBOOK 1.91.0 §34 `visibleTasksForViewer`: Home's task figures count the tasks this viewer may see.
+        let tasks = TaskViewingRulebook.visibleTasks(
+            taskStore.tasks,
+            viewer: userStore.displayUser ?? userStore.currentUser,
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            users: userStore.unfoldedOrganizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ) ?? []
         let managers = operativeStore.allManagers
         let holidays = holidayStore.bookings
         let signedIn = userStore.displayUser ?? userStore.currentUser

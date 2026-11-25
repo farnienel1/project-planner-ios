@@ -39,8 +39,31 @@ final class TaskPersonIndex {
     private var parent: [String: String] = [:]
     private var keyByRoot: [String: String] = [:]
     private var ghostKeys: Set<String> = []
+    /// RULEBOOK 1.91.0 §34: the rows and roster the assignee candidates are worked out from.
+    private let candidateManagers: [Manager]
+    private let candidateOperatives: [Operative]
+    private let candidateUsers: [AppUser]
+    private var candidatesMemo: TaskAssigneeCandidateIds??
+
+    /// RULEBOOK 1.91.0 §34 `taskAssigneeCandidates` (owner report 25 Nov: Edit task's Managers picker listed a deleted
+    /// user): the `managers` / `operatives` row ids a picker offers and the rows whose person is gone. Nil when the
+    /// script did not answer. Until the roster has loaded nothing is offered and nothing reads "Removed user".
+    var candidates: TaskAssigneeCandidateIds? {
+        if let memo = candidatesMemo { return memo }
+        let answer: TaskAssigneeCandidateIds?
+        if candidateUsers.isEmpty {
+            answer = TaskAssigneeCandidateIds(managerIds: [], operativeIds: [], goneIds: [])
+        } else {
+            answer = TaskViewingRulebook.assigneeCandidates(managers: candidateManagers, operatives: candidateOperatives, users: candidateUsers)
+        }
+        candidatesMemo = .some(answer)
+        return answer
+    }
 
     init(managers: [Manager], operatives: [Operative], users: [AppUser]) {
+        candidateManagers = managers
+        candidateOperatives = operatives
+        candidateUsers = users
         var managersById: [UUID: Manager] = [:]
         var managersByStoredId: [String: Manager] = [:]
         for row in managers {
@@ -219,6 +242,7 @@ final class TaskPersonIndex {
             hasher.combine(row.linkedUserId)
             hasher.combine(row.firstName)
             hasher.combine(row.lastName)
+            hasher.combine(row.isActive)
         }
         hasher.combine(operatives.count)
         for row in operatives {
@@ -228,6 +252,7 @@ final class TaskPersonIndex {
             hasher.combine(row.linkedUserId)
             hasher.combine(row.firstName)
             hasher.combine(row.lastName)
+            hasher.combine(row.isActive)
         }
         hasher.combine(users.count)
         for user in users {
@@ -236,6 +261,10 @@ final class TaskPersonIndex {
             hasher.combine(user.formerUserIds)
             hasher.combine(user.sameEmailUserIds)
             hasher.combine(user.isGhost)
+            // RULEBOOK 1.91.0: the assignee candidates read the level, the active flag and sign-up.
+            hasher.combine(user.isActive)
+            hasher.combine(user.passwordSet)
+            hasher.combine(String(describing: user.permissionSubject.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }))
         }
         return hasher.finalize()
     }
@@ -310,8 +339,17 @@ enum TaskPeopleRulebook {
     ) -> (managers: [Manager], operatives: [Operative]) {
         let currentManagers = currentLabourIds(allManagers.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
         let currentOperatives = currentLabourIds(allOperatives.map { (id: $0.id, email: $0.email, first: $0.firstName, last: $0.lastName) })
-        let managers = allManagers.filter { currentManagers?.contains($0.id.uuidString) ?? true }
-        let operatives = allOperatives.filter { currentOperatives?.contains($0.id.uuidString) ?? true }
+        // RULEBOOK 1.91.0 §34 `taskAssigneeCandidates`: only current people — never a deleted, inactive or pending
+        // person, a placeholder or a ghost (script silent: nobody new is offered rather than a deleted person).
+        let candidates = index.candidates
+        let managers = allManagers.filter {
+            (currentManagers?.contains($0.id.uuidString) ?? true)
+                && (candidates?.managerIds.contains($0.id.uuidString.lowercased()) ?? false)
+        }
+        let operatives = allOperatives.filter {
+            (currentOperatives?.contains($0.id.uuidString) ?? true)
+                && (candidates?.operativeIds.contains(Booking.operativeMatchKey(for: $0.id).lowercased()) ?? false)
+        }
         var managerKeys = Set<String>()
         var uniqueManagers: [Manager] = []
         for row in managers {
@@ -407,7 +445,11 @@ enum TaskPeopleRulebook {
         func add(_ kind: TaskPersonKind, _ id: UUID) {
             let key = index.key(kind, id)
             guard !shownKeys.contains(key), seen.insert(key).inserted else { return }
-            out.append(TaskPickerExtra(kind: kind, id: id, label: rowName(kind, id, index: index) ?? unknownLabel(id)))
+            // RULEBOOK 1.91.0 §34: an assignee whose person is gone (`goneIds`) reads "Removed user".
+            let stored = kind == .manager ? id.uuidString : Booking.operativeMatchKey(for: id)
+            let gone = index.candidates?.goneIds.contains(stored.lowercased()) == true
+            let label = gone ? TaskRulebook.removedUserLabel : (rowName(kind, id, index: index) ?? unknownLabel(id))
+            out.append(TaskPickerExtra(kind: kind, id: id, label: label))
         }
         for id in managers { add(.manager, id) }
         for id in operatives { add(.operative, id) }

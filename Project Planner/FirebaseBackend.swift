@@ -3058,6 +3058,12 @@ class FirebaseBackend: ObservableObject {
             throw NSError(domain: "FirebaseBackend", code: 401, userInfo: [NSLocalizedDescriptionKey: "User not authenticated"])
         }
         let fileData = try Data(contentsOf: fileURL)
+        // RULEBOOK 1.91.0 §34 (hand-off v1.91.0, as web): a HEIC / HEIF photo picked as a file is turned into a JPEG
+        // (the photo path: redrawn, location dropped) so every browser can open it.
+        let ext = (fileName as NSString).pathExtension.lowercased()
+        if ext == "heic" || ext == "heif", let image = UIImage(data: fileData) {
+            return try await uploadTaskImage(image, taskId: taskId, organizationId: organizationId)
+        }
         let prepared = try StorageUploadPolicy.prepareFileData(
             fileData,
             originalFileName: fileName,

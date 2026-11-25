@@ -77,6 +77,19 @@ struct ProjectDetailView: View {
         TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser)).seesEveryone
     }
 
+    /// RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): of `tasks`, the ones this viewer may see — admins all,
+    /// a manager every task on a job they manage plus tasks assigned to or created by them, operatives their own.
+    private func visibleJobTasks(_ tasks: [ProjectTask]) -> [ProjectTask] {
+        TaskViewingRulebook.visibleTasks(
+            tasks,
+            viewer: userStore.displayUser ?? userStore.currentUser,
+            jobs: TaskViewingRulebook.allJobs(projectStore),
+            users: userStore.unfoldedOrganizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ) ?? []
+    }
+
     private var canAccessVariations: Bool {
         WorkAccess.canAccessVariations(project: project, userStore: userStore, operativeStore: operativeStore)
     }
@@ -500,7 +513,8 @@ struct ProjectDetailView: View {
             "subcontractorBookings": subcontractorStore.bookings.filter { $0.projectId == project.id }.map { booking -> [String: Any] in
                 ["projectId": jobId, "subcontractorId": booking.subcontractorId.uuidString, "status": booking.status.rawValue]
             },
-            "tasks": taskStore.tasks.filter { $0.projectId == project.id }.map { ["projectId": jobId, "status": $0.status.rawValue] as [String: Any] },
+            // RULEBOOK 1.91.0 §34: the Tasks badge counts the tasks this viewer may see (`visibleTasksForViewer`).
+            "tasks": visibleJobTasks(taskStore.tasks.filter { $0.projectId == project.id }).map { ["projectId": jobId, "status": $0.status.rawValue] as [String: Any] },
             "people": people,
         ]
         return CanonicalBusinessEngine.jobTileBadges(input) ?? RulebookJobTileBadges(tentativeBookings: 0, openTasks: 0, activeUsers: 0)
@@ -2683,21 +2697,9 @@ struct ProjectDetailView: View {
             }
         }
         
-        // Admins and managing users with access: all tasks on this job (after filter chips). Others: assigned only.
-        if canViewAllTasksOnThisJob {
-            return tasks
-        }
-        // RULEBOOK §23 `tasksAssignedToViewer`: assigned under any id the person goes by (users id, former and
-        // same-email ids, every `operatives` / `managers` row on their email), operative mode included.
-        tasks = TaskAssignmentRulebook.assignedTasks(
-            tasks,
-            viewer: userStore.currentUser,
-            organizationUsers: userStore.organizationUsers,
-            operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers
-        )
-        
-        return tasks
+        // RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): the one visibility rule (it replaces 1.89.0's
+        // "staff see every task on the job"; a manager who does not manage this job sees only their own tasks here).
+        return visibleJobTasks(tasks)
     }
     
     private func filteredTasks(for scope: ProjectTaskListScope) -> [ProjectTask] {
@@ -5076,9 +5078,24 @@ private struct AddProjectTaskView: View {
                     if !selectedImages.isEmpty {
                         isUploadingImages = true
                         let totalImages = selectedImages.count
-                        for (index, image) in selectedImages.enumerated() {
-                            imageURLs.append(try await uploadImageForTask(image, taskId: task.id))
-                            uploadProgress = Double(index + 1) / Double(totalImages) * 0.5
+                        // RULEBOOK 1.91.0 §34 (hand-off v1.91.0, as web): photos upload 3 at a time, in order; the
+                        // task document is written once, after every upload (below).
+                        let images = selectedImages
+                        let taskId = task.id
+                        var done = 0
+                        for start in stride(from: 0, to: images.count, by: 3) {
+                            let chunk = Array(images[start..<min(start + 3, images.count)])
+                            let urls = try await withThrowingTaskGroup(of: (Int, String).self) { group in
+                                for (offset, image) in chunk.enumerated() {
+                                    group.addTask { (offset, try await self.uploadImageForTask(image, taskId: taskId)) }
+                                }
+                                var out = [String?](repeating: nil, count: chunk.count)
+                                for try await (offset, url) in group { out[offset] = url }
+                                return out.compactMap { $0 }
+                            }
+                            imageURLs.append(contentsOf: urls)
+                            done += chunk.count
+                            uploadProgress = Double(done) / Double(totalImages) * 0.5
                         }
                         isUploadingImages = false
                         task.attachedImageURLs = imageURLs

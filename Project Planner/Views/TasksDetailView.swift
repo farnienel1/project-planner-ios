@@ -40,6 +40,16 @@ struct TasksDetailView: View {
 
     static let scopeDefaultsKey = "pp.tasks.scope"
 
+    /// RULEBOOK 1.91.0 §34 (decision B): filters and sort, remembered per organisation for this screen
+    /// (`parseTaskFilters` / `parseTaskSort`).
+    @State private var filters: TaskFilterSet = .none
+    @State private var sortChoice: TaskSortChoice = .overdueFirst
+    @State private var showingFilters = false
+    @State private var rememberedLoadedFor: String? = nil
+    private static let filterScope = "main"
+
+    private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }
+
     /// RULEBOOK §5 `qualificationExpiryRows` for the signed-in operative's own catalogue rows (every row of their
     /// account, `bookingIdsForAccount`): organisation day, one calendar month ahead, already expired included — the
     /// rows the Home badge counts (`qualificationExpiryCount`). It used to be a 30-day device-calendar window that
@@ -85,16 +95,57 @@ struct TasksDetailView: View {
         )
     }
 
+    /// RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): admins every task, managers the tasks on the jobs they
+    /// manage plus tasks assigned to or created by them, operatives the tasks assigned to them.
+    private var visibleTasks: [ProjectTask] {
+        TaskViewingRulebook.visibleTasks(
+            taskStore.tasks,
+            viewer: userStore.displayUser ?? userStore.currentUser,
+            jobs: jobs,
+            users: userStore.unfoldedOrganizationUsers,
+            operatives: operativeStore.allOperatives,
+            managers: operativeStore.allManagers
+        ) ?? []
+    }
+
+    private var jobs: [Project] { TaskViewingRulebook.allJobs(projectStore) }
+
+    /// The jobs, the people rows and the roster have loaded (web review of #459: nothing is shown as "No tasks" and no
+    /// remembered filter is dropped on a partial load).
+    private var visibilityReady: Bool {
+        !projectStore.isLoading && !operativeStore.isLoading && !userStore.isLoading && !taskStore.isLoading
+    }
+
+    private var personKeys: [String: String] {
+        TaskViewingRulebook.personKeys(
+            managers: operativeStore.allManagers,
+            operatives: operativeStore.allOperatives,
+            users: userStore.unfoldedOrganizationUsers
+        )
+    }
+
     private var hubScopeTasks: [ProjectTask] {
-        scope == .everyone ? taskStore.tasks : userRelevantTasks
+        let visible = visibleTasks
+        if scope == .everyone { return visible }
+        let mine = Set(userRelevantTasks.map(\.id))
+        return visible.filter { mine.contains($0.id) }
+    }
+
+    /// The scoped list with the filters on (counts and tabs follow the filters, as web).
+    private var filteredScopeTasks: [ProjectTask] {
+        TaskViewingRulebook.filter(hubScopeTasks, filters: filters, jobs: jobs, personKeys: personKeys)
+    }
+
+    private var filterOptions: (projects: [TaskFilterChoice], smallWorks: [TaskFilterChoice], creators: [TaskFilterChoice]) {
+        TaskViewingRulebook.filterOptions(tasks: hubScopeTasks, jobs: jobs, personKeys: personKeys, users: userStore.unfoldedOrganizationUsers)
     }
 
     /// RULEBOOK 1.89.0 §34 `taskTabCounts`: the same definitions as Home and the job tile (an overdue task is also
     /// active).
-    private var tabCounts: [TaskTab: Int] { TaskRulebook.tabCounts(hubScopeTasks) }
+    private var tabCounts: [TaskTab: Int] { TaskRulebook.tabCounts(filteredScopeTasks) }
 
     private var displayedTasks: [ProjectTask] {
-        var list = hubScopeTasks.filter { TaskRulebook.tabs(for: $0).contains(tab) }
+        var list = filteredScopeTasks.filter { TaskRulebook.tabs(for: $0).contains(tab) }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
             list = list.filter { task in
@@ -111,8 +162,8 @@ struct TasksDetailView: View {
                 return false
             }
         }
-        // RULEBOOK 1.89.0 §34 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
-        return TaskRulebook.sorted(list, tab: tab)
+        // RULEBOOK 1.91.0 §34 `sortTasks`: overdue first (the 1.89.0 tab order) or by due date.
+        return TaskViewingRulebook.sort(list, sort: sortChoice, tab: tab)
     }
 
     var body: some View {
@@ -129,7 +180,9 @@ struct TasksDetailView: View {
                             qualificationBannersSection
                         }
 
-                        if taskStore.isLoading && hubScopeTasks.isEmpty && userRelevantTasks.isEmpty {
+                        filterBar
+
+                        if (taskStore.isLoading || !visibilityReady) && hubScopeTasks.isEmpty {
                             ProgressView()
                                 .frame(maxWidth: .infinity)
                                 .padding(40)
@@ -171,14 +224,113 @@ struct TasksDetailView: View {
             }
             .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
                 guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+                loadRememberedFilters()
                 await taskStore.loadData()
                 await holidayStore.loadData()
+            }
+            .sheet(isPresented: $showingFilters) {
+                TaskFilterSheet(
+                    filters: $filters,
+                    options: filterOptions,
+                    showsJobFilters: true,
+                    assignees: assigneeChoices
+                )
+            }
+            .onChange(of: filters) { _, next in
+                TaskViewingRulebook.rememberFilters(next, scope: Self.filterScope, organizationId: organizationId)
+            }
+            .onChange(of: sortChoice) { _, next in
+                TaskViewingRulebook.rememberSort(next, scope: Self.filterScope, organizationId: organizationId)
+            }
+            .onChange(of: visibilityReady) { _, ready in
+                if ready { pruneRememberedFilters() }
             }
             .refreshable {
                 await taskStore.loadData()
                 await holidayStore.loadData()
             }
         }
+    }
+
+    // MARK: Filters and sort (RULEBOOK 1.91.0 §34, decision B)
+
+    private func loadRememberedFilters() {
+        guard !organizationId.isEmpty, rememberedLoadedFor != organizationId else { return }
+        rememberedLoadedFor = organizationId
+        filters = TaskViewingRulebook.rememberedFilters(scope: Self.filterScope, organizationId: organizationId)
+        sortChoice = TaskViewingRulebook.rememberedSort(scope: Self.filterScope, organizationId: organizationId)
+        if visibilityReady { pruneRememberedFilters() }
+    }
+
+    /// Drop remembered values no longer offered — only once everything has loaded.
+    private func pruneRememberedFilters() {
+        guard visibilityReady else { return }
+        let next = TaskViewingRulebook.pruned(filters, options: filterOptions, jobs: jobs, personKeys: personKeys)
+        if next != filters { filters = next }
+    }
+
+    /// The people a task can be filtered by (one per person, from the assignee names).
+    private var assigneeChoices: [TaskFilterChoice] {
+        let keys = personKeys
+        let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
+        var seen: [String: TaskFilterChoice] = [:]
+        func add(_ kind: TaskPersonKind, _ id: UUID, stored: String, counted: inout Set<String>) {
+            let key = keys[stored.lowercased()] ?? "id:\(stored.lowercased())"
+            guard counted.insert(key).inserted else { return }
+            let name = TaskPeopleRulebook.assigneeNames(
+                managerIds: kind == .manager ? [id] : [],
+                operativeIds: kind == .operative ? [id] : [],
+                index: index
+            ).first?.name ?? TaskRulebook.removedUserLabel
+            var choice = seen[key] ?? TaskFilterChoice(value: key, label: name, count: 0)
+            choice.count += 1
+            seen[key] = choice
+        }
+        for task in hubScopeTasks {
+            var counted = Set<String>()
+            for id in task.allAssignedManagerIds { add(.manager, id, stored: id.uuidString, counted: &counted) }
+            for id in task.allAssignedOperativeIds { add(.operative, id, stored: Booking.operativeMatchKey(for: id), counted: &counted) }
+        }
+        return seen.values.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+    }
+
+    /// Filters (n), Sort, and the active filter chips with ✕ and Clear all.
+    @ViewBuilder
+    private var filterBar: some View {
+        let count = TaskViewingRulebook.activeFilterCount(filters)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Button {
+                    showingFilters = true
+                } label: {
+                    Label(count > 0 ? "Filters (\(count))" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .accessibilityIdentifier("tasksDetail.filters")
+                Spacer()
+                Menu {
+                    ForEach(TaskViewingRulebook.sortChoices(tab: tab), id: \.choice) { row in
+                        Button {
+                            sortChoice = row.choice
+                        } label: {
+                            if row.choice == sortChoice { Label(row.label, systemImage: "checkmark") } else { Text(row.label) }
+                        }
+                    }
+                } label: {
+                    Label(TaskViewingRulebook.sortLabel(sortChoice, tab: tab), systemImage: "arrow.up.arrow.down")
+                        .font(.subheadline)
+                }
+                .accessibilityIdentifier("tasksDetail.sort")
+            }
+            if count > 0, visibilityReady {
+                TaskFilterChips(
+                    filters: $filters,
+                    options: filterOptions,
+                    assignees: assigneeChoices
+                )
+            }
+        }
+        .padding(.horizontal, 16)
     }
 
     /// Home-style navy header: the tab counts (RULEBOOK 1.89.0 §34 bug B13: one count per tab, no overlapping
@@ -567,6 +719,8 @@ private struct MyTasksRedesignTaskCard: View {
                             }
                         }
                     }
+                    // RULEBOOK 1.91.0 (owner 25 Nov): the whole area is the target, blank space included.
+                    .contentShape(Rectangle())
                 }
                 .accessibilityIdentifier("myTasksRedesignTaskCard.calendar")
                 .buttonStyle(.plain)
@@ -596,6 +750,10 @@ private struct MyTasksRedesignTaskCard: View {
         }
         .padding(14)
         .background(PPColor.card, in: RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        // RULEBOOK 1.91.0 (owner 25 Nov: a card took several taps to open): one tap anywhere on the card opens it. The
+        // Start / Complete button inside keeps its own action (a Button wins over the card's tap gesture).
+        .contentShape(RoundedRectangle(cornerRadius: PPMetrics.rowCardRadius, style: .continuous))
+        .onTapGesture { showingTaskDetail = true }
         .sheet(isPresented: $showingTaskDetail) {
             CompletedTaskDetailView(task: resolvedTask)
                 .environmentObject(taskStore)
