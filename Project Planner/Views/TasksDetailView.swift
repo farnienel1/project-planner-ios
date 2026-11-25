@@ -33,26 +33,12 @@ struct TasksDetailView: View {
     @EnvironmentObject var bookingStore: BookingStore
 
     @State private var searchText = ""
-    @State private var listSegment: GlobalMyTasksSegment = .assignedToMe
-    @State private var sortNewestFirst = true
+    /// RULEBOOK 1.89.0 §34: the tab (Active / Overdue / Completed) and the My tasks / Everyone scope, remembered on
+    /// this phone (`taskScopeFor`: staff default to Everyone, operatives always My tasks — bug B9).
+    @State private var tab: TaskTab = .active
+    @State private var scopeChoice: String? = UserDefaults.standard.string(forKey: TasksDetailView.scopeDefaultsKey)
 
-    private enum GlobalMyTasksSegment: Hashable {
-        case assignedToMe
-        case active
-        case overdue
-        case completed
-
-        static let ordered: [GlobalMyTasksSegment] = [.assignedToMe, .active, .overdue, .completed]
-
-        func pillTitle(activeCount: Int, completedCount: Int, overdueCount: Int) -> String {
-            switch self {
-            case .assignedToMe: return "Assigned to me"
-            case .active: return "Active · \(activeCount)"
-            case .overdue: return overdueCount > 0 ? "Overdue · \(overdueCount)" : "Overdue"
-            case .completed: return completedCount > 0 ? "Completed · \(completedCount)" : "Completed"
-            }
-        }
-    }
+    static let scopeDefaultsKey = "pp.tasks.scope"
 
     /// RULEBOOK §5 `qualificationExpiryRows` for the signed-in operative's own catalogue rows (every row of their
     /// account, `bookingIdsForAccount`): organisation day, one calendar month ahead, already expired included — the
@@ -79,8 +65,14 @@ struct TasksDetailView: View {
         }
     }
 
-    /// Home Tasks hub: assigned-to-me is always personal. Admins see every job's tasks in Active / Overdue / Completed.
-    private var isAdminTaskHub: Bool { userStore.hasAdminAccess() }
+    private var viewerRole: CanonicalBusinessEngine.CanonicalStaffAccountRole? {
+        TaskRulebook.viewerRole(userStore.displayUser)
+    }
+
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: staff (admins and managers outside operative mode) see every task.
+    private var access: TaskRulebookAccess { TaskRulebook.access(role: viewerRole) }
+
+    private var scope: TaskScope { TaskRulebook.scope(role: viewerRole, remembered: scopeChoice) }
 
     /// RULEBOOK §23 `tasksAssignedToViewer`: assigned under any id the person goes by (as web My tasks and Home).
     private var userRelevantTasks: [ProjectTask] {
@@ -94,48 +86,15 @@ struct TasksDetailView: View {
     }
 
     private var hubScopeTasks: [ProjectTask] {
-        isAdminTaskHub ? taskStore.tasks : userRelevantTasks
+        scope == .everyone ? taskStore.tasks : userRelevantTasks
     }
 
-    /// RULEBOOK §23 `isTaskOverdue`: not completed and due before today on the organisation day (never the phone's).
-    private func taskIsOverdue(_ task: ProjectTask) -> Bool {
-        CanonicalBusinessEngine.isTaskOverdue(status: task.status.rawValue, dueDate: task.dueDate)
-    }
-
-    private var myTasksStats: (todo: Int, inProgress: Int, overdue: Int, done: Int) {
-        let base = hubScopeTasks
-        let incomplete = base.filter { !$0.isCompleted }
-        let todo = incomplete.filter { $0.status == .todo }.count
-        let inProgress = incomplete.filter { $0.status == .inProgress }.count
-        let overdue = base.filter(taskIsOverdue).count
-        let done = base.filter { $0.isCompleted }.count
-        return (todo, inProgress, overdue, done)
-    }
-
-    private var activeRelevantCount: Int {
-        hubScopeTasks.filter { !$0.isCompleted }.count
-    }
-
-    private var completedRelevantCount: Int {
-        hubScopeTasks.filter { $0.isCompleted }.count
-    }
-
-    private var overdueRelevantCount: Int {
-        hubScopeTasks.filter(taskIsOverdue).count
-    }
+    /// RULEBOOK 1.89.0 §34 `taskTabCounts`: the same definitions as Home and the job tile (an overdue task is also
+    /// active).
+    private var tabCounts: [TaskTab: Int] { TaskRulebook.tabCounts(hubScopeTasks) }
 
     private var displayedTasks: [ProjectTask] {
-        var list: [ProjectTask]
-        switch listSegment {
-        case .assignedToMe:
-            list = userRelevantTasks.filter { !$0.isCompleted }
-        case .active:
-            list = hubScopeTasks.filter { !$0.isCompleted }
-        case .completed:
-            list = hubScopeTasks.filter { $0.isCompleted }
-        case .overdue:
-            list = hubScopeTasks.filter(taskIsOverdue)
-        }
+        var list = hubScopeTasks.filter { TaskRulebook.tabs(for: $0).contains(tab) }
         let q = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !q.isEmpty {
             list = list.filter { task in
@@ -152,10 +111,8 @@ struct TasksDetailView: View {
                 return false
             }
         }
-        if sortNewestFirst {
-            return list.sorted { $0.createdAt > $1.createdAt }
-        }
-        return list.sorted { $0.createdAt < $1.createdAt }
+        // RULEBOOK 1.89.0 §34 `sortTasksForTab`: overdue first, then due date, priority, title; Completed newest first.
+        return TaskRulebook.sorted(list, tab: tab)
     }
 
     var body: some View {
@@ -224,18 +181,17 @@ struct TasksDetailView: View {
         }
     }
 
-    /// Home-style navy header: the existing To do / In progress / Overdue / Done numbers, search and scope pills.
+    /// Home-style navy header: the tab counts (RULEBOOK 1.89.0 §34 bug B13: one count per tab, no overlapping
+    /// To do / In progress / Done cards), search, scope and tab pills.
     private var tasksNavyHeader: some View {
-        let stats = myTasksStats
+        let counts = tabCounts
         return VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 12) {
-                PPStat(value: "\(stats.todo)", label: "To do")
+                PPStat(value: "\(counts[.active] ?? 0)", label: TaskTab.active.label)
                 PPStatDivider()
-                PPStat(value: "\(stats.inProgress)", label: "In progress")
+                PPStat(value: "\(counts[.overdue] ?? 0)", label: TaskTab.overdue.label, highlight: (counts[.overdue] ?? 0) > 0)
                 PPStatDivider()
-                PPStat(value: "\(stats.overdue)", label: "Overdue", highlight: stats.overdue > 0)
-                PPStatDivider()
-                PPStat(value: "\(stats.done)", label: "Done")
+                PPStat(value: "\(counts[.completed] ?? 0)", label: TaskTab.completed.label)
             }
             .fixedSize(horizontal: false, vertical: true)
 
@@ -248,17 +204,6 @@ struct TasksDetailView: View {
                     .font(.callout)
                     .foregroundStyle(.white)
                 Spacer(minLength: 0)
-                Menu {
-                    Button(sortNewestFirst ? "Sort: Oldest first" : "Sort: Newest first") {
-                        sortNewestFirst.toggle()
-                    }
-                        .accessibilityIdentifier("tasksDetail.sortOldestFirst2")
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                        .font(.body.weight(.medium))
-                        .foregroundStyle(.white)
-                }
-                    .accessibilityIdentifier("tasksDetail.sortOldestFirst")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 11)
@@ -269,18 +214,23 @@ struct TasksDetailView: View {
             )
             .padding(.top, 20)
 
+            if access.seesEveryone {
+                HStack(spacing: 6) {
+                    ForEach(TaskScope.allCases, id: \.self) { option in
+                        scopePill(title: option.label, isSelected: scope == option) {
+                            scopeChoice = option.rawValue
+                            UserDefaults.standard.set(option.rawValue, forKey: Self.scopeDefaultsKey)
+                        }
+                    }
+                }
+                .padding(.top, 12)
+            }
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(GlobalMyTasksSegment.ordered, id: \.self) { seg in
-                        scopePill(
-                            title: seg.pillTitle(
-                                activeCount: activeRelevantCount,
-                                completedCount: completedRelevantCount,
-                                overdueCount: overdueRelevantCount
-                            ),
-                            isSelected: listSegment == seg
-                        ) {
-                            listSegment = seg
+                    ForEach(TaskTab.allCases, id: \.self) { option in
+                        scopePill(title: "\(option.label) · \(tabCounts[option] ?? 0)", isSelected: tab == option) {
+                            tab = option
                         }
                     }
                 }
@@ -330,30 +280,25 @@ struct TasksDetailView: View {
     }
 
     private var emptyTitle: String {
-        switch listSegment {
-        case .active: return "No active tasks"
+        switch tab {
+        case .active: return scope == .mine ? "Nothing assigned to you" : "No active tasks"
         case .completed: return "No completed tasks"
-        case .assignedToMe: return "Nothing assigned to you"
         case .overdue: return "No overdue tasks"
         }
     }
 
     private var emptySubtitle: String {
-        switch listSegment {
+        switch tab {
         case .active:
-            return isAdminTaskHub
+            return scope == .everyone
                 ? "Active tasks from every project and small work appear here."
-                : "When you are assigned to tasks on a job, they will appear here."
+                : "When someone assigns you on a task, it will show here."
         case .completed:
-            return isAdminTaskHub
+            return scope == .everyone
                 ? "Completed tasks from every project and small work appear here."
                 : "Completed tasks assigned to you will appear here."
-        case .assignedToMe:
-            return "When someone assigns you on a task, it will show here."
         case .overdue:
-            return isAdminTaskHub
-                ? "Every overdue task across the organisation appears here. They also remain under Active."
-                : "Overdue tasks still appear under Active. This filter shows only tasks past their due date."
+            return "Overdue tasks also stay under Active. This tab shows only tasks past their due date."
         }
     }
 
@@ -433,10 +378,8 @@ struct TasksDetailView: View {
             operatives: operativeStore.allOperatives
         )
 
-        if sortNewestFirst {
-            return filtered.sorted { $0.createdAt > $1.createdAt }
-        }
-        return filtered.sorted { $0.createdAt < $1.createdAt }
+        // Newest request first (the order the hub used by default).
+        return filtered.sorted { $0.createdAt > $1.createdAt }
     }
 
     private var holidayApprovalViewer: AppUser? {
@@ -565,17 +508,24 @@ private struct MyTasksRedesignTaskCard: View {
         taskStore.tasks.first(where: { $0.id == task.id }) ?? task
     }
 
-    private var canCarryOut: Bool {
-        guard !resolvedTask.isCompleted else { return false }
-        if userStore.hasAdminAccess() { return true }
-        return TaskAssignmentRulebook.isAssigned(
+    @State private var actionError: String?
+    @State private var actionBusy = false
+
+    /// RULEBOOK 1.89.0 §34 `taskAccess`: staff and the task's assignees start, complete and reopen it.
+    private var canAct: Bool {
+        let isAssignee = TaskAssignmentRulebook.isAssigned(
             resolvedTask,
             viewer: userStore.currentUser,
             organizationUsers: userStore.organizationUsers,
             operatives: operativeStore.allOperatives,
             managers: operativeStore.allManagers
         )
+        return TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser), isAssignee: isAssignee).canAct
     }
+
+    /// RULEBOOK 1.89.0 §34 `taskActions`: Start (To do), Complete (In progress), Reopen (Completed). "Carry out" is gone.
+    /// Nil when the rules did not answer (no action is offered).
+    private var primaryAction: TaskActionKind? { TaskRulebook.actions(resolvedTask.status)?.primary }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -672,44 +622,83 @@ private struct MyTasksRedesignTaskCard: View {
     }
 
     private func applyTaskCompletion(completedBy: String, images: [String], files: [String], notes: String?) async {
-        var updatedTask = resolvedTask
-        updatedTask.completedItemIds = Array(Set(updatedTask.effectiveItems.map(\.id)))
-        updatedTask.status = .completed
-        updatedTask.completedBy = completedBy
-        updatedTask.completedAt = Date()
+        // RULEBOOK 1.89.0 §34: who and when come from `taskStatusChangeFields`; ticks are the task's real items only
+        // (F25), older ticks kept.
+        guard var updatedTask = TaskRulebook.applyingStatus(.completed, to: resolvedTask, by: completedBy) else {
+            actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+            return
+        }
+        var ticks = updatedTask.completedItemIds
+        for item in updatedTask.items where !ticks.contains(item.id) { ticks.append(item.id) }
+        updatedTask.completedItemIds = ticks
         updatedTask.completionImages = images
         updatedTask.completionFiles = files
         updatedTask.completionNotes = notes
         updatedTask.updatedAt = Date()
-        await taskStore.updateTask(updatedTask)
+        guard await taskStore.updateTaskReportingError(updatedTask) else {
+            actionError = taskStore.lastWriteError
+            return
+        }
         await notificationService.notifyTaskCompleted(task: updatedTask, completedBy: completedBy)
     }
 
     @ViewBuilder
     private var checklistRow: some View {
-        let label = HStack(spacing: 5) {
-            Image(systemName: "checklist")
-                .font(.system(size: 12))
-                .foregroundStyle(canCarryOut ? MyTasksScreenPalette.blue : Color(red: 197 / 255, green: 201 / 255, blue: 210 / 255))
-            Text(checklistSummary)
-                .font(.system(size: 11, weight: canCarryOut ? .semibold : .regular))
-                .foregroundStyle(canCarryOut ? MyTasksScreenPalette.blue : MyTasksScreenPalette.muted)
-            Spacer()
-            if canCarryOut {
-                Text("Carry out")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(MyTasksScreenPalette.blue)
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(MyTasksScreenPalette.blue)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: "checklist")
+                    .font(.system(size: 12))
+                    .foregroundStyle(MyTasksScreenPalette.muted)
+                Text(checklistSummary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MyTasksScreenPalette.muted)
+                Spacer()
+                if canAct, let primaryAction {
+                    Button { runPrimaryAction() } label: {
+                        HStack(spacing: 4) {
+                            Text(actionBusy ? "Saving…" : TaskRulebook.actionLabel(primaryAction))
+                                .font(.footnote.weight(.semibold))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 10, weight: .bold))
+                        }
+                        .foregroundStyle(MyTasksScreenPalette.blue)
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                    }
+                    .disabled(actionBusy)
+                    .accessibilityIdentifier("myTasksRedesignTaskCard.button")
+                    .buttonStyle(.plain)
+                }
+            }
+            if let actionError {
+                Text(actionError)
+                    .font(.footnote)
+                    .foregroundStyle(MyTasksScreenPalette.overdueCount)
             }
         }
-        if canCarryOut {
-            Button { showingCarryOut = true } label: { label }
-                .accessibilityIdentifier("myTasksRedesignTaskCard.button")
-                .buttonStyle(.plain)
-        } else {
-            label
+    }
+
+    /// Start and Reopen change the status at once (`taskActionStatus`: Reopen → In progress, completion cleared);
+    /// Complete opens the complete step.
+    private func runPrimaryAction() {
+        guard let action = primaryAction else { return }
+        switch action {
+        case .complete:
+            showingCarryOut = true
+        case .start, .reopen:
+            let name = userStore.currentUser?.fullName ?? ""
+            guard let status = TaskRulebook.actionStatus(action),
+                  let updated = TaskRulebook.applyingStatus(status, to: resolvedTask, by: name) else {
+                actionError = "Couldn't save. The app's rules did not load — close and reopen the app, then try again."
+                return
+            }
+            actionBusy = true
+            actionError = nil
+            Task {
+                let ok = await taskStore.updateTaskReportingError(updated)
+                actionBusy = false
+                if !ok { actionError = taskStore.lastWriteError ?? "Couldn't save. Check the connection and try again." }
+            }
         }
     }
 
@@ -730,20 +719,21 @@ private struct MyTasksRedesignTaskCard: View {
         return "Unknown job"
     }
 
+    /// RULEBOOK 1.89.0 §34 `taskCompleteStep`: the task's real items only (F25).
+    private var checklistStep: TaskCompleteStepInfo {
+        TaskRulebook.completeStep(items: resolvedTask.items, completedItemIds: resolvedTask.completedItemIds)
+    }
+
     private var checklistSummary: String {
-        let items = resolvedTask.effectiveItems
-        if items.count <= 1 { return "No checklist" }
-        let ids = Set(items.map(\.id))
-        let done = Set(resolvedTask.completedItemIds).intersection(ids).count
-        return "\(done) of \(items.count) items"
+        let step = checklistStep
+        if !step.showChecklist { return "No checklist" }
+        return "\(step.done) of \(step.total) items"
     }
 
     private var checklistProgress: CGFloat {
-        let items = resolvedTask.effectiveItems
-        guard items.count > 1 else { return 0 }
-        let ids = Set(items.map(\.id))
-        let done = Set(resolvedTask.completedItemIds).intersection(ids).count
-        return CGFloat(done) / CGFloat(items.count)
+        let step = checklistStep
+        guard step.total > 0 else { return 0 }
+        return CGFloat(step.done) / CGFloat(step.total)
     }
 
     private var progressBarFill: Color {
@@ -757,25 +747,18 @@ private struct MyTasksRedesignTaskCard: View {
         CanonicalBusinessEngine.isTaskOverdue(status: resolvedTask.status.rawValue, dueDate: resolvedTask.dueDate)
     }
 
-    private var dueText: String {
-        guard let due = resolvedTask.dueDate else { return "No date" }
-        let cal = OrganizationRulebookContext.calendar
-        let d0 = cal.startOfDay(for: due)
-        let t0 = cal.startOfDay(for: Date())
-        if resolvedTask.isCompleted || d0 >= t0 {
-            let fmt = DateFormatter()
-            fmt.timeZone = cal.timeZone
-            fmt.dateFormat = "EEE d MMM"
-            return fmt.string(from: due)
-        }
-        let days = cal.dateComponents([.day], from: d0, to: t0).day ?? 0
-        if days == 1 { return "Yesterday" }
-        if days > 1 { return "\(days) days ago" }
-        return due.formatted(date: .abbreviated, time: .omitted)
-    }
+    /// RULEBOOK 1.89.0 §34 `taskDueLabel`: "3 days overdue", "Due today", "Due Thu", "No due date" (bug B10), on the
+    /// organisation day.
+    private var dueInfo: TaskDueText { TaskRulebook.dueText(resolvedTask) }
+
+    private var dueText: String { dueInfo.label }
 
     private var dueColor: Color {
-        isOverdue ? MyTasksScreenPalette.overdueCount : MyTasksScreenPalette.muted
+        switch dueInfo.tone {
+        case "red": return MyTasksScreenPalette.overdueCount
+        case "amber": return MyTasksScreenPalette.inProgressCount
+        default: return MyTasksScreenPalette.muted
+        }
     }
 
     private var dueWeight: Font.Weight {
@@ -795,11 +778,11 @@ private struct MyTasksRedesignTaskCard: View {
     private var statusPill: some View {
         switch resolvedTask.status {
         case .todo:
-            statusCapsule(text: "To do", fg: MyTasksScreenPalette.muted, bg: ProjectWorksRevampColors.grayTint, icon: "circle.dashed")
+            statusCapsule(text: TaskRulebook.statusLabel(.todo), fg: MyTasksScreenPalette.muted, bg: ProjectWorksRevampColors.grayTint, icon: "circle.dashed")
         case .inProgress:
-            statusCapsule(text: "In progress", fg: MyTasksScreenPalette.inProgressCount, bg: ProjectWorksRevampColors.amberTint, icon: "chart.line.uptrend.xyaxis")
+            statusCapsule(text: TaskRulebook.statusLabel(.inProgress), fg: MyTasksScreenPalette.inProgressCount, bg: ProjectWorksRevampColors.amberTint, icon: "chart.line.uptrend.xyaxis")
         case .completed:
-            statusCapsule(text: "Done", fg: MyTasksScreenPalette.doneCount, bg: ProjectWorksRevampColors.greenTint, icon: "checkmark.circle.fill")
+            statusCapsule(text: TaskRulebook.statusLabel(.completed), fg: MyTasksScreenPalette.doneCount, bg: ProjectWorksRevampColors.greenTint, icon: "checkmark.circle.fill")
         }
     }
 
@@ -823,7 +806,7 @@ private struct MyTasksRedesignTaskCard: View {
             Circle()
                 .fill(dot)
                 .frame(width: 6, height: 6)
-            Text(resolvedTask.priority.rawValue)
+            Text(TaskRulebook.priorityLabel(resolvedTask.priority))
                 .font(.system(size: 9, weight: .medium))
         }
         .foregroundStyle(fg)
@@ -870,12 +853,15 @@ private struct MyTasksRedesignTaskCard: View {
     /// One per person (owner decision 17 Nov, web #364): two stored ids of one person show one avatar.
     private var assigneeInitialsList: [String] {
         let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
-        let names = TaskPeopleRulebook.assigneeNames(
+        // RULEBOOK 1.89.0 §34 bug B11: a removed person still shows (as "Removed user", initials "?").
+        let names = TaskPeopleRulebook.assigneeEntries(
             managerIds: resolvedTask.allAssignedManagerIds,
             operativeIds: resolvedTask.allAssignedOperativeIds,
-            index: index
+            index: index,
+            allManagerRows: operativeStore.managers,
+            loaded: operativeStore.rosterLoaded
         )
-        return Array(names.map { Self.initials(from: $0.name) }.prefix(3))
+        return Array(names.map { $0.removed ? "?" : Self.initials(from: $0.name) }.prefix(3))
     }
 
     private static func initials(from fullName: String) -> String {

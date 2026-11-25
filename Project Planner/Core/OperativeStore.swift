@@ -334,6 +334,15 @@ class OperativeStore: ObservableObject {
         operativesServerSnapshotOrganizationId = organizationId
     }
 
+    /// RULEBOOK 1.89.0 §34 (review of #299): the open organisation's operatives and managers have finished loading, so a
+    /// task assignee missing from them really is removed (never a false "Removed user" while the rosters load).
+    var rosterLoaded: Bool {
+        guard !isLoading,
+              let finished = finishedLoadOrganizationId,
+              let open = firebaseBackend?.currentOrganization?.firestoreDocumentId else { return false }
+        return finished == open
+    }
+
     /// True once the open organisation's `operatives` list has come from the server (not only this phone's cache).
     var operativesConfirmedByServer: Bool {
         guard let confirmed = operativesServerSnapshotOrganizationId,

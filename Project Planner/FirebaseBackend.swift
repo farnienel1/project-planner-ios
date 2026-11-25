@@ -3067,7 +3067,68 @@ class FirebaseBackend: ObservableObject {
             unixMilliseconds: StorageUploadPolicy.unixMillisecondsNow()
         )
         let filePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/files/\(prepared.objectName)"
-        return try await putStorageData(prepared.data, path: filePath, contentType: prepared.contentType)
+        return try await putTaskData(prepared.data, path: filePath, contentType: prepared.contentType)
+    }
+
+    /// RULEBOOK 1.89.0 §34 issue 1 (review of #299, the same as web `startTrackedUpload`): a task attachment or proof
+    /// of work upload that sends nothing for `TASK_ATTACHMENT_RULES.upload.stallTimeoutSeconds` is cancelled and tried
+    /// again up to `maxRetries` times, then fails with a real message — never the Storage SDK's silent 10-minute retry.
+    /// The same object path each try (this person's own upload, inside the §24 overwrite window).
+    private func putTaskData(_ data: Data, path: String, contentType: String) async throws -> String {
+        guard let rules = TaskRulebook.uploadRules else {
+            throw NSError(domain: "FirebaseBackend", code: 503, userInfo: [NSLocalizedDescriptionKey: TaskRulebook.rulesNotLoadedMessage])
+        }
+        let storageRef = storage.reference().child(path)
+        let metadata = StorageMetadata()
+        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
+        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
+            storagePath: path, data: data, declaredContentType: contentType
+        )
+        var attempt = 0
+        while true {
+            let watch = VariationUploadWatch()
+            do {
+                let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
+                    let task = storageRef.putData(data, metadata: metadata) { metadata, error in
+                        guard watch.finish() else { return }
+                        if watch.timedOut {
+                            continuation.resume(throwing: TaskUploadStalled())
+                        } else if let error {
+                            continuation.resume(throwing: error)
+                        } else if let metadata {
+                            continuation.resume(returning: metadata)
+                        } else {
+                            continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
+                        }
+                    }
+                    task.observe(.progress) { _ in watch.touch() }
+                    Task {
+                        while !watch.isFinished {
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            if watch.shouldGiveUp(stallSeconds: rules.upload.stallTimeoutSeconds, totalSeconds: .infinity) {
+                                task.cancel()
+                                break
+                            }
+                        }
+                    }
+                }
+                break
+            } catch is TaskUploadStalled {
+                attempt += 1
+                if attempt > rules.upload.maxRetries {
+                    throw NSError(
+                        domain: "FirebaseBackend",
+                        code: 408,
+                        userInfo: [NSLocalizedDescriptionKey: "A file stopped uploading. Check your connection and try again."]
+                    )
+                }
+            } catch {
+                // A retry refused because the object is already there (an earlier try finished on the server).
+                if attempt > 0, let existing = await Self.existingDownloadURLAfterRefusal(error, storageRef: storageRef) { return existing }
+                throw error
+            }
+        }
+        return try await storageRef.downloadURL().absoluteString
     }
 
     func uploadHealthSafetyFile(
@@ -3191,30 +3252,8 @@ class FirebaseBackend: ObservableObject {
             oversizedMessage: "Image is too large. It must be 10 MB or smaller."
         )
         let imagePath = "organizations/\(organizationId)/tasks/\(taskId.uuidString)/images/\(prepared.objectName)"
-        let storageRef = storage.reference().child(imagePath)
-        let imageData = prepared.data
-        
-        // Upload image using async/await wrapper
-        let metadata = StorageMetadata()
-        // RULEBOOK 1.50.0 §24: the one check before every upload (`uploadAllowed`), with the detected type.
-        metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
-            storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
-        )
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
-        
-        // Get download URL
-        let downloadURL = try await storageRef.downloadURL()
-        return downloadURL.absoluteString
+        // RULEBOOK 1.89.0 §34 issue 1: stall cancel and retry (`putTaskData`).
+        return try await putTaskData(prepared.data, path: imagePath, contentType: prepared.contentType)
     }
 
     /// Site audit photos (not task attachments). Keeps Storage paths aligned with Firestore `siteAudits` for clearer rules later.
