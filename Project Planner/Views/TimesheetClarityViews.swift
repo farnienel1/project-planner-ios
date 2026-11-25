@@ -16,6 +16,11 @@ struct TimesheetNextStepCard: View {
     /// Point 5: the screen's existing Generate Invoice action, or nil when it may not be offered now.
     var generateInvoice: (() -> Void)? = nil
     var generateInvoiceBusy: Bool = false
+    /// RULEBOOK 1.90.0 (owner 24 Nov, point 5): the one status card — an error shown in red inside it, this state's
+    /// buttons (the correction entry, or a draft revision's Send / Cancel) and one help line.
+    var errorText: String? = nil
+    var accessory: AnyView? = nil
+    var help: String? = nil
 
     private var accent: Color {
         switch step.tone {
@@ -70,17 +75,29 @@ struct TimesheetNextStepCard: View {
                 .disabled(generateInvoiceBusy)
                 .accessibilityIdentifier("timesheets.nextStep.generateInvoice")
             }
+            if let errorText, !errorText.isEmpty {
+                Label(errorText, systemImage: "exclamationmark.icloud.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(10)
+                    .background(Color.red.opacity(0.08))
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityIdentifier("timesheets.saveError")
+            }
+            if let accessory { accessory }
+            if let help, !help.isEmpty {
+                Text(help)
+                    .font(.caption)
+                    .foregroundStyle(ProjectWorksRevampColors.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.surface)
         .overlay(alignment: .leading) {
             Rectangle().fill(accent).frame(width: 4)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
-        )
+        .timesheetCardChrome(cornerRadius: 12)
         .accessibilityIdentifier("timesheets.nextStep")
     }
 }
@@ -169,12 +186,7 @@ struct TimesheetChangesCard: View {
                     .accessibilityIdentifier("timesheets.changes.showAll")
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
-        )
+        .timesheetCardChrome(cornerRadius: 14)
         .accessibilityIdentifier("timesheets.changesSinceSigned")
     }
 }
@@ -216,5 +228,169 @@ struct TimesheetCorrectionEntryView: View {
                 }
             }
         }
+    }
+}
+
+
+/// RULEBOOK 1.90.0 (owner 24 Nov, points 3 and 5): one row of the notes card.
+struct TimesheetNoticeRow: Identifiable {
+    let id: String
+    /// `info` | `amber` | `green`.
+    let tone: String
+    let text: String
+}
+
+/// RULEBOOK 1.90.0 (owner 24 Nov, points 3 and 5): every notice about the timesheet in ONE calm card — one row each
+/// with a small coloured marker, instead of a stack of coloured banners. `footer` holds Earlier versions. Web:
+/// `TimesheetNoticesCard` in `components/timesheets/TimesheetClarity.tsx`.
+struct TimesheetNoticesCard: View {
+    let notices: [TimesheetNoticeRow]
+    var footer: AnyView? = nil
+
+    private func marker(_ tone: String) -> Color {
+        switch tone {
+        case "amber": return .orange
+        case "green": return .green
+        default: return ProjectWorksRevampColors.blue
+        }
+    }
+
+    var body: some View {
+        if !notices.isEmpty || footer != nil {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(notices.enumerated()), id: \.element.id) { index, notice in
+                    if index > 0 { Divider() }
+                    HStack(alignment: .top, spacing: 10) {
+                        Circle()
+                            .fill(marker(notice.tone))
+                            .frame(width: 8, height: 8)
+                            .padding(.top, 5)
+                            .accessibilityHidden(true)
+                        Text(notice.text)
+                            .font(.footnote)
+                            .foregroundStyle(ProjectWorksRevampColors.ink)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .accessibilityElement(children: .combine)
+                }
+                if let footer {
+                    if !notices.isEmpty { Divider() }
+                    footer.padding(12)
+                }
+            }
+            .timesheetCardChrome(cornerRadius: 12)
+            .accessibilityIdentifier("timesheets.notices")
+        }
+    }
+}
+
+/// RULEBOOK 1.90.0 (owner 24 Nov, point 4): a draft revision's two buttons — "Save changes and send timesheet to …"
+/// (grey until the draft holds a change, then blue) and the red "Cancel revision". Labels from the rulebook.
+struct TimesheetRevisionDraftButtons: View {
+    let state: RulebookTimesheetRevisionDraftState
+    var busy: Bool = false
+    let onSend: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) { send; cancel }
+            VStack(spacing: 10) { send; cancel }
+        }
+    }
+
+    private var send: some View {
+        Button(action: onSend) {
+            Text(busy ? "Working…" : state.sendLabel)
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 10)
+                .background(state.canSend ? Color.blue : ProjectWorksRevampColors.disabledFill)
+                .foregroundStyle(state.canSend ? Color.white : ProjectWorksRevampColors.ink)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy || !state.canSend)
+        .accessibilityIdentifier("timesheets.revisionDraft.send")
+    }
+
+    private var cancel: some View {
+        Button(role: .destructive, action: onCancel) {
+            Text(state.cancelLabel)
+                .fontWeight(.semibold)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 10)
+                .background(Color.red)
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .disabled(busy || !state.canCancel)
+        .accessibilityIdentifier("timesheets.revisionDraft.cancel")
+    }
+}
+
+// MARK: - One top card (RULEBOOK 1.90.0, owner 24 Nov after testing)
+
+/// Inside `TimesheetTopCard` the status, changes and notices cards draw no frame of their own: the whose-turn line,
+/// "Changed since it was signed", every notice and the buttons read as ONE card. Display only.
+private struct TimesheetCardEmbeddedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var timesheetCardEmbedded: Bool {
+        get { self[TimesheetCardEmbeddedKey.self] }
+        set { self[TimesheetCardEmbeddedKey.self] = newValue }
+    }
+}
+
+private struct TimesheetCardChrome: ViewModifier {
+    @Environment(\.timesheetCardEmbedded) private var embedded
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        if embedded {
+            content
+        } else {
+            content
+                .background(ProjectWorksRevampColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
+                )
+        }
+    }
+}
+
+extension View {
+    /// The card frame — left off inside `TimesheetTopCard`.
+    func timesheetCardChrome(cornerRadius: CGFloat) -> some View {
+        modifier(TimesheetCardChrome(cornerRadius: cornerRadius))
+    }
+}
+
+/// RULEBOOK 1.90.0 point 10: the whose-turn line, "Changed since it was signed", every notice and the buttons as ONE
+/// card; Earlier versions is its own section below (not inside it).
+struct TimesheetTopCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .environment(\.timesheetCardEmbedded, true)
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
+        )
+        .accessibilityIdentifier("timesheets.topCard")
     }
 }

@@ -77,6 +77,22 @@ struct ProjectDetailView: View {
         TaskRulebook.access(role: TaskRulebook.viewerRole(userStore.displayUser)).seesEveryone
     }
 
+    /// RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): of `tasks`, the ones this viewer may see — admins all,
+    /// a manager every task on a job they manage plus tasks assigned to or created by them, operatives their own.
+    /// Review of #305: one memoised answer for the whole store (`TaskStoreAnswers`), shared with the Tasks hub and
+    /// Home; loading and failed are shown as such, never as "No tasks".
+    private var jobTaskVisibility: TaskVisibilityState {
+        TaskStoreAnswers.visibility(
+            taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore, userStore: userStore,
+            organizationId: firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+        )
+    }
+
+    private func visibleJobTasks(_ tasks: [ProjectTask]) -> [ProjectTask] {
+        let visible = Set(jobTaskVisibility.tasks.map(\.id))
+        return tasks.filter { visible.contains($0.id) }
+    }
+
     private var canAccessVariations: Bool {
         WorkAccess.canAccessVariations(project: project, userStore: userStore, operativeStore: operativeStore)
     }
@@ -500,7 +516,8 @@ struct ProjectDetailView: View {
             "subcontractorBookings": subcontractorStore.bookings.filter { $0.projectId == project.id }.map { booking -> [String: Any] in
                 ["projectId": jobId, "subcontractorId": booking.subcontractorId.uuidString, "status": booking.status.rawValue]
             },
-            "tasks": taskStore.tasks.filter { $0.projectId == project.id }.map { ["projectId": jobId, "status": $0.status.rawValue] as [String: Any] },
+            // RULEBOOK 1.91.0 §34: the Tasks badge counts the tasks this viewer may see (`visibleTasksForViewer`).
+            "tasks": visibleJobTasks(taskStore.tasks.filter { $0.projectId == project.id }).map { ["projectId": jobId, "status": $0.status.rawValue] as [String: Any] },
             "people": people,
         ]
         return CanonicalBusinessEngine.jobTileBadges(input) ?? RulebookJobTileBadges(tentativeBookings: 0, openTasks: 0, activeUsers: 0)
@@ -2683,21 +2700,9 @@ struct ProjectDetailView: View {
             }
         }
         
-        // Admins and managing users with access: all tasks on this job (after filter chips). Others: assigned only.
-        if canViewAllTasksOnThisJob {
-            return tasks
-        }
-        // RULEBOOK §23 `tasksAssignedToViewer`: assigned under any id the person goes by (users id, former and
-        // same-email ids, every `operatives` / `managers` row on their email), operative mode included.
-        tasks = TaskAssignmentRulebook.assignedTasks(
-            tasks,
-            viewer: userStore.currentUser,
-            organizationUsers: userStore.organizationUsers,
-            operatives: operativeStore.allOperatives,
-            managers: operativeStore.allManagers
-        )
-        
-        return tasks
+        // RULEBOOK 1.91.0 §34 `visibleTasksForViewer` (decision A): the one visibility rule (it replaces 1.89.0's
+        // "staff see every task on the job"; a manager who does not manage this job sees only their own tasks here).
+        return visibleJobTasks(tasks)
     }
     
     private func filteredTasks(for scope: ProjectTaskListScope) -> [ProjectTask] {
@@ -3127,7 +3132,29 @@ struct ProjectDetailView: View {
                 }
             }
             
-            if projectTasksListForCurrentScope.isEmpty {
+            if case .failed(let message) = jobTaskVisibility {
+                VStack(spacing: 12) {
+                    Text(message)
+                        .font(.system(size: 13))
+                        .foregroundStyle(ProjectMyTasksPalette.muted)
+                        .multilineTextAlignment(.center)
+                    Button("Retry") {
+                        Task {
+                            await TaskStoreAnswers.retry(
+                                taskStore: taskStore, projectStore: projectStore, operativeStore: operativeStore, userStore: userStore
+                            )
+                        }
+                    }
+                    .accessibilityIdentifier("projectDetail.tasksRetry")
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(32)
+            } else if jobTaskVisibility == .loading {
+                ProgressView()
+                    .frame(maxWidth: .infinity)
+                    .padding(32)
+            } else if projectTasksListForCurrentScope.isEmpty {
                 VStack(spacing: 14) {
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .fill(ProjectWorksRevampColors.blueTint)
@@ -4223,10 +4250,13 @@ private struct AddProjectTaskView: View {
     @State private var selectedImages: [UIImage] = []
     @State private var isUploadingImages = false
     @State private var uploadProgress: Double = 0
+    /// Review of #305: one task id across retries, and the photos already uploaded for it — a retry uploads only the
+    /// photos that failed, and every uploaded photo is linked when the task is written.
+    @State private var pendingTaskId = UUID()
+    @State private var uploadedImageURLs: [ObjectIdentifier: String] = [:]
     @State private var showingFilePicker = false
     @State private var showingImagePicker = false
     @State private var showingCameraPicker = false
-    @State private var uploadedImageURLs: [String] = []
     @State private var errorMessage: String?
     @State private var showingError = false
 
@@ -5053,6 +5083,7 @@ private struct AddProjectTaskView: View {
         
             Task {
                 var task = ProjectTask(
+                    id: pendingTaskId,
                     projectId: project.id,
                     title: trimmedTitle,
                     details: detailsValue,
@@ -5076,15 +5107,64 @@ private struct AddProjectTaskView: View {
                     if !selectedImages.isEmpty {
                         isUploadingImages = true
                         let totalImages = selectedImages.count
-                        for (index, image) in selectedImages.enumerated() {
-                            imageURLs.append(try await uploadImageForTask(image, taskId: task.id))
-                            uploadProgress = Double(index + 1) / Double(totalImages) * 0.5
+                        // RULEBOOK 1.91.0 §34 (hand-off v1.91.0, as web): photos upload 3 at a time, in order; the
+                        // task document is written once, after every upload (below). Review of #305: one failed photo
+                        // never cancels the others — the uploaded ones are kept for the retry, which sends only the
+                        // failed photos (each with the 1.89 stall cancel and retry), and the task is not written until
+                        // every photo is in.
+                        let images = selectedImages
+                        let taskId = task.id
+                        let backend = firebaseBackend
+                        guard let organizationId = backend.currentOrganization?.firestoreDocumentId else {
+                            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
                         }
+                        var failed: [Int] = []
+                        var firstError: Error?
+                        for start in stride(from: 0, to: images.count, by: 3) {
+                            let chunk = (start..<min(start + 3, images.count)).filter { uploadedImageURLs[ObjectIdentifier(images[$0])] == nil }
+                            let results = await withTaskGroup(of: (Int, Result<String, Error>).self) { group in
+                                for index in chunk {
+                                    let image = images[index]
+                                    group.addTask {
+                                        do {
+                                            return (index, .success(try await backend.uploadTaskImage(image, taskId: taskId, organizationId: organizationId)))
+                                        } catch {
+                                            return (index, .failure(error))
+                                        }
+                                    }
+                                }
+                                var out: [(Int, Result<String, Error>)] = []
+                                for await row in group { out.append(row) }
+                                return out
+                            }
+                            for (index, result) in results {
+                                switch result {
+                                case .success(let url): uploadedImageURLs[ObjectIdentifier(images[index])] = url
+                                case .failure(let error):
+                                    failed.append(index)
+                                    if firstError == nil { firstError = error }
+                                }
+                            }
+                            let done = images.filter { uploadedImageURLs[ObjectIdentifier($0)] != nil }.count
+                            uploadProgress = Double(done) / Double(totalImages) * 0.5
+                        }
+                        if let firstError {
+                            let names = failed.sorted().map { "photo \($0 + 1)" }.joined(separator: ", ")
+                            throw NSError(domain: "ProjectDetail", code: 502, userInfo: [
+                                NSLocalizedDescriptionKey: "Couldn't upload \(names): \(firstError.localizedDescription) Tap Save again to retry — the photos already uploaded are kept.",
+                            ])
+                        }
+                        imageURLs = images.compactMap { uploadedImageURLs[ObjectIdentifier($0)] }
                         isUploadingImages = false
                         task.attachedImageURLs = imageURLs
                     }
                     if let selectedFile = selectedFile {
                         task.attachedFileURL = try await uploadFileForTask(selectedFile, taskId: task.id)
+                        // A HEIC / HEIF photo picked as a file is stored as a JPEG (`uploadTaskFile`): name it so.
+                        let ext = selectedFile.pathExtension.lowercased()
+                        if ext == "heic" || ext == "heif", let name = task.attachedFileName {
+                            task.attachedFileName = ((name as NSString).deletingPathExtension) + ".jpg"
+                        }
                     }
                     try await taskStore.addTask(task)
                     
@@ -5110,13 +5190,6 @@ private struct AddProjectTaskView: View {
                     }
                 }
             }
-    }
-    
-    private func uploadImageForTask(_ image: UIImage, taskId: UUID) async throws -> String {
-        guard let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            throw NSError(domain: "ProjectDetail", code: 400, userInfo: [NSLocalizedDescriptionKey: "No organization loaded."])
-        }
-        return try await firebaseBackend.uploadTaskImage(image, taskId: taskId, organizationId: organizationId)
     }
     
     private func uploadFileForTask(_ fileURL: URL, taskId: UUID) async throws -> String {

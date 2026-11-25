@@ -12,8 +12,15 @@ import FirebaseFirestore
 
 @MainActor
 class ProjectTaskStore: ObservableObject {
-    @Published private(set) var tasks: [ProjectTask] = []
+    @Published private(set) var tasks: [ProjectTask] = [] {
+        didSet { revision &+= 1 }
+    }
+    /// Bumped on every change to `tasks`, so the Tasks screens memoise what they build from them (review of #305).
+    private(set) var revision = 0
     @Published var isLoading = false
+    /// RULEBOOK 1.91.0 §34 (review of #305): the organisation whose task list has a server answer (a load or a live
+    /// server snapshot). Tasks screens show loading, never "No tasks", and keep remembered filters, until it has.
+    @Published private(set) var finishedLoadOrganizationId: String?
     @Published var errorMessage: String?
     /// RULEBOOK 1.89.0 §34: the last task save or delete the server refused, shown to the person (before 1.89.0 it
     /// was only printed, so a refused delete or edit looked like it had worked until the next reload).
@@ -39,6 +46,7 @@ class ProjectTaskStore: ObservableObject {
             query: { $0.collection("tasks") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
+            if !fromCache, self.finishedLoadOrganizationId != organizationId { self.finishedLoadOrganizationId = organizationId }
             let incoming = rows.compactMap { FirebaseBackend.projectTask(documentId: $0.id, data: $0.data) }
             guard var next = LiveSnapshotMerge.apply(existing: self.tasks, incoming: incoming, fromCache: fromCache, rowCount: LiveSnapshotMerge.readableRowCount(rows), collection: "tasks") else { return }
             let incomingIds = Set(next.map(\.id))
@@ -55,6 +63,7 @@ class ProjectTaskStore: ObservableObject {
     func discardInMemoryForOrganizationSwitch() {
         tasks = []
         isLoading = false
+        finishedLoadOrganizationId = nil
         pendingReloadAfterCurrentLoad = false
         errorMessage = nil
     }
@@ -113,6 +122,7 @@ class ProjectTaskStore: ObservableObject {
                 : tasks.filter { !loadedIds.contains($0.id) }
             tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
             OfflineTaskLocalStore.shared.save(tasks, organizationId: organizationId)
+            finishedLoadOrganizationId = organizationId
         } catch {
             print("🔥🔥🔥 DEBUG: TaskStore - Error loading tasks: \(error.localizedDescription)")
             let cached = OfflineTaskLocalStore.shared.load(organizationId: organizationId)

@@ -43,6 +43,8 @@ final class TaskPeopleFoldTests: XCTestCase {
         var row = LogicFixtures.selfEmployedUser(id: id, email: email)
         row.isGhost = ghost
         row.formerUserIds = formerUserIds
+        // RULEBOOK 1.91.0 §34 `taskAssigneeCandidates`: only a signed-up, active account is offered.
+        row.passwordSet = true
         return row
     }
 
@@ -88,12 +90,17 @@ final class TaskPeopleFoldTests: XCTestCase {
     }
 
     func testAnOperativesRowLinkedToAnAccountIsTheSamePersonAsThatAccountsManagersRow() {
-        let roster = [user("u-ada", email: "ada@site.com")]
+        var ada = user("u-ada", email: "ada@site.com")
+        ada.role = .manager
+        ada.permissions.operativeMode = false
+        ada.permissions.manager = true
+        let roster = [ada]
         let mgr = manager("m-ada", email: "ada@site.com", first: "Ada", last: "Admin")
         let linked = operative("op-ada", email: "ada.other@site.com", first: "Ada", last: "Admin", linkedUserId: "U-ADA")
         let without = index(managers: [mgr], operatives: [linked], users: [])
         let before = TaskPeopleRulebook.pickerPeople(managers: [mgr], operatives: [linked], route: .combined, index: without)
-        XCTAssertEqual(before.managers.count + before.operatives.count, 2, "without the roster the link is unknown")
+        // RULEBOOK 1.91.0 §34: with no account on the roster nobody is offered (never a person who may be gone).
+        XCTAssertEqual(before.managers.count + before.operatives.count, 0, "without an account nobody is offered")
         let with = index(managers: [mgr], operatives: [linked], users: roster)
         let after = TaskPeopleRulebook.pickerPeople(managers: [mgr], operatives: [linked], route: .combined, index: with)
         XCTAssertEqual(after.managers.map(\.firestoreDocumentId), ["m-ada"])
@@ -191,7 +198,11 @@ final class TaskPeopleFoldTests: XCTestCase {
     func testAnAnonymisedDeletedManagerIsNotOffered() {
         let deleted = manager("m-gone", email: "", first: "Deleted", last: "user")
         let live = manager("m-live", email: "live@x", first: "Liv", last: "E")
-        let index = index(managers: [deleted, live], operatives: [], users: [])
+        var liveAccount = user("u-live", email: "live@x")
+        liveAccount.role = .manager
+        liveAccount.permissions.operativeMode = false
+        liveAccount.permissions.manager = true
+        let index = index(managers: [deleted, live], operatives: [], users: [liveAccount])
         let picked = TaskPeopleRulebook.pickerPeople(managers: [deleted, live], operatives: [], route: .managers, index: index)
         XCTAssertEqual(picked.managers.map(\.firestoreDocumentId), ["m-live"])
     }
