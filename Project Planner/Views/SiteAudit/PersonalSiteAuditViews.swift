@@ -239,78 +239,138 @@ struct PersonalSiteAuditCreateView: View {
         return user.fullName.isEmpty ? user.email : user.fullName
     }
 
+    /// The audit type as the shared type tiles take it (stored as its raw value, as before).
+    private var typeBinding: Binding<SiteAuditType> {
+        Binding(get: { SiteAuditType(rawValue: type) ?? .general }, set: { type = $0.rawValue })
+    }
+
+    // Owner 25 Nov: the same look and flow as the project / small works audit's first screen (type tiles, a details
+    // card with icon rows, photo cards), instead of a plain iOS form. UI only: the fields, checks and save are as before.
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
                     Text("\(CanonicalBusinessEngine.payeClaimText("PERSONAL_SITE_AUDIT_PRIVATE_NOTE", fallback: "Only you can see your personal site audits.")) Not linked to any job.")
                         .font(.footnote)
-                        .foregroundStyle(.secondary)
-                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("jobNumber") ?? "Job number", text: $jobNumber)
-                    PersonalSiteAuditFieldCounter(field: "jobNumber", value: jobNumber)
-                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("jobName") ?? "Job name", text: $jobName)
-                        .accessibilityIdentifier("personalSiteAudits.jobName")
-                    PersonalSiteAuditFieldCounter(field: "jobName", value: jobName)
-                    Picker("Audit type", selection: $type) {
-                        ForEach(SiteAuditType.allCases) { value in
-                            Text(value.rawValue).tag(value.rawValue)
+                        .foregroundStyle(SiteAuditColors.textSecondary)
+                        .padding(.horizontal, 4)
+
+                    SiteAuditSectionLabel(title: "Type")
+                    SiteAuditTypePickerGrid(selected: typeBinding)
+
+                    SiteAuditSectionLabel(title: "Details")
+                    SiteAuditCard {
+                        VStack(spacing: 0) {
+                            fieldRow(icon: "number", tint: SiteAuditColors.success, label: CanonicalBusinessEngine.siteAuditFieldLabel("jobNumber") ?? "Job number") {
+                                TextField("e.g. J-1042", text: $jobNumber)
+                                    .font(.body)
+                                PersonalSiteAuditFieldCounter(field: "jobNumber", value: jobNumber)
+                            }
+                            divider
+                            fieldRow(icon: "folder.fill", tint: SiteAuditColors.success, label: CanonicalBusinessEngine.siteAuditFieldLabel("jobName") ?? "Job name") {
+                                TextField("e.g. Station Road", text: $jobName)
+                                    .font(.body)
+                                    .accessibilityIdentifier("personalSiteAudits.jobName")
+                                PersonalSiteAuditFieldCounter(field: "jobName", value: jobName)
+                            }
+                            divider
+                            fieldRow(icon: "pencil", tint: SiteAuditColors.primary, label: CanonicalBusinessEngine.siteAuditFieldLabel("customTitle") ?? "Title (optional)") {
+                                TextField("e.g. Plant room snags", text: $customTitle)
+                                    .font(.body)
+                                PersonalSiteAuditFieldCounter(field: "customTitle", value: customTitle)
+                            }
+                            divider
+                            fieldRow(icon: "person.fill", tint: SiteAuditColors.pink, label: "Author") {
+                                Text(authorName.isEmpty ? "—" : authorName)
+                                    .font(.body)
+                                    .foregroundStyle(SiteAuditColors.text)
+                            }
+                            divider
+                            fieldRow(icon: "calendar", tint: SiteAuditColors.purple, label: "Date") {
+                                DatePicker("", selection: $date, displayedComponents: .date)
+                                    .closesCalendarOnDayPick(date)
+                                    .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                                    .labelsHidden()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 2)
+                    }
+
+                    SiteAuditSectionLabel(title: "Photos", suffix: items.isEmpty ? nil : "· \(items.count)")
+                    ForEach($items) { $item in
+                        SiteAuditCard {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Image(uiImage: item.preview)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxWidth: .infinity, maxHeight: 220)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                Text("Taken \(takenText(item.takenAt))")
+                                    .font(.caption)
+                                    .foregroundStyle(SiteAuditColors.textSecondary)
+                                TextField(CanonicalBusinessEngine.siteAuditFieldLabel("title") ?? "Title", text: $item.title)
+                                PersonalSiteAuditFieldCounter(field: "title", value: item.title)
+                                TextField(CanonicalBusinessEngine.siteAuditFieldLabel("location") ?? "Location", text: $item.location)
+                                PersonalSiteAuditFieldCounter(field: "location", value: item.location)
+                                TextField(CanonicalBusinessEngine.siteAuditFieldLabel("comments") ?? "Comments", text: $item.comments, axis: .vertical)
+                                    .lineLimit(2...5)
+                                PersonalSiteAuditFieldCounter(field: "comments", value: item.comments)
+                                Button("Remove", role: .destructive) {
+                                    let id = item.id
+                                    items.removeAll { $0.id == id }
+                                }
+                                .font(.subheadline.weight(.semibold))
+                            }
+                            .textFieldStyle(.roundedBorder)
+                            .padding(14)
                         }
                     }
-                    TextField(CanonicalBusinessEngine.siteAuditFieldLabel("customTitle") ?? "Title (optional)", text: $customTitle)
-                    PersonalSiteAuditFieldCounter(field: "customTitle", value: customTitle)
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
-                        .closesCalendarOnDayPick(date)
-                        .environment(\.timeZone, OrganizationRulebookContext.timeZone)
-                }
-                ForEach($items) { $item in
-                    Section {
-                        Image(uiImage: item.preview)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 220)
-                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("title") ?? "Title", text: $item.title)
-                        PersonalSiteAuditFieldCounter(field: "title", value: item.title)
-                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("location") ?? "Location", text: $item.location)
-                        PersonalSiteAuditFieldCounter(field: "location", value: item.location)
-                        TextField(CanonicalBusinessEngine.siteAuditFieldLabel("comments") ?? "Comments", text: $item.comments, axis: .vertical)
-                            .lineLimit(2...5)
-                        PersonalSiteAuditFieldCounter(field: "comments", value: item.comments)
-                        Button("Remove", role: .destructive) {
-                            let id = item.id
-                            items.removeAll { $0.id == id }
+                    HStack(spacing: 10) {
+                        SiteAuditPrimaryButton(title: "Take photo", systemImage: "camera.fill", style: .outline,
+                                               disabled: !UIImagePickerController.isSourceTypeAvailable(.camera)) {
+                            pickingPhoto = .camera
                         }
-                    } header: {
-                        Text("Photo · taken \(takenText(item.takenAt))")
+                        SiteAuditPrimaryButton(title: "Photo library", systemImage: "photo.on.rectangle", style: .outline) {
+                            pickingPhoto = .photoLibrary
+                        }
                     }
-                }
-                Section {
-                    Button("Take photo") { pickingPhoto = .camera }
-                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
-                    Button("Add from photo library") { pickingPhoto = .photoLibrary }
-                }
-                if let error {
-                    Section {
-                        Text(error).foregroundStyle(.red).font(.footnote)
+
+                    if let error {
+                        Text(error)
+                            .foregroundStyle(SiteAuditColors.danger)
+                            .font(.footnote)
+                            .padding(.horizontal, 4)
                     }
-                }
-                Section {
+
                     Button {
                         Task { await submit() }
                     } label: {
                         Text(saving ?? "Save audit")
                             .font(.headline)
+                            .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(SiteAuditColors.primary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                     }
+                    .buttonStyle(.plain)
                     .disabled(saving != nil)
+                    .opacity(saving != nil ? 0.7 : 1)
                     .accessibilityIdentifier("personalSiteAudits.save")
+                    .padding(.top, 6)
                 }
+                .padding(.horizontal, PPMetrics.screenGutter)
+                .padding(.top, 12)
+                .padding(.bottom, 28)
             }
+            .siteAuditScreenBackground()
             .navigationTitle(CanonicalBusinessEngine.payeClaimText("PERSONAL_SITE_AUDIT_CREATE_LABEL", fallback: "Create Personal Site Audit"))
             .navigationBarTitleDisplayMode(.inline)
+            .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
-                        .disabled(saving != nil)
+                    SiteAuditToolbarPill(title: "Cancel", filled: false, disabled: saving != nil, onNavy: true) { dismiss() }
                 }
             }
             .sheet(item: Binding(
@@ -323,6 +383,29 @@ struct PersonalSiteAuditCreateView: View {
             }
         }
         .interactiveDismissDisabled(saving != nil)
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(SiteAuditColors.border)
+            .frame(height: 0.5)
+            .padding(.leading, PPMetrics.menuIcon + 13)
+    }
+
+    /// One details row in the project audit's style: a coloured icon tile, a small label and the field beneath it.
+    private func fieldRow<Content: View>(icon: String, tint: Color, label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 13) {
+            SiteAuditRowIconChip(systemName: icon, tint: tint, background: tint, size: PPMetrics.menuIcon)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.footnote)
+                    .foregroundStyle(SiteAuditColors.textSecondary)
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 11)
+        .frame(minHeight: 60)
     }
 
     private func takenText(_ date: Date) -> String {
