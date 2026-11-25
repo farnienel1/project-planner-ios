@@ -588,7 +588,11 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 signatureRemovals: signatureRemovals
             )
         } catch {
-            errorMessage = error.localizedDescription
+            // The change was shown before the save; it was not stored, so read the stored copy back (the screen
+            // never keeps showing something that is not saved) and say so plainly.
+            let reason = error.localizedDescription
+            await load(firebaseBackend: firebaseBackend, userStore: userStore)
+            errorMessage = "Your change was not saved. \(reason) Try again."
         }
     }
 
