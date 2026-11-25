@@ -134,7 +134,11 @@ extension FirebaseBackend {
         let size = prepared.data.count
         let outcome: String
         do {
-            outcome = try await writeSubcontractorDocumentList(organizationId: organizationId, subcontractorId: subcontractorId) { stored in
+            // Owner report 25 Nov: the link write is a transaction, which keeps retrying while the server does not
+            // answer, so the button stayed on "Uploading…". It is bounded like the qualification save (20 s); on a
+            // time-out the file is kept (the write may still land and the live list then shows it).
+            outcome = try await BoundedWait.run(seconds: Self.subcontractorDocumentLinkConfirmSeconds) { [self] in
+              try await writeSubcontractorDocumentList(organizationId: organizationId, subcontractorId: subcontractorId) { stored in
                 let answer = CanonicalBusinessEngine.subcontractorDocumentAddWriteFields(
                     stored: stored,
                     kind: kind,
@@ -149,7 +153,10 @@ extension FirebaseBackend {
                     expiresOn: expiresOn
                 )
                 return (answer.write, answer.outcome, nil)
-            }.outcome
+              }.outcome
+            }
+        } catch is BoundedWait.TimedOut {
+            throw NSError(domain: "FirebaseBackend", code: 504, userInfo: [NSLocalizedDescriptionKey: Self.subcontractorDocumentLinkUnconfirmedMessage])
         } catch {
             await deleteSubcontractorUploadIfUnlinked(organizationId: organizationId, subcontractorId: subcontractorId, path: path)
             throw error
@@ -165,6 +172,12 @@ extension FirebaseBackend {
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This document could not be saved. Try again."])
         }
     }
+
+    /// How long the link write waits for the server (web `SUBCONTRACTOR_DOCUMENT_LINK_CONFIRM_MS`).
+    nonisolated static let subcontractorDocumentLinkConfirmSeconds: Double = 20
+
+    nonisolated static let subcontractorDocumentLinkUnconfirmedMessage =
+        "The file uploaded, but the server has not confirmed it on this sub contractor yet. Check your connection — it will appear here once it arrives. If it does not, upload it again."
 
     /// After a failed save: re-read the firm from the server and delete the new file only when no entry names it. A
     /// save that committed while the app saw an error (a dropped connection) keeps its file, as web does; when the

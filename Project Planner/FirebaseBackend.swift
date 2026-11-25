@@ -3102,17 +3102,8 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: prepared.data, declaredContentType: prepared.contentType
         )
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(prepared.data, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
+        // 25 Nov: stall-watched (cancelled only after a minute with nothing sent, no overall limit).
+        try await putStallWatched(storageRef: storageRef, data: prepared.data, metadata: metadata)
 
         // RULEBOOK 1.16.1 (§1 partial writes, health & safety file links): a `gs://` address is never stored as
         // `fileURL` — no app can open it, so the row would lose its View link. Retry the download address, then
@@ -3200,17 +3191,8 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: imagePath, data: imageData, declaredContentType: prepared.contentType
         )
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
+        // 25 Nov: stall-watched (cancelled only after a minute with nothing sent, no overall limit).
+        try await putStallWatched(storageRef: storageRef, data: imageData, metadata: metadata)
         
         // Get download URL
         let downloadURL = try await storageRef.downloadURL()
@@ -3331,7 +3313,8 @@ class FirebaseBackend: ObservableObject {
     }
 
     static let siteAuditUploadStallSeconds: TimeInterval = 60
-    static let siteAuditUploadTotalSeconds: TimeInterval = 180
+    /// 25 Nov (owner): no overall limit — only a stall cancels an upload.
+    static let siteAuditUploadTotalSeconds: TimeInterval = .infinity
 
     /// Profile photo for a user (managed from Manage Users). Overwrites prior object at this path.
     func uploadUserProfilePhoto(_ image: UIImage, userId: String, organizationId: String) async throws -> String {
@@ -3355,17 +3338,8 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: imageData, declaredContentType: prepared.contentType
         )
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
+        // 25 Nov: stall-watched (cancelled only after a minute with nothing sent, no overall limit).
+        try await putStallWatched(storageRef: storageRef, data: imageData, metadata: metadata)
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
@@ -3407,17 +3381,8 @@ class FirebaseBackend: ObservableObject {
         metadata.contentType = try StorageUploadPolicy.checkedUploadContentType(
             storagePath: path, data: imageData, declaredContentType: prepared.contentType
         )
-        let _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<StorageMetadata, Error>) in
-            storageRef.putData(imageData, metadata: metadata) { metadata, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let metadata = metadata {
-                    continuation.resume(returning: metadata)
-                } else {
-                    continuation.resume(throwing: NSError(domain: "StorageReference", code: -1, userInfo: [NSLocalizedDescriptionKey: "Unknown error"]))
-                }
-            }
-        }
+        // 25 Nov: stall-watched (cancelled only after a minute with nothing sent, no overall limit).
+        try await putStallWatched(storageRef: storageRef, data: imageData, metadata: metadata)
         let downloadURL = try await storageRef.downloadURL()
         return downloadURL.absoluteString
     }
