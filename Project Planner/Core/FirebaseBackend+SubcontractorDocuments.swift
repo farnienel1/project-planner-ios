@@ -151,7 +151,7 @@ extension FirebaseBackend {
                 return (answer.write, answer.outcome, nil)
             }.outcome
         } catch {
-            try? await storage.reference().child(path).delete()
+            await deleteSubcontractorUploadIfUnlinked(organizationId: organizationId, subcontractorId: subcontractorId, path: path)
             throw error
         }
         switch outcome {
@@ -164,6 +164,29 @@ extension FirebaseBackend {
             try? await storage.reference().child(path).delete()
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This document could not be saved. Try again."])
         }
+    }
+
+    /// After a failed save: re-read the firm from the server and delete the new file only when no entry names it. A
+    /// save that committed while the app saw an error (a dropped connection) keeps its file, as web does; when the
+    /// re-read fails too the file is kept (an unlinked file is safer than a linked entry whose file is gone).
+    private func deleteSubcontractorUploadIfUnlinked(organizationId: String, subcontractorId: String, path: String) async {
+        let ref = subcontractorFirmRef(organizationId: organizationId, subcontractorId: subcontractorId)
+        guard let snapshot = try? await ref.getDocument(source: .server) else { return }
+        if let data = snapshot.data(), Self.subcontractorDocumentPathIsLinked(data, path: path) { return }
+        try? await storage.reference().child(path).delete()
+    }
+
+    /// Whether either stored list (`documents.insurance`, `documents.rams`) holds an entry for this Storage path.
+    nonisolated static func subcontractorDocumentPathIsLinked(_ stored: [String: Any], path: String) -> Bool {
+        guard let documents = stored["documents"] as? [String: Any] else { return false }
+        for kind in ["insurance", "rams"] {
+            for row in documents[kind] as? [Any] ?? [] {
+                guard let entry = row as? [String: Any] else { continue }
+                let stored = (entry["path"] as? String) ?? (entry["storagePath"] as? String) ?? ""
+                if stored == path { return true }
+            }
+        }
+        return false
     }
 
     /// The download URL of a stored document (Storage refuses anyone who is not staff of the organisation).
