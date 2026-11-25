@@ -211,6 +211,9 @@ struct SiteAuditToolbarPill: View {
         if onNavy {
             Text(title)
                 .font(.subheadline.weight(.semibold))
+                // Never squeezed to "…" in a narrow navy toolbar (owner 25 Nov: the button read as three dots).
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(Color.white.opacity(disabled ? 0.45 : 1))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
@@ -226,6 +229,8 @@ struct SiteAuditToolbarPill: View {
         } else {
             Text(title)
                 .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(disabled ? SiteAuditColors.textDisabled : (filled ? .white : SiteAuditColors.text))
                 .padding(.horizontal, filled ? 14 : 12)
                 .padding(.vertical, 6)

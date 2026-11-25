@@ -971,7 +971,8 @@ struct SiteAuditCreateFlowView: View {
             .ppNavyNavigationBar()
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    SiteAuditToolbarPill(title: "Back", filled: false, onNavy: true) {
+                    // Owner 25 Nov: the first step reads "Cancel" (it closes the new audit); later steps go back a step.
+                    SiteAuditToolbarPill(title: step == 1 ? "Cancel" : "Back", filled: false, onNavy: true) {
                         if step == 1 { dismiss() }
                         else if step == 2 { step = 1 }
                         else { step = 2 }
