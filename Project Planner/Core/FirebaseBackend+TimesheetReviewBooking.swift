@@ -72,7 +72,8 @@ extension FirebaseBackend {
         org: DocumentReference,
         record: TimesheetReviewerEditSheetRecord
     ) {
-        var value = record.edit.value
+        // RULEBOOK 1.90.0: the record's `before` holds the booking's stored values (a ✕ keeps its Timestamp `date`).
+        var value = TimesheetReviewerFirestoreValue.map(record.edit.value)
         value["editedAt"] = FieldValue.serverTimestamp()
         var fields: [AnyHashable: Any] = [
             FieldPath([CanonicalBusinessEngine.timesheetReviewerBookingEditsField, record.edit.key]): value,

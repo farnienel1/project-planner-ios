@@ -11829,7 +11829,7 @@ extension FirebaseBackend {
     }
 
     /// RULEBOOK 1.90.0 §8: Cancel revision — delete a reviewer's draft revision, only while it is still a draft (one
-    /// transaction re-reads it). Booking changes already made stay in the bookings. False when it was no longer a draft.
+    /// transaction re-reads it). Callers undo its changes first (`cancelTimesheetReviewerChanges`). False when it was no longer a draft.
     func cancelTimesheetRevisionDraft(organizationId: String, documentId: String) async throws -> Bool {
         let ref = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings").document(documentId)
         return try await Self.runTimesheetRevisionDraftWrite(db: db, ref: ref, writerId: "", cancel: true)
