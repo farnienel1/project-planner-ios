@@ -920,7 +920,9 @@ struct DLEditDeadlineScreen: View {
         "Ground Floor",
         "1st Floor", "2nd Floor", "3rd Floor", "4th Floor",
         "5th Floor", "6th Floor", "7th Floor", "8th Floor",
-        "Roof", "Risers", "External", "Basement"
+        "Roof", "Risers", "External", "Basement",
+        // Rulebook 1.94.1: the "Multiple floors" chip lists the deadline under that section (as web).
+        "Multiple floors"
     ]
 
     private var canSave: Bool { !title.trimmingCharacters(in: .whitespaces).isEmpty }
