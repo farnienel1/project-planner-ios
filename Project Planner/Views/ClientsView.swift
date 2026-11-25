@@ -183,7 +183,7 @@ struct ClientCardView: View {
                         Image(systemName: "location.fill")
                             .font(.caption2)
                             .foregroundStyle(PPFamily.trade.bottom)
-                        Text(address)
+                        Text(UKPostcodeText.tidyAddress(address))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -257,7 +257,7 @@ struct ClientDetailsView: View {
                                     HStack(alignment: .top, spacing: 8) {
                                         Image(systemName: "location.fill")
                                             .foregroundColor(.orange)
-                                        Text(address)
+                                        Text(UKPostcodeText.tidyAddress(address))
                                             .font(.body)
                                     }
                                 }

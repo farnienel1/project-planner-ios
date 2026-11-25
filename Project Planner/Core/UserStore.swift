@@ -34,6 +34,14 @@ class UserStore: ObservableObject {
             // every screen, PDF and notice that takes names from the roster shows it. (A set inside didSet does not
             // run didSet again.)
             if let named = MemberNameOverlay.apply(organizationUsers, names: memberNames) { organizationUsers = named }
+            // RULEBOOK 1.88.0 §8, §11: a visiting member's line manager in this company (this company's record
+            // `memberLineManagers/{uid}`, live), laid over once here so every rule that reads line managers from the
+            // roster reads this company's.
+            if let laid = OrgLineManagerOverlay.apply(
+                organizationUsers,
+                organizationId: lineManagerRecordsOrg,
+                records: lineManagerRecords
+            ) { organizationUsers = laid }
             revision &+= 1
             restampSameEmailAliasesIfNeeded()
             // Rules that run without a store (`timesheetSelfSigned` in `TimesheetApprovalPolicy`) read this roster.
@@ -68,6 +76,19 @@ class UserStore: ObservableObject {
     private var organizationCancellable: AnyCancellable?
     /// RULEBOOK 1.81.0 §11: the open organisation's `memberNames` entries (lower-case users id → name), live.
     private(set) var memberNames: [String: [String: String]] = [:]
+    /// RULEBOOK 1.88.0 §8, §11: the open organisation's `memberLineManagers` records (lower-case users id → the three
+    /// line-manager keys), live from one snapshot listener; this company's line manager for members whose home is
+    /// another company.
+    private var lineManagerRecords: [String: [String: Any]] = [:]
+    private var lineManagerRecordsOrg = ""
+    private var lineManagerRecordsListener: ListenerRegistration?
+    private var lineManagerRecordsCancellable: AnyCancellable?
+    private var lineManagerRecordsFailures = 0
+    /// Bumped on every attach, so a late error or retry of an earlier listener is ignored.
+    private var lineManagerRecordsGeneration = UUID()
+    /// True after the listener failed and has not answered since: the line managers shown for visiting members are
+    /// the last ones read (or their users documents'), not live. Logged; the listener is retried.
+    private(set) var lineManagerRecordsStale = false
     private var memberNamesOrganizationId = ""
     private var memberNamesListener: ListenerRegistration?
     private var memberNamesCancellable: AnyCancellable?
@@ -316,6 +337,13 @@ class UserStore: ObservableObject {
             .sink { [weak self] organizationId in
                 Task { @MainActor [weak self] in self?.listenToMemberNames(organizationId: organizationId) }
             }
+        lineManagerRecordsCancellable = firebaseBackend.$currentOrganization
+            .map { $0?.firestoreDocumentId ?? "" }
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] organizationId in
+                Task { @MainActor [weak self] in self?.listenToMemberLineManagers(organizationId: organizationId) }
+            }
         organizationCancellable = firebaseBackend.$currentOrganization
             .map { $0?.firestoreDocumentId ?? "" }
             .removeDuplicates()
@@ -324,6 +352,94 @@ class UserStore: ObservableObject {
             .sink { [weak self] _ in
                 Task { @MainActor [weak self] in self?.organizationDidLoadForPay() }
             }
+    }
+
+    /// RULEBOOK 1.88.0 §8, §11: ONE snapshot listener on `organizations/{orgId}/memberLineManagers` for the open
+    /// organisation (every active member may read it), removed on a company switch or sign-out (no company open).
+    /// Each record is laid over the roster (`OrgLineManagerOverlay`, `parseMemberLineManagerDocuments`). A listener
+    /// error is logged, marks the records stale and attaches again after `LiveListenerAttachPolicy.retryDelay` while
+    /// the same company is open; a permission refusal that persists (rules before 1.88.0) drops the records (visiting
+    /// members then have no line manager here, as the rules read it).
+    private func listenToMemberLineManagers(organizationId: String) {
+        let org = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard org.lowercased() != lineManagerRecordsOrg.lowercased() || lineManagerRecordsListener == nil else { return }
+        lineManagerRecordsListener?.remove()
+        lineManagerRecordsListener = nil
+        if org.lowercased() != lineManagerRecordsOrg.lowercased() {
+            lineManagerRecordsOrg = org
+            lineManagerRecordsFailures = 0
+            lineManagerRecordsStale = false
+            applyLineManagerRecords([:])
+        }
+        guard !org.isEmpty else { return }
+        let generation = UUID()
+        lineManagerRecordsGeneration = generation
+        lineManagerRecordsListener = Firestore.firestore()
+            .collection("organizations").document(org).collection(CanonicalBusinessEngine.memberLineManagersCollection)
+            .addSnapshotListener { [weak self] snapshot, error in
+                if let error {
+                    NSLog("LIVE_LISTENER_FAILED key=memberLineManagers org=%@ error=%@", org, error.localizedDescription)
+                    let permissionDenied = LiveListenerAttachPolicy.isPermissionDenied(error)
+                    Task { @MainActor [weak self] in
+                        self?.memberLineManagersListenerFailed(organizationId: org, generation: generation, permissionDenied: permissionDenied)
+                    }
+                    return
+                }
+                guard let snapshot else { return }
+                let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                Task { @MainActor [weak self] in
+                    guard let self, self.lineManagerRecordsGeneration == generation,
+                          self.lineManagerRecordsOrg.lowercased() == org.lowercased() else { return }
+                    self.lineManagerRecordsFailures = 0
+                    self.lineManagerRecordsStale = false
+                    self.applyLineManagerRecords(CanonicalBusinessEngine.parseMemberLineManagerDocuments(docs))
+                }
+            }
+    }
+
+    /// A failed `memberLineManagers` listener drops its registration and is attached again after
+    /// `LiveListenerAttachPolicy.retryDelay` while the same company is open and someone is signed in.
+    private func memberLineManagersListenerFailed(organizationId org: String, generation: UUID, permissionDenied: Bool) {
+        guard lineManagerRecordsGeneration == generation, lineManagerRecordsOrg.lowercased() == org.lowercased() else { return }
+        lineManagerRecordsListener?.remove()
+        lineManagerRecordsListener = nil
+        lineManagerRecordsStale = true
+        lineManagerRecordsFailures += 1
+        guard let delay = LiveListenerAttachPolicy.retryDelay(afterFailures: lineManagerRecordsFailures, permissionDenied: permissionDenied) else {
+            // No more retries this session (the next company switch, or launch, attaches again).
+            if permissionDenied {
+                // Rules before 1.88.0 refuse the collection: no records (visitors have no line manager here).
+                applyLineManagerRecords([:])
+            }
+            print("[memberLineManagers] listener stopped after \(lineManagerRecordsFailures) failures")
+            return
+        }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self, self.lineManagerRecordsGeneration == generation,
+                  self.lineManagerRecordsListener == nil,
+                  LiveListenerAttachPolicy.mayRetryAttach(
+                      listenerOrganizationId: org,
+                      currentOrganizationId: self.firebaseBackend?.currentOrganization?.firestoreDocumentId,
+                      isAuthenticated: self.firebaseBackend?.isAuthenticated ?? false
+                  ) else { return }
+            self.listenToMemberLineManagers(organizationId: org)
+        }
+    }
+
+    private func applyLineManagerRecords(_ records: [String: [String: Any]]) {
+        lineManagerRecords = records
+        if let laid = OrgLineManagerOverlay.apply(organizationUsers, organizationId: lineManagerRecordsOrg, records: records) {
+            organizationUsers = laid
+        }
+    }
+
+    /// RULEBOOK 1.88.0: after this phone saved a visiting member's line manager here, use it straight away (the
+    /// listener confirms it).
+    func noteOrgLineManagerSaved(userId: String, record: [String: Any]) {
+        var next = lineManagerRecords
+        next[userId.lowercased()] = record
+        applyLineManagerRecords(next)
     }
 
     /// RULEBOOK 1.81.0 §11: listens to `organizations/{orgId}/memberNames` for the open organisation and lays the
@@ -341,11 +457,50 @@ class UserStore: ObservableObject {
             .addSnapshotListener { [weak self] snapshot, error in
                 guard let snapshot, error == nil else { return }
                 let docs = snapshot.documents.map { (id: $0.documentID, data: $0.data()) }
+                let serverRead = !snapshot.metadata.isFromCache
                 Task { @MainActor [weak self] in
                     guard let self, self.memberNamesOrganizationId == org else { return }
-                    self.applyMemberNames(CanonicalBusinessEngine.parseMemberNames(docs))
+                    let names = CanonicalBusinessEngine.parseMemberNames(docs)
+                    self.applyMemberNames(names)
+                    self.seedOwnMemberName(organizationId: org, names: names, serverRead: serverRead)
                 }
             }
+    }
+
+    /// `orgId/uid` pairs already tried this session (one attempt each).
+    private var seededMemberNames: Set<String> = []
+
+    /// RULEBOOK 1.82.0 §1, §11 (`memberNameEntryMissing`): the signed-in person has no entry in the open organisation
+    /// yet — create it once, with the name this organisation shows them today (the users document's name), so a name
+    /// edit in another of their companies never changes it here. Create-only in a transaction (never over an entry);
+    /// the rules let a member write their own entry. A refusal or a lost race changes nothing.
+    private func seedOwnMemberName(organizationId: String, names: [String: [String: String]], serverRead: Bool) {
+        guard let user = currentUser, firebaseBackend?.currentOrganization?.firestoreDocumentId == organizationId else { return }
+        let pair = "\(organizationId)/\(user.id)".lowercased()
+        guard !seededMemberNames.contains(pair) else { return }
+        guard CanonicalBusinessEngine.memberNameEntryMissing(userId: user.id, aliases: user.formerUserIds + user.sameEmailUserIds, names: names, serverRead: serverRead) else { return }
+        let account = MemberNameOverlay.accountName(user)
+        guard let name = CanonicalBusinessEngine.memberNameJoinEntry([account]),
+              var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: name.firstName, surname: name.surname, writerUserId: user.id)
+        else { return }
+        seededMemberNames.insert(pair)
+        fields["updatedAt"] = FieldValue.serverTimestamp()
+        let entry = fields
+        let db = Firestore.firestore()
+        let ref = db.collection("organizations").document(organizationId)
+            .collection(CanonicalBusinessEngine.memberNamesCollection).document(user.id)
+        db.runTransaction({ transaction, errorPointer -> Any? in
+            do {
+                if try transaction.getDocument(ref).exists { return nil }
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            transaction.setData(entry, forDocument: ref)
+            return nil
+        }) { _, error in
+            if let error { print("[memberNames] own entry not created: \((error as NSError).code)") }
+        }
     }
 
     private func applyMemberNames(_ names: [String: [String: String]]) {
@@ -387,14 +542,20 @@ class UserStore: ObservableObject {
         return copy
     }
 
-    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same):
-    /// always in the person's home organisation (the existing identity rules apply), else only themself or an admin.
+    /// Whether the signed-in person may write this person's name here (`canWriteMemberName`; the rules hold the same).
+    /// RULEBOOK 1.82.0 §11: every name edit writes this company's own entry, so the check applies in the home company
+    /// too — the person themself, an admin, or a manager who manages operatives for an operative (never another
+    /// manager).
     func canEditName(of user: AppUser) -> Bool {
-        guard nameEditIsOrganizations(user) else { return true }
+        // Owner correction 24 Nov: an Operatives manager of this organisation, for any operative member of it.
+        let managesOperative = displayUser.map {
+            CanonicalBusinessEngine.memberNameWriterManagesOperative(writer: $0.permissionSubject, subject: user.permissionSubject)
+        } ?? false
         return CanonicalBusinessEngine.canWriteMemberName(
             writerUserId: Auth.auth().currentUser?.uid,
             subjectUserId: user.id,
-            writerIsAdmin: hasAdminAccess()
+            writerIsAdmin: hasAdminAccess(),
+            writerManagesOperative: managesOperative
         )
     }
 
@@ -439,12 +600,33 @@ class UserStore: ObservableObject {
                 cu.lastSeenAt = now
                 currentUser = cu
             }
-            if let idx = organizationUsers.firstIndex(where: { $0.id == uid }) {
-                organizationUsers[idx].lastSeenAt = now
-            }
+            // The roster is not republished here (review of #284): a whole-roster publish re-runs every roster
+            // consumer (pay overlay read, job access). The live users listener brings the stored value, and the
+            // warnings rescan gate (`WarningsRosterFingerprint`) ignores `lastSeenAt`.
         } catch {
             print("🔥🔥🔥 DEBUG: lastSeenAt heartbeat failed: \(error.localizedDescription)")
         }
+    }
+
+    /// "Last active" for a person: the newest `lastSeenAt` across every users document of that person in this
+    /// organisation (`personIdSet` over the unfolded roster — an old invite id or a second same-email document may
+    /// hold the newer heartbeat, e.g. the person signs in on web under one and on iPhone under another).
+    func newestLastSeenAt(for user: AppUser) -> Date? {
+        let documents = unfoldedOrganizationUsers
+        let ids = CanonicalBusinessEngine.personIdSet(person: RulebookPeople.person(user), roster: unfoldedRosterRows)
+            ?? ([user.id] + user.formerUserIds + user.sameEmailUserIds)
+        return Self.newestLastSeenAt(personIds: ids, documents: documents, fallback: user.lastSeenAt)
+    }
+
+    /// Pure part of `newestLastSeenAt(for:)`: ids compared without case (RULEBOOK §1).
+    nonisolated static func newestLastSeenAt(personIds: [String], documents: [AppUser], fallback: Date?) -> Date? {
+        let wanted = Set(personIds.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        var newest = fallback
+        for document in documents where wanted.contains(document.id.lowercased()) {
+            guard let seen = document.lastSeenAt else { continue }
+            if newest.map({ seen > $0 }) ?? true { newest = seen }
+        }
+        return newest
     }
 
     /// The `operatives` roster row for this app user, so qualifications can attach (`OperativeProfileLinkPolicy`).
@@ -2649,9 +2831,12 @@ class UserStore: ObservableObject {
                     }
                     // `userDeleteWrites`: one batch per step, in order; the account batch first, so a refusal there
                     // leaves everything as it was. Later steps stop at the first refusal.
-                    for (index, step) in steps.enumerated() {
+                    // RULEBOOK 1.59.0 / 1.82.0 / 1.88.0: a write marked `optional` (the former-person record, the
+                    // person's `memberNames` entry, this company's `memberLineManagers` record) never stops the delete: when older security rules refuse the batch, the same
+                    // batch runs again without it.
+                    func makeBatch(_ writes: [[String: Any]]) -> WriteBatch {
                         let batch = db.batch()
-                        for write in step["writes"] as? [[String: Any]] ?? [] {
+                        for write in writes {
                             guard let path = write["path"] as? String, !path.isEmpty else { continue }
                             let ref = db.document(path)
                             switch write["op"] as? String {
@@ -2669,8 +2854,20 @@ class UserStore: ObservableObject {
                                 continue
                             }
                         }
+                        return batch
+                    }
+                    for (index, step) in steps.enumerated() {
+                        let writes = step["writes"] as? [[String: Any]] ?? []
                         do {
-                            try await batch.commit()
+                            do {
+                                try await makeBatch(writes).commit()
+                            } catch {
+                                let ns = error as NSError
+                                let rest = writes.filter { ($0["optional"] as? Bool) != true }
+                                guard rest.count < writes.count, ns.domain == "FIRFirestoreErrorDomain", ns.code == 7 else { throw error }
+                                print("🔥🔥🔥 DEBUG: ⚠️ optional delete write skipped: \(error.localizedDescription)")
+                                if !rest.isEmpty { try await makeBatch(rest).commit() }
+                            }
                             print("🔥🔥🔥 DEBUG: ✅ userDeleteWrites step \(index) (\(step["step"] as? String ?? "?")) done")
                         } catch {
                             // Any `account` step refused stops the delete (an operatives manager's account step is
@@ -2730,6 +2927,12 @@ class UserStore: ObservableObject {
         let oldEmailNorm = updated.email.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Review of #442 (item 6): a name change is checked against `canWriteMemberName` before the first write (the
+        // Auth email request, the users document, the entry), so a refused name never leaves the rest half saved.
+        if (updated.firstName != trimmedFirst || updated.surname != trimmedSurname) && !canEditName(of: updated) {
+            errorMessage = CanonicalBusinessEngine.memberNameRefusedMessage
+            return false
+        }
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let trimmedMobile = mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines)
         let mobileOut: String? = (trimmedMobile?.isEmpty == false) ? trimmedMobile : nil
@@ -3529,6 +3732,38 @@ class UserStore: ObservableObject {
                     errorMessage = Self.payChangeRefusedMessage
                     return false
                 }
+                // RULEBOOK 1.88.0 §8, §11 `orgLineManagerEditTarget`: in the person's home company the line manager is
+                // saved on their users document (as before); in any other company it is this company's own line
+                // manager for them, its record `organizations/{orgId}/memberLineManagers/{uid}` (admins only), never
+                // the membership and never the users document. An unknown home refuses the change rather than write it
+                // to the wrong company.
+                let openOrganizationId = firebaseBackend.currentOrganization?.firestoreDocumentId ?? ""
+                let lineManagerTarget: String? = lineManagerChanged
+                    ? CanonicalBusinessEngine.orgLineManagerEditTarget(
+                        organizationId: openOrganizationId,
+                        homeOrganizationId: original.storedOrganizationId
+                    )
+                    : "users"
+                if lineManagerChanged && lineManagerTarget == nil {
+                    errorMessage = CanonicalBusinessEngine.orgLineManagerHomeUnknownMessage
+                    return false
+                }
+                let lineManagerOnRecord = lineManagerChanged && lineManagerTarget == "record"
+                var lineManagerRecord: [String: Any]?
+                if lineManagerOnRecord {
+                    let noLineManager = hasNoLineManager ?? updatedUser.hasNoLineManager
+                    guard !openOrganizationId.isEmpty,
+                          let fields = CanonicalBusinessEngine.memberLineManagerWriteFields(
+                              assignedManagerUserIds: noLineManager ? [] : updatedUser.lineManagerUserIds,
+                              assignedManagerUserId: noLineManager ? nil : updatedUser.lineManagerUserIds.first,
+                              hasNoLineManager: noLineManager,
+                              writerUserId: Auth.auth().currentUser?.uid
+                          ) else {
+                        errorMessage = CanonicalBusinessEngine.orgLineManagerHomeUnknownMessage
+                        return false
+                    }
+                    lineManagerRecord = fields
+                }
                 if dayRateChanged {
                     Self.applyStoredPay(to: &updatedUser, basis: previousPay.basis, amount: dayRate)
                 }
@@ -3554,7 +3789,8 @@ class UserStore: ObservableObject {
                     historyRows = change.rows
                 }
                 do {
-                    // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch.
+                    // RULEBOOK 1.10.0 §8: the profile and its `payRateChangeWrites` rows in one batch; RULEBOOK 1.88.0:
+                    // a visiting member's line manager here goes in the same batch as its `memberLineManagers` record.
                     try await firebaseBackend.updateOperativeProfileMetadata(
                         userId: updatedUser.id,
                         assignedManagerUserId: updatedUser.assignedManagerUserId,
@@ -3562,11 +3798,14 @@ class UserStore: ObservableObject {
                         hasNoLineManager: hasNoLineManager ?? updatedUser.hasNoLineManager,
                         dayRate: dayRate,
                         updateDayRate: dayRateChanged,
-                        // Unchanged (or not ours to change): leave the line-manager keys out of the write entirely.
-                        writeLineManager: lineManagerChanged,
+                        // Unchanged, not ours to change, or saved on this company's record (1.88.0): leave the
+                        // line-manager keys out of the users document write entirely.
+                        writeLineManager: lineManagerChanged && !lineManagerOnRecord,
                         payBasis: previousPay.basis,
-                        historyRows: historyRows
+                        historyRows: historyRows,
+                        memberLineManagerRecord: lineManagerRecord.map { (organizationId: openOrganizationId, fields: $0) }
                     )
+                    if let lineManagerRecord { noteOrgLineManagerSaved(userId: updatedUser.id, record: lineManagerRecord) }
                     // Mirror (web writes the same one). Never read over users/{uid}; best effort.
                     let mirrored = Self.storedPay(of: updatedUser)
                     try? await firebaseBackend.saveOperativeProfileMetadataFallback(

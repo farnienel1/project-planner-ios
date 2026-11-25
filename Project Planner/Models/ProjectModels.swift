@@ -106,6 +106,12 @@ struct Project: Identifiable, Codable, Hashable {
         return ""
     }
     
+    /// The site address as shown and looked up: every UK postcode "SW1X 9HR", an x look-alike (such as ×) read as x.
+    /// Display only — never written (job saves write `siteAddress`).
+    var displaySiteAddress: String {
+        UKPostcodeText.tidyAddress(siteAddress)
+    }
+
     init(
         id: UUID = UUID(),
         jobNumber: String,

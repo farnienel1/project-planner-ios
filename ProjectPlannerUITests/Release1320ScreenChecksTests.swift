@@ -93,12 +93,12 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         openPaymentRunsFromBanner()
         scrollTo("payePayday.picker", timeout: 30)
         shot("A4 admin payday picker before")
-        // The picker opens a 31-day menu; "Day 1" is always on screen, "Day 25" may need scrolling.
-        let day1 = openPaydayMenu(offering: "Day 1")
+        // 24 Nov: the days are an inline grid (no menu); each day is its own button.
+        let day1 = paydayDayButton("Day 1")
         if day1.exists {
             day1.tap()
         } else {
-            XCTFail("A4: the payday picker did not offer 'Day 1'")
+            XCTFail("A4: the payday grid did not offer 'Day 1'")
         }
         assertPaydayShows("Day 1", "A4 unsaved pick")
         // The payday's own note, not the Save bar's "…when you press Save." line.
@@ -109,31 +109,22 @@ final class Release1320ScreenChecksTests: PPUITestCase {
 
     // MARK: Owner bug 23 Nov — PAYE payday "reverts to Not set"; More → Settings stays on Payment runs
 
-    /// Picks `day` from the PAYE payday menu (Payment runs & timesheets is open).
+    /// Picks `label` ("Day 3") from the PAYE payday grid (Payment runs & timesheets is open).
     private func pickPayday(_ label: String) {
-        // Early days are always on screen in the 31-day menu (a swipe would close it).
-        let item = openPaydayMenu(offering: label)
-        XCTAssertTrue(item.exists, "the payday menu did not offer '\(label)'")
+        let item = paydayDayButton(label)
+        XCTAssertTrue(item.exists, "the payday grid did not offer '\(label)'")
         if item.exists { item.tap() }
     }
 
-    /// Scrolls to the PAYE payday picker, opens its menu and returns the item `label` (check `exists`). Payment
-    /// runs is a long page (1.78 added the line manager reminder above the payday), so the scroll gets 30 s; the
-    /// picker must be clear of the tab bar and the sticky Save bar (`isFullyOnScreen`), or the tap lands on the
-    /// bar and no menu opens (A04 on #285). A tap that still opens no menu is retried once, recorded as a retry.
-    private func openPaydayMenu(offering label: String) -> XCUIElement {
-        let item = app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
-        let picker = element("payePayday.picker")
-        for attempt in 1...2 {
-            scrollTo("payePayday.picker", timeout: 30)
-            guard picker.exists else { break }
-            waitUntilSettled(picker)
-            if attempt > 1 {
-                recordRetry("Retry tap 2 of 2 on 'payePayday.picker': the first tap opened no menu offering '\(label)'")
-            }
-            picker.tap()
-            if item.waitForExistence(timeout: 3) { return item }
-        }
+    /// Owner bug 24 Nov: the PAYE payday is an inline grid of 31 day buttons (`payePayday.day.N`, labelled "Day N"),
+    /// as on web — no menu to open, so no tap can land on the sticky Save bar and close it. Scrolls the day button
+    /// itself clear of the tab bar and the Save bar (`scrollTo` checks `isFullyOnScreen`) and returns it.
+    private func paydayDayButton(_ label: String) -> XCUIElement {
+        let number = label.replacingOccurrences(of: "Day ", with: "")
+        let id = "payePayday.day.\(number)"
+        scrollTo(id, timeout: 30)
+        let item = element(id)
+        if item.exists { waitUntilSettled(item) }
         return item
     }
 
@@ -152,8 +143,8 @@ final class Release1320ScreenChecksTests: PPUITestCase {
         pickPayday("Day 3")
         assertPaydayShows("Day 3", "A4b banner path")
         shot("A4b payday picked from the banner path")
-        // A pick can be dropped before saving.
-        element("payePayday.picker").tap()
+        // A pick can be dropped before saving (a button under the grid, no menu).
+        scrollTo("payePayday.dropPick", timeout: 10)
         let drop = element("payePayday.dropPick")
         XCTAssertTrue(drop.waitForExistence(timeout: 3), "A4b: no way to drop the pick")
         if drop.exists { drop.tap() }

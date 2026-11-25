@@ -327,6 +327,23 @@ extension CanonicalBusinessEngine {
         (callJSON("healthSafetyDocumentIds", arguments: [jobId, isSmallWorks]) as? [Any])?.compactMap { $0 as? String }
     }
 
+    /// RULEBOOK 1.82.0 §13 `healthSafetyIssueJob`: the job an older toolbox notice (the talk's issue id) belongs to —
+    /// the first candidate one of whose health & safety documents holds an issue with that id. Only the issue ids are
+    /// passed (Firestore data is not JSON). Nil when none holds it or the script did not answer.
+    nonisolated static func healthSafetyIssueJob(issueId: String, candidates: [(jobId: String, collection: String, documents: [[String: Any]?])]) -> (jobId: String, collection: String)? {
+        let rows: [[String: Any]] = candidates.map { candidate in
+            let documents: [Any] = candidate.documents.map { data -> Any in
+                guard let data else { return NSNull() }
+                let issues = (data["issues"] as? [[String: Any]] ?? []).map { ["id": ($0["id"] as? String) ?? ""] }
+                return ["issues": issues]
+            }
+            return ["jobId": candidate.jobId, "collection": candidate.collection, "documents": documents]
+        }
+        guard let row = callJSON("healthSafetyIssueJob", arguments: [["issueId": issueId, "candidates": rows]]) as? [String: Any],
+              let jobId = row["jobId"] as? String, let collection = row["collection"] as? String else { return nil }
+        return (jobId, collection)
+    }
+
     /// `healthSafetySignatureKey(issueId, userId)`: `{issue}__{user}`, lower case.
     nonisolated static func healthSafetySignatureKey(issueId: String, userId: String) -> String? {
         callJSON("healthSafetySignatureKey", arguments: [issueId, userId]) as? String

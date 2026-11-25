@@ -306,7 +306,7 @@ struct VariationTrackerView: View {
                 }
             }
         } catch {
-            print("⚠️ [Variations] tracker save failed: \(error.localizedDescription)")
+            logAndReportError("⚠️ [Variations] tracker save failed: \(error.localizedDescription)")
             message = Self.failureMessage(error)
         }
     }

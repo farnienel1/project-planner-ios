@@ -439,6 +439,13 @@ class FirebaseBackend: ObservableObject {
         }
     }
 
+    /// Attaches the open organisation's live listener again when it is not attached (it failed, or its retries ran
+    /// out). An attached listener is kept, never doubled. Used by screens that must not stand on a stub copy.
+    func ensureOrganizationDocumentListener() {
+        guard isAuthenticated, let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return }
+        startOrganizationDocumentListener(organizationId: orgId)
+    }
+
     private func startOrganizationDocumentListener(organizationId: String) {
         let orgId = normalizedOrganizationId(organizationId)
         guard !orgId.isEmpty else { return }
@@ -567,6 +574,7 @@ class FirebaseBackend: ObservableObject {
         org.defaultLongitude = parsed.defaultLongitude
         org.companyLogoURL = parsed.companyLogoURL
         org.documentAbbreviation = parsed.documentAbbreviation
+        org.companyDetailsLoaded = true
         if let creator = parsed.creatorUserId, !creator.isEmpty {
             org.creatorUserId = creator
         }
@@ -575,6 +583,7 @@ class FirebaseBackend: ObservableObject {
         org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
         org.payrollPolicyStateJSON = parsed.payrollPolicyStateJSON
         org.payePaydayJSON = parsed.payePaydayJSON
+        org.onboardingDocumentJSON = parsed.onboardingDocumentJSON
         guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -1442,13 +1451,18 @@ class FirebaseBackend: ObservableObject {
             return
         }
         let cachedBilling = cachedBillingJSON(matching: trimmed)
-        currentOrganization = Organization(
+        var stub = Organization(
             id: Manager.stableId(forFirestoreDocumentId: trimmed),
             firestoreDocumentId: trimmed,
             name: cachedOrganizationName(matching: trimmed) ?? "",
             billingJSON: cachedBilling,
             billingResolved: cachedBilling != nil
         )
+        // The live organisation listener fills every field; until then the saved company details are shown.
+        if let details = Self.cachedCompanyDetailsDocument(matching: trimmed) {
+            stub.applyCompanyDetailsCache(details)
+        }
+        currentOrganization = stub
     }
 
     /// Company last written on `users/{uid}.organizationId`. Web and iOS can sit in different companies, so this is not the phone's session.
@@ -1475,7 +1489,7 @@ class FirebaseBackend: ObservableObject {
                 settings.currencyCode = currencyCode
             }
             let cachedBilling = cachedBillingJSON(matching: organizationId)
-            return Organization(
+            var organization = Organization(
                 id: uuid,
                 firestoreDocumentId: organizationId,
                 name: organizationName,
@@ -1483,8 +1497,35 @@ class FirebaseBackend: ObservableObject {
                 billingJSON: cachedBilling,
                 billingResolved: cachedBilling != nil
             )
+            // Every company-details field from the last document read (abbreviation, logo, office address,
+            // country, map pin), so an offline or slow start never shows blanks or derived initials.
+            if let details = Self.cachedCompanyDetailsDocument(matching: organizationId) {
+                organization.applyCompanyDetailsCache(details)
+            }
+            return organization
         }
         return nil
+    }
+
+    private static func companyDetailsDefaultsKey(_ organizationId: String) -> String {
+        "org_company_details_\(organizationId)"
+    }
+
+    /// The saved company-details fields for this organisation (`Organization.companyDetailsCacheDocument`).
+    static func cachedCompanyDetailsDocument(matching organizationId: String) -> [String: Any]? {
+        let trimmed = organizationId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let data = UserDefaults.standard.data(forKey: companyDetailsDefaultsKey(trimmed)),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object
+    }
+
+    /// Saves the company-details fields only when they were read (never a stub's blanks over a good copy).
+    private static func cacheCompanyDetails(_ organization: Organization) {
+        guard let document = organization.companyDetailsCacheDocument,
+              JSONSerialization.isValidJSONObject(document),
+              let data = try? JSONSerialization.data(withJSONObject: document) else { return }
+        UserDefaults.standard.set(data, forKey: companyDetailsDefaultsKey(organization.firestoreDocumentId))
     }
 
     private static func bankHolidayRegionDefaultsKey(_ organizationId: String) -> String {
@@ -1522,6 +1563,7 @@ class FirebaseBackend: ObservableObject {
             UserDefaults.standard.set(currencyCode, forKey: Self.currencyCodeDefaultsKey(organization.firestoreDocumentId))
         }
         cacheBillingJSON(organization)
+        Self.cacheCompanyDetails(organization)
         print("🔥🔥🔥 DEBUG: ✅ Stored organization locally: \(organization.name)")
     }
 
@@ -1625,6 +1667,8 @@ class FirebaseBackend: ObservableObject {
         organization.payrollPolicyStateJSON = PayrollTimePolicyCatalog.payrollStateJSON(fromOrganizationData: data)
         // RULEBOOK 1.29.0 §4.5: the PAYE payday and its dated history, as stored (read by CanonicalBusinessEngine.payePayrunPeriod).
         organization.payePaydayJSON = OvertimeOrganizationDocument.payePaydayJSON(fromOrganizationData: data)
+        // RULEBOOK 1.85.0 §32: the stored fields the Getting started checklist reads.
+        organization.onboardingDocumentJSON = OnboardingOrganizationDocument.json(fromOrganizationData: data)
         let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
         let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
         guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
@@ -3158,7 +3202,7 @@ class FirebaseBackend: ObservableObject {
                 return downloadURL.absoluteString
             } catch {
                 lastError = error
-                print("⚠️ [\(logTag)] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
+                logAndReportError("⚠️ [\(logTag)] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
             }
         }
         // RULEBOOK 1.25.0 §24 (`CanonicalBusinessEngine.fileDeletePermission`): the uploader's own clean-up inside the
@@ -3173,7 +3217,7 @@ class FirebaseBackend: ObservableObject {
             do {
                 try await storageRef.delete()
             } catch {
-                print("⚠️ [\(logTag)] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [\(logTag)] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
             }
         } else {
             print("⚠️ [\(logTag)] Unlinked upload kept (\(cleanup.reason)): \(path)")
@@ -3313,7 +3357,7 @@ class FirebaseBackend: ObservableObject {
             do {
                 try await storage.reference(forURL: url).delete()
             } catch {
-                print("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
+                logAndReportError("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
             }
         }
     }
@@ -6260,7 +6304,7 @@ class FirebaseBackend: ObservableObject {
     ///   delete (a stale copy without the photo must not remove it; the photo upload path writes it).
     /// - A document the server confirms missing is created once with the full profile.
     /// RULEBOOK 1.81.0 §11: this organisation's `memberNames` entries (lower-case users ids), kept by `UserStore`
-    /// from its live listener, so a home-company edit removes an entry only when one exists.
+    /// from its live listener. (1.82.0: an edit never removes an entry; kept for diagnostics.)
     var memberNameEntryIds: Set<String> = []
 
     /// One name edit routed by `memberNameEditTarget` (RULEBOOK 1.81.0 §11 "Names per organisation"): the names the
@@ -6275,10 +6319,11 @@ class FirebaseBackend: ObservableObject {
         var target: String
     }
 
-    /// The plan for one name edit. Outside the person's home organisation (the one their users document names) the
-    /// name is this company's own entry (`memberNameWriteFields`) and the users document keeps its name; in the home
-    /// organisation the users document takes the edit (as before) and this company's entry, if one exists, is removed.
-    /// Without `previous` (a profile being created) the users document takes the name as before.
+    /// The plan for one name edit (RULEBOOK 1.82.0 §11 `memberNameEditPlan`, owner 24 Nov: a name belongs to each
+    /// organisation separately). The open organisation's entry is always written (`memberNameWriteFields`), so no
+    /// other company ever reads this edit; only in the person's home organisation (the one their users document names)
+    /// does the users document take the name as well. An entry is never removed by an edit. Without `previous` (a
+    /// profile being created) the users document takes the name as before.
     func nameEditPlan(
         subjectUserId: String,
         firstName: String,
@@ -6290,33 +6335,46 @@ class FirebaseBackend: ObservableObject {
         let trimmedSurname = surname.trimmingCharacters(in: .whitespacesAndNewlines)
         let asBefore = NameEditPlan(accountFirstName: trimmedFirst, accountSurname: trimmedSurname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "account")
         let organizationId = currentOrganization?.firestoreDocumentId ?? ""
-        guard let previous, !organizationId.isEmpty,
-              let target = CanonicalBusinessEngine.memberNameEditTarget(organizationId: organizationId, homeOrganizationId: homeOrganizationId)
-        else { return asBefore }
+        guard let previous else { return asBefore }
         let changed = previous.firstName != trimmedFirst || previous.surname != trimmedSurname
-        let ref = db.collection("organizations").document(organizationId)
+        let account = MemberNameOverlay.accountName(previous)
+        let keepAccount = NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: "organization")
+        // Review of #442 (fail closed): a name belongs to an organisation. With none open, or when the script does not
+        // answer, the users document keeps its name and a changed name is refused — never written to the account alone.
+        guard !organizationId.isEmpty else {
+            if changed { throw NSError(domain: "MemberNames", code: 3, userInfo: [NSLocalizedDescriptionKey: "Open the company first, then change the name there."]) }
+            return keepAccount
+        }
+        guard let edit = CanonicalBusinessEngine.memberNameEditPlan(organizationId: organizationId, homeOrganizationId: homeOrganizationId) else {
+            if changed { throw CanonicalWriteUnavailableError(function: "memberNameEditPlan") }
+            return keepAccount
+        }
+        var plan = edit.writeAccount ? asBefore : keepAccount
+        guard changed, edit.writeEntry else { return plan }
+        if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
+            throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
+        }
+        guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
+            throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
+        }
+        fields["updatedAt"] = FieldValue.serverTimestamp()
+        plan.entryRef = db.collection("organizations").document(organizationId)
             .collection(CanonicalBusinessEngine.memberNamesCollection).document(subjectUserId)
-        if target == "organization" {
-            let account = MemberNameOverlay.accountName(previous)
-            var plan = NameEditPlan(accountFirstName: account.firstName, accountSurname: account.surname, entryRef: nil, entryFields: nil, deleteEntry: false, target: target)
-            guard changed else { return plan }
-            if let message = CanonicalBusinessEngine.memberNameValidationError(firstName: trimmedFirst, surname: trimmedSurname) {
-                throw NSError(domain: "MemberNames", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
-            }
-            guard var fields = CanonicalBusinessEngine.memberNameWriteFields(firstName: trimmedFirst, surname: trimmedSurname, writerUserId: auth.currentUser?.uid) else {
-                throw CanonicalWriteUnavailableError(function: "memberNameWriteFields")
-            }
-            fields["updatedAt"] = FieldValue.serverTimestamp()
-            plan.entryRef = ref
-            plan.entryFields = fields
-            return plan
-        }
-        var plan = asBefore
-        if changed, memberNameEntryIds.contains(subjectUserId.lowercased()) {
-            plan.entryRef = ref
-            plan.deleteEntry = true
-        }
+        plan.entryFields = fields
         return plan
+    }
+
+    /// The home organisation a name edit is judged against (review of #442, fail closed): the one this device holds,
+    /// else the stored users document's (read now). Nil when unknown — `memberNameEditPlan` then writes this
+    /// organisation's entry only, never the account's name.
+    func homeOrganizationForNameEdit(userId: String, known: String?) async -> String? {
+        if let known, !known.trimmingCharacters(in: .whitespaces).isEmpty { return known }
+        if userId == auth.currentUser?.uid, let shared = sharedUserOrganizationId, !shared.isEmpty { return shared }
+        guard let snap = try? await db.collection("users").document(userId).getDocument(), snap.exists,
+              let data = snap.data() else { return nil }
+        if let text = data["organizationId"] as? String { return text }
+        if let ref = data["organizationId"] as? DocumentReference { return ref.documentID }
+        return nil
     }
 
     /// A refused `memberNames` write reads as the rulebook's message; any other error (offline, network) is kept.
@@ -6349,12 +6407,13 @@ class FirebaseBackend: ObservableObject {
         // RULEBOOK 1.81.0 §11: outside the home organisation the name goes to this company's entry; the users document
         // write below keeps the users document's own name.
         var user = user
+        let home: String? = previous == nil ? nil : await homeOrganizationForNameEdit(userId: user.id, known: user.storedOrganizationId)
         let namePlan = try nameEditPlan(
             subjectUserId: user.id,
             firstName: user.firstName,
             surname: user.surname,
             previous: previous,
-            homeOrganizationId: user.storedOrganizationId ?? (user.id == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+            homeOrganizationId: home
         )
         user.firstName = namePlan.accountFirstName
         user.surname = namePlan.accountSurname
@@ -6518,12 +6577,13 @@ class FirebaseBackend: ObservableObject {
         var plan: NameEditPlan? = nil
         var names = (firstName: firstName, surname: surname)
         if !nameAlreadyRouted {
+            let home: String? = previous == nil ? nil : await homeOrganizationForNameEdit(userId: userId, known: previous?.storedOrganizationId)
             let routed = try nameEditPlan(
                 subjectUserId: userId,
                 firstName: firstName,
                 surname: surname,
                 previous: previous,
-                homeOrganizationId: previous?.storedOrganizationId ?? (userId == auth.currentUser?.uid ? sharedUserOrganizationId : nil)
+                homeOrganizationId: home
             )
             plan = routed
             names = (routed.accountFirstName, routed.accountSurname)
@@ -6989,7 +7049,8 @@ class FirebaseBackend: ObservableObject {
         updateDayRate: Bool = true,
         writeLineManager: Bool = true,
         payBasis: String? = nil,
-        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = []
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite] = [],
+        memberLineManagerRecord: (organizationId: String, fields: [String: Any])? = nil
     ) async throws {
         var payload: [String: Any] = [:]
         if writeLineManager {
@@ -7018,7 +7079,12 @@ class FirebaseBackend: ObservableObject {
                 payload[key] = value
             }
         }
-        try await commitProfileWithPayHistory(userId: userId, payload: payload, historyRows: historyRows)
+        try await commitProfileWithPayHistory(
+            userId: userId,
+            payload: payload,
+            historyRows: historyRows,
+            memberLineManagerRecord: memberLineManagerRecord
+        )
     }
 
     /// Rate-only patch on `users/{uid}`: `payBasis` plus one amount (`exclusivePayFields`) and `WriteMetadata`.
@@ -7034,14 +7100,25 @@ class FirebaseBackend: ObservableObject {
 
     /// RULEBOOK 1.10.0 §8: the profile update and its `payRateChangeWrites` history rows in one batch, so a refused
     /// profile write leaves no history row (and a refused history row no profile change).
+    /// RULEBOOK 1.88.0 §8, §11: `memberLineManagerRecord` (this company's line manager for a member whose home is
+    /// another company, `memberLineManagerWriteFields`) is set whole on `organizations/{orgId}/memberLineManagers/{uid}`
+    /// in the SAME batch, with the server `updatedAt`, so the profile, its pay history and the record land together.
     private func commitProfileWithPayHistory(
         userId: String,
         payload: [String: Any],
-        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite]
+        historyRows: [CanonicalBusinessEngine.CanonicalPayRateHistoryWrite],
+        memberLineManagerRecord: (organizationId: String, fields: [String: Any])? = nil
     ) async throws {
         let uid = auth.currentUser?.uid
         let userRef = db.collection("users").document(userId)
         let batch = db.batch()
+        if let record = memberLineManagerRecord {
+            var fields = record.fields
+            fields["updatedAt"] = FieldValue.serverTimestamp()
+            let recordRef = db.collection("organizations").document(record.organizationId)
+                .collection(CanonicalBusinessEngine.memberLineManagersCollection).document(userId)
+            batch.setData(fields, forDocument: recordRef)
+        }
         // RULEBOOK 1.26.0 §8 `CanonicalBusinessEngine.sharedDocumentPayWrite`: pay stays off `users/{uid}` while
         // `privatePay` is on for the organisation (unchanged while it is off).
         let shared = CanonicalBusinessEngine.sharedDocumentPayWrite(payload, privatePay: SecuritySwitchContext.privatePay)
@@ -9523,7 +9600,7 @@ class FirebaseBackend: ObservableObject {
                 } catch {
                     failures += 1
                     firstError = firstError ?? error
-                    print("⚠️ [PayHistory] one rate history query refused or failed: \(error.localizedDescription)")
+                    logAndReportError("⚠️ [PayHistory] one rate history query refused or failed: \(error.localizedDescription)")
                 }
             }
             if !queries.isEmpty, failures == queries.count, let firstError { throw firstError }
@@ -10418,7 +10495,7 @@ extension FirebaseBackend {
                 do {
                     try await self.upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
                 } catch {
-                    print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+                    logAndReportError("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -10502,7 +10579,7 @@ extension FirebaseBackend {
         do {
             snapshot = try await materialsQuery.getDocuments(source: .server)
         } catch {
-            print("⚠️ [FirebaseBackend] Server materials read failed, using cache/default: \(error.localizedDescription)")
+            logAndReportError("⚠️ [FirebaseBackend] Server materials read failed, using cache/default: \(error.localizedDescription)")
             snapshot = try await materialsQuery.getDocuments()
         }
         
@@ -10553,7 +10630,7 @@ extension FirebaseBackend {
             .whereField("projectId", in: JobKeys.queryValues(for: projectId))
             .addSnapshotListener { snapshot, error in
                 if let error {
-                    print("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
+                    logAndReportError("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
                     return
                 }
 
@@ -10601,7 +10678,7 @@ extension FirebaseBackend {
             do {
                 try await docRef.updateData(["addedByUserId": uid])
             } catch {
-                print("⚠️ [FirebaseBackend] Legacy material owner backfill before delete failed: \(error.localizedDescription)")
+                logAndReportError("⚠️ [FirebaseBackend] Legacy material owner backfill before delete failed: \(error.localizedDescription)")
                 throw NSError(
                     domain: "FirebaseBackend",
                     code: 403,
@@ -11403,7 +11480,7 @@ extension FirebaseBackend {
         do {
             result = try await MaterialRequestEmailClient.send(request, organizationId: orgId, senderEmail: senderEmail)
         } catch {
-            print("❌ [materials/send] sendEmail failed: \(error.localizedDescription)")
+            logAndReportError("❌ [materials/send] sendEmail failed: \(error.localizedDescription)")
             throw error
         }
         print("✅ [materials/send] sendEmail sent \(result.sentCount) · ids \(result.messageIds) · cc \(result.cc)")
@@ -11411,7 +11488,7 @@ extension FirebaseBackend {
             print("✅ [materials/send] already sent earlier with this request id; not sent again")
         }
         if !result.failed.isEmpty {
-            print("❌ [materials/send] not sent to \(result.failed)")
+            logAndReportError("❌ [materials/send] not sent to \(result.failed)")
         }
         if result.cc.isEmpty {
             // The deployed function ignored `ccCaller` (app callers need the server change in web functions/email).
@@ -12241,6 +12318,52 @@ extension FirebaseBackend {
         let settings = db.collection("organizations").document(organizationId).collection("settings")
         let refs = ids.map { settings.document($0) }
         return refs.isEmpty ? [hsStateDocumentRef(organizationId: organizationId, project: project)] : refs
+    }
+
+    /// RULEBOOK 1.82.0 §13 (owner 24 Nov, item 4): the job an older toolbox notice belongs to. Rows written before 1.79
+    /// carry the talk's issue id, not the job id; this reads the health & safety documents of the jobs this phone holds
+    /// (the settings copies `healthSafetyDocumentIds` and the web nested copy — single-document reads every member may
+    /// make), ten jobs at a time with each batch's reads in parallel, and asks `healthSafetyIssueJob`. Nothing is written; nil when no job holds the issue.
+    func toolboxNoticeJob(issueId: String, jobs: [Project]) async -> Project? {
+        guard let organizationId = currentOrganization?.firestoreDocumentId, !organizationId.isEmpty else { return nil }
+        let candidates = Array(jobs.prefix(300))
+        var start = 0
+        while start < candidates.count {
+            let batch = Array(candidates[start..<min(start + 10, candidates.count)])
+            start += 10
+            // Review of #442 (item 9): the batch's reads run at the same time (ten jobs, a few documents each), never one
+            // after another; at most 300 jobs are looked at.
+            var refsByJob: [[DocumentReference]] = []
+            for project in batch {
+                var refs = hsStateDocumentRefs(organizationId: organizationId, project: project)
+                refs.append(db.collection("organizations").document(organizationId)
+                    .collection(hsCollectionName(for: project)).document(project.documentId)
+                    .collection("healthSafety").document("data"))
+                refsByJob.append(refs)
+            }
+            var documentsByJob: [[[String: Any]?]] = refsByJob.map { Array(repeating: nil, count: $0.count) }
+            await withTaskGroup(of: (Int, Int, [String: Any]?).self) { group in
+                for (jobIndex, refs) in refsByJob.enumerated() {
+                    for (refIndex, ref) in refs.enumerated() {
+                        group.addTask {
+                            let snap = try? await ref.getDocument()
+                            return (jobIndex, refIndex, snap?.data())
+                        }
+                    }
+                }
+                for await (jobIndex, refIndex, data) in group {
+                    documentsByJob[jobIndex][refIndex] = data
+                }
+            }
+            var rows: [(jobId: String, collection: String, documents: [[String: Any]?])] = []
+            for (jobIndex, project) in batch.enumerated() {
+                rows.append((project.documentId, hsCollectionName(for: project), documentsByJob[jobIndex]))
+            }
+            if let found = CanonicalBusinessEngine.healthSafetyIssueJob(issueId: issueId, candidates: rows) {
+                return batch.first { $0.documentId == found.jobId && hsCollectionName(for: $0) == found.collection }
+            }
+        }
+        return nil
     }
 
     // Row maps a save sends. Nil optionals are left out, so `healthSafetyDocumentWriteFields` keeps the stored value.

@@ -278,47 +278,53 @@ struct OrganisationInvoicingSettingsView: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-            // Owner bug 23 Nov: the day is picked from a Menu of Buttons that set `paydayPick` directly (the pattern
-            // of every other day menu on this screen), never a menu-style Picker over a hand-made Binding whose
-            // getter captured this render's value; the label reads the live pick (`paydayPick ?? saved`).
+            // Owner bug 24 Nov ("PAYE payday still does not set", iPhone): the day is picked from an inline grid of
+            // the 31 days, as on web (`PayePaydayCard`), never a 33-item menu. On a small phone that menu opened
+            // just above the sticky Save bar, had to be scrolled, and a tap could miss it or close it without
+            // choosing (the iPhone 16e screen checks A04 / A04b failed that way: no menu, or the drop tap ignored).
+            // Each day sets `paydayPick` directly; the line above reads the live pick (`paydayPick ?? saved`).
             HStack {
                 Text(CanonicalBusinessEngine.overtimeText("PAYE_PAYDAY_CONTROL_LABEL", fallback: "Set PAYE payday"))
                     .font(.body)
                 Spacer()
-                Menu {
-                    // Drops the unsaved pick: back to the saved payday, or to Not set when none is saved.
-                    if paydayPick != nil {
-                        Button {
-                            paydayPick = nil
-                        } label: {
-                            Text(saved.map { "Keep Day \($0)" } ?? "Not set")
-                        }
-                        .accessibilityIdentifier("payePayday.dropPick")
-                        Divider()
+                Text(shown.map { "Day \($0)" } ?? "Not set")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(PPColor.brand)
+                    .accessibilityIdentifier("payePayday.picker")
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 4) {
+                ForEach(1...31, id: \.self) { day in
+                    let selected = shown == day
+                    Button {
+                        pickPayePayday(day, saved: saved)
+                    } label: {
+                        Text("\(day)")
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .background(selected ? PPColor.brand : PPColor.well)
+                            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     }
-                    ForEach(1...31, id: \.self) { day in
-                        Button {
-                            pickPayePayday(day, saved: saved)
-                        } label: {
-                            if shown == day {
-                                Label("Day \(day)", systemImage: "checkmark")
-                            } else {
-                                Text("Day \(day)")
-                            }
-                        }
-                        .accessibilityIdentifier("payePayday.day.\(day)")
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Text(shown.map { "Day \($0)" } ?? "Not set")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(PPColor.brand)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(PPColor.brand)
-                    }
+                    .buttonStyle(.plain)
+                    .disabled(firebaseBackend.currentOrganization == nil)
+                    .accessibilityLabel("Day \(day)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityIdentifier("payePayday.day.\(day)")
                 }
-                .accessibilityIdentifier("payePayday.picker")
+            }
+            .accessibilityIdentifier("payePayday.grid")
+            if paydayPick != nil {
+                // Drops the unsaved pick: back to the saved payday, or to Not set when none is saved.
+                Button {
+                    paydayPick = nil
+                } label: {
+                    Text(saved.map { "Keep Day \($0)" } ?? "Clear — leave Not set")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PPColor.brand)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("payePayday.dropPick")
             }
             if let shown, shown >= 29 {
                 Text("In shorter months the payday is the last day of the month.")

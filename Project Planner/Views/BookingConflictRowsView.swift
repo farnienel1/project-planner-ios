@@ -181,7 +181,8 @@ struct BookingConflictRowView: View {
     let row: BookingConflictItem
     let decision: BookingConflictDecision?
     let onDecide: (BookingConflictDecision) -> Void
-    /// RULEBOOK 1.41.0 §2: Replace is online only (`booking.replace`); disabled offline with the standard message.
+    /// RULEBOOK §2: whether Replace may be used now (`booking.replace`; 1.86.0 allowed offline — queued). Read from the
+    /// packed table, so an older script still disables it offline with the standard message.
     var isOnline: Bool = SmartCacheService.lastKnownOnline
 
     private var isLeave: Bool { row.kind == .annualLeave }
@@ -200,7 +201,7 @@ struct BookingConflictRowView: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(decision == .drop ? ProjectWorksRevampColors.muted : tone)
                 if row.kind == .doubleBooking, row.replace != nil, !replaceEnabled {
-                    // RULEBOOK 1.41.0 §2: Replace is online only; ✓ and ✕ still work offline.
+                    // RULEBOOK §2: shown only while the packed table says Replace is online only (before 1.86.0).
                     Label(OfflinePolicy.onlineOnlyMessage, systemImage: "wifi.slash")
                         .font(.caption2)
                         .foregroundStyle(.secondary)

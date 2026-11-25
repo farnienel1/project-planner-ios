@@ -302,7 +302,7 @@ struct UserProfileSummaryView: View {
         if !person.isGhost {
             let mobile = person.mobileNumber?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             rows.append(DetailRow(icon: "phone.fill", label: "Mobile", value: mobile.isEmpty ? "—" : mobile))
-            rows.append(DetailRow(icon: "clock.fill", label: "Last active", value: lastActiveText(person.lastSeenAt)))
+            rows.append(DetailRow(icon: "clock.fill", label: "Last active", value: lastActiveText(userStore.newestLastSeenAt(for: person))))
         }
         rows.append(DetailRow(icon: "hammer.fill", label: "Trade", value: person.displayTradeType))
         if payVisible(person) {
@@ -323,7 +323,7 @@ struct UserProfileSummaryView: View {
         rows.append(DetailRow(
             icon: "person.2.fill",
             label: "Line manager",
-            value: LineManagerRulebook.summary(for: person, roster: userStore.organizationUsers)
+            value: LineManagerRulebook.summary(for: person, roster: userStore.unfoldedOrganizationUsers)
         ))
         return rows
     }
@@ -387,9 +387,16 @@ struct UserProfileSummaryView: View {
 
     private func lastActiveText(_ date: Date?) -> String {
         guard let date else { return "—" }
+        return LastActiveText.format(date)
+    }
+}
+
+/// "24 Nov 2026 at 14:05" in the organisation's time zone (RULEBOOK §1), never the phone's.
+enum LastActiveText {
+    static func format(_ date: Date, timeZone: TimeZone = OrganizationRulebookContext.timeZone) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = OrganizationRulebookContext.timeZone
+        formatter.timeZone = timeZone
         formatter.dateFormat = "d MMM yyyy 'at' HH:mm"
         return formatter.string(from: date)
     }

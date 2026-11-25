@@ -70,7 +70,7 @@ extension CanonicalBusinessEngine {
     nonisolated static var timesheetReviewEditBookingNote: String {
         reviewBookingText(
             "TIMESHEET_REVIEW_EDIT_BOOKING_NOTE",
-            fallback: "Saving changes the booking itself, so scheduling, Daily Overview and the weekly report show the new hours. You can keep reviewing; the person sees the change when you counter-sign."
+            fallback: "Saving changes the booking itself, so scheduling, daily Overview and the weekly report show the new hours. You can keep reviewing; the person sees the change when you counter-sign."
         )
     }
 
