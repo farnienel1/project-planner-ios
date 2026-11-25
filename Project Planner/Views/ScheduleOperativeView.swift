@@ -2011,10 +2011,10 @@ struct ScheduleOperativeView: View {
                 case .nothingToSave:
                     saveOutcomeAlert = ScheduleBookingSaveAlert(outcome: outcome, message: ScheduleBookingSaveOutcome.nothingToSaveMessage)
                 }
-                // Owner decision 25 Nov: Scheduling goes to the week of the first booked day.
-                if outcome.clearsSelection { onBooked?(bookedDays) }
                 // Feedback guide §4: one sound for the whole Confirm, from this save's own outcome.
                 Feedback.play(outcome, success: .bookingSaved)
+                // Owner decision 25 Nov: Scheduling goes to the week of the first booked day.
+                if outcome.clearsSelection { onBooked?(bookedDays) }
                 if outcome.clearsSelection {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()

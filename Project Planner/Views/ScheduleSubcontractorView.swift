@@ -653,13 +653,13 @@ struct ScheduleSubcontractorView: View {
                 let result = await subcontractorStore.saveBooking(booking)
                 results.append(result)
             }
-            let savedResults = results
             let bookedDays = Array(selectedDates)
+            let savedResults = results
             await MainActor.run {
                 isSaving = false
-                if savedResults.contains(where: { $0.keepsBooking }) { onBooked?(bookedDays) }
                 dismiss()
                 Feedback.play(results: savedResults, success: .bookingSaved)
+                if savedResults.contains(where: { $0.keepsBooking }) { onBooked?(bookedDays) }
             }
         }
     }
