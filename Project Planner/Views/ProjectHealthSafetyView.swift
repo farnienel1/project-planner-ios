@@ -172,21 +172,30 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         await persist(firebaseBackend: firebaseBackend, userStore: userStore)
     }
 
+    /// Saves the signature first and shows it as signed only once the save succeeded, so a failed save never leaves a
+    /// signature on screen that is not stored. The signer's own row is found under every id they go by, without case
+    /// (`myIdKeys`, rulebook §1 / `personIdSet`). Returns whether it was saved.
+    @discardableResult
     func signTalk(
         issueId: String,
         userId: String,
+        myIdKeys: Set<String> = [],
         readConfirmed: Bool,
         signatureImageBase64: String,
         firebaseBackend: FirebaseBackend,
         userStore: UserStore
-    ) async {
-        if let idx = data.signatures.firstIndex(where: { $0.issueId == issueId && $0.userId == userId }) {
-            data.signatures[idx].readConfirmed = readConfirmed
-            data.signatures[idx].status = .signed
-            data.signatures[idx].signatureImageBase64 = signatureImageBase64
-            data.signatures[idx].signedAt = Date()
+    ) async -> Bool {
+        let keys: Set<String> = myIdKeys.isEmpty ? Set([Self.idKey(userId)]) : myIdKeys
+        var signatures = data.signatures
+        let now = Date()
+        let idx = signatures.firstIndex(where: { $0.issueId == issueId && keys.contains(Self.idKey($0.userId)) })
+        if let idx {
+            signatures[idx].readConfirmed = readConfirmed
+            signatures[idx].status = .signed
+            signatures[idx].signatureImageBase64 = signatureImageBase64
+            signatures[idx].signedAt = now
         } else {
-            data.signatures.insert(
+            signatures.insert(
                 HSToolboxSignature(
                     id: UUID().uuidString,
                     issueId: issueId,
@@ -194,27 +203,34 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                     status: .signed,
                     readConfirmed: readConfirmed,
                     signatureImageBase64: signatureImageBase64,
-                    signedAt: Date(),
+                    signedAt: now,
                     reminderSentAt: nil
                 ),
                 at: 0
             )
         }
-        recalculateIssueStatuses()
+        let signature = signatures[idx ?? 0]
         // RULEBOOK 1.8.0 §1: the signature is its own per-signer write (`healthSafetySignatureWriteFields`), so a
         // colleague signing at the same moment is never overwritten; only the issue statuses are saved as a list.
-        guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore),
-              let signature = data.signatures.first(where: { $0.issueId == issueId && $0.userId == userId }) else {
-            errorMessage = "Cannot save without organization."
-            return
+        guard let orgId = organizationId(firebaseBackend: firebaseBackend, userStore: userStore) else {
+            errorMessage = "Your signature was not saved: the organisation is not available. Try again."
+            return false
         }
         do {
             try await firebaseBackend.saveHealthSafetySignature(signature, project: project, organizationId: orgId)
         } catch {
-            errorMessage = error.localizedDescription
-            return
+            errorMessage = "Your signature was not saved. \(error.localizedDescription) Try again."
+            return false
         }
+        data.signatures = signatures
+        recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore, fields: ["issues"])
+        return true
+    }
+
+    /// An id compared without case or spaces (rulebook §1 `normalizeDocumentId`).
+    static func idKey(_ id: String) -> String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     func sendReminder(issueId: String, firebaseBackend: FirebaseBackend, userStore: UserStore) async -> Int {
@@ -597,6 +613,17 @@ struct ProjectHealthSafetyView: View {
     @EnvironmentObject var notificationService: NotificationService
     @StateObject private var vm: ProjectHealthSafetyViewModel
 
+    /// Every id of the signed-in person, lower case (rulebook `personIdSet`: own id, former and same-email ids, and
+    /// the sign-in uid). Signature rows are matched against these without case, so a talk signed on web, or under an
+    /// older id, still shows as this person's signature.
+    private var myIdKeys: Set<String> {
+        guard let me = userStore.currentUser else { return [] }
+        var ids = RulebookPeople.ownerIds(for: me, users: userStore.organizationUsers)
+        if let uid = firebaseBackend.currentUser?.uid, !uid.isEmpty { ids.append(uid) }
+        return Set(ids.map(ProjectHealthSafetyViewModel.idKey).filter { !$0.isEmpty })
+    }
+
+
     @State private var managerTab: HSManagerTab = .hub
     @State private var operativeTab: HSOperativeTab = .toolbox
     @State private var selectedTradeFilter: String = "All"
@@ -737,10 +764,10 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var availableOperativeWeeks: [Date] {
-        let myId = userStore.currentUser?.id ?? ""
+        let mine = myIdKeys
         let calendar = OrganizationRulebookContext.calendar
         let weeks = Set(vm.visibleIssues().compactMap { issue -> Date? in
-            guard vm.signatures(for: issue.id).contains(where: { $0.userId == myId }) else { return nil }
+            guard vm.signatures(for: issue.id).contains(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) }) else { return nil }
             return calendar.dateInterval(of: .weekOfYear, for: issue.weekCommencing)?.start
         })
         return weeks.sorted(by: >)
@@ -957,6 +984,7 @@ struct ProjectHealthSafetyView: View {
                     await vm.signTalk(
                         issueId: issue.id,
                         userId: userStore.currentUser?.id ?? "",
+                        myIdKeys: myIdKeys,
                         readConfirmed: true,
                         signatureImageBase64: base64Signature,
                         firebaseBackend: firebaseBackend,
@@ -966,11 +994,12 @@ struct ProjectHealthSafetyView: View {
             }
         }
         .sheet(item: $selectedIssueToView) { issue in
+            let mine = myIdKeys
             HSSignedTalkView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
                 rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId }),
-                signature: vm.signatures(for: issue.id).first(where: { $0.userId == (userStore.currentUser?.id ?? "") })
+                signature: vm.signatures(for: issue.id).first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
             )
         }
         .sheet(item: $selectedTalkForPreview) { talk in
@@ -1109,8 +1138,8 @@ struct ProjectHealthSafetyView: View {
     }
 
     private var operativeSegments: [HSSegmented<HSOperativeTab>.Item] {
-        let myId = userStore.currentUser?.id ?? ""
-        let pendingMine = vm.data.signatures.filter { $0.userId == myId && $0.status == .pending }.count
+        let mine = myIdKeys
+        let pendingMine = vm.data.signatures.filter { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) && $0.status == .pending }.count
         return [
             .init(id: .toolbox, title: "Toolbox", icon: "checkmark.seal.fill", count: pendingMine),
             .init(id: .rams, title: "RAMS", icon: "doc.richtext.fill", count: vm.data.ramsDocuments.count),
@@ -1177,8 +1206,9 @@ struct ProjectHealthSafetyView: View {
     private func myAssignedIssueEntries() -> [(issue: HSToolboxIssue, signature: HSToolboxSignature)] {
         let myUserId = userStore.currentUser?.id ?? ""
         guard !myUserId.isEmpty else { return [] }
+        let mine = myIdKeys
         return vm.visibleIssues().compactMap { issue in
-            guard let signature = vm.signatures(for: issue.id).first(where: { $0.userId == myUserId }) else { return nil }
+            guard let signature = vm.signatures(for: issue.id).first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) }) else { return nil }
             return (issue, signature)
         }
         .sorted { $0.issue.issuedAt > $1.issue.issuedAt }
@@ -1673,8 +1703,8 @@ struct ProjectHealthSafetyView: View {
 
     private var operativeContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            let myId = userStore.currentUser?.id ?? ""
-            let pendingCount = vm.data.signatures.filter { $0.userId == myId && $0.status == .pending }.count
+            let mine = myIdKeys
+            let pendingCount = vm.data.signatures.filter { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) && $0.status == .pending }.count
             if pendingCount > 0 {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.circle.fill")
@@ -1714,9 +1744,8 @@ struct ProjectHealthSafetyView: View {
                 .padding(.top, 12)
             }
 
-            let myId = userStore.currentUser?.id ?? ""
             let filteredIssues = vm.visibleIssues().filter { issue in
-                let assigned = vm.signatures(for: issue.id).contains(where: { $0.userId == myId })
+                let assigned = vm.signatures(for: issue.id).contains(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
                 guard assigned else { return false }
                 guard let week = operativeWeekFilter else { return true }
                 let issueWeek = OrganizationRulebookContext.calendar.dateInterval(of: .weekOfYear, for: issue.weekCommencing)?.start
@@ -1734,7 +1763,7 @@ struct ProjectHealthSafetyView: View {
                 VStack(spacing: HSMetric.rowGap) {
                     ForEach(filteredIssues, id: \.id) { issue in
                         let talk = vm.data.talks.first(where: { $0.id == issue.talkId })
-                        let mySignature = vm.signatures(for: issue.id).first(where: { $0.userId == myId })
+                        let mySignature = vm.signatures(for: issue.id).first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
                         let isPending = mySignature?.status != .signed
                         let overdue = isPending && isIssueOverdue(issue)
                         HSTalkCard(
@@ -3712,7 +3741,10 @@ private struct HSSignaturePad: View {
             imageData = nil
             return
         }
-        imageData = canvas.drawing.image(from: bounds, scale: UIScreen.main.scale).pngData()
+        // One pixel per point: the image is stored twice in the job's one health & safety document (the `signatures`
+        // array and `signatureRecords`), and Firestore refuses a document over 1 MiB, so a 3× image could fill it
+        // after a handful of signatures, and every later signature then failed to save.
+        imageData = canvas.drawing.image(from: bounds, scale: 1).pngData()
     }
 }
 
