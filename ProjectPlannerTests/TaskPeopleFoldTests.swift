@@ -242,7 +242,28 @@ final class TaskPeopleFoldTests: XCTestCase {
         XCTAssertFalse(text.contains("struct OperativeMultiSelectView"))
         XCTAssertFalse(text.contains("struct ManagerMultiSelectView"))
         XCTAssertTrue(text.contains("TaskPeopleRulebook.pickerPeople("))
-        XCTAssertTrue(text.contains("TaskPeopleRulebook.filterOperatives("))
         XCTAssertTrue(text.contains("TaskPeopleRulebook.assigneeNames("))
+        // RULEBOOK 1.91.0 §34: the job Tasks tab's "Assigned to" filter is the shared builder, which folds people by
+        // `taskPersonKeys` (it replaced the 1.89 per-row operative / manager filter that used `filterOperatives`).
+        XCTAssertTrue(text.contains("TaskAssigneeFilterChoices.build("))
+        XCTAssertFalse(text.contains("struct ProjectTaskFilterSheet"))
+        let filters = try String(contentsOf: root.appendingPathComponent("Project Planner/Views/TaskFilterViews.swift"), encoding: .utf8)
+        XCTAssertTrue(filters.contains("TaskPeopleRulebook.assigneeNames("))
+        XCTAssertTrue(filters.contains("keys[stored.lowercased()]"))
+    }
+
+    /// The "Assigned to" filter lists a converted ghost and its linked duplicate row as one person (the fold).
+    func testTheAssignedToFilterListsEachPersonOnce() {
+        let all = [ghostRow, ghostDuplicate, patRow]
+        let index = index(operatives: all, users: ghostRoster)
+        let keys = TaskViewingRulebook.personKeys(managers: [], operatives: all, users: ghostRoster)
+        XCTAssertFalse(keys.isEmpty, "the script answered")
+        let task = ProjectTask(
+            projectId: UUID(), title: "Both", createdBy: "TEST",
+            assignedOperativeIds: [ghostRow.id, ghostDuplicate.id, patRow.id]
+        )
+        let choices = TaskAssigneeFilterChoices.build([task], keys: keys, index: index)
+        XCTAssertEqual(choices.count, 2)
+        XCTAssertTrue(choices.allSatisfy { $0.count == 1 })
     }
 }
