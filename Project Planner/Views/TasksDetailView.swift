@@ -294,64 +294,21 @@ struct TasksDetailView: View {
 
     /// The people a task can be filtered by (one per person, from the assignee names).
     private func buildAssigneeChoices(_ tasks: [ProjectTask], keys: [String: String]) -> [TaskFilterChoice] {
-        let index = TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore)
-        var seen: [String: TaskFilterChoice] = [:]
-        func add(_ kind: TaskPersonKind, _ id: UUID, stored: String, counted: inout Set<String>) {
-            let key = keys[stored.lowercased()] ?? "id:\(stored.lowercased())"
-            guard counted.insert(key).inserted else { return }
-            let name = TaskPeopleRulebook.assigneeNames(
-                managerIds: kind == .manager ? [id] : [],
-                operativeIds: kind == .operative ? [id] : [],
-                index: index
-            ).first?.name ?? TaskRulebook.removedUserLabel
-            var choice = seen[key] ?? TaskFilterChoice(value: key, label: name, count: 0)
-            choice.count += 1
-            seen[key] = choice
-        }
-        for task in tasks {
-            var counted = Set<String>()
-            for id in task.allAssignedManagerIds { add(.manager, id, stored: id.uuidString, counted: &counted) }
-            for id in task.allAssignedOperativeIds { add(.operative, id, stored: Booking.operativeMatchKey(for: id), counted: &counted) }
-        }
-        return seen.values.sorted { $0.label.localizedCaseInsensitiveCompare($1.label) == .orderedAscending }
+        TaskAssigneeFilterChoices.build(tasks, keys: keys, index: TaskPersonIndex.current(operativeStore: operativeStore, userStore: userStore))
     }
 
     /// Filters (n), Sort, and the active filter chips with ✕ and Clear all.
-    @ViewBuilder
     private var filterBar: some View {
-        let count = TaskViewingRulebook.activeFilterCount(filters)
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    showingFilters = true
-                } label: {
-                    Label(count > 0 ? "Filters (\(count))" : "Filters", systemImage: "line.3.horizontal.decrease.circle")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .accessibilityIdentifier("tasksDetail.filters")
-                Spacer()
-                Menu {
-                    ForEach(TaskViewingRulebook.sortChoices(tab: tab), id: \.choice) { row in
-                        Button {
-                            sortChoice = row.choice
-                        } label: {
-                            if row.choice == sortChoice { Label(row.label, systemImage: "checkmark") } else { Text(row.label) }
-                        }
-                    }
-                } label: {
-                    Label(TaskViewingRulebook.sortLabel(sortChoice, tab: tab), systemImage: "arrow.up.arrow.down")
-                        .font(.subheadline)
-                }
-                .accessibilityIdentifier("tasksDetail.sort")
-            }
-            if count > 0, visibilityReady {
-                TaskFilterChips(
-                    filters: $filters,
-                    options: filterOptions,
-                    assignees: assigneeChoices
-                )
-            }
-        }
+        TaskFilterSortBar(
+            filters: $filters,
+            sort: $sortChoice,
+            tab: tab,
+            ready: visibilityReady,
+            options: filterOptions,
+            assignees: assigneeChoices,
+            identifierPrefix: "tasksDetail",
+            onShowFilters: { showingFilters = true }
+        )
         .padding(.horizontal, 16)
     }
 
