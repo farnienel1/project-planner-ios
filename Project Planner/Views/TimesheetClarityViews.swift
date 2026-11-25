@@ -94,15 +94,10 @@ struct TimesheetNextStepCard: View {
             }
         }
         .padding(12)
-        .background(ProjectWorksRevampColors.surface)
         .overlay(alignment: .leading) {
             Rectangle().fill(accent).frame(width: 4)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
-        )
+        .timesheetCardChrome(cornerRadius: 12)
         .accessibilityIdentifier("timesheets.nextStep")
     }
 }
@@ -191,12 +186,7 @@ struct TimesheetChangesCard: View {
                     .accessibilityIdentifier("timesheets.changes.showAll")
             }
         }
-        .background(ProjectWorksRevampColors.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
-        )
+        .timesheetCardChrome(cornerRadius: 14)
         .accessibilityIdentifier("timesheets.changesSinceSigned")
     }
 }
@@ -291,12 +281,7 @@ struct TimesheetNoticesCard: View {
                     footer.padding(12)
                 }
             }
-            .background(ProjectWorksRevampColors.surface)
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
-            )
+            .timesheetCardChrome(cornerRadius: 12)
             .accessibilityIdentifier("timesheets.notices")
         }
     }
@@ -346,5 +331,66 @@ struct TimesheetRevisionDraftButtons: View {
         .buttonStyle(.plain)
         .disabled(busy || !state.canCancel)
         .accessibilityIdentifier("timesheets.revisionDraft.cancel")
+    }
+}
+
+// MARK: - One top card (RULEBOOK 1.90.0, owner 24 Nov after testing)
+
+/// Inside `TimesheetTopCard` the status, changes and notices cards draw no frame of their own: the whose-turn line,
+/// "Changed since it was signed", every notice and the buttons read as ONE card. Display only.
+private struct TimesheetCardEmbeddedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var timesheetCardEmbedded: Bool {
+        get { self[TimesheetCardEmbeddedKey.self] }
+        set { self[TimesheetCardEmbeddedKey.self] = newValue }
+    }
+}
+
+private struct TimesheetCardChrome: ViewModifier {
+    @Environment(\.timesheetCardEmbedded) private var embedded
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        if embedded {
+            content
+        } else {
+            content
+                .background(ProjectWorksRevampColors.surface)
+                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
+                )
+        }
+    }
+}
+
+extension View {
+    /// The card frame — left off inside `TimesheetTopCard`.
+    func timesheetCardChrome(cornerRadius: CGFloat) -> some View {
+        modifier(TimesheetCardChrome(cornerRadius: cornerRadius))
+    }
+}
+
+/// RULEBOOK 1.90.0 point 10: the whose-turn line, "Changed since it was signed", every notice and the buttons as ONE
+/// card; Earlier versions is its own section below (not inside it).
+struct TimesheetTopCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            content()
+        }
+        .environment(\.timesheetCardEmbedded, true)
+        .background(ProjectWorksRevampColors.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(ProjectWorksRevampColors.border, lineWidth: 1)
+        )
+        .accessibilityIdentifier("timesheets.topCard")
     }
 }

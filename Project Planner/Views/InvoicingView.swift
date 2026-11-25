@@ -1305,7 +1305,8 @@ enum TimesheetDraftStore {
         firebaseBackend: FirebaseBackend,
         organizationId: String,
         writer: AppUser? = nil,
-        subject: AppUser? = nil
+        subject: AppUser? = nil,
+        makingChanges: Bool = false
     ) async -> String? {
         let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart, organizationId: organizationId) ?? weekStart
         let writerId = Auth.auth().currentUser?.uid ?? writer?.id ?? ""
@@ -1511,6 +1512,32 @@ enum TimesheetDraftStore {
                 sheetDocId: server?["__documentId"] as? String
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
+                // RULEBOOK 1.90.0 §8 (Cancel changes): a price work / expense decision changed while making changes records
+                // the stored review it replaced, once per session (`timesheetReviewerReviewRecord`), in the same write.
+                // Null outside a session and for a late extra's decision.
+                if let server {
+                    var storedSheet = FirebaseBackend.firestoreJSON(server) as? [String: Any] ?? [:]
+                    if storedSheet["revision"] == nil,
+                       let revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(server["__documentId"] as? String)?.revision {
+                        storedSheet["revision"] = revision
+                    }
+                    let storedReviews = storedSheet["extraEntryReviews"] as? [String: Any] ?? [:]
+                    let prefix = "extraEntryReviews."
+                    for (key, value) in reviewFields where key.hasPrefix(prefix) {
+                        let entryId = String(key.dropFirst(prefix.count))
+                        guard let record = CanonicalBusinessEngine.timesheetReviewerReviewRecord(
+                            sheet: storedSheet,
+                            entryId: entryId,
+                            before: storedReviews[entryId] as? [String: Any],
+                            editedBy: writerId,
+                            makingChanges: makingChanges,
+                            after: FirebaseBackend.firestoreJSON(value) as? [String: Any]
+                        ) else { continue }
+                        var recordValue = TimesheetReviewerFirestoreValue.map(record.value)
+                        recordValue["editedAt"] = FieldValue.serverTimestamp()
+                        changed["\(CanonicalBusinessEngine.timesheetReviewerBookingEditsField).\(record.key)"] = recordValue
+                    }
+                }
             }
             // RULEBOOK 1.54.0 (final check of #337): a stored `exportedAt` is never written back changed or removed.
             if storedExported { changed.removeValue(forKey: "exportedAt") }
@@ -3139,14 +3166,28 @@ private struct MyTimesheetView: View {
                 let clarityDetails = clarityChangeDetails
                 let draftState = personDraftState
                 if let step = clarityNextStep(details: clarityDetails) {
-                    TimesheetNextStepCard(
-                        step: step,
-                        generateInvoice: invoiceNextStepAction,
-                        generateInvoiceBusy: isGeneratingInvoice,
-                        errorText: saveErrorMessage,
-                        accessory: draftState.draft ? nil : AnyView(personCorrectionEntry),
-                        help: draftState.personMessage
-                    )
+                    // RULEBOOK 1.90.0 point 10: whose turn, what changed and every notice are ONE card.
+                    TimesheetTopCard {
+                        TimesheetNextStepCard(
+                            step: step,
+                            generateInvoice: invoiceNextStepAction,
+                            generateInvoiceBusy: isGeneratingInvoice,
+                            errorText: saveErrorMessage,
+                            accessory: draftState.draft ? nil : AnyView(personCorrectionEntry),
+                            help: draftState.personMessage
+                        )
+                        if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                            Divider()
+                            TimesheetChangesCard(details: clarityDetails)
+                        }
+                        if !personNotices.isEmpty {
+                            Divider()
+                            TimesheetNoticesCard(notices: personNotices)
+                        }
+                    }
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
                 } else {
                     if let saveErrorMessage {
                         Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
@@ -3159,14 +3200,14 @@ private struct MyTimesheetView: View {
                             .accessibilityIdentifier("timesheets.saveError")
                     }
                     if !draftState.draft { personCorrectionEntry }
+                    if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                        TimesheetChangesCard(details: clarityDetails)
+                    }
+                    TimesheetNoticesCard(notices: personNotices)
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
                 }
-                if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
-                    TimesheetChangesCard(details: clarityDetails)
-                }
-                TimesheetNoticesCard(
-                    notices: personNotices,
-                    footer: earlierVersions.isEmpty ? nil : AnyView(TimesheetEarlierVersionsList(versions: earlierVersions))
-                )
 
                 if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
                     TimesheetManagerAdjustmentSummaryCard(
@@ -6602,8 +6643,17 @@ private struct OperativeTimesheetReviewView: View {
     private var reviewerDraftState: RulebookTimesheetRevisionDraftState {
         var sheet = makeChangesSheet
         sheet["reviewerBookingEdits"] = TimesheetReviewerBookingEdits.stored(draft)
+        // Review of #304 (as web TimesheetPeriodPage): the draft's own review maps against the version it corrects, so a
+        // draft whose only change is a price work / expense (or labour) decision can be sent.
+        sheet["payrollLineReviews"] = FirebaseBackend.firestoreJSON(draft.payrollLineReviews.mapValues { $0.storedFields })
+        sheet["extraEntryReviews"] = TimesheetLateExtrasSupport.storedReviews(draft)
+        let chain = TimesheetVersionChainCache.chain(for: draft.versionDocumentId)
+        let previous: [String: Any]? = chain.count > 1 && chain.last?.documentId == draft.versionDocumentId
+            ? FirebaseBackend.firestoreJSON(chain[chain.count - 2].data) as? [String: Any]
+            : nil
         return CanonicalBusinessEngine.timesheetRevisionDraftState(
             sheet: sheet,
+            previous: previous,
             viewerIsReviewer: viewerIsReviewer,
             viewerIsSubject: false,
             personName: TimesheetClarityNames.personName(operative),
@@ -6613,6 +6663,9 @@ private struct OperativeTimesheetReviewView: View {
 
     @State private var isSendingDraftRevision = false
     @State private var confirmCancelDraftRevision = false
+    /// RULEBOOK 1.90.0 §8: the confirm before Cancel changes.
+    @State private var confirmCancelReviewerChanges = false
+    @State private var isCancellingReviewerChanges = false
 
     /// RULEBOOK 1.90.0: Save changes and send — end the draft, then tell the person (`timesheet_revision_to_sign`).
     private func sendDraftRevision() {
@@ -6642,7 +6695,7 @@ private struct OperativeTimesheetReviewView: View {
         }
     }
 
-    /// RULEBOOK 1.90.0: Cancel revision — delete the draft (after the confirm). Booking changes already made stay.
+    /// RULEBOOK 1.90.0: Cancel revision — undo the draft's changes (item 9), then delete the draft (after the confirm).
     private func cancelDraftRevision() {
         guard !isSendingDraftRevision, reviewerDraftState.canCancel,
               let documentId = draft.versionDocumentId,
@@ -6650,6 +6703,17 @@ private struct OperativeTimesheetReviewView: View {
         isSendingDraftRevision = true
         Task {
             do {
+                // RULEBOOK 1.90.0 §8 (item 9): the draft's booking and decision changes are undone FIRST
+                // (`timesheetReviewerUndoPlan`), then the draft is deleted while it is still a draft.
+                let undo = try await firebaseBackend.cancelTimesheetReviewerChanges(organizationId: orgId, documentId: documentId)
+                guard undo.refused.isEmpty else {
+                    await refreshDraftFromCloud()
+                    await MainActor.run {
+                        isSendingDraftRevision = false
+                        saveErrorMessage = undo.message
+                    }
+                    return
+                }
                 let cancelled = try await firebaseBackend.cancelTimesheetRevisionDraft(organizationId: orgId, documentId: documentId)
                 await refreshDraftFromCloud()
                 await MainActor.run {
@@ -6661,6 +6725,74 @@ private struct OperativeTimesheetReviewView: View {
                 await MainActor.run {
                     isSendingDraftRevision = false
                     saveErrorMessage = "Couldn't cancel the revision: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK 1.90.0 §8: the sheet as the undo rules read it (`reviewerBookingEdits`, the signatures as ms).
+    private var reviewerUndoSheet: [String: Any] {
+        SignedTimesheetChangeInputs.sheet(draft, keys: [:])
+    }
+
+    /// RULEBOOK 1.90.0 §8: "Cancel changes" is offered (`timesheetReviewerCancelChangesOffered`) — never on a draft
+    /// revision (its Cancel revision undoes the same changes), never to the person.
+    private var reviewerCancelChangesOffered: Bool {
+        guard viewerIsReviewer, draft.revisionDraft != true else { return false }
+        return CanonicalBusinessEngine.timesheetReviewerCancelChangesOffered(
+            sheet: reviewerUndoSheet,
+            viewerIsReviewer: true,
+            viewerIsSubject: false
+        )
+    }
+
+    /// The number of changes Cancel changes undoes (`timesheetReviewerSessionRecords`).
+    private var reviewerSessionChangeCount: Int {
+        CanonicalBusinessEngine.timesheetReviewerSessionRecords(reviewerUndoSheet).count
+    }
+
+    /// RULEBOOK 1.90.0 §8: the red "Cancel changes" button (asks first).
+    @ViewBuilder
+    private var cancelReviewerChangesButton: some View {
+        if reviewerCancelChangesOffered {
+            Button(role: .destructive) {
+                confirmCancelReviewerChanges = true
+            } label: {
+                Text(CanonicalBusinessEngine.timesheetReviewerCancelChangesLabel)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.red)
+                    .background(Color.red.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isCancellingReviewerChanges || !smartCache.isOnline)
+            .onlineOnly(isOnline: smartCache.isOnline)
+            .accessibilityIdentifier("operativeTimesheetReview.cancelChanges")
+        }
+    }
+
+    /// RULEBOOK 1.90.0 §8: Cancel changes — undo the session's booking and decision changes
+    /// (`FirebaseBackend.cancelTimesheetReviewerChanges`, one transaction per booking).
+    private func cancelReviewerChanges() {
+        guard !isCancellingReviewerChanges,
+              let documentId = draft.versionDocumentId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isCancellingReviewerChanges = true
+        Task {
+            do {
+                let result = try await firebaseBackend.cancelTimesheetReviewerChanges(organizationId: orgId, documentId: documentId)
+                await refreshDraftFromCloud()
+                await MainActor.run {
+                    isCancellingReviewerChanges = false
+                    if result.refused.isEmpty { makingChangesFor = nil }
+                    saveErrorMessage = nil
+                    reviewBookingNotice = result.message
+                }
+            } catch {
+                await MainActor.run {
+                    isCancellingReviewerChanges = false
+                    reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
                 }
             }
         }
@@ -6931,26 +7063,39 @@ private struct OperativeTimesheetReviewView: View {
     private var reviewClaritySection: some View {
         let details = reviewerChangeDetails
         let draftState = reviewerDraftState
+        let showChanges = (revisionDue.due || bookingChange?.waitingForLineManager == true) && !details.rows.isEmpty
         if let step = reviewerNextStep(details: details) {
-            TimesheetNextStepCard(
-                step: step,
-                errorText: saveErrorMessage,
-                accessory: reviewStatusAccessory(draftState),
-                help: draftState.reviewerActs ? draftState.help : nil
-            )
-        } else if let saveErrorMessage {
-            Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.red)
-                .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            // RULEBOOK 1.90.0 point 10: whose turn, what changed, every notice and the buttons are ONE card.
+            TimesheetTopCard {
+                TimesheetNextStepCard(
+                    step: step,
+                    errorText: saveErrorMessage,
+                    accessory: reviewStatusAccessory(draftState),
+                    help: draftState.reviewerActs ? draftState.help : nil
+                )
+                if showChanges {
+                    Divider()
+                    TimesheetChangesCard(details: details)
+                }
+                if !reviewNotices.isEmpty {
+                    Divider()
+                    TimesheetNoticesCard(notices: reviewNotices)
+                }
+            }
+        } else {
+            if let saveErrorMessage {
+                Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            }
+            if showChanges { TimesheetChangesCard(details: details) }
+            TimesheetNoticesCard(notices: reviewNotices)
         }
-        if (revisionDue.due || bookingChange?.waitingForLineManager == true), !details.rows.isEmpty {
-            TimesheetChangesCard(details: details)
+        // Earlier versions is its own section below the card.
+        if !earlierVersions.isEmpty {
+            TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
         }
-        TimesheetNoticesCard(
-            notices: reviewNotices,
-            footer: earlierVersions.isEmpty ? nil : AnyView(TimesheetEarlierVersionsList(versions: earlierVersions))
-        )
     }
 
     /// The status card's buttons for this state.
@@ -7025,12 +7170,23 @@ private struct OperativeTimesheetReviewView: View {
         .alert(
             CanonicalBusinessEngine.timesheetRevisionCancelConfirmMessage(
                 revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
-                changeCount: reviewerDraftState.bookingEdits
+                changeCount: reviewerDraftState.bookingEdits,
+                removedCount: CanonicalBusinessEngine.timesheetReviewerSessionRecords(reviewerUndoSheet)
+                    .filter { $0.kind == "booking" && $0.value["deleted"] as? Bool == true }
+                    .count
             ),
             isPresented: $confirmCancelDraftRevision
         ) {
             Button(reviewerDraftState.cancelLabel, role: .destructive) { cancelDraftRevision() }
             Button("Keep it", role: .cancel) {}
+        }
+        // RULEBOOK 1.90.0 §8: the confirm before Cancel changes (`timesheetReviewerCancelChangesConfirmMessage`).
+        .alert(
+            CanonicalBusinessEngine.timesheetReviewerCancelChangesConfirmMessage(reviewerSessionChangeCount),
+            isPresented: $confirmCancelReviewerChanges
+        ) {
+            Button(CanonicalBusinessEngine.timesheetReviewerCancelChangesLabel, role: .destructive) { cancelReviewerChanges() }
+            Button("Keep them", role: .cancel) {}
         }
     }
 
@@ -7427,6 +7583,8 @@ private struct OperativeTimesheetReviewView: View {
             .buttonStyle(.plain)
             .disabled(!bookingCheckReady || !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign)
             .onlineOnly(isOnline: smartCache.isOnline)
+            // RULEBOOK 1.90.0 §8: after a change made while making changes, the session can still be undone.
+            cancelReviewerChangesButton
         } else if bookingChange?.reopened == true {
             EmptyView()
         } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
@@ -7464,6 +7622,8 @@ private struct OperativeTimesheetReviewView: View {
                             .accessibilityIdentifier("operativeTimesheetReview.stopMakingChanges")
                     }
                 }
+                // RULEBOOK 1.90.0 §8: Cancel changes next to Stop making changes (or after it while the session holds changes).
+                cancelReviewerChangesButton
             }
         } else if viewerIsReviewer,
                   TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
@@ -7797,7 +7957,7 @@ private struct OperativeTimesheetReviewView: View {
                         draft: draft,
                         collection: plan.collection,
                         bookingId: plan.bookingId,
-                        booking: nil,
+                        booking: booking,
                         write: nil,
                         editedBy: uid
                     )
@@ -8025,6 +8185,8 @@ private struct OperativeTimesheetReviewView: View {
         let snapshot = draft
         let writer = userStore.displayUser
         let subject = operative
+        // RULEBOOK 1.90.0 (Cancel changes): a decision made while Make changes is open is recorded for undo.
+        let makingChangesNow = makingChanges
         return Task {
             // Owner-or-reviewer partial write, plus changed `extraEntryReviews` (`timesheetEntryReviewWriteFields`).
             let message = await TimesheetDraftStore.saveToCloud(
@@ -8035,7 +8197,8 @@ private struct OperativeTimesheetReviewView: View {
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId,
                 writer: writer,
-                subject: subject
+                subject: subject,
+                makingChanges: makingChangesNow
             )
             saveErrorMessage = message
             return message

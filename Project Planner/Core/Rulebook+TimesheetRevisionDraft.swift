@@ -142,8 +142,9 @@ extension CanonicalBusinessEngine {
     }
 
     /// RULEBOOK 1.90.0 `timesheetRevisionCancelConfirmMessage(revisionLabel, changeCount)`.
-    nonisolated static func timesheetRevisionCancelConfirmMessage(revisionLabel: String?, changeCount: Int) -> String {
-        callJSON("timesheetRevisionCancelConfirmMessage", arguments: [RulebookJSON.orNull(revisionLabel), changeCount]) as? String
+    /// `removedCount` (1.90.1): the removed bookings that come back under a new id (records `deleted` with no `restoredAs`).
+    nonisolated static func timesheetRevisionCancelConfirmMessage(revisionLabel: String?, changeCount: Int, removedCount: Int = 0) -> String {
+        callJSON("timesheetRevisionCancelConfirmMessage", arguments: [RulebookJSON.orNull(revisionLabel), changeCount, removedCount]) as? String
             ?? "Cancel this revision? The revision is deleted and nothing is sent."
     }
 }
