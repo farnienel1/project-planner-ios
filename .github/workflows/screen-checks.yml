@@ -89,7 +89,7 @@ jobs:
         include:
           - slug: iphone-16e
             device: iPhone 16e
-            only: -only-testing:ProjectPlannerUITests/Release1320ScreenChecksTests -only-testing:ProjectPlannerUITests/AddUserScreenChecksTests
+            only: -only-testing:ProjectPlannerUITests/VariationsTests
           - slug: iphone-se
             device: iPhone SE (3rd generation)
             only: -only-testing:ProjectPlannerUITests/AddUserScreenChecksTests
