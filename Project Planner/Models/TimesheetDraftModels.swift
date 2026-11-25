@@ -186,6 +186,9 @@ struct TimesheetDraft: Codable {
     var versionDocumentId: String? = nil
     /// RULEBOOK 1.55.0 §8: 0 for the original, N for REV N (`parseTimesheetRevisionDocId`). Read only, never written.
     var revision: Int? = nil
+    /// RULEBOOK 1.90.0 §8: `true` while a reviewer's revision is a draft (stored `revisionDraft`). Read only — never part
+    /// of `asFirestoreMap`; Send removes it (`FirebaseBackend.sendTimesheetRevisionDraft`).
+    var revisionDraft: Bool? = nil
     /// RULEBOOK 1.55.0 §8: the previous version's exported total (`timesheetExportedTotal`), read from that frozen
     /// document when this draft is a revision — the base of the difference shown ("+£44.12"). Never stored.
     var previousVersionExportedTotal: Double? = nil

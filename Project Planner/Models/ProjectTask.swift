@@ -35,7 +35,8 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         case urgent = "Urgent"
     }
 
-    /// Stable id for the synthetic first checklist row built from `title` + `details` (not stored in `items`).
+    /// The id builds before 1.89.0 gave the checklist row they made from `title` + `details` (`TASK_LEGACY_PRIMARY_ITEM_ID`;
+    /// never a stored item). Kept so older ticks are recognised; no new task writes it.
     static let primaryEffectiveLineItemId = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
 
     let id: UUID
@@ -153,29 +154,22 @@ struct ProjectTask: Identifiable, Codable, Hashable {
         status == .completed
     }
     
-    /// Effective checklist rows: main line from `title`/`details` plus optional extra `items` (checklist-only saves).
-    /// Legacy multi-item tasks (items already include the first row matching title+details) return `items` unchanged.
+    /// The checklist rows: the task's real `items` only (RULEBOOK 1.89.0 §34 F25). Before 1.89.0 this added a row made
+    /// from the title (`primaryEffectiveLineItemId`) and stored that id in `completedItemIds`; a task with no items
+    /// now has no checklist (`taskCompleteStep` `showChecklist` false). Older ticks of that id are kept on read and
+    /// on edit (`taskChecklistAfterEdit`) and never block completion.
     var effectiveItems: [ProjectTaskItem] {
-        if items.isEmpty {
-            return [ProjectTaskItem(id: Self.primaryEffectiveLineItemId, title: title, description: details)]
-        }
-        if let first = items.first,
-           first.title == title,
-           (first.description ?? "") == (details ?? "") {
-            return items
-        }
-        let primary = ProjectTaskItem(id: Self.primaryEffectiveLineItemId, title: title, description: details)
-        return [primary] + items
+        items
     }
-    
-    /// True when task has more than one item (so assignee must tick all before marking complete).
+
+    /// True when the task has a checklist the assignee must tick before completing.
     var isMultiItemTask: Bool {
-        effectiveItems.count > 1
+        !items.isEmpty
     }
-    
-    /// True when all items have been ticked (for multi-item tasks). Always true for single-item.
+
+    /// True when every real item has been ticked (always true for a task with no checklist).
     var allItemsTicked: Bool {
-        let ids = Set(effectiveItems.map(\.id))
+        let ids = Set(items.map(\.id))
         return ids.isEmpty || ids.isSubset(of: Set(completedItemIds))
     }
 

@@ -12,9 +12,19 @@ import FirebaseFirestore
 
 @MainActor
 class ProjectTaskStore: ObservableObject {
-    @Published private(set) var tasks: [ProjectTask] = []
+    @Published private(set) var tasks: [ProjectTask] = [] {
+        didSet { revision &+= 1 }
+    }
+    /// Bumped on every change to `tasks`, so the Tasks screens memoise what they build from them (review of #305).
+    private(set) var revision = 0
     @Published var isLoading = false
+    /// RULEBOOK 1.91.0 §34 (review of #305): the organisation whose task list has a server answer (a load or a live
+    /// server snapshot). Tasks screens show loading, never "No tasks", and keep remembered filters, until it has.
+    @Published private(set) var finishedLoadOrganizationId: String?
     @Published var errorMessage: String?
+    /// RULEBOOK 1.89.0 §34: the last task save or delete the server refused, shown to the person (before 1.89.0 it
+    /// was only printed, so a refused delete or edit looked like it had worked until the next reload).
+    @Published var lastWriteError: String?
     
     private var firebaseBackend: FirebaseBackend?
     private var cancellables = Set<AnyCancellable>()
@@ -36,6 +46,7 @@ class ProjectTaskStore: ObservableObject {
             query: { $0.collection("tasks") }
         ) { [weak self] rows, fromCache in
             guard let self else { return }
+            if !fromCache, self.finishedLoadOrganizationId != organizationId { self.finishedLoadOrganizationId = organizationId }
             let incoming = rows.compactMap { FirebaseBackend.projectTask(documentId: $0.id, data: $0.data) }
             guard var next = LiveSnapshotMerge.apply(existing: self.tasks, incoming: incoming, fromCache: fromCache, rowCount: LiveSnapshotMerge.readableRowCount(rows), collection: "tasks") else { return }
             let incomingIds = Set(next.map(\.id))
@@ -52,6 +63,7 @@ class ProjectTaskStore: ObservableObject {
     func discardInMemoryForOrganizationSwitch() {
         tasks = []
         isLoading = false
+        finishedLoadOrganizationId = nil
         pendingReloadAfterCurrentLoad = false
         errorMessage = nil
     }
@@ -110,6 +122,7 @@ class ProjectTaskStore: ObservableObject {
                 : tasks.filter { !loadedIds.contains($0.id) }
             tasks = (loadedTasks + pendingLocal).sorted { $0.createdAt > $1.createdAt }
             OfflineTaskLocalStore.shared.save(tasks, organizationId: organizationId)
+            finishedLoadOrganizationId = organizationId
         } catch {
             print("🔥🔥🔥 DEBUG: TaskStore - Error loading tasks: \(error.localizedDescription)")
             let cached = OfflineTaskLocalStore.shared.load(organizationId: organizationId)
@@ -174,48 +187,88 @@ class ProjectTaskStore: ObservableObject {
     }
     
     func updateTask(_ task: ProjectTask) async {
-        if let index = tasks.firstIndex(where: { $0.id == task.id }) {
-            tasks[index] = task
-            if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
-                OfflineTaskLocalStore.shared.upsert(task, organizationId: organizationId)
-            }
-            await save(task)
-        }
+        _ = await updateTaskReportingError(task)
     }
-    
-    func toggleTaskStatus(_ task: ProjectTask, to status: ProjectTask.Status) async {
-        var updatedTask = task
-        updatedTask.status = status
-        updatedTask.updatedAt = Date()
-        await updateTask(updatedTask)
+
+    /// Saves an edited task and says whether the server accepted it. On a refusal the row on screen goes back to the
+    /// stored copy and `lastWriteError` says why.
+    @discardableResult
+    func updateTaskReportingError(_ task: ProjectTask) async -> Bool {
+        guard let index = tasks.firstIndex(where: { $0.id == task.id }) else { return false }
+        let previous = tasks[index]
+        tasks[index] = task
+        if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
+            OfflineTaskLocalStore.shared.upsert(task, organizationId: organizationId)
+        }
+        let ok = await save(task)
+        if !ok, let back = tasks.firstIndex(where: { $0.id == task.id }) {
+            tasks[back] = previous
+            if let organizationId = firebaseBackend?.currentOrganization?.firestoreDocumentId {
+                OfflineTaskLocalStore.shared.upsert(previous, organizationId: organizationId)
+            }
+        }
+        return ok
     }
     
     func deleteTask(_ task: ProjectTask) async {
-        tasks.removeAll { $0.id == task.id }
+        _ = await deleteTaskReportingError(task)
+    }
+
+    /// Deletes a task and says whether the server accepted it (RULEBOOK 1.89.0 §34: only admins delete; the security
+    /// rules refuse anyone else). On a refusal the task comes back and `lastWriteError` says why.
+    @discardableResult
+    func deleteTaskReportingError(_ task: ProjectTask) async -> Bool {
+        lastWriteError = nil
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return
+            lastWriteError = "Couldn't delete the task. Try again."
+            return false
         }
+        let original = tasks.first(where: { $0.id == task.id }) ?? task
+        tasks.removeAll { $0.id == task.id }
         OfflineTaskLocalStore.shared.remove(taskId: task.id, organizationId: organizationId)
-        
+
         do {
             try await firebaseBackend.deleteProjectTask(taskId: task.id, organizationId: organizationId)
+            return true
         } catch {
-            print("🔥🔥🔥 DEBUG: Failed to delete task: \(error.localizedDescription)")
+            if !tasks.contains(where: { $0.id == original.id }) { tasks.append(original) }
+            OfflineTaskLocalStore.shared.upsert(original, organizationId: organizationId)
+            lastWriteError = Self.writeErrorText(error, deleting: true)
+            return false
         }
     }
-    
-    private func save(_ task: ProjectTask) async {
+
+    @discardableResult
+    private func save(_ task: ProjectTask) async -> Bool {
+        lastWriteError = nil
         guard let firebaseBackend = firebaseBackend,
               let organizationId = firebaseBackend.currentOrganization?.firestoreDocumentId else {
-            return
+            lastWriteError = "Couldn't save the task. Try again."
+            return false
         }
-        
+
         do {
             try await firebaseBackend.saveProjectTask(task, organizationId: organizationId)
+            return true
         } catch {
-            print("🔥🔥🔥 DEBUG: Failed to save task: \(error.localizedDescription)")
+            lastWriteError = Self.writeErrorText(error, deleting: false)
+            return false
         }
+    }
+
+    /// The words a refused write shows (`TASK_COPY.errors`, the same words as web).
+    private static func writeErrorText(_ error: Error, deleting: Bool) -> String {
+        let code = (error as NSError).code
+        // FirestoreErrorCode.permissionDenied == 7
+        if (error as NSError).domain == "FIRFirestoreErrorDomain", code == 7 {
+            return deleting
+                ? TaskRulebook.copy("errors", "deleteRefused", fallback: "Only an admin can delete a task.")
+                : TaskRulebook.copy("errors", "noAccess", fallback: "You don't have access to this task.")
+        }
+        return deleting
+            ? "Couldn't delete the task. Check your connection and try again."
+            : TaskRulebook.copy("errors", "saveFailed", fallback: "The task wasn't saved. Check your connection and try again.")
     }
 }
 

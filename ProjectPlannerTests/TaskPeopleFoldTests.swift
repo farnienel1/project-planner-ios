@@ -43,6 +43,8 @@ final class TaskPeopleFoldTests: XCTestCase {
         var row = LogicFixtures.selfEmployedUser(id: id, email: email)
         row.isGhost = ghost
         row.formerUserIds = formerUserIds
+        // RULEBOOK 1.91.0 §34 `taskAssigneeCandidates`: only a signed-up, active account is offered.
+        row.passwordSet = true
         return row
     }
 
@@ -88,12 +90,17 @@ final class TaskPeopleFoldTests: XCTestCase {
     }
 
     func testAnOperativesRowLinkedToAnAccountIsTheSamePersonAsThatAccountsManagersRow() {
-        let roster = [user("u-ada", email: "ada@site.com")]
+        var ada = user("u-ada", email: "ada@site.com")
+        ada.role = .manager
+        ada.permissions.operativeMode = false
+        ada.permissions.manager = true
+        let roster = [ada]
         let mgr = manager("m-ada", email: "ada@site.com", first: "Ada", last: "Admin")
         let linked = operative("op-ada", email: "ada.other@site.com", first: "Ada", last: "Admin", linkedUserId: "U-ADA")
         let without = index(managers: [mgr], operatives: [linked], users: [])
         let before = TaskPeopleRulebook.pickerPeople(managers: [mgr], operatives: [linked], route: .combined, index: without)
-        XCTAssertEqual(before.managers.count + before.operatives.count, 2, "without the roster the link is unknown")
+        // RULEBOOK 1.91.0 §34: with no account on the roster nobody is offered (never a person who may be gone).
+        XCTAssertEqual(before.managers.count + before.operatives.count, 0, "without an account nobody is offered")
         let with = index(managers: [mgr], operatives: [linked], users: roster)
         let after = TaskPeopleRulebook.pickerPeople(managers: [mgr], operatives: [linked], route: .combined, index: with)
         XCTAssertEqual(after.managers.map(\.firestoreDocumentId), ["m-ada"])
@@ -191,7 +198,11 @@ final class TaskPeopleFoldTests: XCTestCase {
     func testAnAnonymisedDeletedManagerIsNotOffered() {
         let deleted = manager("m-gone", email: "", first: "Deleted", last: "user")
         let live = manager("m-live", email: "live@x", first: "Liv", last: "E")
-        let index = index(managers: [deleted, live], operatives: [], users: [])
+        var liveAccount = user("u-live", email: "live@x")
+        liveAccount.role = .manager
+        liveAccount.permissions.operativeMode = false
+        liveAccount.permissions.manager = true
+        let index = index(managers: [deleted, live], operatives: [], users: [liveAccount])
         let picked = TaskPeopleRulebook.pickerPeople(managers: [deleted, live], operatives: [], route: .managers, index: index)
         XCTAssertEqual(picked.managers.map(\.firestoreDocumentId), ["m-live"])
     }
@@ -231,7 +242,28 @@ final class TaskPeopleFoldTests: XCTestCase {
         XCTAssertFalse(text.contains("struct OperativeMultiSelectView"))
         XCTAssertFalse(text.contains("struct ManagerMultiSelectView"))
         XCTAssertTrue(text.contains("TaskPeopleRulebook.pickerPeople("))
-        XCTAssertTrue(text.contains("TaskPeopleRulebook.filterOperatives("))
         XCTAssertTrue(text.contains("TaskPeopleRulebook.assigneeNames("))
+        // RULEBOOK 1.91.0 §34: the job Tasks tab's "Assigned to" filter is the shared builder, which folds people by
+        // `taskPersonKeys` (it replaced the 1.89 per-row operative / manager filter that used `filterOperatives`).
+        XCTAssertTrue(text.contains("TaskAssigneeFilterChoices.build("))
+        XCTAssertFalse(text.contains("struct ProjectTaskFilterSheet"))
+        let filters = try String(contentsOf: root.appendingPathComponent("Project Planner/Views/TaskFilterViews.swift"), encoding: .utf8)
+        XCTAssertTrue(filters.contains("TaskPeopleRulebook.assigneeNames("))
+        XCTAssertTrue(filters.contains("keys[stored.lowercased()]"))
+    }
+
+    /// The "Assigned to" filter lists a converted ghost and its linked duplicate row as one person (the fold).
+    func testTheAssignedToFilterListsEachPersonOnce() {
+        let all = [ghostRow, ghostDuplicate, patRow]
+        let index = index(operatives: all, users: ghostRoster)
+        let keys = TaskViewingRulebook.personKeys(managers: [], operatives: all, users: ghostRoster)
+        XCTAssertFalse(keys.isEmpty, "the script answered")
+        let task = ProjectTask(
+            projectId: UUID(), title: "Both", createdBy: "TEST",
+            assignedOperativeIds: [ghostRow.id, ghostDuplicate.id, patRow.id]
+        )
+        let choices = TaskAssigneeFilterChoices.build([task], keys: keys, index: index)
+        XCTAssertEqual(choices.count, 2)
+        XCTAssertTrue(choices.allSatisfy { $0.count == 1 })
     }
 }
