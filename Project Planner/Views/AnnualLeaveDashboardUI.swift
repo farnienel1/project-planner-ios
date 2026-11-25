@@ -68,6 +68,9 @@ enum AnnualLeavePalette {
         light: AppAdaptiveColor.rgb(0.886, 0.910, 0.949),
         dark: AppAdaptiveColor.rgb(0.141, 0.192, 0.294)
     )
+    /// Team calendar (owner request 25 Nov): two or more people on leave — solid blue with white text, the same fixed
+    /// colour as web (`bg-blue-600`, #2563EB, 5.2:1 with white in both themes).
+    static let manyAway = Color(red: 0.145, green: 0.388, blue: 0.922)
     static let red = AppAdaptiveColor.dynamic(
         light: AppAdaptiveColor.rgb(0.827, 0.271, 0.247),
         dark: AppAdaptiveColor.rgb(1.000, 0.420, 0.420)
@@ -85,6 +88,8 @@ enum AnnualLeaveDayVisual: Equatable {
     case pending
     case bankHoliday
     case weekend
+    /// Team calendar: two or more people on leave that day.
+    case manyAway
 }
 
 enum AnnualLeaveDateFormat {
@@ -191,6 +196,8 @@ struct AnnualLeaveDisplaySpan: Identifiable {
 }
 
 struct AnnualLeaveLegend: View {
+    var showsManyAway: Bool = false
+
     var body: some View {
         // Owner 11 Nov: wrap by whole item (flow layout), never mid-word ("Pendin g"), as web's flex-wrap legend.
         PPWrapLayout(spacing: 10) {
@@ -198,7 +205,10 @@ struct AnnualLeaveLegend: View {
             halfItem("Half day")
             item(AnnualLeavePalette.amber, "Pending", bordered: true)
             item(AnnualLeavePalette.violet, "Bank holiday")
-            item(AnnualLeavePalette.soft, "Weekend")
+            item(AnnualLeaveCalendarChrome.weekendFill, "Weekend")
+            if showsManyAway {
+                item(AnnualLeavePalette.manyAway, "Two or more on leave")
+            }
         }
         .font(.footnote.weight(.semibold))
         .foregroundStyle(AnnualLeavePalette.ink2)
@@ -244,6 +254,8 @@ struct AnnualLeaveDayFace: View {
     var isToday: Bool = false
     var initials: String? = nil
     var accessibilityLabel: String = ""
+    /// Team calendar: a two-or-more day whose leave includes a pending request (amber inner ring).
+    var pendingRing: Bool = false
 
     var body: some View {
         ZStack {
@@ -273,7 +285,7 @@ struct AnnualLeaveDayFace: View {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .stroke(AnnualLeavePalette.ink3, lineWidth: 2.5)
             }
-            if visual == .pending && !isSelected {
+            if (visual == .pending || pendingRing) && !isSelected {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .stroke(AnnualLeavePalette.amber, lineWidth: 2)
             }
@@ -310,7 +322,10 @@ struct AnnualLeaveDayFace: View {
             case .bankHoliday:
                 RoundedRectangle(cornerRadius: 13, style: .continuous).fill(AnnualLeavePalette.violetTint)
             case .weekend:
-                RoundedRectangle(cornerRadius: 13, style: .continuous).fill(AnnualLeavePalette.soft)
+                // Owner request 25 Nov: weekends a clearly neutral grey (the shared calendar chrome).
+                RoundedRectangle(cornerRadius: 13, style: .continuous).fill(AnnualLeaveCalendarChrome.weekendFill)
+            case .manyAway:
+                RoundedRectangle(cornerRadius: 13, style: .continuous).fill(AnnualLeavePalette.manyAway)
             case .none:
                 Color.clear
             }
@@ -318,17 +333,17 @@ struct AnnualLeaveDayFace: View {
     }
 
     private var numberColor: Color {
-        if isSelected || visual == .approvedFull || visual == .approvedHalf { return .white }
+        if isSelected || visual == .approvedFull || visual == .approvedHalf || visual == .manyAway { return .white }
         switch visual {
         case .pending: return AnnualLeavePalette.amber
         case .bankHoliday: return AnnualLeavePalette.violet
-        case .weekend: return AnnualLeavePalette.ink3
-        case .none, .approvedFull, .approvedHalf: return AnnualLeavePalette.ink
+        case .weekend: return AnnualLeavePalette.ink2
+        case .none, .approvedFull, .approvedHalf, .manyAway: return AnnualLeavePalette.ink
         }
     }
 
     private var initialsColor: Color {
-        if visual == .approvedFull || visual == .approvedHalf { return .white.opacity(0.95) }
+        if visual == .approvedFull || visual == .approvedHalf || visual == .manyAway { return .white.opacity(0.95) }
         return AnnualLeavePalette.ink2
     }
 }

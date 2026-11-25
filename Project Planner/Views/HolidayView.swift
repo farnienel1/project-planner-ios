@@ -62,6 +62,8 @@ struct HolidayView: View {
     @State private var bankHolidayAlertTitle = "Annual leave calendar"
     @State private var bankHolidayCalendarTick = 0
     @State private var teamDisplayedMonth = Date()
+    /// Owner request 25 Nov: the Team calendar day whose "who is off" summary is shown below the calendar.
+    @State private var teamSummaryDay: Date?
     @State private var teamSort = AnnualLeavePersonSort.firstName
     @State private var teamTradeFilter: String?
     @State private var teamSearch = ""
@@ -871,7 +873,7 @@ struct HolidayView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Who is off, and when")
                 .font(.system(.title3, design: .rounded).weight(.bold))
-            Text("Initials show on each day, so a clash is obvious before you approve it.")
+            Text("Initials show on each day, so a clash is obvious before you approve it. Tap a day to see who is off.")
                 .font(.footnote)
                 .foregroundStyle(AnnualLeavePalette.ink3)
             VStack(alignment: .leading, spacing: 8) {
@@ -917,15 +919,10 @@ struct HolidayView: View {
                         }
                     }
                 }
-                AnnualLeaveLegend()
-                HStack(spacing: 6) {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .fill(AnnualLeavePalette.blue.opacity(0.2))
-                        .frame(width: 13, height: 13)
-                    Text("Two or more away")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(AnnualLeavePalette.ink2)
+                if let summaryDay = teamSummaryDay {
+                    teamDaySummary(summaryDay)
                 }
+                AnnualLeaveLegend(showsManyAway: true)
             }
             .padding(14)
             .background(PPColor.card)
@@ -933,16 +930,60 @@ struct HolidayView: View {
         }
     }
 
+    /// Owner request 25 Nov: who is off on the tapped day — name, Full day / AM / PM, Approved or Pending. Display only.
+    private func teamDaySummary(_ day: Date) -> some View {
+        let entries = teamLeave(on: day)
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(AnnualLeaveDateFormat.singleDay(day))
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(AnnualLeavePalette.ink)
+            if entries.isEmpty {
+                Text("No annual leave")
+                    .font(.footnote)
+                    .foregroundStyle(AnnualLeavePalette.ink2)
+            } else {
+                ForEach(entries) { entry in
+                    HStack(spacing: 8) {
+                        Text(entry.name)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(AnnualLeavePalette.ink)
+                        Spacer(minLength: 8)
+                        Text(entry.slot)
+                            .font(.caption)
+                            .foregroundStyle(AnnualLeavePalette.ink2)
+                        Text(entry.pending ? "Pending" : "Approved")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(AnnualLeavePalette.ink)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(entry.pending ? AnnualLeavePalette.amberTint : AnnualLeavePalette.approvedTint)
+                            .clipShape(Capsule())
+                    }
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(AnnualLeavePalette.line, lineWidth: 1)
+        }
+    }
+
     private func teamDayCell(_ date: Date) -> some View {
         let day = calendar.startOfDay(for: date)
-        let away = teamAway(on: day)
+        let leave = teamLeave(on: day)
+        let anyPending = leave.contains(where: \.pending)
         let block = AnnualLeaveCalendarRules.blockReason(
             for: day,
             bankHolidays: bankHolidayService.holidaysByDayKey,
             calendar: calendar
         )
         let visual: AnnualLeaveDayVisual = {
-            if away.count >= 1 { return .approvedFull }
+            // Owner request 25 Nov: two or more on leave solid blue; one person approved green, or pending amber.
+            if leave.count >= 2 { return .manyAway }
+            if leave.count == 1 { return anyPending ? .pending : .approvedFull }
             if let block {
                 switch block {
                 case .bankHoliday: return .bankHoliday
@@ -951,26 +992,39 @@ struct HolidayView: View {
             }
             return .none
         }()
-        let awayInitials = away.prefix(2).map { initials(from: $0.displayName) }.joined(separator: " ")
-        return AnnualLeaveDayFace(
-            dayNumber: calendar.component(.day, from: date),
-            visual: away.count >= 2 ? .none : visual,
-            isToday: calendar.isDateInToday(day),
-            initials: awayInitials.isEmpty ? nil : awayInitials,
-            accessibilityLabel: teamDayLabel(date: day, away: away, block: block)
-        )
-        .background {
-            if away.count >= 2 {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(AnnualLeavePalette.blue.opacity(0.22))
+        let awayInitials = leave.prefix(2).map { initials(from: $0.name) }.joined(separator: " ")
+        let isSummaryDay = teamSummaryDay.map { calendar.isDate($0, inSameDayAs: day) } ?? false
+        return Button {
+            if isSummaryDay {
+                teamSummaryDay = nil
+            } else {
+                teamSummaryDay = day
+            }
+        } label: {
+            AnnualLeaveDayFace(
+                dayNumber: calendar.component(.day, from: date),
+                visual: visual,
+                isToday: calendar.isDateInToday(day),
+                initials: awayInitials.isEmpty ? nil : awayInitials,
+                accessibilityLabel: teamDayLabel(date: day, leave: leave, block: block),
+                pendingRing: leave.count >= 2 && anyPending
+            )
+            .overlay {
+                if isSummaryDay {
+                    RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        .stroke(AnnualLeavePalette.ink, lineWidth: 2)
+                }
             }
         }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isSummaryDay ? .isSelected : [])
     }
 
-    private func teamDayLabel(date: Date, away: [AnnualLeavePerson], block: AnnualLeaveDayBlockReason?) -> String {
+    private func teamDayLabel(date: Date, leave: [TeamLeaveEntry], block: AnnualLeaveDayBlockReason?) -> String {
         let spoken = date.formatted(date: .long, time: .omitted)
-        if !away.isEmpty {
-            return "\(spoken), \(away.map(\.displayName).joined(separator: ", ")) away"
+        if !leave.isEmpty {
+            let names = leave.map { $0.pending ? "\($0.name) (pending)" : $0.name }.joined(separator: ", ")
+            return "\(spoken), \(names) on leave"
         }
         if let block {
             switch block {
@@ -1193,6 +1247,37 @@ struct HolidayView: View {
                 nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
             ) ?? RulebookLeaveDayKind.none
             return kind == .approvedFull || kind == .approvedHalf
+        }
+    }
+
+    /// One listed person's leave on a Team calendar day (owner request 25 Nov, display only).
+    struct TeamLeaveEntry: Identifiable {
+        let id: String
+        let name: String
+        let slot: String
+        let pending: Bool
+    }
+
+    /// Owner request 25 Nov: everyone on the Team list with approved or pending leave on the day — `leaveDayAnswer`
+    /// (`leaveDayKind` with its deciding record) over their records; rejected never; weekends and bank holidays inside a
+    /// multi-day record are not leave days. The slot is the deciding record's own.
+    private func teamLeave(on day: Date) -> [TeamLeaveEntry] {
+        let key = OrganizationRulebookContext.dayKey(day)
+        let byPerson = teamLeaveRecords
+        return teamPeople.compactMap { (person) -> TeamLeaveEntry? in
+            let records = byPerson[person.id] ?? []
+            guard !records.isEmpty,
+                  let answer = CanonicalBusinessEngine.leaveDayAnswer(
+                      records: records,
+                      dayKey: key,
+                      nonWorkingDayKeys: OrganizationBankHolidays.dayKeys
+                  ),
+                  answer.kind != .none else { return nil }
+            let full = answer.kind == .approvedFull || answer.kind == .pendingFull
+            let pending = answer.kind == .pendingFull || answer.kind == .pendingHalf
+            let record = records.first { $0.id.lowercased() == (answer.recordId ?? "").lowercased() }
+            let slot = full ? "Full day" : (record?.timeSlot.uppercased() == "PM" ? "PM" : "AM")
+            return TeamLeaveEntry(id: person.id, name: person.displayName, slot: slot, pending: pending)
         }
     }
 
