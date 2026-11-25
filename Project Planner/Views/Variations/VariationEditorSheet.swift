@@ -1744,7 +1744,15 @@ struct VariationEditorSheet: View {
                 store.customTrades.append(name)
             }
             if let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId {
-                Task { await firebaseBackend.addCustomVariationTrade(name, organizationId: orgId) }
+                // The trade is used on this line either way; only the saved pick-list entry can fail, and then
+                // the editor says so (owner 25 Nov: no silent failed saves).
+                Task {
+                    do {
+                        try await firebaseBackend.addCustomVariationTrade(name, organizationId: orgId)
+                    } catch {
+                        errorMessage = "“\(name)” was not saved to your trade list. \(error.localizedDescription) It is still used on this line."
+                    }
+                }
             }
         }
         customTradeDraft = ""

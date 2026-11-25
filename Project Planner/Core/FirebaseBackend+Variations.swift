@@ -733,20 +733,24 @@ extension FirebaseBackend {
     }
 
     /// Adds one trade with `variationTradesWriteFields` against the stored list (only what the user added, so a
-    /// stale list never drops another device's trade). A standard trade is not stored (app picker list).
-    func addCustomVariationTrade(_ trade: String, organizationId: String) async {
+    /// stale list never drops another device's trade). A standard trade is not stored (app picker list). Throws when
+    /// the trade could not be saved (owner 25 Nov: no silent failed saves), so the editor can say so.
+    func addCustomVariationTrade(_ trade: String, organizationId: String) async throws {
         let trimmed = trade.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         if VariationTrades.standard.contains(where: { $0.lowercased() == trimmed.lowercased() }) { return }
         let ref = variationTradesDocument(organizationId: organizationId)
-        guard let snap = try? await ref.getDocument() else { return }
+        let snap = try await ref.getDocument()
         let stored = snap.exists ? snap.data() : nil
-        guard let answer = CanonicalBusinessEngine.variationTradesWriteFields(stored: stored, add: [trimmed]),
-              let trades = answer else { return }
+        guard let answer = CanonicalBusinessEngine.variationTradesWriteFields(stored: stored, add: [trimmed]) else {
+            throw CanonicalWriteUnavailableError(function: "variationTradesWriteFields")
+        }
+        // `.some(nil)`: the trade is already stored; nothing to write.
+        guard let trades = answer else { return }
         if snap.exists {
-            try? await ref.updateData(["customTrades": trades])
+            try await ref.updateData(["customTrades": trades])
         } else {
-            try? await ref.setData(["customTrades": trades], merge: true)
+            try await ref.setData(["customTrades": trades], merge: true)
         }
     }
 
