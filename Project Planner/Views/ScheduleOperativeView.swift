@@ -24,6 +24,8 @@ struct ScheduleOperativeView: View {
     var editingBooking: Booking? = nil
     /// When set, pre-selects all operatives/dates in this group for batch edit.
     var editingGroupId: String? = nil
+    /// Owner decision 25 Nov: the booked days once something saved, so Scheduling opens on the first booked day's week.
+    var onBooked: (([Date]) -> Void)? = nil
 
     @State private var selectedOperatives: Set<UUID> = []
     /// Memo for `multiPersonBlocks` (RULEBOOK 1.60.0).
@@ -1836,7 +1838,8 @@ struct ScheduleOperativeView: View {
     private func proceedWithBooking() {
         isBooking = true
         Feedback.prepare()
-        
+        let bookedDays = Array(selectedDates)
+
         Task {
             let operatives = selectableOperatives.filter { selectedOperatives.contains($0.id) }
             var newBookings: [Booking] = []
@@ -2010,6 +2013,8 @@ struct ScheduleOperativeView: View {
                 }
                 // Feedback guide §4: one sound for the whole Confirm, from this save's own outcome.
                 Feedback.play(outcome, success: .bookingSaved)
+                // Owner decision 25 Nov: Scheduling goes to the week of the first booked day.
+                if outcome.clearsSelection { onBooked?(bookedDays) }
                 if outcome.clearsSelection {
                     acknowledgedConflictIds.removeAll()
                     struckConflictIds.removeAll()

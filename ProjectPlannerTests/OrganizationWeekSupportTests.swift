@@ -42,6 +42,22 @@ final class OrganizationWeekSupportTests: XCTestCase {
 
     private let novemberWeek = ["2026-11-16", "2026-11-17", "2026-11-18", "2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"]
 
+    // MARK: Back to the booked week (owner decision 25 Nov)
+
+    /// After saving a booking in Scheduling the grid opens on the week of the first booked day: one week → that week;
+    /// across weeks → the earliest day's week (1 day w/c 30 Nov + days w/c 7 Dec → w/c 30 Nov); nothing → nil.
+    func testSavingABookingReturnsToTheWeekOfTheFirstBookedDay() {
+        onPhonesIn { zone in
+            let oneDay = [instant("2026-12-02T12:00:00Z")]
+            XCTAssertEqual(OrganizationWeekSupport.returnWeekStart(forBookedDays: oneDay, timeZone: london), instant("2026-11-30T00:00:00Z"), zone)
+            let acrossWeeks = [instant("2026-12-09T12:00:00Z"), instant("2026-12-08T12:00:00Z"), instant("2026-12-01T12:00:00Z")]
+            XCTAssertEqual(OrganizationWeekSupport.returnWeekStart(forBookedDays: acrossWeeks, timeZone: london), instant("2026-11-30T00:00:00Z"), zone)
+            let sunday = [instant("2026-12-06T12:00:00Z")]
+            XCTAssertEqual(OrganizationWeekSupport.returnWeekStart(forBookedDays: sunday, timeZone: london), instant("2026-11-30T00:00:00Z"), zone)
+            XCTAssertNil(OrganizationWeekSupport.returnWeekStart(forBookedDays: [], timeZone: london), zone)
+        }
+    }
+
     // MARK: The week and its columns
 
     /// Failure before: the grid's week came from a calendar, so a phone in Los Angeles or Auckland could start the week
