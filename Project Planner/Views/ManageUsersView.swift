@@ -309,8 +309,18 @@ struct ManageUsersView: View {
 
     /// RULEBOOK 1.14.0 §8, §11 `usersMissingPayRate`: active self-employed people saved before the pay-rate rule with no
     /// rate above 0 (a missing employment type reads as self-employed). Admins only, like web.
+    ///
+    /// 25 Nov (owner: a ghost with a day rate was listed): while `privatePay` is on the rate is on the person's pay
+    /// profile, laid over the roster only once it has been read. Nobody is listed until the roster overlay is ready and
+    /// their own read did not fail, so a stripped users document is never read as "no rate" (as web).
     private var usersMissingPayRate: [AppUser] {
-        PayRateRequiredRulebook.usersMissingPayRate(rosterListed(userStore.organizationUsers, segment: .active))
+        let privatePay = SecuritySwitchContext.privatePay
+        if privatePay && userStore.rosterPayOverlayLoad != .ready { return [] }
+        let failed = privatePay ? userStore.rosterPayFailedIds : []
+        return PayRateRequiredRulebook.usersMissingPayRate(rosterListed(userStore.organizationUsers, segment: .active))
+            .filter { person in
+                !([person.id] + person.formerUserIds).contains { failed.contains($0.lowercased()) }
+            }
     }
 
     private var usersMissingPayRateNotice: some View {

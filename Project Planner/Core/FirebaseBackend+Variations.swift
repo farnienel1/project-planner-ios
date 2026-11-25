@@ -860,19 +860,19 @@ extension FirebaseBackend {
         let storageRef = storage.reference().child(path)
         let metadata = StorageMetadata()
         metadata.contentType = contentType
+        try await putStallWatched(storageRef: storageRef, data: data, metadata: metadata)
+        return try await variationEvidenceDownloadURL(storageRef: storageRef, path: path)
+    }
+
+    /// One upload with the stall watch (25 Nov, owner: uploads solid everywhere before launch): cancelled only after
+    /// `variationUploadStallSeconds` with nothing sent — never for taking long, so a big file on a slow site
+    /// connection finishes — and a stall is reported with its reason. Every iPhone upload goes through it.
+    func putStallWatched(storageRef: StorageReference, data: Data, metadata: StorageMetadata) async throws {
         let watch = VariationUploadWatch()
         do {
             _ = try await putWatched(storageRef: storageRef, data: data, metadata: metadata, watch: watch)
         } catch {
             guard watch.timedOut else { throw error }
-            // Review of #261: past the 5-minute overall limit the upload was still moving, so it is not a stall.
-            if watch.timedOutOverall {
-                throw NSError(
-                    domain: Self.variationUploadStallDomain,
-                    code: 408,
-                    userInfo: [NSLocalizedDescriptionKey: "The evidence upload took more than 5 minutes, so it was cancelled and nothing was saved. Check the connection, or add a smaller file."]
-                )
-            }
             // A refusal by the Storage rules comes back at once as an error; a stall means File storage never answered
             // (the SDK keeps retrying). Ask Storage one quick question about the same path to say which (17 Nov).
             throw NSError(
@@ -881,7 +881,6 @@ extension FirebaseBackend {
                 userInfo: [NSLocalizedDescriptionKey: await Self.variationUploadStallReason(storageRef: storageRef, sentBytes: watch.sentBytes)]
             )
         }
-        return try await variationEvidenceDownloadURL(storageRef: storageRef, path: path)
     }
 
     static let variationUploadStallDomain = "VariationUploadStall"
@@ -893,7 +892,7 @@ extension FirebaseBackend {
             if probe.domain == StorageErrorDomain,
                let code = StorageErrorCode(rawValue: probe.code),
                code == .unauthorized || code == .unauthenticated {
-                return "File storage refused this upload: your account may not add evidence to this job. Ask an admin to check your access."
+                return "File storage refused this upload: your account may not add this file here. Ask an admin to check your access."
             }
             let notFound = probe.domain == StorageErrorDomain && StorageErrorCode(rawValue: probe.code) == .objectNotFound
             if !notFound {
@@ -982,7 +981,8 @@ extension FirebaseBackend {
     }
 
     static let variationUploadStallSeconds: TimeInterval = 60
-    static let variationUploadTotalSeconds: TimeInterval = 300
+    /// 25 Nov (owner): no overall limit — only a stall cancels an upload.
+    static let variationUploadTotalSeconds: TimeInterval = .infinity
 
     /// RULEBOOK 1.52.0 §24 `CanonicalBusinessEngine.variationEvidenceAddWriteFields`: links uploaded files to the
     /// variation in a transaction on `variations/{id}` (the stored list plus each new entry, up to 10 files; a file
