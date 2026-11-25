@@ -116,8 +116,16 @@ var ProjectPlannerCanonical = (() => {
     DATA_PARITY_TRIGGERS: () => DATA_PARITY_TRIGGERS,
     DAY_RATE_OVERTIME_ROUNDED_NOTE: () => DAY_RATE_OVERTIME_ROUNDED_NOTE,
     DEADLINE_ASSIGNMENTS_DOCUMENT_ID: () => DEADLINE_ASSIGNMENTS_DOCUMENT_ID,
+    DEADLINE_BEHIND_PACE_POINTS: () => DEADLINE_BEHIND_PACE_POINTS,
+    DEADLINE_GROUPS: () => DEADLINE_GROUPS,
     DEADLINE_MULTIPLE_FLOORS_GROUP: () => DEADLINE_MULTIPLE_FLOORS_GROUP,
+    DEADLINE_REOPEN_LABEL: () => DEADLINE_REOPEN_LABEL,
+    DEADLINE_RESCHEDULE_NOTE_REQUIRED_MESSAGE: () => DEADLINE_RESCHEDULE_NOTE_REQUIRED_MESSAGE,
+    DEADLINE_RESCHEDULE_OTHER_REASON: () => DEADLINE_RESCHEDULE_OTHER_REASON,
+    DEADLINE_RESCHEDULE_REASONS: () => DEADLINE_RESCHEDULE_REASONS,
+    DEADLINE_RESCHEDULE_REASON_REQUIRED_MESSAGE: () => DEADLINE_RESCHEDULE_REASON_REQUIRED_MESSAGE,
     DEADLINE_STATUSES: () => DEADLINE_STATUSES,
+    DEADLINE_TABS: () => DEADLINE_TABS,
     DEFAULT_ANNUAL_LEAVE: () => DEFAULT_ANNUAL_LEAVE,
     DEFAULT_ANNUAL_LEAVE_DAYS: () => DEFAULT_ANNUAL_LEAVE_DAYS,
     DEFAULT_BANK_HOLIDAY_REGION_ID: () => DEFAULT_BANK_HOLIDAY_REGION_ID,
@@ -1106,11 +1114,20 @@ var ProjectPlannerCanonical = (() => {
     deadlineAssignedProjectIds: () => deadlineAssignedProjectIds,
     deadlineAssignedRecipients: () => deadlineAssignedRecipients,
     deadlineAssignmentWriteFields: () => deadlineAssignmentWriteFields,
+    deadlineDayText: () => deadlineDayText,
     deadlineDaysRemaining: () => deadlineDaysRemaining,
+    deadlineDisplay: () => deadlineDisplay,
     deadlineFloorGroup: () => deadlineFloorGroup,
     deadlineLocationWriteFields: () => deadlineLocationWriteFields,
+    deadlineMovedNote: () => deadlineMovedNote,
     deadlineOnLocation: () => deadlineOnLocation,
     deadlineProjectKey: () => deadlineProjectKey,
+    deadlineReopenFields: () => deadlineReopenFields,
+    deadlineReopenedNote: () => deadlineReopenedNote,
+    deadlineRescheduleReasonError: () => deadlineRescheduleReasonError,
+    deadlineRescheduleReasonText: () => deadlineRescheduleReasonText,
+    deadlineSummaryLine: () => deadlineSummaryLine,
+    deadlineTabCounts: () => deadlineTabCounts,
     deadlineUrgency: () => deadlineUrgency,
     deadlinesDocumentId: () => deadlinesDocumentId,
     defaultBankHolidayRegionForCountry: () => defaultBankHolidayRegionForCountry,
@@ -13476,7 +13493,8 @@ var ProjectPlannerCanonical = (() => {
     const raw = item.locations && item.locations.length > 0 ? item.locations : item.location ? [item.location] : [];
     const list = uniqueLocations([...raw]);
     if (list.length === 0) return null;
-    return list.length === 1 ? list[0] : DEADLINE_MULTIPLE_FLOORS_GROUP;
+    if (list.length === 1 && list[0].replace(/\s+/g, " ").toLowerCase() !== DEADLINE_MULTIPLE_FLOORS_GROUP.toLowerCase()) return list[0];
+    return DEADLINE_MULTIPLE_FLOORS_GROUP;
   }
   function parseDeadlineItem(raw, options) {
     const row3 = record4(raw);
@@ -18120,8 +18138,8 @@ var ProjectPlannerCanonical = (() => {
   // lib/canonical/rulebookStamp.ts
   function rulebookStamp() {
     return {
-      version: true ? "1.93.0" : "",
-      sha256: true ? "bca55b9cb48521c0b950697b0b7f7ed427d77b5b9737d03eb411c75bf0dd6f51" : ""
+      version: true ? "1.95.0" : "",
+      sha256: true ? "15011556b747a106b3fa65e0b1f40a9d16f8ff18951118df811515f9bc104b13" : ""
     };
   }
   function rulebookVersionLabel(version) {
@@ -32699,8 +32717,8 @@ var ProjectPlannerCanonical = (() => {
     return { result: "ok", storedMime: "storeAs" in accepted ? accepted.storeAs : accepted.mime, message: null };
   }
   var TASK_ATTACHMENT_HELP = `Photos (JPG, PNG, WebP, HEIC) or PDF, up to ${TASK_ATTACHMENT_RULES.maxSizeMb} MB each, ${TASK_ATTACHMENT_RULES.maxFiles} files max`;
-  function taskUploadProgressText(done, total, percent) {
-    const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  function taskUploadProgressText(done, total, percent2) {
+    const p = Math.max(0, Math.min(100, Math.round(Number(percent2) || 0)));
     return `Uploading ${Math.min(done + 1, total)} of ${total} \xB7 ${p}%`;
   }
   var TASK_FORM_ORDER = ["title", "description", "location", "assignees", "dueDate", "priority", "checklist", "attachments", "status"];
@@ -35198,6 +35216,185 @@ var ProjectPlannerCanonical = (() => {
         }
       }
     };
+  }
+
+  // lib/canonical/deadlineDisplay.ts
+  var DEADLINE_TABS = [
+    { key: "all", label: "All" },
+    { key: "overdue", label: "Overdue" },
+    { key: "thisWeek", label: "This week" },
+    { key: "behindPace", label: "Behind pace" },
+    { key: "completed", label: "Completed" }
+  ];
+  var DEADLINE_GROUPS = [
+    { key: "overdue", label: "Overdue" },
+    { key: "thisWeek", label: "This week" },
+    { key: "nextWeek", label: "Next week" },
+    { key: "later", label: "Later" },
+    { key: "completed", label: "Completed" }
+  ];
+  var DEADLINE_BEHIND_PACE_POINTS = 10;
+  var MONTHS8 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var WEEKDAYS6 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  function keyDate(key8) {
+    const [y, m, d] = key8.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, d));
+  }
+  function deadlineDayText(dayKey, withYear = false) {
+    if (!dayKey || !/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return "";
+    const date = keyDate(dayKey);
+    const base = `${WEEKDAYS6[date.getUTCDay()]} ${date.getUTCDate()} ${MONTHS8[date.getUTCMonth()]}`;
+    return withYear ? `${base} ${date.getUTCFullYear()}` : base;
+  }
+  function deadlineDayCount(n) {
+    return n === 1 ? "1 day" : `${n} days`;
+  }
+  function percent(progress) {
+    const value = Number(progress);
+    if (!Number.isFinite(value)) return 0;
+    const scaled = value <= 1 ? value * 100 : value;
+    return Math.max(0, Math.min(100, Math.round(scaled)));
+  }
+  function weekStartKey(dayKey) {
+    const iso = (keyDate(dayKey).getUTCDay() + 6) % 7 + 1;
+    return addCalendarDayKeys(dayKey, 1 - iso);
+  }
+  function deadlineDisplay(item, nowMs2, timeZone) {
+    const today = dueDayKey(Number.isFinite(nowMs2) ? nowMs2 : Date.now(), timeZone);
+    const due = dueDayKey(item?.due, timeZone) || null;
+    const start = dueDayKey(item?.start, timeZone) || dueDayKey(item?.createdAt, timeZone) || null;
+    const status = String(item?.status ?? "").trim().toLowerCase();
+    const complete = status === "complete";
+    const progressPercent = complete ? 100 : percent(item?.progress);
+    const daysRemaining = due ? calendarDaysBetween(today, due) : null;
+    let expectedPercent = null;
+    if (due && start) {
+      const span = calendarDaysBetween(start, due);
+      expectedPercent = span <= 0 ? today >= due ? 100 : 0 : Math.max(0, Math.min(100, Math.round(calendarDaysBetween(start, today) / span * 100)));
+    }
+    const sunday = addCalendarDayKeys(weekStartKey(today), 6);
+    const nextSunday = addCalendarDayKeys(sunday, 7);
+    if (complete) {
+      const doneDay = dueDayKey(item?.completedAt, timeZone);
+      const lateBy = doneDay && due ? calendarDaysBetween(due, doneDay) : 0;
+      const late = lateBy > 0;
+      return {
+        status: late ? "late" : "met",
+        statusLabel: late ? "Completed late" : "Met on time",
+        tone: late ? "grey" : "green",
+        group: "completed",
+        tabs: ["all", "completed"],
+        daysRemaining,
+        dueText: late ? `Done ${deadlineDayCount(lateBy)} late` : "Met on time",
+        pill: "Done",
+        progressPercent,
+        expectedPercent,
+        paceText: null
+      };
+    }
+    const overdue = daysRemaining != null && daysRemaining < 0;
+    const behind = !overdue && expectedPercent != null && progressPercent < expectedPercent - DEADLINE_BEHIND_PACE_POINTS;
+    const group = overdue ? "overdue" : !due ? "later" : due <= sunday ? "thisWeek" : due <= nextSunday ? "nextWeek" : "later";
+    const tabs = ["all"];
+    if (overdue) tabs.push("overdue");
+    if (group === "thisWeek") tabs.push("thisWeek");
+    if (behind) tabs.push("behindPace");
+    const displayStatus = overdue ? "overdue" : status === "blocked" ? "blocked" : behind ? "behindPace" : "onTrack";
+    const statusLabel = { overdue: "Overdue", blocked: "Blocked", behindPace: "Behind pace", onTrack: "On track" }[displayStatus];
+    const tone = displayStatus === "overdue" ? "red" : displayStatus === "onTrack" && group !== "thisWeek" ? "primary" : "amber";
+    const dueText = daysRemaining == null ? "No due date" : overdue ? `${deadlineDayCount(-daysRemaining)} overdue` : daysRemaining === 0 ? "Due today" : daysRemaining === 1 ? "Due tomorrow" : `Due in ${deadlineDayCount(daysRemaining)}`;
+    const pill = daysRemaining == null ? "\u2014" : overdue ? `+${-daysRemaining}d` : daysRemaining === 0 ? "Today" : `${daysRemaining}d`;
+    return {
+      status: displayStatus,
+      statusLabel,
+      tone,
+      group,
+      tabs,
+      daysRemaining,
+      dueText,
+      pill,
+      progressPercent,
+      expectedPercent,
+      paceText: behind ? `${progressPercent}% \xB7 expected ${expectedPercent}%` : null
+    };
+  }
+  function deadlineTabCounts(items, nowMs2, timeZone) {
+    const counts = { all: 0, overdue: 0, thisWeek: 0, behindPace: 0, completed: 0 };
+    for (const item of items) for (const tab of deadlineDisplay(item, nowMs2, timeZone).tabs) counts[tab] += 1;
+    return counts;
+  }
+  function deadlineSummaryLine(items, nowMs2, timeZone) {
+    let completed = 0;
+    let met = 0;
+    let next = null;
+    for (const item of items) {
+      const view = deadlineDisplay(item, nowMs2, timeZone);
+      if (view.group === "completed") {
+        completed += 1;
+        if (view.status === "met") met += 1;
+        continue;
+      }
+      const due = dueDayKey(item.due, timeZone);
+      if (due && (!next || due < next.due)) next = { title: String(item.title ?? "").trim() || "Untitled", due };
+    }
+    const parts3 = [`${completed} of ${items.length} complete`, `${met} on time`];
+    if (next) parts3.push(`Next: ${next.title}, ${deadlineDayText(next.due)}`);
+    return parts3.join(" \xB7 ");
+  }
+  function deadlineMovedNote(fromDue, toDue, timeZone) {
+    const from = dueDayKey(fromDue, timeZone);
+    const to = dueDayKey(toDue, timeZone);
+    if (!from || !to || from === to) return "";
+    const shift = calendarDaysBetween(from, to);
+    const date = keyDate(from);
+    const fromText = `${date.getUTCDate()} ${MONTHS8[date.getUTCMonth()]}`;
+    return shift > 0 ? `Moved ${deadlineDayCount(shift)} from ${fromText}` : `Brought forward ${deadlineDayCount(-shift)} from ${fromText}`;
+  }
+  var DEADLINE_RESCHEDULE_REASONS = [
+    "Materials",
+    "Preceding trade",
+    "Access",
+    "Weather",
+    "Labour",
+    "Client change",
+    "Design change",
+    "Inspection",
+    "Other"
+  ];
+  var DEADLINE_RESCHEDULE_OTHER_REASON = "Other";
+  var DEADLINE_RESCHEDULE_REASON_REQUIRED_MESSAGE = "Choose a reason for the new date.";
+  var DEADLINE_RESCHEDULE_NOTE_REQUIRED_MESSAGE = "Add a note to say why.";
+  function deadlineRescheduleReasonError(reason, note) {
+    const picked = String(reason ?? "").trim();
+    if (!picked) return DEADLINE_RESCHEDULE_REASON_REQUIRED_MESSAGE;
+    if (picked === DEADLINE_RESCHEDULE_OTHER_REASON && !String(note ?? "").trim()) return DEADLINE_RESCHEDULE_NOTE_REQUIRED_MESSAGE;
+    return null;
+  }
+  function deadlineRescheduleReasonText(reason, note) {
+    const picked = String(reason ?? "").trim();
+    const detail = String(note ?? "").trim();
+    return detail ? `${picked} \u2014 ${detail}` : picked;
+  }
+  var DEADLINE_REOPEN_LABEL = "Reopen";
+  function deadlineReopenFields(history) {
+    const rows3 = Array.isArray(history) ? history : [];
+    let lastCompleted = -1;
+    rows3.forEach((row3, index) => {
+      if (row3?.type === "completed") lastCompleted = index;
+    });
+    let percent2 = 0;
+    const end = lastCompleted >= 0 ? lastCompleted : rows3.length;
+    for (let i = end - 1; i >= 0; i -= 1) {
+      const value = Number(rows3[i]?.progress);
+      if (rows3[i]?.type === "progress" && Number.isFinite(value) && value < 100) {
+        percent2 = Math.max(0, Math.round(value));
+        break;
+      }
+    }
+    return { progressPercent: percent2, status: percent2 > 0 ? "inProgress" : "notStarted", note: deadlineReopenedNote(percent2) };
+  }
+  function deadlineReopenedNote(percent2) {
+    return `Reopened at ${Math.max(0, Math.min(100, Math.round(Number(percent2) || 0)))}%`;
   }
   return __toCommonJS(bundleEntry_exports);
 })();

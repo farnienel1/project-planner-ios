@@ -21,20 +21,21 @@ import SwiftUI
 // always one line, always the urgency colour.
 
 struct DLCountdownPill: View {
-    let urgency: DLUrgency
-    var compact: Bool = false
+    /// The rulebook's short pill ("Today", "3d", "+2d", "Done") and tone (RULEBOOK 1.94.0 §23 `deadlineDisplay`).
+    let text: String
+    let tone: String
 
     var body: some View {
-        Text(compact ? urgency.pillText : urgency.phrase)
-            .font(.system(size: compact ? 12.5 : 12, weight: .bold))
-            .foregroundStyle(urgency.accent)
+        Text(text)
+            .font(.system(size: 12.5, weight: .bold))
+            .foregroundStyle(DLTone.color(tone))
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .padding(.horizontal, compact ? 9 : 10)
-            .padding(.vertical, compact ? 5 : 5.5)
-            .background(urgency.tint)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(DLTone.tint(tone))
             .clipShape(Capsule())
-            .overlay(Capsule().strokeBorder(urgency.accent.opacity(0.22), lineWidth: 1))
+            .overlay(Capsule().strokeBorder(DLTone.color(tone).opacity(0.22), lineWidth: 1))
             .fixedSize()
     }
 }
@@ -102,7 +103,7 @@ struct DLMetaChip: View {
 struct DLPacingBar: View {
     let progress: Double            // 0...1 actual
     var expected: Double? = nil     // 0...1 where we should be today
-    var accent: Color = HS.teal
+    var accent: Color = PPColor.brand
     var height: CGFloat = 8
     var showNotch: Bool = true
 
@@ -130,31 +131,30 @@ struct DLPacingBar: View {
     }
 }
 
-/// Bar plus its caption line. Use this rather than the bare bar.
+/// Bar plus its caption line. Use this rather than the bare bar. Progress, the "should be here" tick and the pace
+/// words ("25% · expected 64%") are the rulebook's (RULEBOOK 1.94.0 §23 `deadlineDisplay`).
 struct DLPacingBlock: View {
     let item: DLDeadline
     var now: Date = Date()
 
     var body: some View {
-        let urgency = item.urgency(now: now)
-        let expected = item.expectedProgress(now: now)
-        let gap = item.pacingGap(now: now)
+        let view = item.display(now: now)
 
         VStack(alignment: .leading, spacing: 6) {
-            DLPacingBar(progress: item.progress,
-                        expected: expected,
-                        accent: item.status == .complete ? HS.green : urgency.accent)
+            DLPacingBar(progress: Double(view.progressPercent) / 100,
+                        expected: view.expectedPercent.map { Double($0) / 100 },
+                        accent: DLTone.color(view.tone),
+                        showNotch: !view.isCompleted)
 
             HStack(spacing: 6) {
-                Text("\(item.progressPercent)% complete")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(HS.slate)
-
-                if let gap, gap >= 5, item.status != .complete {
-                    Text("·").foregroundStyle(HS.slate2)
-                    Text("\(gap)% behind pace")
+                if let pace = view.paceText {
+                    Text(pace)
                         .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(HS.red)
+                        .foregroundStyle(HS.amber)
+                } else {
+                    Text("\(view.progressPercent)% complete")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(HS.slate)
                 }
                 Spacer(minLength: 0)
             }
@@ -212,29 +212,35 @@ struct DLDeadlineCard: View {
     var onOpen: () -> Void
     var onUpdate: (() -> Void)? = nil
 
-    private var urgency: DLUrgency { item.urgency(now: now) }
-    private var atRisk: Bool { item.isAtRisk(now: now) }
+    /// RULEBOOK 1.94.0 §23 `deadlineDisplay`: every word and colour on the card.
+    private var view: RulebookDeadlineDisplay { item.display(now: now) }
+    private var behindPace: Bool { view.status == "behindPace" }
+    private var moved: String { item.movedNote }
 
     // Press feedback without a wrapping Button — a Button here would swallow
     // taps on the "Update" pill nested inside it.
     @State private var pressed = false
 
+    /// Words first, then the day: "Due in 2 days · Fri 27 Nov 2026"; completed "Met on time" / "Done 3 days late".
+    private var dueLine: String {
+        if view.isCompleted || view.dueText.isEmpty { return view.dueText.isEmpty ? DLFormat.full(item.due) : view.dueText }
+        let day = CanonicalBusinessEngine.deadlineDayText(item.due, withYear: true) ?? DLFormat.full(item.due)
+        return "\(view.dueText) · \(day)"
+    }
+
     var body: some View {
             VStack(alignment: .leading, spacing: 11) {
 
                 // Row 1 — flags
-                if item.isCritical || atRisk || item.timesRescheduled > 0 {
-                    HStack(spacing: 6) {
+                if item.isCritical || behindPace || !moved.isEmpty {
+                    PPWrapLayout(spacing: 6) {
                         if item.isCritical { DLCriticalFlag() }
-                        if atRisk {
-                            HSBadge(text: "AT RISK", tone: .danger, icon: "exclamationmark.triangle.fill")
+                        if behindPace {
+                            HSBadge(text: view.statusLabel, tone: .warn, icon: "gauge.with.dots.needle.33percent")
                         }
-                        if item.timesRescheduled > 0 {
-                            DLMetaChip(icon: "calendar.badge.exclamationmark",
-                                       text: item.slippageDays > 0 ? "+\(item.slippageDays)d slip" : "moved",
-                                       tint: HS.amber)
+                        if !moved.isEmpty {
+                            DLMetaChip(icon: "calendar.badge.exclamationmark", text: moved, tint: HS.slate)
                         }
-                        Spacer(minLength: 0)
                     }
                 }
 
@@ -245,16 +251,16 @@ struct DLDeadlineCard: View {
                         .foregroundStyle(HS.ink)
                         .hsNoClip(2)
                     Spacer(minLength: 6)
-                    DLCountdownPill(urgency: urgency, compact: true)
+                    DLCountdownPill(text: view.pill, tone: view.tone)
                 }
 
                 // Row 3 — where and who
                 HStack(spacing: 6) {
                     if showLocation, let location = item.floorsText {
-                        DLMetaChip(icon: "building.2.fill", text: location, tint: HS.inkSoft)
+                        DLMetaChip(icon: "building.2.fill", text: location, tint: HS.slate)
                     }
                     if let trade = item.trade {
-                        DLMetaChip(icon: "wrench.and.screwdriver.fill", text: trade, tint: HS.blue)
+                        DLMetaChip(icon: "wrench.and.screwdriver.fill", text: trade, tint: HS.slate)
                     }
                     Spacer(minLength: 0)
                 }
@@ -274,7 +280,7 @@ struct DLDeadlineCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(HS.violetBg)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                } else if item.status != .complete {
+                } else if !view.isCompleted {
                     DLPacingBlock(item: item, now: now)
                 }
 
@@ -283,12 +289,10 @@ struct DLDeadlineCard: View {
                 // Row 5 — footer: due date, people, action
                 HStack(spacing: 10) {
                     HStack(spacing: 5) {
-                        Image(systemName: item.status == .complete ? "checkmark.seal.fill" : "calendar")
+                        Image(systemName: view.isCompleted ? "checkmark.seal.fill" : "calendar")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(item.status == .complete ? HS.green : HS.slate2)
-                        Text(item.status == .complete
-                             ? "Done \(DLFormat.day(item.completedAt ?? item.due))"
-                             : DLFormat.full(item.due))
+                            .foregroundStyle(view.isCompleted ? DLTone.color(view.tone) : HS.slate2)
+                        Text(dueLine)
                             .font(HSFont.meta)
                             .foregroundStyle(HS.slate)
                             .lineLimit(1)
@@ -301,14 +305,14 @@ struct DLDeadlineCard: View {
                         DLAssigneeStack(initials: item.initialsForAssignees, size: 24)
                     }
 
-                    if let onUpdate, item.status != .complete {
+                    if let onUpdate, !view.isCompleted {
                         Button {
                             HSHaptic.tap(); onUpdate()
                         } label: {
                             Text("Update")
                         }
                         .accessibilityIdentifier("dlDeadlineCard.update")
-                        .buttonStyle(HSPillButton(tone: .teal))
+                        .buttonStyle(HSPillButton(tone: .blue))
                     }
                 }
             }
@@ -317,12 +321,12 @@ struct DLDeadlineCard: View {
             .overlay(alignment: .leading) {
                 // Urgency spine — readable before a single word is.
                 RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(urgency.accent)
+                    .fill(DLTone.color(view.tone))
                     .frame(width: 4)
                     .padding(.vertical, 14)
                     .padding(.leading, 7)
             }
-            .opacity(item.status == .complete ? 0.72 : 1)
+            .opacity(view.isCompleted ? 0.72 : 1)
             .scaleEffect(pressed ? 0.985 : 1)
             .animation(.spring(response: 0.25, dampingFraction: 0.75), value: pressed)
             .contentShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
@@ -372,74 +376,6 @@ struct DLGroupHeader: View {
 }
 
 // =====================================================================
-// MARK: - 8. Week rail
-// =====================================================================
-//
-// Fourteen days of workload at a glance. The bar under each day is the
-// number of deadlines landing that day, so a Thursday with four things due
-// is obvious before anybody opens a list. Tap a day to filter to it.
-
-struct DLWeekRail: View {
-    let days: [Date]
-    let load: (Date) -> Int
-    let overdueOn: (Date) -> Bool
-    @Binding var selected: Date?
-    var now: Date = Date()
-
-    private let cal = Calendar.current
-
-    var body: some View {
-        Color.clear
-            .frame(height: 78)
-            .frame(maxWidth: .infinity)
-            .overlay(alignment: .leading) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(days, id: \.timeIntervalSince1970) { day in
-                            let n = load(day)
-                            let isToday = cal.isDate(day, inSameDayAs: now)
-                            let isSel = selected.map { cal.isDate($0, inSameDayAs: day) } ?? false
-                            let bad = overdueOn(day)
-                            let accent: Color = bad ? HS.red : (n > 0 ? HS.teal : HS.slate2)
-
-                            Button {
-                                HSHaptic.select()
-                                selected = isSel ? nil : day
-                            } label: {
-                                VStack(spacing: 5) {
-                                    Text(DLFormat.weekday(day))
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(isSel ? HS.onAccent : HS.slate2)
-                                    Text(DLFormat.dayNum(day))
-                                        .font(.system(size: 15, weight: isToday ? .black : .semibold))
-                                        .foregroundStyle(isSel ? HS.onAccent : (isToday ? HS.teal : HS.ink))
-                                    Capsule()
-                                        .fill(n == 0 ? Color.clear : (isSel ? HS.onAccent : accent))
-                                        .frame(width: 14, height: n == 0 ? 3 : CGFloat(min(n, 4)) * 3.5 + 2)
-                                        .frame(height: 16, alignment: .bottom)
-                                }
-                                .frame(width: 40)
-                                .padding(.vertical, 8)
-                                .background(isSel ? HS.teal : (isToday ? HS.tealBg : Color.clear))
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .strokeBorder(isToday && !isSel ? HS.teal.opacity(0.35) : Color.clear,
-                                                      lineWidth: 1)
-                                )
-                            }
-                            .accessibilityIdentifier("dlWeekRail.row.\(day.timeIntervalSince1970)")
-                            .buttonStyle(HSPressStyle())
-                        }
-                    }
-                    .padding(.horizontal, HSMetric.screenPad)
-                    .padding(.vertical, 2)
-                }
-            }
-    }
-}
-
-// =====================================================================
 // MARK: - 9. Timeline row (the Gantt-lite view)
 // =====================================================================
 //
@@ -454,7 +390,7 @@ struct DLTimelineRow: View {
     var now: Date = Date()
     var onOpen: () -> Void
 
-    private let cal = Calendar.current
+    private let cal = OrganizationRulebookContext.calendar
 
     private func offsetDays(_ date: Date) -> Double {
         Double(cal.dateComponents([.day], from: cal.startOfDay(for: windowStart),
@@ -462,7 +398,7 @@ struct DLTimelineRow: View {
     }
 
     var body: some View {
-        let urgency = item.urgency(now: now)
+        let tone = DLTone.color(item.display(now: now).tone)
         // Clamped to the six-week window, so a deadline before or after it still draws at the edge.
         let s = min(max(offsetDays(item.start ?? item.due), 0), Double(windowDays) - 0.6)
         let e = min(offsetDays(item.due) + 1, Double(windowDays))
@@ -491,7 +427,7 @@ struct DLTimelineRow: View {
                     Spacer(minLength: 6)
                     Text(DLFormat.day(item.due))
                         .font(.system(size: 11.5, weight: .bold))
-                        .foregroundStyle(urgency.accent)
+                        .foregroundStyle(tone)
                         .fixedSize()
                 }
 
@@ -505,7 +441,7 @@ struct DLTimelineRow: View {
 
                         // The bar
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(LinearGradient(colors: [urgency.accent.opacity(0.80), urgency.accent],
+                            .fill(LinearGradient(colors: [tone.opacity(0.80), tone],
                                                  startPoint: .leading, endPoint: .trailing))
                             .frame(width: max(unit * CGFloat(span), 10), height: 18)
                             .overlay(alignment: .leading) {
@@ -533,7 +469,7 @@ struct DLTimelineScale: View {
     let windowStart: Date
     let windowDays: Int
 
-    private let cal = Calendar.current
+    private let cal = OrganizationRulebookContext.calendar
 
     var body: some View {
         GeometryReader { geo in
@@ -648,7 +584,7 @@ struct DLHistoryRow: View {
 
 struct DLProgressPicker: View {
     @Binding var percent: Int
-    var accent: Color = HS.teal
+    var accent: Color = PPColor.brand
 
     private let steps = [0, 25, 50, 75, 100]
 
@@ -733,67 +669,6 @@ struct DLToggleRow: View {
 }
 
 // =====================================================================
-// MARK: - 14. Risk banner
-// =====================================================================
-//
-// Appears above the list only when there is something to say. An always-on
-// banner becomes wallpaper within a week.
-
-struct DLRiskBanner: View {
-    let overdue: Int
-    let atRisk: Int
-    let criticalOpen: Int
-    var onTap: () -> Void
-
-    private var message: String? {
-        if overdue > 0 && criticalOpen > 0 {
-            return "\(overdue) overdue, \(criticalOpen) on the critical path"
-        } else if overdue > 0 {
-            return overdue == 1 ? "1 deadline is overdue" : "\(overdue) deadlines are overdue"
-        } else if atRisk > 0 {
-            return atRisk == 1 ? "1 deadline is behind pace" : "\(atRisk) deadlines are behind pace"
-        }
-        return nil
-    }
-
-    var body: some View {
-        if let message {
-            Button {
-                HSHaptic.tap(); onTap()
-            } label: {
-                HStack(spacing: 11) {
-                    Image(systemName: overdue > 0 ? "exclamationmark.triangle.fill" : "gauge.with.dots.needle.33percent")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(overdue > 0 ? HS.red : HS.amber)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(message)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(HS.ink)
-                            .hsNoClip(2)
-                        Text("Tap to review")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(HS.slate)
-                    }
-                    Spacer(minLength: 6)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(HS.slate2)
-                }
-                .padding(13)
-                .background(overdue > 0 ? HS.redBg : HS.amberBg)
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder((overdue > 0 ? HS.red : HS.amber).opacity(0.25), lineWidth: 1)
-                )
-            }
-            .accessibilityIdentifier("dlRiskBanner.exclamationmarkTriangleFill")
-            .buttonStyle(HSPressStyle())
-        }
-    }
-}
-
-// =====================================================================
 // MARK: - 15. Grouping menu button
 // =====================================================================
 
@@ -816,15 +691,125 @@ struct DLGroupingButton: View {
                 Text(grouping.label).font(.system(size: 12, weight: .bold))
                 Image(systemName: "chevron.down").font(.system(size: 8.5, weight: .black))
             }
-            .foregroundStyle(HS.teal)
+            .foregroundStyle(PPColor.brand)
             .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(HS.tealBg)
+            .background(HS.blueBg)
             .clipShape(Capsule())
             .fixedSize()
         }
             .accessibilityIdentifier("dlGrouping.chevronDown")
+    }
+}
+
+/// The "Filter" pill under the band, with the number of filters on.
+struct DLFilterButton: View {
+    let activeCount: Int
+    let action: () -> Void
+
+    var body: some View {
+        Button {
+            HSHaptic.select(); action()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "line.3.horizontal.decrease").font(.system(size: 10.5, weight: .bold))
+                Text("Filter").font(.system(size: 12, weight: .bold))
+                if activeCount > 0 {
+                    Text("\(activeCount)")
+                        .font(.system(size: 10.5, weight: .heavy))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 5)
+                        .frame(minWidth: 16, minHeight: 16)
+                        .background(PPColor.brand, in: Capsule())
+                }
+            }
+            .foregroundStyle(PPColor.brand)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(HS.blueBg)
+            .clipShape(Capsule())
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(activeCount > 0 ? "Filter, \(activeCount) on" : "Filter")
+        .accessibilityIdentifier("dlDeadlinesScreen.filter")
+    }
+}
+
+/// The Filter sheet: Trade, Location, Responsible, Critical path only and Sort (the web toolbar's choices). It
+/// narrows the list and timeline only; the summary and tab counts keep reading every deadline the viewer sees.
+struct DLFilterSheet: View {
+    @ObservedObject var store: DLStore
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let trades = store.trades
+        let locations = store.locationOptions
+        let people = store.responsibleOptions
+        NavigationStack {
+            Form {
+                Section("Trade") {
+                    Picker("Trade", selection: $store.tradeFilter) {
+                        ForEach(trades, id: \.self) { Text($0).tag($0) }
+                        // A chosen trade no deadline uses any more stays listed, never silently "All trades".
+                        if !trades.contains(store.tradeFilter) { Text(store.tradeFilter).tag(store.tradeFilter) }
+                    }
+                    .accessibilityIdentifier("dlFilter.trade")
+                }
+                Section("Location") {
+                    Picker("Location", selection: $store.locationFilter) {
+                        Text("All locations").tag("")
+                        ForEach(locations, id: \.self) { Text($0).tag($0) }
+                        if !store.locationFilter.isEmpty, !locations.contains(store.locationFilter) {
+                            Text(store.locationFilter).tag(store.locationFilter)
+                        }
+                    }
+                    .accessibilityIdentifier("dlFilter.location")
+                }
+                Section("Responsible") {
+                    Picker("Responsible", selection: $store.responsibleFilter) {
+                        Text("Anyone").tag("")
+                        ForEach(people) { Text($0.name).tag($0.id) }
+                        if !store.responsibleFilter.isEmpty, !people.contains(where: { $0.id == store.responsibleFilter }) {
+                            Text("Selected").tag(store.responsibleFilter)
+                        }
+                    }
+                    .accessibilityIdentifier("dlFilter.responsible")
+                }
+                Section {
+                    Toggle("Critical path only", isOn: $store.criticalOnly)
+                        .tint(PPColor.brand)
+                        .accessibilityIdentifier("dlFilter.criticalOnly")
+                }
+                Section("Sort") {
+                    Picker("Sort", selection: $store.sort) {
+                        ForEach(DLSort.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    .accessibilityIdentifier("dlFilter.sort")
+                }
+                if store.isNarrowed {
+                    Section {
+                        Button("Clear filters", role: .destructive) {
+                            HSHaptic.select(); store.clearFilters()
+                        }
+                        .accessibilityIdentifier("dlFilter.clear")
+                    }
+                }
+            }
+            .tint(PPColor.brand)
+            .navigationTitle("Filter")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                        .accessibilityIdentifier("dlFilter.done")
+                }
+            }
+        }
     }
 }
 
@@ -838,8 +823,9 @@ struct DLCountdownRing: View {
     var size: CGFloat = 96
 
     var body: some View {
-        let urgency = item.urgency(now: now)
-        let expected = item.expectedProgress(now: now) ?? 0
+        // RULEBOOK 1.94.0 §23 `deadlineDisplay`: the pill words, progress and where progress should be by today.
+        let view = item.display(now: now)
+        let expected = Double(view.expectedPercent ?? 0) / 100
 
         ZStack {
             Circle()
@@ -847,38 +833,54 @@ struct DLCountdownRing: View {
 
             // Time elapsed, drawn faint.
             Circle()
-                .trim(from: 0, to: min(max(expected, 0), 1))
+                .trim(from: 0, to: view.isCompleted ? 0 : min(max(expected, 0), 1))
                 .stroke(Color.white.opacity(0.35), style: StrokeStyle(lineWidth: 9, lineCap: .round))
                 .rotationEffect(.degrees(-90))
 
             // Work done, drawn solid.
             Circle()
-                .trim(from: 0, to: min(max(item.progress, 0), 1))
+                .trim(from: 0, to: min(max(Double(view.progressPercent) / 100, 0), 1))
                 .stroke(Color.white, style: StrokeStyle(lineWidth: 9, lineCap: .round))
                 .rotationEffect(.degrees(-90))
 
             VStack(spacing: 0) {
-                Text(urgency.pillText)
+                Text(view.pill)
                     .font(.system(size: 21, weight: .black))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
-                Text(urgency.isOverdue ? "over" : "to go")
-                    .font(.system(size: 10.5, weight: .bold))
-                    .foregroundStyle(.white.opacity(0.75))
+                if !caption(view).isEmpty {
+                    Text(caption(view))
+                        .font(.system(size: 10.5, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
             }
         }
         .frame(width: size, height: size)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(view.dueText)
+    }
+
+    /// The small word under the pill: "on time" / "late" once completed, "overdue", "due" (today) or "to go".
+    private func caption(_ view: RulebookDeadlineDisplay) -> String {
+        if view.isCompleted { return view.status == "late" ? "late" : "on time" }
+        guard let days = view.daysRemaining else { return "" }
+        if days < 0 { return "overdue" }
+        return days == 0 ? "due" : "to go"
     }
 }
 
-/// The gradient hero at the top of the detail sheet.
+/// The gradient hero at the top of the detail sheet, coloured by the rulebook tone.
 struct DLDetailHero: View {
     let item: DLDeadline
     var now: Date = Date()
 
     var body: some View {
-        let urgency = item.urgency(now: now)
+        let view = item.display(now: now)
+        let moved = item.movedNote
+        let day = CanonicalBusinessEngine.deadlineDayText(item.due, withYear: true) ?? DLFormat.full(item.due)
 
         HStack(alignment: .center, spacing: 16) {
             VStack(alignment: .leading, spacing: 7) {
@@ -898,13 +900,13 @@ struct DLDetailHero: View {
                     .foregroundStyle(.white)
                     .hsNoClip(3, minScale: 0.7)
 
-                Text(DLFormat.full(item.due))
+                Text(view.dueText.isEmpty ? day : "\(view.dueText) · \(day)")
                     .font(HSFont.heroSub)
                     .foregroundStyle(.white.opacity(0.88))
                     .hsNoClip(2)
 
-                if item.slippageDays > 0 {
-                    Text("Moved \(item.slippageDays) days from \(DLFormat.day(item.originalDue ?? item.due))")
+                if !moved.isEmpty {
+                    Text(moved)
                         .font(.system(size: 11.5, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.80))
                         .hsNoClip(2)
@@ -917,24 +919,24 @@ struct DLDetailHero: View {
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(heroGradient(for: urgency))
+        .background(heroGradient(for: view.tone))
         .clipShape(RoundedRectangle(cornerRadius: HSMetric.cardRadius, style: .continuous))
-        .shadow(color: urgency.accent.opacity(0.28), radius: 16, x: 0, y: 8)
+        .shadow(color: DLTone.color(view.tone).opacity(0.28), radius: 16, x: 0, y: 8)
     }
 
-    private func heroGradient(for urgency: DLUrgency) -> LinearGradient {
-        switch urgency {
-        case .overdue:
+    private func heroGradient(for tone: String) -> LinearGradient {
+        switch tone {
+        case "red":
             return LinearGradient(colors: [hsDyn("#EF6257", "#C3453B"), hsDyn("#D13B31", "#8E2C25")],
                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .today, .tomorrow, .soon:
+        case "amber":
             return LinearGradient(colors: [hsDyn("#F0A03A", "#C07C21"), hsDyn("#D9821A", "#8E5A12")],
                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .complete:
+        case "green":
             return LinearGradient(colors: [hsDyn("#22B87C", "#178A5C"), hsDyn("#12A46A", "#0E6B46")],
                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .blocked:
-            return LinearGradient(colors: [hsDyn("#7E6DEB", "#5B4CB8"), hsDyn("#6D5AE6", "#433790")],
+        case "grey":
+            return LinearGradient(colors: [hsDyn("#7D8A9C", "#5A6676"), hsDyn("#667488", "#434D5B")],
                                   startPoint: .topLeading, endPoint: .bottomTrailing)
         default:
             return HS.heroBlue
