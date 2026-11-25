@@ -70,10 +70,15 @@ final class DeadlineFilterSortTests: XCTestCase {
         store.responsibleFilter = "id:u1"
         store.criticalOnly = true
         store.sort = .trade
+        store.search = "zzz"
         XCTAssertEqual(store.activeFilterCount, 4)
+        XCTAssertTrue(store.isNarrowed)
+        XCTAssertTrue(store.groups().isEmpty)
         XCTAssertEqual(store.scopedItems.count, 1, "filters never narrow what the counts read")
         store.clearFilters()
         XCTAssertEqual(store.activeFilterCount, 0)
-        XCTAssertEqual(store.sort, .dueDate)
+        XCTAssertFalse(store.isNarrowed)
+        XCTAssertEqual(store.search, "")
+        XCTAssertEqual(store.sort, .trade, "Clear filters leaves the sort")
     }
 }

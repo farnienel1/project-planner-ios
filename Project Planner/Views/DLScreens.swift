@@ -180,10 +180,10 @@ struct DLDeadlinesScreen: View {
         let groups = store.groups()
 
         if groups.isEmpty {
-            if store.activeFilterCount > 0 && !store.scopedItems.isEmpty {
+            if store.isNarrowed && !store.scopedItems.isEmpty {
                 HSEmptyState(icon: "line.3.horizontal.decrease",
-                             title: "Nothing matches",
-                             message: "No deadlines match these filters.",
+                             title: "No deadlines match these filters",
+                             message: "Change or clear the filters to see more.",
                              actionTitle: "Clear filters",
                              action: { HSHaptic.select(); store.clearFilters() })
                 .hsGutter()

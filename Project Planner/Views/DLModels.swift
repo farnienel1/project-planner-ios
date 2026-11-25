@@ -678,13 +678,18 @@ final class DLStore: ObservableObject {
             + (responsibleFilter.isEmpty ? 0 : 1) + (criticalOnly ? 1 : 0)
     }
 
-    /// "Clear filters": every sheet filter off and the sort back to Due date.
+    /// Search or any sheet filter is on (web #468: the empty state then offers Clear filters).
+    var isNarrowed: Bool {
+        activeFilterCount > 0 || !search.isEmpty
+    }
+
+    /// "Clear filters" (web #468): search, Trade, Location, Responsible and Critical path only all off. Sort stays.
     func clearFilters() {
+        search = ""
         tradeFilter = "All trades"
         locationFilter = ""
         responsibleFilter = ""
         criticalOnly = false
-        sort = .dueDate
     }
 
     /// Every key the chosen person goes by: their id, plus their other ids (`personIdSet`, as `scopedItems`).

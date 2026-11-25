@@ -791,7 +791,7 @@ struct DLFilterSheet: View {
                     .labelsHidden()
                     .accessibilityIdentifier("dlFilter.sort")
                 }
-                if store.activeFilterCount > 0 || store.sort != .dueDate {
+                if store.isNarrowed {
                     Section {
                         Button("Clear filters", role: .destructive) {
                             HSHaptic.select(); store.clearFilters()
