@@ -1748,6 +1748,7 @@ struct ProjectHealthSafetyView: View {
                 .padding(.top, 12)
             }
 
+            let mine = myIdKeys
             let filteredIssues = vm.visibleIssues().filter { issue in
                 let assigned = vm.signatures(for: issue.id).contains(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
                 guard assigned else { return false }
