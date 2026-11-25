@@ -134,7 +134,11 @@ extension FirebaseBackend {
         let size = prepared.data.count
         let outcome: String
         do {
-            outcome = try await writeSubcontractorDocumentList(organizationId: organizationId, subcontractorId: subcontractorId) { stored in
+            // Owner report 25 Nov: the link write is a transaction, which keeps retrying while the server does not
+            // answer, so the button stayed on "Uploading…". It is bounded like the qualification save (20 s); on a
+            // time-out the file is kept (the write may still land and the live list then shows it).
+            outcome = try await BoundedWait.run(seconds: Self.subcontractorDocumentLinkConfirmSeconds) { [self] in
+              try await writeSubcontractorDocumentList(organizationId: organizationId, subcontractorId: subcontractorId) { stored in
                 let answer = CanonicalBusinessEngine.subcontractorDocumentAddWriteFields(
                     stored: stored,
                     kind: kind,
@@ -149,9 +153,12 @@ extension FirebaseBackend {
                     expiresOn: expiresOn
                 )
                 return (answer.write, answer.outcome, nil)
-            }.outcome
+              }.outcome
+            }
+        } catch is BoundedWait.TimedOut {
+            throw NSError(domain: "FirebaseBackend", code: 504, userInfo: [NSLocalizedDescriptionKey: Self.subcontractorDocumentLinkUnconfirmedMessage])
         } catch {
-            try? await storage.reference().child(path).delete()
+            await deleteSubcontractorUploadIfUnlinked(organizationId: organizationId, subcontractorId: subcontractorId, path: path)
             throw error
         }
         switch outcome {
@@ -164,6 +171,35 @@ extension FirebaseBackend {
             try? await storage.reference().child(path).delete()
             throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "This document could not be saved. Try again."])
         }
+    }
+
+    /// How long the link write waits for the server (web `SUBCONTRACTOR_DOCUMENT_LINK_CONFIRM_MS`).
+    nonisolated static let subcontractorDocumentLinkConfirmSeconds: Double = 20
+
+    nonisolated static let subcontractorDocumentLinkUnconfirmedMessage =
+        "The file uploaded, but the server has not confirmed it on this sub contractor yet. Check your connection — it will appear here once it arrives. If it does not, upload it again."
+
+    /// After a failed save: re-read the firm from the server and delete the new file only when no entry names it. A
+    /// save that committed while the app saw an error (a dropped connection) keeps its file, as web does; when the
+    /// re-read fails too the file is kept (an unlinked file is safer than a linked entry whose file is gone).
+    private func deleteSubcontractorUploadIfUnlinked(organizationId: String, subcontractorId: String, path: String) async {
+        let ref = subcontractorFirmRef(organizationId: organizationId, subcontractorId: subcontractorId)
+        guard let snapshot = try? await ref.getDocument(source: .server) else { return }
+        if let data = snapshot.data(), Self.subcontractorDocumentPathIsLinked(data, path: path) { return }
+        try? await storage.reference().child(path).delete()
+    }
+
+    /// Whether either stored list (`documents.insurance`, `documents.rams`) holds an entry for this Storage path.
+    nonisolated static func subcontractorDocumentPathIsLinked(_ stored: [String: Any], path: String) -> Bool {
+        guard let documents = stored["documents"] as? [String: Any] else { return false }
+        for kind in ["insurance", "rams"] {
+            for row in documents[kind] as? [Any] ?? [] {
+                guard let entry = row as? [String: Any] else { continue }
+                let stored = (entry["path"] as? String) ?? (entry["storagePath"] as? String) ?? ""
+                if stored == path { return true }
+            }
+        }
+        return false
     }
 
     /// The download URL of a stored document (Storage refuses anyone who is not staff of the organisation).
