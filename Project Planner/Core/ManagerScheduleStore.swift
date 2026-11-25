@@ -95,6 +95,20 @@ class ManagerScheduleStore: ObservableObject {
             }
         }
 
+        // RULEBOOK 1.86.0: a Replace queued offline (from either store) removes its replaced manager bookings here too.
+        NotificationCenter.default.addObserver(
+            forName: .offlineReplaceHidBookings,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let ids = note.userInfo?["managerBookingIds"] as? [String] ?? []
+            guard !ids.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                for id in ids.compactMap(UUID.init(uuidString:)) { self.dropLocalBooking(id: id) }
+            }
+        }
+
         // RULEBOOK 1.33.0: a queued delete was undone from the sync list or refused on replay — the booking comes back.
         NotificationCenter.default.addObserver(
             forName: .offlineBookingDeleteRestored,
@@ -303,7 +317,8 @@ class ManagerScheduleStore: ObservableObject {
     }
 
     /// RULEBOOK 1.41.0 §5: Replace for a manager schedule booking — one checked transaction
-    /// (`FirebaseBackend.createBookingReplacing`, `CanonicalBusinessEngine.bookingReplaceWrites`), online only.
+    /// (`FirebaseBackend.createBookingReplacing`, `CanonicalBusinessEngine.bookingReplaceWrites`); offline (1.86.0) one
+    /// queued outbox item replayed through `offlineReplaceReplayDecision`.
     /// `labourBookings`: the labour bookings on this phone, so a replaced one is resolved from what the person was shown.
     /// The delete's signed-timesheet warning first (`CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning`), the
     /// overtime reopen notices after (review 1.41 #1, #2). Returns nil when saved, else why nothing was saved.
@@ -328,6 +343,27 @@ class ManagerScheduleStore: ObservableObject {
         var normalized = booking
         normalized.date = BookingDay.organizationMidnight(for: booking.date)
         normalized.updatedAt = Date()
+        if OfflinePolicy.queuesWhileOffline(.replaceBooking, isOnline: smartCache?.isOnline != false) {
+            // RULEBOOK 1.86.0 §2 / §5: one queued item; the new booking shows "Pending sync", the replaced ones leave.
+            if let problem = OfflineOutboxStore.shared.enqueueReplaceBooking(
+                manager: normalized, replacing: targets, organizationId: orgId
+            ) {
+                errorMessage = problem
+                return problem
+            }
+            // The delete's signed-timesheet warning, as for an offline delete: read in the background (cache offline),
+            // never holding the save.
+            let warnBackend = fb
+            Task { @MainActor in
+                await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: orgId, firebaseBackend: warnBackend)
+            }
+            BookingReplaceNotices.hideReplacedLocally(targets, organizationId: orgId)
+            let gone = Set(targets.filter { $0.ref.collection == "managerSiteBookings" }.map { $0.ref.bookingId.lowercased() })
+            managerSiteBookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+            applyLocalSave(normalized, organizationId: orgId)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+            return nil
+        }
         await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: orgId, firebaseBackend: fb)
         do {
             try await fb.createBookingReplacing(manager: normalized, replacing: targets, organizationId: orgId,
@@ -500,6 +536,8 @@ class ManagerScheduleStore: ObservableObject {
         // through the app outbox (`BookingStore.deleteRoute`). Review fix 3: so is one whose queued write the outbox is
         // replaying right now.
         let outbox = OfflineOutboxStore.shared
+        // RULEBOOK 1.86.0 `dropLocal`: the new booking of a queued Replace, deleted before it was sent.
+        if outbox.dropQueuedReplace(newBookingId: booking.id) { return }
         let replayInFlight = outbox.isInFlight(bookingId: booking.id)
         let pendingInFirestore = replayInFlight
             || SDKPendingWrites.shared.contains(collection: "managerSiteBookings", documentId: booking.documentKey)

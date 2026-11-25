@@ -87,6 +87,9 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
     /// (`OvertimeOrganizationDocument.payePaydayJSON`), read by CanonicalBusinessEngine.payePayrunPeriod / payePaydayWriteFields. Nil when
     /// no PAYE payday is stored.
     var payePaydayJSON: String? = nil
+    /// RULEBOOK 1.85.0 §32: JSON text of the stored fields `onboardingChecklist` reads (`OnboardingOrganizationDocument`),
+    /// nil before a document was read.
+    var onboardingDocumentJSON: String? = nil
     /// JSON text of `organizations/{id}.billing`, or nil when that nested map is absent.
     var billingJSON: String?
     /// JSON text of `organizations/{id}.deletion` (RULEBOOK 1.15.0 §20), or nil when the organisation is not being
@@ -158,7 +161,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         case id, firestoreDocumentId, name, settings, officeAddressLine1, officeAddressLine2, officeCity, officeCounty, officePostcode
         case countryCode, defaultLatitude, defaultLongitude, companyLogoURL, documentAbbreviation, createdAt, updatedAt, creatorUserId
         case payrollTimePolicyPrior, payrollTimePolicyEffectiveFrom, payrollTimePolicyScheduled
-        case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON, payePaydayJSON
+        case billingJSON, billingResolved, deletionJSON, payrollPolicyStateJSON, payePaydayJSON, onboardingDocumentJSON
         case storedCreatedAt
     }
 
@@ -189,6 +192,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         deletionJSON = try c.decodeIfPresent(String.self, forKey: .deletionJSON)
         payrollPolicyStateJSON = try c.decodeIfPresent(String.self, forKey: .payrollPolicyStateJSON)
         payePaydayJSON = try c.decodeIfPresent(String.self, forKey: .payePaydayJSON)
+        onboardingDocumentJSON = try c.decodeIfPresent(String.self, forKey: .onboardingDocumentJSON)
         storedCreatedAt = try c.decodeIfPresent(Date.self, forKey: .storedCreatedAt)
     }
 
@@ -219,6 +223,7 @@ nonisolated struct Organization: Identifiable, Codable, Hashable {
         try c.encodeIfPresent(deletionJSON, forKey: .deletionJSON)
         try c.encodeIfPresent(payrollPolicyStateJSON, forKey: .payrollPolicyStateJSON)
         try c.encodeIfPresent(payePaydayJSON, forKey: .payePaydayJSON)
+        try c.encodeIfPresent(onboardingDocumentJSON, forKey: .onboardingDocumentJSON)
         try c.encodeIfPresent(storedCreatedAt, forKey: .storedCreatedAt)
     }
 

@@ -161,8 +161,10 @@ final class RulebookBypassGuardTests: XCTestCase {
             "Core/WarningsRosterFingerprint.swift": 1,
             "FirebaseBackend.swift": 1,
             "Models/AppModels.swift": 3,
+            // Cache key only (`LineManagerLabelCache.key`); the label comes from `lineManagerSummary`.
+            "Core/TimesheetListDisplay.swift": 1,
             "Views/HolidayView.swift": 3,
-            "Views/InvoicingView.swift": 3,
+            "Views/InvoicingView.swift": 2,
             "Views/ManageUsersView.swift": 4,
         ],
         "hardClockHour": [:],

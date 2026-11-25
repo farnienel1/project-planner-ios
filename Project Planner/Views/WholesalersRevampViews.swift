@@ -151,7 +151,7 @@ struct WholesalersListContent: View {
             wholesalers = try await firebaseBackend.loadWholesalers(organizationId: organizationId)
             await reloadSendRecords()
         } catch {
-            print("Error loading wholesalers: \(error.localizedDescription)")
+            logAndReportError("Error loading wholesalers: \(error.localizedDescription)")
         }
     }
 
@@ -161,7 +161,7 @@ struct WholesalersListContent: View {
             let all = try await firebaseBackend.loadAllMaterialSendRecords(organizationId: organizationId)
             await MainActor.run { sendRecords = all }
         } catch {
-            print("Error loading send records: \(error.localizedDescription)")
+            logAndReportError("Error loading send records: \(error.localizedDescription)")
         }
     }
 
@@ -419,7 +419,7 @@ struct WholesalerDetailView: View {
             let smallWorks = try await firebaseBackend.loadSmallWorks(organizationId: organizationId)
             await MainActor.run { jobProjects = projects + smallWorks }
         } catch {
-            print("Error loading jobs for wholesaler history: \(error.localizedDescription)")
+            logAndReportError("Error loading jobs for wholesaler history: \(error.localizedDescription)")
         }
     }
 

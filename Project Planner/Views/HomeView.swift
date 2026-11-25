@@ -22,6 +22,8 @@ struct HomeView: View {
     @EnvironmentObject var appSettings: AppSettingsStore
     @EnvironmentObject var notificationService: NotificationService
     @EnvironmentObject var smartCache: SmartCacheService
+    /// RULEBOOK 1.83.0 / 1.85.0: one listener on the insurance & accreditations document for both Home cards (admins).
+    @StateObject private var orgComplianceStore = OrgComplianceStore()
     @State private var homeWarningCount: Int = 0
     /// False until a warnings scan of loaded inputs has published (`WarningsService.hasCompletedLiveDetection`).
     /// Until then the pill reads "Checking…", never "All clear".
@@ -713,10 +715,12 @@ struct HomeView: View {
 
     private var homeLightSheet: some View {
         VStack(alignment: .leading, spacing: 0) {
+            // RULEBOOK 1.85.0 §32: admins' Getting started checklist for a new company (hidden once done or dismissed).
+            GettingStartedHomeCard(complianceStore: orgComplianceStore)
             quickActionsHeaderRow
             quickActionsIconGrid
             // RULEBOOK 1.83.0 §31: admins' insurance & accreditations reminder (nothing for anyone else).
-            OrgComplianceHomeReminderCard()
+            OrgComplianceHomeReminderCard(store: orgComplianceStore)
             upNextSection
             if !userStore.isOperativeMode() && userStore.hasAdminAccess() {
                 siteMapHomeCard
