@@ -682,7 +682,8 @@ struct CreateProjectView: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
         .background(
-            Color.white
+            // Owner 25 Nov: the page colour in light and dark mode (it was fixed white, a white band in dark mode).
+            ProjectWorksRevampColors.canvas
                 .shadow(color: .black.opacity(0.06), radius: 10, y: -2)
                 .ignoresSafeArea(edges: .bottom)
         )
