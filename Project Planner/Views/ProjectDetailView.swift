@@ -4257,7 +4257,6 @@ private struct AddProjectTaskView: View {
     @State private var showingFilePicker = false
     @State private var showingImagePicker = false
     @State private var showingCameraPicker = false
-    @State private var uploadedImageURLs: [String] = []
     @State private var errorMessage: String?
     @State private var showingError = false
 
