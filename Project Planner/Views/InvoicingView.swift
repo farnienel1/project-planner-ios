@@ -3166,14 +3166,28 @@ private struct MyTimesheetView: View {
                 let clarityDetails = clarityChangeDetails
                 let draftState = personDraftState
                 if let step = clarityNextStep(details: clarityDetails) {
-                    TimesheetNextStepCard(
-                        step: step,
-                        generateInvoice: invoiceNextStepAction,
-                        generateInvoiceBusy: isGeneratingInvoice,
-                        errorText: saveErrorMessage,
-                        accessory: draftState.draft ? nil : AnyView(personCorrectionEntry),
-                        help: draftState.personMessage
-                    )
+                    // RULEBOOK 1.90.0 point 10: whose turn, what changed and every notice are ONE card.
+                    TimesheetTopCard {
+                        TimesheetNextStepCard(
+                            step: step,
+                            generateInvoice: invoiceNextStepAction,
+                            generateInvoiceBusy: isGeneratingInvoice,
+                            errorText: saveErrorMessage,
+                            accessory: draftState.draft ? nil : AnyView(personCorrectionEntry),
+                            help: draftState.personMessage
+                        )
+                        if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                            Divider()
+                            TimesheetChangesCard(details: clarityDetails)
+                        }
+                        if !personNotices.isEmpty {
+                            Divider()
+                            TimesheetNoticesCard(notices: personNotices)
+                        }
+                    }
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
                 } else {
                     if let saveErrorMessage {
                         Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
@@ -3186,14 +3200,14 @@ private struct MyTimesheetView: View {
                             .accessibilityIdentifier("timesheets.saveError")
                     }
                     if !draftState.draft { personCorrectionEntry }
+                    if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                        TimesheetChangesCard(details: clarityDetails)
+                    }
+                    TimesheetNoticesCard(notices: personNotices)
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
                 }
-                if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
-                    TimesheetChangesCard(details: clarityDetails)
-                }
-                TimesheetNoticesCard(
-                    notices: personNotices,
-                    footer: earlierVersions.isEmpty ? nil : AnyView(TimesheetEarlierVersionsList(versions: earlierVersions))
-                )
 
                 if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
                     TimesheetManagerAdjustmentSummaryCard(
@@ -7040,26 +7054,39 @@ private struct OperativeTimesheetReviewView: View {
     private var reviewClaritySection: some View {
         let details = reviewerChangeDetails
         let draftState = reviewerDraftState
+        let showChanges = (revisionDue.due || bookingChange?.waitingForLineManager == true) && !details.rows.isEmpty
         if let step = reviewerNextStep(details: details) {
-            TimesheetNextStepCard(
-                step: step,
-                errorText: saveErrorMessage,
-                accessory: reviewStatusAccessory(draftState),
-                help: draftState.reviewerActs ? draftState.help : nil
-            )
-        } else if let saveErrorMessage {
-            Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.red)
-                .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            // RULEBOOK 1.90.0 point 10: whose turn, what changed, every notice and the buttons are ONE card.
+            TimesheetTopCard {
+                TimesheetNextStepCard(
+                    step: step,
+                    errorText: saveErrorMessage,
+                    accessory: reviewStatusAccessory(draftState),
+                    help: draftState.reviewerActs ? draftState.help : nil
+                )
+                if showChanges {
+                    Divider()
+                    TimesheetChangesCard(details: details)
+                }
+                if !reviewNotices.isEmpty {
+                    Divider()
+                    TimesheetNoticesCard(notices: reviewNotices)
+                }
+            }
+        } else {
+            if let saveErrorMessage {
+                Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            }
+            if showChanges { TimesheetChangesCard(details: details) }
+            TimesheetNoticesCard(notices: reviewNotices)
         }
-        if (revisionDue.due || bookingChange?.waitingForLineManager == true), !details.rows.isEmpty {
-            TimesheetChangesCard(details: details)
+        // Earlier versions is its own section below the card.
+        if !earlierVersions.isEmpty {
+            TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
         }
-        TimesheetNoticesCard(
-            notices: reviewNotices,
-            footer: earlierVersions.isEmpty ? nil : AnyView(TimesheetEarlierVersionsList(versions: earlierVersions))
-        )
     }
 
     /// The status card's buttons for this state.
