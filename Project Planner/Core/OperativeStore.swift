@@ -677,17 +677,25 @@ class OperativeStore: ObservableObject {
         NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
     }
 
-    func updateOperative(_ operative: Operative) async {
-        if let index = operatives.firstIndex(where: { $0.id == operative.id }) {
-            let previous = operatives[index]
-            operatives[index] = operative
-            // Save ONLY this operative, and only the fields that changed from the copy it was edited from (RULEBOOK §1).
-            _ = await saveSingleOperativeWithRetry(operative, previous: previous, mode: .update, description: "updating operative \(operative.name)")
-            if let smartCache {
-                smartCache.cacheOperatives(operatives)
-            }
-            NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
+    /// Returns whether the change was saved. A failed save puts the row back as it was and sets `errorMessage`
+    /// (owner 25 Nov: a change is never left on screen when it was not stored).
+    @discardableResult
+    func updateOperative(_ operative: Operative) async -> Bool {
+        guard let index = operatives.firstIndex(where: { $0.id == operative.id }) else { return false }
+        let previous = operatives[index]
+        operatives[index] = operative
+        // Save ONLY this operative, and only the fields that changed from the copy it was edited from (RULEBOOK §1).
+        let result = await saveSingleOperativeWithRetry(operative, previous: previous, mode: .update, description: "updating operative \(operative.name)")
+        if case .failure(let error) = result, !(error is RecordDeletedElsewhereError) {
+            if let now = operatives.firstIndex(where: { $0.id == operative.id }) { operatives[now] = previous }
+            errorMessage = "\(operative.name) was not saved. \(error.localizedDescription)"
         }
+        if let smartCache {
+            smartCache.cacheOperatives(operatives)
+        }
+        NotificationCenter.default.post(name: .qualificationExpiryScheduleRefresh, object: nil)
+        if case .failure = result { return false }
+        return true
     }
     
     func deleteOperative(_ operative: Operative, bookingStore: BookingStore?) async {
@@ -750,21 +758,35 @@ class OperativeStore: ObservableObject {
     
     // MARK: - Manager Operations
     
-    func addManager(_ manager: Manager) async {
+    /// Returns whether the manager was saved; a failed save takes the row off the list again and sets `errorMessage`.
+    @discardableResult
+    func addManager(_ manager: Manager) async -> Bool {
         managers.append(manager)
         // A new row: created whole. Nothing else on the roster is written.
-        _ = await saveSingleManagerWithRetry(manager, previous: nil, mode: .create, description: "adding manager \(manager.fullName)")
+        let result = await saveSingleManagerWithRetry(manager, previous: nil, mode: .create, description: "adding manager \(manager.fullName)")
+        if case .failure(let error) = result {
+            managers.removeAll { $0.id == manager.id }
+            errorMessage = "\(manager.fullName) was not added. \(error.localizedDescription)"
+        }
         smartCache?.cacheManagers(managers)
+        if case .failure = result { return false }
+        return true
     }
     
-    func updateManager(_ manager: Manager) async {
-        if let index = managers.firstIndex(where: { $0.id == manager.id }) {
-            let previous = managers[index]
-            managers[index] = manager
-            // Only the fields that changed on this row (RULEBOOK §1).
-            _ = await saveSingleManagerWithRetry(manager, previous: previous, mode: .update, description: "updating manager \(manager.fullName)")
-            smartCache?.cacheManagers(managers)
+    @discardableResult
+    func updateManager(_ manager: Manager) async -> Bool {
+        guard let index = managers.firstIndex(where: { $0.id == manager.id }) else { return false }
+        let previous = managers[index]
+        managers[index] = manager
+        // Only the fields that changed on this row (RULEBOOK §1).
+        let result = await saveSingleManagerWithRetry(manager, previous: previous, mode: .update, description: "updating manager \(manager.fullName)")
+        if case .failure(let error) = result, !(error is RecordDeletedElsewhereError) {
+            if let now = managers.firstIndex(where: { $0.id == manager.id }) { managers[now] = previous }
+            errorMessage = "\(manager.fullName) was not saved. \(error.localizedDescription)"
         }
+        smartCache?.cacheManagers(managers)
+        if case .failure = result { return false }
+        return true
     }
     
     func deleteManager(_ manager: Manager) async {

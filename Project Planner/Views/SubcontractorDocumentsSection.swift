@@ -20,9 +20,8 @@ struct SubcontractorDocumentsSection: View {
 
     @State private var importingKind: String?
     @State private var showingImporter = false
-    /// Expiry for the next upload, one per kind (Insurance and RAMS never share a date).
-    @State private var setExpiry: [String: Bool] = [:]
-    @State private var expiryDate: [String: Date] = [:]
+    /// Owner 25 Nov: the files just picked, waiting for the optional expiry date before they upload.
+    @State private var pendingUpload: SubcontractorDocumentPendingUpload?
     /// The document whose expiry is being changed ("Edit expiry").
     @State private var editingExpiry: SubcontractorDocumentExpiryEdit?
     @State private var busyKind: String?
@@ -42,18 +41,24 @@ struct SubcontractorDocumentsSection: View {
                     .padding(.horizontal, 4)
             }
         }
+        .sheet(item: $pendingUpload) { pending in
+            SubcontractorDocumentUploadSheet(pending: pending) { expiresOn in
+                await upload(urls: pending.urls, kind: pending.kind, expiresOn: expiresOn)
+            }
+        }
         .sheet(item: $editingExpiry) { edit in
             SubcontractorDocumentExpirySheet(edit: edit) { expiresOn in
                 await saveExpiry(edit, expiresOn: expiresOn)
             }
         }
-        .fileImporter(isPresented: $showingImporter, allowedContentTypes: Self.allowedTypes, allowsMultipleSelection: false) { result in
+        .fileImporter(isPresented: $showingImporter, allowedContentTypes: Self.allowedTypes, allowsMultipleSelection: true) { result in
             guard let kind = importingKind else { return }
             importingKind = nil
             switch result {
             case .success(let urls):
-                guard let url = urls.first else { return }
-                Task { await upload(url: url, kind: kind) }
+                // Owner 25 Nov: several certificates at once; the expiry is asked only now, for these files.
+                guard !urls.isEmpty else { return }
+                pendingUpload = SubcontractorDocumentPendingUpload(kind: kind, urls: urls)
             case .failure(let error):
                 message = error.localizedDescription
             }
@@ -103,26 +108,6 @@ struct SubcontractorDocumentsSection: View {
                 }
             }
         }
-        Toggle(CanonicalBusinessEngine.subcontractorDocumentExpiryLabel, isOn: expiryToggle(kind))
-            .font(.subheadline)
-            .padding(.horizontal, 4)
-            .accessibilityIdentifier("subcontractorDocuments.setExpiry.\(kind)")
-        if setExpiry[kind] == true {
-            DatePicker("\(label) expiry date", selection: expiryDateBinding(kind), displayedComponents: .date)
-                .closesCalendarOnDayPick(expiryDateBinding(kind).wrappedValue)
-                .environment(\.timeZone, OrganizationRulebookContext.timeZone)
-                .font(.subheadline)
-                .padding(.horizontal, 4)
-                .accessibilityIdentifier("subcontractorDocuments.expiryDate.\(kind)")
-        }
-    }
-
-    private func expiryToggle(_ kind: String) -> Binding<Bool> {
-        Binding(get: { setExpiry[kind] ?? false }, set: { setExpiry[kind] = $0 })
-    }
-
-    private func expiryDateBinding(_ kind: String) -> Binding<Date> {
-        Binding(get: { expiryDate[kind] ?? Date() }, set: { expiryDate[kind] = $0 })
     }
 
     private func documentRow(_ entry: RulebookSubcontractorDocument, kind: String) -> some View {
@@ -165,37 +150,35 @@ struct SubcontractorDocumentsSection: View {
         }
     }
 
-    private func upload(url: URL, kind: String) async {
+    /// Uploads the picked files one by one with the expiry chosen for them (nil = none). Returns nil when every file
+    /// saved, else the message to show (the files that did save stay on the list).
+    private func upload(urls: [URL], kind: String, expiresOn: String?) async -> String? {
         busyKind = kind
         defer { busyKind = nil }
-        let didStart = url.startAccessingSecurityScopedResource()
-        defer { if didStart { url.stopAccessingSecurityScopedResource() } }
-        let data: Data
-        do {
-            // Read the file off the main thread (a large PDF from iCloud can take a while).
-            data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
-        } catch {
-            message = error.localizedDescription
-            return
+        var failures: [String] = []
+        for url in urls {
+            let didStart = url.startAccessingSecurityScopedResource()
+            defer { if didStart { url.stopAccessingSecurityScopedResource() } }
+            do {
+                // Read the file off the main thread (a large PDF from iCloud can take a while).
+                let data = try await Task.detached(priority: .userInitiated) { try Data(contentsOf: url) }.value
+                let contentType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                try await firebaseBackend.uploadSubcontractorDocument(
+                    data: data,
+                    fileName: url.lastPathComponent,
+                    contentType: contentType,
+                    organizationId: organizationId,
+                    subcontractorId: subcontractor.documentId,
+                    kind: kind,
+                    expiresOn: expiresOn
+                )
+            } catch {
+                failures.append("\(url.lastPathComponent): \(error.localizedDescription)")
+            }
         }
-        let contentType = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
-        let expiresOn = setExpiry[kind] == true ? OrganizationRulebookContext.dayKey(expiryDate[kind] ?? Date()) : nil
-        do {
-            try await firebaseBackend.uploadSubcontractorDocument(
-                data: data,
-                fileName: url.lastPathComponent,
-                contentType: contentType,
-                organizationId: organizationId,
-                subcontractorId: subcontractor.documentId,
-                kind: kind,
-                expiresOn: expiresOn
-            )
-            setExpiry[kind] = false
-            expiryDate[kind] = nil
-            message = nil
-        } catch {
-            message = error.localizedDescription
-        }
+        let result = failures.isEmpty ? nil : "Not uploaded — " + failures.joined(separator: " · ")
+        message = result
+        return result
     }
 
     /// Nil when saved, else the message the sheet shows.
@@ -317,5 +300,78 @@ private struct SubcontractorDocumentExpirySheet: View {
             }
         }
         .presentationDetents([.medium])
+    }
+}
+
+/// Files picked for one kind (Insurance or RAMS), waiting for the optional expiry date.
+struct SubcontractorDocumentPendingUpload: Identifiable {
+    let id = UUID()
+    let kind: String
+    let urls: [URL]
+}
+
+/// Owner 25 Nov: after choosing the files, an optional expiry date for them, then Upload. One date for the files
+/// picked together; each document's date can be changed later with "Edit expiry".
+private struct SubcontractorDocumentUploadSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let pending: SubcontractorDocumentPendingUpload
+    let upload: (String?) async -> String?
+
+    @State private var hasExpiry = false
+    @State private var date = Date()
+    @State private var uploading = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(CanonicalBusinessEngine.subcontractorDocumentLabel(pending.kind)) {
+                    ForEach(pending.urls, id: \.self) { url in
+                        Label(url.lastPathComponent, systemImage: url.pathExtension.lowercased() == "pdf" ? "doc.richtext" : "photo")
+                            .font(.subheadline)
+                            .lineLimit(2)
+                    }
+                }
+                Section {
+                    Toggle(CanonicalBusinessEngine.subcontractorDocumentExpiryLabel, isOn: $hasExpiry)
+                        .accessibilityIdentifier("subcontractorDocuments.upload.expiryToggle")
+                    if hasExpiry {
+                        DatePicker("Expiry date", selection: $date, displayedComponents: .date)
+                            .closesCalendarOnDayPick(date)
+                            .environment(\.timeZone, OrganizationRulebookContext.timeZone)
+                    }
+                } footer: {
+                    if pending.urls.count > 1 {
+                        Text("The date applies to all \(pending.urls.count) files. Change one later with Edit expiry.")
+                    }
+                }
+            }
+            .navigationTitle(pending.urls.count == 1 ? "Upload document" : "Upload \(pending.urls.count) documents")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(uploading)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if uploading {
+                        ProgressView()
+                    } else {
+                        Button("Upload") {
+                            uploading = true
+                            Task {
+                                // Closes either way: files that saved are on the list, and any that did not are named
+                                // under the section (retrying here would upload the saved ones a second time).
+                                _ = await upload(hasExpiry ? OrganizationRulebookContext.dayKey(date) : nil)
+                                uploading = false
+                                dismiss()
+                            }
+                        }
+                        .accessibilityIdentifier("subcontractorDocuments.upload.confirm")
+                    }
+                }
+            }
+        }
+        .interactiveDismissDisabled(uploading)
+        .presentationDetents([.medium, .large])
     }
 }

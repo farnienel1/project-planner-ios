@@ -972,11 +972,15 @@ struct SiteAuditCreateFlowView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     // Owner 25 Nov: the first step reads "Cancel" (it closes the new audit); later steps go back a step.
-                    SiteAuditToolbarPill(title: step == 1 ? "Cancel" : "Back", filled: false, onNavy: true) {
+                    // Owner 25 Nov (build 18): the custom pill was clipped by the bar ("Cancel" ran off it); the
+                    // standard toolbar button always fits its word on every iPhone and iPad.
+                    Button(step == 1 ? "Cancel" : "Back") {
                         if step == 1 { dismiss() }
                         else if step == 2 { step = 1 }
                         else { step = 2 }
                     }
+                    .foregroundStyle(Color.white)
+                    .accessibilityIdentifier(step == 1 ? "siteAuditCreate.cancel" : "siteAuditCreate.back")
                 }
                 ToolbarItem(placement: .principal) {
                     if step == 2 {

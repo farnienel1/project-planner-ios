@@ -50,6 +50,8 @@ struct MyScheduleGeneralOptionsView: View {
     @State private var draft = MyScheduleOptions()
     @State private var baseline = MyScheduleOptions()
     @State private var isSaving = false
+    /// A failed save, shown so it is never silent (owner 25 Nov save sweep).
+    @State private var saveError: String?
     @State private var didLoad = false
 
     private var isDirty: Bool { didLoad && draft != baseline }
@@ -121,6 +123,11 @@ struct MyScheduleGeneralOptionsView: View {
         .settingsUnsavedLeave(isDirty: isDirty) {
             draft = baseline
             dismiss()
+        }
+        .alert("Not saved", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
         }
         .onAppear {
             guard !didLoad else { return }
@@ -199,7 +206,10 @@ struct MyScheduleGeneralOptionsView: View {
         defer { isSaving = false }
         appSettings.errorMessage = nil
         await appSettings.updateMyScheduleOptions(draft)
-        guard appSettings.errorMessage == nil else { return }
+        if let message = appSettings.errorMessage, !message.isEmpty {
+            saveError = "Schedule options were not saved. \(message)"
+            return
+        }
         draft = appSettings.settings.myScheduleOptions
         baseline = draft
     }

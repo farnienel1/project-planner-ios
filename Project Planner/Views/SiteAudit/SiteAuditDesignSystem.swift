@@ -201,6 +201,9 @@ struct SiteAuditToolbarPill: View {
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
         }
+        // Owner 25 Nov (build 18): the toolbar measured the pill narrower than its word, so "Cancel" ran off its
+        // glass bubble. The whole pill now reports its full size, so the bar makes room for the word.
+        .fixedSize()
         .accessibilityIdentifier("siteAuditToolbarPill.\(AccessibilityID.token(title))")
         .buttonStyle(.plain)
         .disabled(disabled)

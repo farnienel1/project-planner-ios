@@ -368,8 +368,17 @@ nonisolated enum CanonicalBusinessEngine {
         }
         guard let source, !source.isEmpty else { return nil }
         let context = JSContext()
-        context?.exceptionHandler = { _, value in
-            NSLog("Canonical business script error: %@", value?.toString() ?? "")
+        // 25 Nov crash (variation editor, build 18): `value.toString()` inside this handler can throw again, which
+        // called this handler again, and so on until the app ran out of stack. While the error is read, a do-nothing
+        // handler stands in, and the error is kept on the context so `evaluate` returns nil instead of a value.
+        context?.exceptionHandler = { context, value in
+            guard let context else { return }
+            let handler = context.exceptionHandler
+            context.exceptionHandler = { _, _ in }
+            let text = value?.toString() ?? ""
+            context.exception = value
+            context.exceptionHandler = handler
+            NSLog("Canonical business script error: %@", text)
         }
         context?.evaluateScript(source)
         return context
@@ -3444,7 +3453,7 @@ nonisolated enum CanonicalBusinessEngine {
         context.exception = nil
         let value = context.evaluateScript(source)
         if context.exception != nil {
-            NSLog("Canonical business script error: %@", context.exception?.toString() ?? "")
+            // Logged once by the exception handler; reading it again here could throw again.
             context.exception = nil
             return nil
         }

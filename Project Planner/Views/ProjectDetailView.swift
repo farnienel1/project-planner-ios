@@ -195,6 +195,7 @@ struct ProjectDetailView: View {
         .navigationTitle(detailRootTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .background(SwipeBackEnabler())
         .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {
@@ -4870,7 +4871,8 @@ private struct AddProjectTaskView: View {
         .padding(.top, 12)
         .padding(.bottom, 8)
         .background(
-            Color.white
+            // Owner 25 Nov: the page colour in light and dark mode (it was fixed white, a white band in dark mode).
+            ProjectWorksRevampColors.canvas
                 .shadow(color: .black.opacity(0.06), radius: 10, y: -2)
         )
     }

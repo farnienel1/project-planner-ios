@@ -510,6 +510,8 @@ struct SettingsNotificationsHubView: View {
     @State private var baseline = NotificationSettings()
     @State private var isSaving = false
     @State private var didLoad = false
+    /// A failed save, shown so it is never silent (owner 25 Nov save sweep).
+    @State private var saveError: String?
 
     private var isDirty: Bool { didLoad && draft != baseline }
 
@@ -586,6 +588,11 @@ struct SettingsNotificationsHubView: View {
             draft = baseline
             dismiss()
         }
+        .alert("Not saved", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("OK", role: .cancel) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
         .onAppear(perform: loadDraft)
     }
 
@@ -601,7 +608,13 @@ struct SettingsNotificationsHubView: View {
         isSaving = true
         defer { isSaving = false }
         let previous = baseline
+        appSettings.errorMessage = nil
         await appSettings.updateNotifications(draft, changedKeys: changedVisiblePreferences())
+        // A failed save keeps the screen unsaved (Save stays on) and says so; the toggles never look saved.
+        if let message = appSettings.errorMessage, !message.isEmpty {
+            saveError = "Your notification settings were not saved. \(message)"
+            return
+        }
         if previous.canonicalPreferenceIsOn("materialOrderCutOff") != draft.canonicalPreferenceIsOn("materialOrderCutOff") {
             await notificationService.refreshDailyMaterialCutOffReminder()
         }
