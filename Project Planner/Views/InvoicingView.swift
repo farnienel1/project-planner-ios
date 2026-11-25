@@ -6643,8 +6643,17 @@ private struct OperativeTimesheetReviewView: View {
     private var reviewerDraftState: RulebookTimesheetRevisionDraftState {
         var sheet = makeChangesSheet
         sheet["reviewerBookingEdits"] = TimesheetReviewerBookingEdits.stored(draft)
+        // Review of #304 (as web TimesheetPeriodPage): the draft's own review maps against the version it corrects, so a
+        // draft whose only change is a price work / expense (or labour) decision can be sent.
+        sheet["payrollLineReviews"] = FirebaseBackend.firestoreJSON(draft.payrollLineReviews.mapValues { $0.storedFields })
+        sheet["extraEntryReviews"] = TimesheetLateExtrasSupport.storedReviews(draft)
+        let chain = TimesheetVersionChainCache.chain(for: draft.versionDocumentId)
+        let previous: [String: Any]? = chain.count > 1 && chain.last?.documentId == draft.versionDocumentId
+            ? FirebaseBackend.firestoreJSON(chain[chain.count - 2].data) as? [String: Any]
+            : nil
         return CanonicalBusinessEngine.timesheetRevisionDraftState(
             sheet: sheet,
+            previous: previous,
             viewerIsReviewer: viewerIsReviewer,
             viewerIsSubject: false,
             personName: TimesheetClarityNames.personName(operative),
