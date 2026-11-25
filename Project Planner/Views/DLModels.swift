@@ -853,6 +853,30 @@ final class DLStore: ObservableObject {
         notifyChange()
     }
 
+    /// RULEBOOK 1.95.0 §23 Reopen: progress and status from `deadlineReopenFields` (the last progress before it was
+    /// completed), the completed date cleared, and one status change plus the rulebook note ("Reopened at 50%").
+    /// Returns false (nothing changed) when the rule did not answer.
+    @discardableResult
+    func reopen(_ item: DLDeadline, author: String) -> Bool {
+        guard let i = items.firstIndex(where: { $0.id == item.id }) else { return false }
+        let history: [(type: String, progress: Int?)] = items[i].history.reversed().map { change in
+            switch change.kind {
+            case .progress(let pct): return (type: "progress", progress: pct)
+            case .completed:         return (type: "completed", progress: nil)
+            default:                 return (type: "other", progress: nil)
+            }
+        }
+        guard let fields = CanonicalBusinessEngine.deadlineReopenFields(history: history) else { return false }
+        let now = Date()
+        items[i].status = fields.status
+        items[i].progress = Double(fields.progressPercent) / 100
+        items[i].completedAt = nil
+        items[i].history.insert(DLChange(at: now, author: author, kind: .status(to: fields.status)), at: 0)
+        items[i].history.insert(DLChange(at: now, author: author, kind: .note(fields.note)), at: 0)
+        notifyChange()
+        return true
+    }
+
     func upsert(_ item: DLDeadline) {
         if let i = items.firstIndex(where: { $0.id == item.id }) {
             items[i] = item

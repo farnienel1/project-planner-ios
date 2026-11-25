@@ -1,6 +1,6 @@
 import Foundation
 
-// RULEBOOK 1.94.0 §23 "How a deadline reads": `deadlineDisplay(item, nowMs, timeZone)`, `deadlineTabCounts`,
+// RULEBOOK 1.94.0–1.95.0 §23 "How a deadline reads": `deadlineDisplay(item, nowMs, timeZone)`, `deadlineTabCounts`,
 // `deadlineSummaryLine`, `deadlineMovedNote`, `deadlineDayText`, `DEADLINE_TABS`, `DEADLINE_GROUPS`. Display only:
 // nothing here is stored. Every day is the organisation-zone day (`OrganizationRulebookContext`), never the phone's.
 
@@ -138,5 +138,49 @@ extension CanonicalBusinessEngine {
     nonisolated private static func keyLabelList(_ name: String) -> [(key: String, label: String)]? {
         guard let rows = constant(name, as: [RulebookDeadlineKeyLabel].self) else { return nil }
         return rows.map { ($0.key, $0.label) }
+    }
+
+    // MARK: RULEBOOK 1.95.0 §23 Reopen and reschedule reasons
+
+    /// RULEBOOK 1.95.0 `DEADLINE_REOPEN_LABEL` ("Reopen").
+    nonisolated static func deadlineReopenLabel() -> String {
+        constant("DEADLINE_REOPEN_LABEL", as: String.self) ?? "Reopen"
+    }
+
+    /// RULEBOOK 1.95.0 `deadlineReopenFields(history)` → progress (0–100), status and the history note
+    /// ("Reopened at 50%"). `history` is oldest first (`DLStore` keeps it newest first; pass it reversed). Nil when the
+    /// script did not answer.
+    nonisolated static func deadlineReopenFields(
+        history: [(type: String, progress: Int?)]
+    ) -> (progressPercent: Int, status: DLStatus, note: String)? {
+        let rows: [[String: Any]] = history.map { row in
+            var map: [String: Any] = ["type": row.type]
+            if let progress = row.progress { map["progress"] = progress }
+            return map
+        }
+        guard let result = callJSON("deadlineReopenFields", arguments: [rows]) as? [String: Any],
+              let percent = (result["progressPercent"] as? NSNumber)?.intValue,
+              let statusKey = result["status"] as? String,
+              let status = DLStatus(rawValue: statusKey),
+              let note = result["note"] as? String else { return nil }
+        return (percent, status, note)
+    }
+
+    /// RULEBOOK 1.95.0 `DEADLINE_RESCHEDULE_REASONS`, in order (ends with "Other"). Nil when the script did not load.
+    nonisolated static func deadlineRescheduleReasons() -> [String]? {
+        constant("DEADLINE_RESCHEDULE_REASONS", as: [String].self)
+    }
+
+    /// RULEBOOK 1.95.0 `deadlineRescheduleReasonError(reason, note)`: why the reschedule can't be saved yet, or nil.
+    /// When the script did not answer, a blocking message so nothing is saved unchecked.
+    nonisolated static func deadlineRescheduleReasonError(reason: String?, note: String) -> String? {
+        let value = callJSON("deadlineRescheduleReasonError", arguments: [reason ?? NSNull(), note])
+        if value is NSNull { return nil }
+        return (value as? String) ?? "Couldn't check the reason — try again."
+    }
+
+    /// RULEBOOK 1.95.0 `deadlineRescheduleReasonText(reason, note)`: "Weather" or "Weather — road closed".
+    nonisolated static func deadlineRescheduleReasonText(reason: String, note: String) -> String? {
+        callJSON("deadlineRescheduleReasonText", arguments: [reason, note]) as? String
     }
 }

@@ -379,7 +379,8 @@ struct DLDeadlineDetailSheet: View {
             }
             .modifier(DLDeadlinesContentSheet())
 
-            // Owner 25 Nov: Reschedule stays on a completed deadline (no Reopen yet), as on web; Mark complete is hidden.
+            // Owner 25 Nov: Reschedule stays on a completed deadline, as on web; Mark complete is replaced by
+            // Reopen (RULEBOOK 1.95.0 `deadlineReopenFields`), after which Mark complete and Save progress show again.
             if canManage {
                 HSBottomBar {
                     HStack(spacing: 10) {
@@ -400,6 +401,15 @@ struct DLDeadlineDetailSheet: View {
                                 Label("Mark complete", systemImage: "checkmark")
                             }
                             .accessibilityIdentifier("dlDeadlineDetail.markComplete")
+                            .buttonStyle(HSFilledButton(tone: .blue))
+                        } else {
+                            Button {
+                                HSHaptic.tap()
+                                store.reopen(live, author: authorName)
+                            } label: {
+                                Label(CanonicalBusinessEngine.deadlineReopenLabel(), systemImage: "arrow.uturn.backward")
+                            }
+                            .accessibilityIdentifier("dlDeadlineDetail.reopen")
                             .buttonStyle(HSFilledButton(tone: .blue))
                         }
                     }
@@ -690,8 +700,11 @@ struct DLRescheduleSheet: View {
     @State private var reason: String = ""
     @State private var picked: String? = nil
 
-    private let reasons = ["Materials", "Preceding trade", "Access", "Weather",
-                           "Labour", "Client change", "Design change", "Inspection"]
+    /// RULEBOOK 1.95.0 `DEADLINE_RESCHEDULE_REASONS` (ends with "Other"). The fallback is shown only when the script
+    /// did not load; the save still asks the rulebook.
+    private let reasons: [String] = CanonicalBusinessEngine.deadlineRescheduleReasons()
+        ?? ["Materials", "Preceding trade", "Access", "Weather", "Labour",
+            "Client change", "Design change", "Inspection", "Other"]
 
     init(item: DLDeadline, store: DLStore, authorName: String = "Unknown") {
         self.item = item
@@ -706,7 +719,14 @@ struct DLRescheduleSheet: View {
         return cal.dateComponents([.day], from: cal.startOfDay(for: item.due), to: cal.startOfDay(for: newDate)).day ?? 0
     }
 
-    private var canSave: Bool { movedDays != 0 && !(picked ?? reason).isEmpty }
+    /// RULEBOOK 1.95.0 `deadlineRescheduleReasonError`: a reason is required, and "Other" needs a note.
+    private var reasonError: String? {
+        CanonicalBusinessEngine.deadlineRescheduleReasonError(reason: picked, note: reason)
+    }
+
+    private var isOther: Bool { picked == "Other" }
+
+    private var canSave: Bool { movedDays != 0 && reasonError == nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -778,7 +798,7 @@ struct DLRescheduleSheet: View {
                         }
                         .hsGutter()
 
-                        TextField("Add detail (optional)", text: $reason, axis: .vertical)
+                        TextField(isOther ? "Add a note (required)" : "Add detail (optional)", text: $reason, axis: .vertical)
                             .accessibilityIdentifier("dlReschedule.addDetailOptional")
                             .font(HSFont.body)
                             .foregroundStyle(HS.ink)
@@ -798,14 +818,15 @@ struct DLRescheduleSheet: View {
                     if !canSave {
                         Text(movedDays == 0
                              ? "Pick a different date to continue"
-                             : "Choose a reason to continue")
+                             : (reasonError ?? "Choose a reason to continue"))
                             .font(.system(size: 12))
                             .foregroundStyle(HS.slate2)
                     }
                     Button {
                         HSHaptic.success()
-                        let text = [picked, reason.isEmpty ? nil : reason]
-                            .compactMap { $0 }.joined(separator: " — ")
+                        guard let picked, reasonError == nil,
+                              let text = CanonicalBusinessEngine.deadlineRescheduleReasonText(reason: picked, note: reason)
+                        else { return }
                         store.reschedule(item, to: newDate, reason: text, author: authorName)
                         dismiss()
                     } label: {
