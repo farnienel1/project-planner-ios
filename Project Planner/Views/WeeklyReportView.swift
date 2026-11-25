@@ -737,6 +737,7 @@ struct WeeklyReportView: View {
                 Divider().padding(.leading, 16)
                 if label == "End" {
                     DatePicker("", selection: date, in: startDate..., displayedComponents: .date)
+                        .onDayPicked(date.wrappedValue) { isExpanded.wrappedValue = false }
                         .accessibilityIdentifier("weeklyReport.dateRow")
                         .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .datePickerStyle(.graphical)
@@ -745,6 +746,7 @@ struct WeeklyReportView: View {
                         .padding(.bottom, 8)
                 } else {
                     DatePicker("", selection: date, displayedComponents: .date)
+                        .onDayPicked(date.wrappedValue) { isExpanded.wrappedValue = false }
                         .accessibilityIdentifier("weeklyReport.dateRow2")
                         .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                         .datePickerStyle(.graphical)

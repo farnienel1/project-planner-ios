@@ -1963,6 +1963,7 @@ private struct HSIssueTalkSheet: View {
                         .buttonStyle(.plain)
                         if showDatePicker {
                             DatePicker("Date", selection: $issueDate, displayedComponents: .date)
+                                .onDayPicked(issueDate) { showDatePicker = false }
                                 .accessibilityIdentifier("hsIssueTalk.date")
                                 .labelsHidden()
                                 .datePickerStyle(.graphical)
@@ -3120,6 +3121,7 @@ private struct HSRamsUploadSheet: View {
                             }
                         }
                         DatePicker("Review date", selection: $reviewDate, displayedComponents: .date)
+                            .closesCalendarOnDayPick(reviewDate)
                             .accessibilityIdentifier("hsRamsUpload.reviewDate")
                             .datePickerStyle(.compact)
                             .font(.system(size: 14, weight: .medium))

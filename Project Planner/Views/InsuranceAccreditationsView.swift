@@ -545,6 +545,7 @@ private struct OrgComplianceDocumentForm: View {
                         .accessibilityIdentifier("orgCompliance.form.hasExpiry")
                     if hasExpiry {
                         DatePicker(CanonicalBusinessEngine.orgComplianceLabel("expiry", fallback: "Expiry date"), selection: $expiry, displayedComponents: .date)
+                            .closesCalendarOnDayPick(expiry)
                             .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                     }
                 } footer: {

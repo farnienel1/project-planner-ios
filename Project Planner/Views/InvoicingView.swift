@@ -8448,6 +8448,7 @@ private struct TimesheetMoneyEntrySheet: View {
 
                     moneyCard {
                         DatePicker(mode == .expense ? "Date" : "Start date", selection: $date, displayedComponents: .date)
+                            .closesCalendarOnDayPick(date)
                             .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                             .accessibilityIdentifier("timesheets.date")
                             .font(.system(size: 13, weight: .medium))
@@ -8461,6 +8462,7 @@ private struct TimesheetMoneyEntrySheet: View {
                                     get: { endDate ?? date },
                                     set: { endDate = $0 }
                                 ), displayedComponents: .date)
+                                .closesCalendarOnDayPick(endDate ?? date)
                                 .environment(\.timeZone, OrganizationRulebookContext.timeZone)
                                 .accessibilityIdentifier("timesheets.endDate")
                                 .font(.system(size: 13, weight: .medium))

@@ -276,6 +276,7 @@ struct SiteAuditDetailsStepView: View {
                             label: "Date"
                         ) {
                             DatePicker("", selection: $selectedDate, displayedComponents: .date)
+                                .closesCalendarOnDayPick(selectedDate)
                                 .accessibilityIdentifier("siteAuditDetailsStep.datePicker")
                                 .labelsHidden()
                                 .frame(maxWidth: .infinity, alignment: .leading)

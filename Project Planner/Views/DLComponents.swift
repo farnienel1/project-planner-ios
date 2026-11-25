@@ -463,7 +463,8 @@ struct DLTimelineRow: View {
 
     var body: some View {
         let urgency = item.urgency(now: now)
-        let s = max(offsetDays(item.start ?? item.due), 0)
+        // Clamped to the six-week window, so a deadline before or after it still draws at the edge.
+        let s = min(max(offsetDays(item.start ?? item.due), 0), Double(windowDays) - 0.6)
         let e = min(offsetDays(item.due) + 1, Double(windowDays))
         let span = max(e - s, 0.6)
 
@@ -472,7 +473,12 @@ struct DLTimelineRow: View {
         } label: {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 6) {
-                    if item.isCritical {
+                    if item.status == .complete {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(HS.green)
+                            .accessibilityLabel("Complete")
+                    } else if item.isCritical {
                         Image(systemName: "flag.fill")
                             .font(.system(size: 9, weight: .black))
                             .foregroundStyle(HS.ink)

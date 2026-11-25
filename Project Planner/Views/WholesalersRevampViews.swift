@@ -893,6 +893,7 @@ struct WholesalerSendHistoryView: View {
                     .font(.system(size: 12, weight: .medium))
                 if useDateFilter {
                     DatePicker("", selection: $dateFilter, displayedComponents: .date)
+                        .closesCalendarOnDayPick(dateFilter)
                         .accessibilityIdentifier("wholesalerSendHistory.datePicker")
                         .labelsHidden()
                 }

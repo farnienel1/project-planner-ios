@@ -116,11 +116,13 @@ struct PayrunSnapshotView: View {
                 if kind == "custom" {
                     PPGroupedCard {
                         DatePicker("Start", selection: $customStart, displayedComponents: .date)
+                            .closesCalendarOnDayPick(customStart)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .accessibilityIdentifier("payrunSnapshot.custom.start")
                         PPRowDivider()
                         DatePicker("End", selection: $customEnd, in: customStart..., displayedComponents: .date)
+                            .closesCalendarOnDayPick(customEnd)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
                             .accessibilityIdentifier("payrunSnapshot.custom.end")

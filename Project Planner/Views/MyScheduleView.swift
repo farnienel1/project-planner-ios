@@ -1315,6 +1315,7 @@ struct ManagerScheduleContentView: View {
                     ),
                     displayedComponents: .date
                 )
+                .onDayPicked(selectedDate ?? Date()) { showingDayPicker = false }
                 .accessibilityIdentifier("managerScheduleContent.day")
                 .datePickerStyle(.graphical)
                 .padding()

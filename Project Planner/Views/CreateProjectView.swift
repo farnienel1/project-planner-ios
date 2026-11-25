@@ -515,6 +515,7 @@ struct CreateProjectView: View {
             }
             Spacer()
             DatePicker("", selection: date, displayedComponents: .date)
+                .closesCalendarOnDayPick(date.wrappedValue)
                 .accessibilityIdentifier("createProject.dateRow")
                 .labelsHidden()
             Image(systemName: "chevron.right")

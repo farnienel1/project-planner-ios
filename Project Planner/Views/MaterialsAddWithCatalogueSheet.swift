@@ -588,6 +588,7 @@ struct MaterialsAddWithCatalogueSheet: View {
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
             DatePicker("", selection: $neededDate, displayedComponents: .date)
+                .closesCalendarOnDayPick(neededDate)
                 .accessibilityIdentifier("materialsAddWithCatalogue.datePicker")
                 .labelsHidden()
                 .padding(10)

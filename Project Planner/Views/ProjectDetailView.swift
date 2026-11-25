@@ -3673,6 +3673,7 @@ private struct ProjectTaskFilterSheet: View {
                             ),
                             displayedComponents: .date
                         )
+                            .closesCalendarOnDayPick(localFilter.dateRange?.lowerBound ?? Date())
                             .accessibilityIdentifier("projectTaskFilter.startDate")
                         DatePicker(
                             "End Date",
@@ -3688,6 +3689,7 @@ private struct ProjectTaskFilterSheet: View {
                             ),
                             displayedComponents: .date
                         )
+                            .closesCalendarOnDayPick(localFilter.dateRange?.upperBound ?? Date())
                             .accessibilityIdentifier("projectTaskFilter.endDate")
                     }
                 }
@@ -4790,6 +4792,7 @@ private struct AddProjectTaskView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(NewTaskScreenPalette.muted)
                 DatePicker("", selection: $dueDate, displayedComponents: .date)
+                    .closesCalendarOnDayPick(dueDate)
                     .accessibilityIdentifier("addProjectTask.datePicker")
                     .labelsHidden()
                     .tint(NewTaskScreenPalette.blue)
@@ -5359,6 +5362,7 @@ private struct EditProjectTaskView: View {
                 
                 Section {
                     DatePicker("Schedule", selection: $dueDate, displayedComponents: .date)
+                        .closesCalendarOnDayPick(dueDate)
                         .accessibilityIdentifier("editProjectTask.schedule")
                 } header: {
                     Text("Schedule")

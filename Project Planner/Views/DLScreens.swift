@@ -161,19 +161,19 @@ struct DLDeadlinesScreen: View {
 
             HSStatTile(value: "\(store.overdueCount)", label: "Overdue",
                        accent: HS.red, icon: "exclamationmark.triangle.fill") {
-                HSHaptic.select(); store.filter = .overdue; mode = .list
+                HSHaptic.select(); showFilter(.overdue)
             }
             HSStatTile(value: "\(store.thisWeekCount)", label: "Due this week",
                        accent: HS.amber, icon: "calendar") {
-                HSHaptic.select(); store.filter = .thisWeek; mode = .list
+                HSHaptic.select(); showFilter(.thisWeek)
             }
             HSStatTile(value: "\(store.atRiskCount)", label: "Behind pace",
                        accent: HS.violet, icon: "gauge.with.dots.needle.33percent") {
-                HSHaptic.select(); store.filter = .atRisk; mode = .list
+                HSHaptic.select(); showFilter(.atRisk)
             }
             HSStatTile(value: "\(store.completeCount)", label: "Completed",
                        accent: HS.green, icon: "checkmark.seal.fill") {
-                HSHaptic.select(); store.filter = .complete; mode = .list
+                HSHaptic.select(); showFilter(.complete)
             }
         }
         .hsGutter()
@@ -186,8 +186,7 @@ struct DLDeadlinesScreen: View {
             DLRiskBanner(overdue: store.overdueCount,
                          atRisk: store.atRiskCount,
                          criticalOpen: store.criticalOpen) {
-                store.filter = store.overdueCount > 0 ? .overdue : .atRisk
-                mode = .list
+                showFilter(store.overdueCount > 0 ? .overdue : .atRisk)
             }
             .hsGutter()
             .padding(.top, 12)
@@ -219,6 +218,26 @@ struct DLDeadlinesScreen: View {
 
     // MARK: Segments + filters
 
+    /// Picking a filter (a segment, a stat tile or the risk banner) shows that whole filter: a day picked on the week
+    /// rail is cleared, so "All" lists every deadline — past, this week, later and complete — and never only the day
+    /// left selected on the rail. Display only.
+    private func showFilter(_ filter: DLFilter) {
+        selectedDay = nil
+        store.filter = filter
+        mode = .list
+    }
+
+    /// The segments' binding: choosing a segment (even the one already chosen) clears the week-rail day.
+    private var filterSelection: Binding<DLFilter> {
+        Binding(
+            get: { store.filter },
+            set: { newValue in
+                selectedDay = nil
+                store.filter = newValue
+            }
+        )
+    }
+
     private var segments: some View {
         VStack(spacing: 10) {
             HSSegmented(items: [
@@ -227,7 +246,7 @@ struct DLDeadlinesScreen: View {
                 .init(id: DLFilter.thisWeek, title: "This week", count: store.thisWeekCount),
                 .init(id: DLFilter.atRisk,   title: "At risk",   count: store.atRiskCount),
                 .init(id: DLFilter.complete, title: "Complete",  count: store.completeCount)
-            ], selection: $store.filter)
+            ], selection: filterSelection)
 
             HStack(spacing: 10) {
                 HSSearchField(placeholder: "Search deadlines, floors, trades", text: $store.search)
@@ -323,7 +342,7 @@ struct DLDeadlinesScreen: View {
             if items.isEmpty {
                 HSEmptyState(icon: "chart.bar.doc.horizontal",
                              title: "Nothing to plot",
-                             message: "Open deadlines with a start and due date appear here as bars.")
+                             message: "Deadlines with a start and due date appear here as bars.")
                     .hsGutter()
                     .padding(.top, 20)
             } else {
@@ -1153,6 +1172,7 @@ struct DLEditDeadlineScreen: View {
                     HSDivider(inset: 62)
                     DLFieldRow(icon: "calendar", tint: HS.blue, label: "Starts") {
                         DatePicker("", selection: $start, displayedComponents: .date)
+                            .closesCalendarOnDayPick(start)
                             .accessibilityIdentifier("dlEditDeadlineScreen.datePicker")
                             .labelsHidden().tint(HS.teal)
                     }
@@ -1160,6 +1180,7 @@ struct DLEditDeadlineScreen: View {
                 HSDivider(inset: 62)
                 DLFieldRow(icon: "flag.checkered", tint: HS.teal, label: "Due") {
                     DatePicker("", selection: $due, displayedComponents: .date)
+                        .closesCalendarOnDayPick(due)
                         .accessibilityIdentifier("dlEditDeadlineScreen.datePicker2")
                         .labelsHidden().tint(HS.teal)
                 }

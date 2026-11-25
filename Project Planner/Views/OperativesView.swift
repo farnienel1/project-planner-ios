@@ -906,6 +906,7 @@ struct EditOperativeView: View {
                             .accessibilityIdentifier("editOperative.phone")
                             .keyboardType(.phonePad)
                         DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                            .closesCalendarOnDayPick(startDate)
                             .accessibilityIdentifier("editOperative.startDate")
                         Toggle("Active", isOn: $isActive)
                             .accessibilityIdentifier("editOperative.active")

@@ -798,6 +798,7 @@ struct MaterialRequiredDeliveryEditor: View {
                 .foregroundStyle(.secondary)
             if deliveryAt != nil {
                 DatePicker("Day", selection: dayBinding, displayedComponents: .date)
+                    .closesCalendarOnDayPick(dayBinding.wrappedValue)
                     .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryDate")
                 DatePicker("Time", selection: timeBinding, displayedComponents: .hourAndMinute)
                     .accessibilityIdentifier("materialRequiredDeliveryDate.requiredDeliveryTime")

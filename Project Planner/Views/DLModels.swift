@@ -577,10 +577,10 @@ final class DLStore: ObservableObject {
             }
     }
 
-    /// Timeline rows: everything open, sorted by start then due.
+    /// Timeline rows: every deadline the chosen filter lists (complete ones included under All and Complete, drawn
+    /// marked complete), sorted by start then due. The segment filter alone decides what shows, as in the list.
     func timelineItems() -> [DLDeadline] {
-        filtered.filter { $0.status != .complete }
-                .sorted { ($0.start ?? $0.due) < ($1.start ?? $1.due) }
+        filtered.sorted { ($0.start ?? $0.due) < ($1.start ?? $1.due) }
     }
 
     func predecessors(of item: DLDeadline) -> [DLDeadline] {

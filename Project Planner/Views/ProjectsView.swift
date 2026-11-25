@@ -955,8 +955,10 @@ struct AddProjectView: View {
                 
                 Section("Schedule") {
                     DatePicker("Start Date", selection: $startDate, displayedComponents: .date)
+                        .closesCalendarOnDayPick(startDate)
                         .accessibilityIdentifier("addProject.startDate")
                     DatePicker("End Date", selection: $endDate, displayedComponents: .date)
+                        .closesCalendarOnDayPick(endDate)
                         .accessibilityIdentifier("addProject.endDate")
                     
                     Picker("Manager", selection: $selectedManager) {
