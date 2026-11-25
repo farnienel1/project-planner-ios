@@ -195,6 +195,7 @@ struct ProjectDetailView: View {
         .navigationTitle(detailRootTitle)
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(true)
+        .background(SwipeBackEnabler())
         .ppNavyNavigationBar()
         .toolbar {
             ToolbarItem(placement: .navigationBarLeading) {

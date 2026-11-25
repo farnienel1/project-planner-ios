@@ -279,3 +279,36 @@ private struct SettingsUnsavedLeaveModifier: ViewModifier {
         }
     }
 }
+
+/// Lets the edge swipe go back on a screen that hides the system back button for its own navy back button
+/// (owner 25 Nov: swipe back from a project or small works to the list). Hiding the system button stops
+/// UIKit's swipe; this puts it back for this screen only and hands the gesture back when the screen goes.
+struct SwipeBackEnabler: UIViewControllerRepresentable {
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ controller: Controller, context: Context) {}
+
+    final class Controller: UIViewController, UIGestureRecognizerDelegate {
+        private weak var previousDelegate: UIGestureRecognizerDelegate?
+
+        override func viewDidAppear(_ animated: Bool) {
+            super.viewDidAppear(animated)
+            guard let pop = navigationController?.interactivePopGestureRecognizer else { return }
+            if pop.delegate !== self {
+                previousDelegate = pop.delegate
+                pop.delegate = self
+            }
+            pop.isEnabled = true
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            if let pop = navigationController?.interactivePopGestureRecognizer, pop.delegate === self {
+                pop.delegate = previousDelegate
+            }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            (navigationController?.viewControllers.count ?? 0) > 1
+        }
+    }
+}
