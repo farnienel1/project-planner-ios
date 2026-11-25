@@ -15,7 +15,8 @@ import Combine
 struct OrgComplianceHomeReminderCard: View {
     @EnvironmentObject var firebaseBackend: FirebaseBackend
     @EnvironmentObject var userStore: UserStore
-    @StateObject private var store = OrgComplianceStore()
+    /// Owned by Home and shared with `GettingStartedHomeCard` (one listener); this card starts and stops it.
+    @ObservedObject var store: OrgComplianceStore
     @State private var showingPage = false
 
     private var organizationId: String { firebaseBackend.currentOrganization?.firestoreDocumentId ?? "" }

@@ -583,6 +583,7 @@ class FirebaseBackend: ObservableObject {
         org.payrollTimePolicyScheduled = parsed.payrollTimePolicyScheduled
         org.payrollPolicyStateJSON = parsed.payrollPolicyStateJSON
         org.payePaydayJSON = parsed.payePaydayJSON
+        org.onboardingDocumentJSON = parsed.onboardingDocumentJSON
         guard org != previous else { return }
         currentOrganization = org
         storeOrganizationLocally(org)
@@ -1666,6 +1667,8 @@ class FirebaseBackend: ObservableObject {
         organization.payrollPolicyStateJSON = PayrollTimePolicyCatalog.payrollStateJSON(fromOrganizationData: data)
         // RULEBOOK 1.29.0 §4.5: the PAYE payday and its dated history, as stored (read by CanonicalBusinessEngine.payePayrunPeriod).
         organization.payePaydayJSON = OvertimeOrganizationDocument.payePaydayJSON(fromOrganizationData: data)
+        // RULEBOOK 1.85.0 §32: the stored fields the Getting started checklist reads.
+        organization.onboardingDocumentJSON = OnboardingOrganizationDocument.json(fromOrganizationData: data)
         let zone = CanonicalBusinessEngine.organizationTimeZoneIdentifier(countryCode: data["countryCode"] as? String)
         let todayKey = CanonicalBusinessEngine.organizationDayKey(Date(), timeZoneIdentifier: zone)
         guard let state = CanonicalBusinessEngine.payrollTimePolicyTimeline(
@@ -3138,7 +3141,7 @@ class FirebaseBackend: ObservableObject {
                 return downloadURL.absoluteString
             } catch {
                 lastError = error
-                print("⚠️ [\(logTag)] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
+                logAndReportError("⚠️ [\(logTag)] Uploaded file but could not fetch download URL (attempt \(attempt + 1)): \(error.localizedDescription)")
             }
         }
         // RULEBOOK 1.25.0 §24 (`CanonicalBusinessEngine.fileDeletePermission`): the uploader's own clean-up inside the
@@ -3153,7 +3156,7 @@ class FirebaseBackend: ObservableObject {
             do {
                 try await storageRef.delete()
             } catch {
-                print("⚠️ [\(logTag)] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [\(logTag)] Could not remove the unlinked upload \(path): \(error.localizedDescription)")
             }
         } else {
             print("⚠️ [\(logTag)] Unlinked upload kept (\(cleanup.reason)): \(path)")
@@ -3315,7 +3318,7 @@ class FirebaseBackend: ObservableObject {
             do {
                 try await storage.reference(forURL: url).delete()
             } catch {
-                print("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
+                logAndReportError("⚠️ [SiteAudit] photo kept on sign-out, delete refused or failed: \(error.localizedDescription)")
             }
         }
     }
@@ -9541,7 +9544,7 @@ class FirebaseBackend: ObservableObject {
                 } catch {
                     failures += 1
                     firstError = firstError ?? error
-                    print("⚠️ [PayHistory] one rate history query refused or failed: \(error.localizedDescription)")
+                    logAndReportError("⚠️ [PayHistory] one rate history query refused or failed: \(error.localizedDescription)")
                 }
             }
             if !queries.isEmpty, failures == queries.count, let firstError { throw firstError }
@@ -10436,7 +10439,7 @@ extension FirebaseBackend {
                 do {
                     try await self.upsertMaterialCatalogueFromMaterial(material, organizationId: orgId)
                 } catch {
-                    print("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
+                    logAndReportError("⚠️ [FirebaseBackend] Catalogue upsert from material failed: \(error.localizedDescription)")
                 }
             }
         }
@@ -10520,7 +10523,7 @@ extension FirebaseBackend {
         do {
             snapshot = try await materialsQuery.getDocuments(source: .server)
         } catch {
-            print("⚠️ [FirebaseBackend] Server materials read failed, using cache/default: \(error.localizedDescription)")
+            logAndReportError("⚠️ [FirebaseBackend] Server materials read failed, using cache/default: \(error.localizedDescription)")
             snapshot = try await materialsQuery.getDocuments()
         }
         
@@ -10571,7 +10574,7 @@ extension FirebaseBackend {
             .whereField("projectId", in: JobKeys.queryValues(for: projectId))
             .addSnapshotListener { snapshot, error in
                 if let error {
-                    print("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
+                    logAndReportError("❌ [FirebaseBackend] observeMaterialItems error: \(error.localizedDescription)")
                     return
                 }
 
@@ -10619,7 +10622,7 @@ extension FirebaseBackend {
             do {
                 try await docRef.updateData(["addedByUserId": uid])
             } catch {
-                print("⚠️ [FirebaseBackend] Legacy material owner backfill before delete failed: \(error.localizedDescription)")
+                logAndReportError("⚠️ [FirebaseBackend] Legacy material owner backfill before delete failed: \(error.localizedDescription)")
                 throw NSError(
                     domain: "FirebaseBackend",
                     code: 403,
@@ -11421,7 +11424,7 @@ extension FirebaseBackend {
         do {
             result = try await MaterialRequestEmailClient.send(request, organizationId: orgId, senderEmail: senderEmail)
         } catch {
-            print("❌ [materials/send] sendEmail failed: \(error.localizedDescription)")
+            logAndReportError("❌ [materials/send] sendEmail failed: \(error.localizedDescription)")
             throw error
         }
         print("✅ [materials/send] sendEmail sent \(result.sentCount) · ids \(result.messageIds) · cc \(result.cc)")
@@ -11429,7 +11432,7 @@ extension FirebaseBackend {
             print("✅ [materials/send] already sent earlier with this request id; not sent again")
         }
         if !result.failed.isEmpty {
-            print("❌ [materials/send] not sent to \(result.failed)")
+            logAndReportError("❌ [materials/send] not sent to \(result.failed)")
         }
         if result.cc.isEmpty {
             // The deployed function ignored `ccCaller` (app callers need the server change in web functions/email).

@@ -296,6 +296,8 @@ extension SignedTimesheetChanges {
 
 /// RULEBOOK 1.77.0 §8: the names the whose-turn line and the correction help use, from the roster
 /// (`lineManagerSummary`): the line manager by name only when the person has exactly one known one (web the same).
+/// Pass every users document of the organisation (`UserStore.unfoldedOrganizationUsers`, 24 Nov): the email-folded
+/// roster cannot name a line manager stored under a folded-away document (web `soleLineManagerName`).
 @MainActor
 enum TimesheetClarityNames {
     static func lineManagerName(for person: AppUser, roster: [AppUser]) -> String? {

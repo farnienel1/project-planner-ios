@@ -169,6 +169,27 @@ class BookingStore: ObservableObject {
             }
         }
 
+        // RULEBOOK 1.86.0: a Replace queued offline (from either store) removes its replaced labour bookings here too.
+        NotificationCenter.default.addObserver(
+            forName: .offlineReplaceHidBookings,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            let ids = note.userInfo?["labourBookingIds"] as? [String] ?? []
+            guard !ids.isEmpty else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let keys = Set(ids.map { $0.uppercased() })
+                let before = self.bookings.count
+                self.bookings.removeAll { keys.contains($0.id.uuidString.uppercased()) }
+                guard self.bookings.count != before else { return }
+                self.smartCache?.cacheBookings(self.bookings)
+                let snapshot = self.bookings
+                Task { try? await self.persistenceService.saveBookingData(bookings: snapshot) }
+                ScheduleChangeNotifier.postBookingStoreDidChange()
+            }
+        }
+
         // RULEBOOK 1.33.0: a queued delete was undone from the sync list or refused on replay — the booking comes back.
         NotificationCenter.default.addObserver(
             forName: .offlineBookingDeleteRestored,
@@ -450,8 +471,9 @@ class BookingStore: ObservableObject {
     }
 
     /// RULEBOOK 1.41.0 §5 (owner decision 11 Nov): Replace — the new booking and each replaced booking's delete with its
-    /// tombstone in one checked transaction (`FirebaseBackend.createBookingReplacing`, `bookingReplaceWrites`). Online
-    /// only (`booking.replace`): offline it writes nothing and returns `OFFLINE_ONLINE_ONLY_MESSAGE`. `managerBookings`:
+    /// tombstone in one checked transaction (`FirebaseBackend.createBookingReplacing`, `bookingReplaceWrites`). Offline
+    /// (RULEBOOK 1.86.0, `booking.replace` allowed offline) it is queued as one outbox item and replayed through
+    /// `offlineReplaceReplayDecision` (`OfflineOutboxStore.enqueueReplaceBooking`). `managerBookings`:
     /// the manager schedule bookings on this phone, so a replaced one is resolved from what the person was shown.
     /// Before it is written the delete's signed-timesheet warning is shown
     /// (`CanonicalBusinessEngine.bookingDeleteSignedTimesheetWarning`); after it, each replaced booking's overtime line
@@ -479,6 +501,29 @@ class BookingStore: ObservableObject {
         }
         guard let firebaseBackend, let organizationId = firebaseBackend.resolvedOrganizationIdForOfflineWrites() else {
             return "This booking could not be saved."
+        }
+        if OfflinePolicy.queuesWhileOffline(.replaceBooking, isOnline: smartCache?.isOnline != false) {
+            // RULEBOOK 1.86.0 §2 / §5: one queued item; the new booking shows "Pending sync", the replaced ones leave.
+            if let problem = OfflineOutboxStore.shared.enqueueReplaceBooking(
+                labour: booking, replacing: targets, organizationId: organizationId
+            ) {
+                errorMessage = problem
+                return problem
+            }
+            // The delete's signed-timesheet warning, as for an offline delete: read in the background (cache offline),
+            // never holding the save.
+            let warnBackend = firebaseBackend
+            Task { @MainActor in
+                await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: organizationId, firebaseBackend: warnBackend)
+            }
+            BookingReplaceNotices.hideReplacedLocally(targets, organizationId: organizationId)
+            let gone = Set(targets.filter { $0.ref.collection == "bookings" }.map { $0.ref.bookingId.lowercased() })
+            bookings.removeAll { gone.contains($0.documentKey.lowercased()) }
+            bookings.append(booking)
+            try? await persistenceService.saveBookingData(bookings: bookings)
+            smartCache?.cacheBookings(bookings)
+            ScheduleChangeNotifier.postBookingStoreDidChange()
+            return nil
         }
         await BookingReplaceNotices.warnIfOnSignedTimesheet(targets, organizationId: organizationId, firebaseBackend: firebaseBackend)
         do {
@@ -765,6 +810,9 @@ class BookingStore: ObservableObject {
 
         warnIfOnSignedTimesheet(booking, organizationId: orgId)
         let outbox = OfflineOutboxStore.shared
+        // RULEBOOK 1.86.0 `dropLocal`: the new booking of a queued Replace, deleted before it was sent — the whole item
+        // leaves the queue and the replaced bookings come back (nothing is sent).
+        if outbox.dropQueuedReplace(newBookingId: booking.id) { return }
         // 1.33.1 review fix 3: a queued write of this booking that the outbox is replaying right now is already out of
         // the app's hands (a replayed create would land after "nothing to send" and bring the booking back). It counts
         // as held by Firestore: the delete goes through Firestore, after it.

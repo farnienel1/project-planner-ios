@@ -88,7 +88,7 @@ extension FirebaseBackend {
                 .whereField("parentId", in: parentIds)
                 .addSnapshotListener { snapshot, error in
                     if let error {
-                        print("❌ [Variations] listen error: \(error.localizedDescription)")
+                        logAndReportError("❌ [Variations] listen error: \(error.localizedDescription)")
                         Task { @MainActor in
                             bag.receivedCollection = true
                             if bag.receivedFallback || bag.receivedItemDocs {
@@ -128,7 +128,7 @@ extension FirebaseBackend {
             variationsFallbackDocument(organizationId: orgId, parentId: parentId)
                 .addSnapshotListener { snapshot, error in
                     if let error {
-                        print("❌ [Variations] fallback listen error: \(error.localizedDescription)")
+                        logAndReportError("❌ [Variations] fallback listen error: \(error.localizedDescription)")
                         Task { @MainActor in
                             bag.receivedFallback = true
                             onChange(
@@ -161,7 +161,7 @@ extension FirebaseBackend {
                 .whereField("recordType", isEqualTo: "variationItem")
                 .addSnapshotListener { snapshot, error in
                     if let error {
-                        print("❌ [Variations] item-doc listen error: \(error.localizedDescription)")
+                        logAndReportError("❌ [Variations] item-doc listen error: \(error.localizedDescription)")
                         Task { @MainActor in
                             bag.receivedItemDocs = true
                             onChange(
@@ -207,7 +207,7 @@ extension FirebaseBackend {
         return variationTrackerDocument(organizationId: organizationId, parentId: parentId)
             .addSnapshotListener { snapshot, error in
                 if let error {
-                    print("❌ [Variations] tracker listen error: \(error.localizedDescription)")
+                    logAndReportError("❌ [Variations] tracker listen error: \(error.localizedDescription)")
                     return
                 }
                 let tracker: VariationTracker
@@ -292,7 +292,7 @@ extension FirebaseBackend {
             wrote = true
         } catch {
             lastError = error
-            print("⚠️ [Variations] Settings log write failed: \(error.localizedDescription)")
+            logAndReportError("⚠️ [Variations] Settings log write failed: \(error.localizedDescription)")
         }
 
         do {
@@ -300,7 +300,7 @@ extension FirebaseBackend {
             wrote = true
         } catch {
             lastError = lastError ?? error
-            print("⚠️ [Variations] Settings item write failed: \(error.localizedDescription)")
+            logAndReportError("⚠️ [Variations] Settings item write failed: \(error.localizedDescription)")
         }
 
         do {
@@ -834,7 +834,7 @@ extension FirebaseBackend {
                 return result
             } catch {
                 lastError = error
-                print("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
+                logAndReportError("⚠️ [Variations] Storage path failed \(path): \(error.localizedDescription)")
                 // 17 Nov bug: a stall (no answer from File storage) is not a refusal — trying the second path would
                 // only wait another minute. Stop and show why it stalled.
                 if (error as NSError).domain == Self.variationUploadStallDomain { throw error }
@@ -1116,7 +1116,7 @@ extension FirebaseBackend {
             try await storage.reference().child(storagePath).delete()
             return .deleted
         } catch {
-            print("⚠️ [Variations] evidence delete refused or failed for \(storagePath): \(error.localizedDescription)")
+            logAndReportError("⚠️ [Variations] evidence delete refused or failed for \(storagePath): \(error.localizedDescription)")
             return .failed(error.localizedDescription)
         }
     }
