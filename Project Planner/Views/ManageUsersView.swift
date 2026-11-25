@@ -2137,7 +2137,7 @@ struct EditUserView: View {
             for: draftUserForAnnualLeaveValidation,
             selectedIds: selectedLineManagerUserIds,
             hasNoLineManager: hasNoLineManagerDraft,
-            roster: userStore.organizationUsers
+            roster: userStore.unfoldedOrganizationUsers
         )
     }
 
@@ -2312,7 +2312,7 @@ struct EditUserView: View {
         // RULEBOOK 1.26.1 §8: against the editor's record while `privatePay` is on; the opened row as before while off.
         let payrollRateDirty = isPayrollRateDirty(versus: payRecord.map { user.withPayFields(of: $0) } ?? user)
         let operativeProfileChanged = (permissions.operativeMode || permissions.manager || permissions.adminAccess) && (
-            LineManagerRulebook.selectionChanged(selectedLineManagerUserIds, from: user, roster: userStore.organizationUsers) ||
+            LineManagerRulebook.selectionChanged(selectedLineManagerUserIds, from: user, roster: userStore.unfoldedOrganizationUsers) ||
             hasNoLineManagerDraft != user.hasNoLineManager ||
             payrollRateDirty
         )
@@ -2399,7 +2399,7 @@ struct EditUserView: View {
 
     /// RULEBOOK 1.11.0 §11: `lineManagerCandidates(person, roster)`.
     private var lineManagerCandidates: [AppUser] {
-        LineManagerRulebook.candidates(for: draftUserForAnnualLeaveValidation, roster: userStore.organizationUsers)
+        LineManagerRulebook.candidates(for: draftUserForAnnualLeaveValidation, roster: userStore.unfoldedOrganizationUsers)
     }
     
     var body: some View {
@@ -2449,7 +2449,7 @@ struct EditUserView: View {
     /// (`lineManagerSelectedIds`), as the draft starts — so an untouched picker never counts as a change.
     private var lineManagerBaselineRow: [String: Any] {
         var baseline = displayedUser
-        let ids = LineManagerRulebook.selectedIds(for: userStore.rosterRow(for: user.id) ?? user, roster: userStore.organizationUsers)
+        let ids = LineManagerRulebook.selectedIds(for: userStore.rosterRow(for: user.id) ?? user, roster: userStore.unfoldedOrganizationUsers)
         baseline.setLineManagerUserIds(Array(ids).sorted())
         if !ids.isEmpty { baseline.hasNoLineManager = false }
         return baseline.lineManagerAccessRow
@@ -2761,7 +2761,7 @@ struct EditUserView: View {
         hasNoLineManagerDraft = u.hasNoLineManager
         // RULEBOOK 1.14.0 §11 `lineManagerSelectedIds`: a stored id on the other users document of the same person
         // selects that person's one picker option.
-        selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: u, roster: userStore.organizationUsers)
+        selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: u, roster: userStore.unfoldedOrganizationUsers)
         selectedAssignedManagerUserId = u.assignedManagerUserId
     }
 
@@ -3153,7 +3153,7 @@ struct EditUserView: View {
                 if let fresh = userStore.rosterRow(for: user.id) {
                     permissions = fresh.permissions
                     permissionsBaseline = fresh.permissions
-                    selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: fresh, roster: userStore.organizationUsers)
+                    selectedLineManagerUserIds = LineManagerRulebook.selectedIds(for: fresh, roster: userStore.unfoldedOrganizationUsers)
                     selectedAssignedManagerUserId = fresh.assignedManagerUserId
                     isActive = fresh.isActive
                 }
@@ -4568,7 +4568,7 @@ struct EditUserView: View {
         var operativeDetailsSuccess = true
         // Both sides read through `lineManagerSelectedIds`, so an untouched picker never rewrites the stored ids.
         let managerAssignmentChanged = LineManagerRulebook.selectionChanged(
-            selectedLineManagerUserIds, from: subjectUser, roster: userStore.organizationUsers
+            selectedLineManagerUserIds, from: subjectUser, roster: userStore.unfoldedOrganizationUsers
         )
         let hasNoLineManagerChanged = hasNoLineManagerDraft != subjectUser.hasNoLineManager
         let operativeDayRateChanged = isPayrollRateDirty(versus: subjectUser)
