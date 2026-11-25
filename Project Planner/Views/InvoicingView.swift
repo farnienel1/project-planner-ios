@@ -1045,6 +1045,9 @@ enum TimesheetDraftStore {
         put("exportedAt", draft.exportedAt)
         // `resolveTimesheetExportedAtMs` (inside `parseTimesheetStatusFields`) reads it beside `exportedAt`.
         put("invoiceGeneratedAt", draft.invoiceGeneratedAt)
+        // RULEBOOK 1.90.0: a draft revision is with the reviewer (`timesheetNextStep`, `timesheetRevisionIsDraft`).
+        if let revision = draft.revision, revision > 0 { row["revision"] = revision }
+        if draft.revisionDraft == true { row["revisionDraft"] = true }
         return row
     }
 
@@ -1163,7 +1166,9 @@ enum TimesheetDraftStore {
                 organizationId: organizationId,
                 previousDocumentId: latest.documentId,
                 writerIsSubject: writerIsSubject,
-                liveLines: liveLines.map(\.rulebookTotalsJSON)
+                liveLines: liveLines.map(\.rulebookTotalsJSON),
+                // RULEBOOK 1.90.0 (owner 24 Nov, point 4): a reviewer's revision starts as a draft held with them.
+                draft: !writerIsSubject
             )
             switch result.status {
             case "created": return (result.documentId, nil, false)
@@ -1300,7 +1305,8 @@ enum TimesheetDraftStore {
         firebaseBackend: FirebaseBackend,
         organizationId: String,
         writer: AppUser? = nil,
-        subject: AppUser? = nil
+        subject: AppUser? = nil,
+        makingChanges: Bool = false
     ) async -> String? {
         let end = weekEnd ?? storedPeriodEnd(userId: userId, weekStart: weekStart, organizationId: organizationId) ?? weekStart
         let writerId = Auth.auth().currentUser?.uid ?? writer?.id ?? ""
@@ -1506,6 +1512,32 @@ enum TimesheetDraftStore {
                 sheetDocId: server?["__documentId"] as? String
             ) {
                 for (key, value) in reviewFields { changed[key] = value }
+                // RULEBOOK 1.90.0 §8 (Cancel changes): a price work / expense decision changed while making changes records
+                // the stored review it replaced, once per session (`timesheetReviewerReviewRecord`), in the same write.
+                // Null outside a session and for a late extra's decision.
+                if let server {
+                    var storedSheet = FirebaseBackend.firestoreJSON(server) as? [String: Any] ?? [:]
+                    if storedSheet["revision"] == nil,
+                       let revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(server["__documentId"] as? String)?.revision {
+                        storedSheet["revision"] = revision
+                    }
+                    let storedReviews = storedSheet["extraEntryReviews"] as? [String: Any] ?? [:]
+                    let prefix = "extraEntryReviews."
+                    for (key, value) in reviewFields where key.hasPrefix(prefix) {
+                        let entryId = String(key.dropFirst(prefix.count))
+                        guard let record = CanonicalBusinessEngine.timesheetReviewerReviewRecord(
+                            sheet: storedSheet,
+                            entryId: entryId,
+                            before: storedReviews[entryId] as? [String: Any],
+                            editedBy: writerId,
+                            makingChanges: makingChanges,
+                            after: FirebaseBackend.firestoreJSON(value) as? [String: Any]
+                        ) else { continue }
+                        var recordValue = TimesheetReviewerFirestoreValue.map(record.value)
+                        recordValue["editedAt"] = FieldValue.serverTimestamp()
+                        changed["\(CanonicalBusinessEngine.timesheetReviewerBookingEditsField).\(record.key)"] = recordValue
+                    }
+                }
             }
             // RULEBOOK 1.54.0 (final check of #337): a stored `exportedAt` is never written back changed or removed.
             if storedExported { changed.removeValue(forKey: "exportedAt") }
@@ -1928,6 +1960,8 @@ enum TimesheetDraftStore {
             output.versionDocumentId = readId
             output.revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(readId)?.revision ?? 0
         }
+        // RULEBOOK 1.90.0 §8: a reviewer's draft revision (read only).
+        output.revisionDraft = (map[CanonicalBusinessEngine.timesheetRevisionDraftField] as? Bool) == true ? true : nil
         output.previousVersionExportedTotal = (map["__previousExportedTotal"] as? NSNumber)?.doubleValue
         output.previousVersionKnown = map["__previousVersionKnown"] as? Bool
         output.originalStoredUserId = (map["__originalUserId"] as? String) ?? (output.revision == 0 ? map["userId"] as? String : nil)
@@ -2986,6 +3020,57 @@ private struct MyTimesheetView: View {
         )
     }
 
+    /// RULEBOOK 1.90.0 §8: a reviewer's draft revision — the person is never offered Sign while it is a draft.
+    private var personDraftState: RulebookTimesheetRevisionDraftState {
+        CanonicalBusinessEngine.timesheetRevisionDraftState(
+            sheet: TimesheetDraftStore.statusPayload(for: draft),
+            viewerIsReviewer: false,
+            viewerIsSubject: true,
+            personName: userStore.displayUser.flatMap { TimesheetClarityNames.personName($0) },
+            revisionLabel: TimesheetDraftStore.revisionLabel(for: draft)
+        )
+    }
+
+    /// RULEBOOK 1.77.0 §8 (owner 23 Nov, point 1): one "Correct this timesheet" entry; it only runs the existing actions
+    /// (revision → `createRevisionAndOpen`, late extras → `beginAddingExtra`). 1.90.0: shown inside the status card.
+    private var personCorrectionEntry: some View {
+        let correction = clarityCorrection
+        return TimesheetCorrectionEntryView(option: correction, busy: isCreatingRevision) {
+            switch correction.action {
+            case "reviewAndSignAgain", "createRevision":
+                createRevisionAndOpen()
+            case "addLateExtras":
+                showCorrectionExtraChoice = true
+            default:
+                break
+            }
+        }
+        // RULEBOOK §2: signing is online only.
+        .onlineOnly(isOnline: smartCache.isOnline)
+        .confirmationDialog(correction.label, isPresented: $showCorrectionExtraChoice, titleVisibility: .visible) {
+            Button("Add price work") { beginAddingExtra(.priceWork) }
+            Button("Add expense") { beginAddingExtra(.expense) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// RULEBOOK 1.90.0 (owner 24 Nov, point 3): every notice as one row of the notes card.
+    private var personNotices: [TimesheetNoticeRow] {
+        var rows: [TimesheetNoticeRow] = []
+        // RULEBOOK 1.47.0 §8: bookings changed since the person signed (`SIGNED_TIMESHEET_CHANGED_MESSAGE`).
+        if mustSignAgain {
+            rows.append(TimesheetNoticeRow(id: "change", tone: "amber", text: bookingChange?.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage))
+        }
+        // RULEBOOK 1.55.0 §8: exported and a booking changed since — the person signs an update (a revision).
+        if revisionDue.due {
+            rows.append(TimesheetNoticeRow(id: "due", tone: "amber", text: revisionDue.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage))
+        }
+        if payrollLines.contains(where: { $0.isOverlapping }), let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: false) {
+            rows.append(TimesheetNoticeRow(id: "overlap", tone: "amber", text: note))
+        }
+        return rows
+    }
+
     /// Point 5: Generate Invoice in the whose-turn line — the existing action, under the same test as the button lower
     /// down; nil when it may not be offered now.
     private var invoiceNextStepAction: (() -> Void)? {
@@ -3075,28 +3160,53 @@ private struct MyTimesheetView: View {
                     }
                 }
 
-                if let saveErrorMessage {
-                    Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(Color.red.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        .accessibilityIdentifier("timesheets.saveError")
-                }
-
                 // RULEBOOK 1.77.0 §8 (owner 23 Nov, points 2, 3, 5): whose turn, what changed since signing.
+                // RULEBOOK 1.90.0 (owner 24 Nov, point 5): ONE status card (whose turn, any error in red, the "Correct
+                // this timesheet" entry, one help line), the changes card, then ONE notes card.
                 let clarityDetails = clarityChangeDetails
+                let draftState = personDraftState
                 if let step = clarityNextStep(details: clarityDetails) {
-                    TimesheetNextStepCard(
-                        step: step,
-                        generateInvoice: invoiceNextStepAction,
-                        generateInvoiceBusy: isGeneratingInvoice
-                    )
-                }
-                if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
-                    TimesheetChangesCard(details: clarityDetails)
+                    // RULEBOOK 1.90.0 point 10: whose turn, what changed and every notice are ONE card.
+                    TimesheetTopCard {
+                        TimesheetNextStepCard(
+                            step: step,
+                            generateInvoice: invoiceNextStepAction,
+                            generateInvoiceBusy: isGeneratingInvoice,
+                            errorText: saveErrorMessage,
+                            accessory: draftState.draft ? nil : AnyView(personCorrectionEntry),
+                            help: draftState.personMessage
+                        )
+                        if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                            Divider()
+                            TimesheetChangesCard(details: clarityDetails)
+                        }
+                        if !personNotices.isEmpty {
+                            Divider()
+                            TimesheetNoticesCard(notices: personNotices)
+                        }
+                    }
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
+                } else {
+                    if let saveErrorMessage {
+                        Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.red)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
+                            .background(Color.red.opacity(0.08))
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .accessibilityIdentifier("timesheets.saveError")
+                    }
+                    if !draftState.draft { personCorrectionEntry }
+                    if (mustSignAgain || revisionDue.due), !clarityDetails.rows.isEmpty {
+                        TimesheetChangesCard(details: clarityDetails)
+                    }
+                    TimesheetNoticesCard(notices: personNotices)
+                    if !earlierVersions.isEmpty {
+                        TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
+                    }
                 }
 
                 if managerHasSigned, TimesheetDraftAdjustments.managerAdjustmentCount(draft: draft, lines: payrollLines) > 0 {
@@ -3162,10 +3272,16 @@ private struct MyTimesheetView: View {
                                     .foregroundStyle(row.shouldHighlightRateInOrange ? Color.orange : Color.primary)
                                     .strikethrough(removed)
                                 // The person's own sheet: `overlappingBookingNote(reviewing: false)`.
+                                // RULEBOOK 1.90.0 (owner 24 Nov, point 3): a small chip on the line; the sentence is one row of the notes card.
                                 if row.isOverlapping, let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: false) {
-                                    Text(note)
-                                        .font(.caption.weight(.semibold))
+                                    Text("Overlaps another booking")
+                                        .font(.caption2.weight(.semibold))
                                         .foregroundStyle(PPColor.warningAmber)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 3)
+                                        .background(PPColor.warningAmber.opacity(0.12))
+                                        .clipShape(Capsule())
+                                        .accessibilityLabel(note)
                                 }
                             }
                             Spacer()
@@ -3408,42 +3524,8 @@ private struct MyTimesheetView: View {
                 .background(ProjectWorksRevampColors.requiredPillBg)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-                // RULEBOOK 1.47.0 §8: bookings changed since the person signed — they review the live bookings and sign
-                // again (`SIGNED_TIMESHEET_CHANGED_MESSAGE`).
-                if mustSignAgain {
-                    SignedTimesheetChangedBanner(message: bookingChange?.message ?? CanonicalBusinessEngine.signedTimesheetChangedMessage)
-                }
-                // RULEBOOK 1.55.0 §8: exported and a booking changed since — the exported sheet stays as it was; the
-                // person signs an update (a revision).
-                if revisionDue.due {
-                    SignedTimesheetChangedBanner(message: revisionDue.message ?? CanonicalBusinessEngine.timesheetRevisionDueMessage)
-                }
-                // RULEBOOK 1.77.0 §8 (owner 23 Nov, point 1): one "Correct this timesheet" entry; it only runs the
-                // existing actions (revision → `createRevisionAndOpen`, late extras → `beginAddingExtra`).
-                let correction = clarityCorrection
-                TimesheetCorrectionEntryView(option: correction, busy: isCreatingRevision) {
-                    switch correction.action {
-                    case "reviewAndSignAgain", "createRevision":
-                        createRevisionAndOpen()
-                    case "addLateExtras":
-                        showCorrectionExtraChoice = true
-                    default:
-                        break
-                    }
-                }
-                // RULEBOOK §2: signing is online only.
-                .onlineOnly(isOnline: smartCache.isOnline)
-                .confirmationDialog(correction.label, isPresented: $showCorrectionExtraChoice, titleVisibility: .visible) {
-                    Button("Add price work") { beginAddingExtra(.priceWork) }
-                    Button("Add expense") { beginAddingExtra(.expense) }
-                    Button("Cancel", role: .cancel) {}
-                }
-                if !earlierVersions.isEmpty {
-                    TimesheetEarlierVersionsList(versions: earlierVersions)
-                        .padding(14)
-                        .background(Color(.systemBackground))
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
+                // RULEBOOK 1.90.0 (owner 24 Nov, point 5): the changed / revision-due notes, the "Correct this
+                // timesheet" entry and Earlier versions are in the status card and the notes card at the top.
                 if bookingCheckUnavailable {
                     // Review of #234 (B): a signed sheet whose bookings cannot be read says so, with Retry.
                     PayInputsFailureBanner(message: SignedTimesheetCheckAvailability.unavailableMessage) {
@@ -3455,7 +3537,14 @@ private struct MyTimesheetView: View {
                         retryBookingCheck()
                     }
                 }
-                if (draft.operativeSignedAt == nil || mustSignAgain) && payInputsBlockMessage == nil {
+                if !personDraftState.personMaySign {
+                    // RULEBOOK 1.90.0: a draft revision is with the line manager — never offer Sign (the rules refuse it).
+                    Text(CanonicalBusinessEngine.timesheetRevisionDraftRefusedMessage)
+                        .font(.footnote)
+                        .foregroundStyle(ProjectWorksRevampColors.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityIdentifier("timesheets.revisionDraft.personNote")
+                } else if (draft.operativeSignedAt == nil || mustSignAgain) && payInputsBlockMessage == nil {
                     NavigationLink {
                         SignTimesheetView(
                             week: week,
@@ -4247,6 +4336,11 @@ private struct MyTimesheetView: View {
         // RULEBOOK 1.74.0 §13: a signature already being saved, or a sheet already signed that is not asking to be
         // signed again, is never signed (or notified) twice.
         guard !signatureSaving else { return }
+        // RULEBOOK 1.90.0: a draft revision is with the line manager — never signed by the person.
+        if !personDraftState.personMaySign {
+            saveErrorMessage = CanonicalBusinessEngine.timesheetRevisionDraftRefusedMessage
+            return
+        }
         if draft.operativeSignedAt != nil && !mustSignAgain {
             // Review of #276: an already-signed sheet whose booking check has not answered yet (bookings not loaded, or
             // the script did not answer) is never signed again silently — say so, nothing is signed.
@@ -6538,8 +6632,161 @@ private struct OperativeTimesheetReviewView: View {
             lateExtrasAllowed: false,
             personName: TimesheetClarityNames.personName(operative),
             lineManagerName: TimesheetClarityNames.lineManagerName(for: operative, roster: userStore.unfoldedOrganizationUsers),
-            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers)
+            hasLineManager: TimesheetClarityNames.hasLineManager(operative, roster: userStore.organizationUsers),
+            // RULEBOOK 1.90.0: the reviewer's revision is created as a draft.
+            revisionDraft: true
         )
+    }
+
+    /// RULEBOOK 1.90.0 §8 (owner 24 Nov, point 4): the draft revision's state for this reviewer
+    /// (`timesheetRevisionDraftState`): Send grey until the draft holds a booking change, Cancel revision.
+    private var reviewerDraftState: RulebookTimesheetRevisionDraftState {
+        var sheet = makeChangesSheet
+        sheet["reviewerBookingEdits"] = TimesheetReviewerBookingEdits.stored(draft)
+        return CanonicalBusinessEngine.timesheetRevisionDraftState(
+            sheet: sheet,
+            viewerIsReviewer: viewerIsReviewer,
+            viewerIsSubject: false,
+            personName: TimesheetClarityNames.personName(operative),
+            revisionLabel: TimesheetDraftStore.revisionLabel(for: draft)
+        )
+    }
+
+    @State private var isSendingDraftRevision = false
+    @State private var confirmCancelDraftRevision = false
+    /// RULEBOOK 1.90.0 §8: the confirm before Cancel changes.
+    @State private var confirmCancelReviewerChanges = false
+    @State private var isCancellingReviewerChanges = false
+
+    /// RULEBOOK 1.90.0: Save changes and send — end the draft, then tell the person (`timesheet_revision_to_sign`).
+    private func sendDraftRevision() {
+        guard !isSendingDraftRevision, reviewerDraftState.canSend,
+              let documentId = draft.versionDocumentId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isSendingDraftRevision = true
+        let subject = operative
+        Task {
+            do {
+                let sent = try await firebaseBackend.sendTimesheetRevisionDraft(organizationId: orgId, documentId: documentId)
+                if sent {
+                    await notificationService.notifyTimesheetRevisionToSign(subject: subject, revisionDocumentId: documentId, weekStart: week.start)
+                }
+                await refreshDraftFromCloud()
+                await MainActor.run {
+                    isSendingDraftRevision = false
+                    saveErrorMessage = nil
+                    reviewBookingNotice = sent ? CanonicalBusinessEngine.timesheetRevisionDraftSentMessage : nil
+                }
+            } catch {
+                await MainActor.run {
+                    isSendingDraftRevision = false
+                    saveErrorMessage = "Couldn't send the revision: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK 1.90.0: Cancel revision — undo the draft's changes (item 9), then delete the draft (after the confirm).
+    private func cancelDraftRevision() {
+        guard !isSendingDraftRevision, reviewerDraftState.canCancel,
+              let documentId = draft.versionDocumentId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isSendingDraftRevision = true
+        Task {
+            do {
+                // RULEBOOK 1.90.0 §8 (item 9): the draft's booking and decision changes are undone FIRST
+                // (`timesheetReviewerUndoPlan`), then the draft is deleted while it is still a draft.
+                let undo = try await firebaseBackend.cancelTimesheetReviewerChanges(organizationId: orgId, documentId: documentId)
+                guard undo.refused.isEmpty else {
+                    await refreshDraftFromCloud()
+                    await MainActor.run {
+                        isSendingDraftRevision = false
+                        saveErrorMessage = undo.message
+                    }
+                    return
+                }
+                let cancelled = try await firebaseBackend.cancelTimesheetRevisionDraft(organizationId: orgId, documentId: documentId)
+                await refreshDraftFromCloud()
+                await MainActor.run {
+                    isSendingDraftRevision = false
+                    saveErrorMessage = nil
+                    reviewBookingNotice = cancelled ? CanonicalBusinessEngine.timesheetRevisionDraftCancelledMessage : nil
+                }
+            } catch {
+                await MainActor.run {
+                    isSendingDraftRevision = false
+                    saveErrorMessage = "Couldn't cancel the revision: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// RULEBOOK 1.90.0 §8: the sheet as the undo rules read it (`reviewerBookingEdits`, the signatures as ms).
+    private var reviewerUndoSheet: [String: Any] {
+        SignedTimesheetChangeInputs.sheet(draft, keys: [:])
+    }
+
+    /// RULEBOOK 1.90.0 §8: "Cancel changes" is offered (`timesheetReviewerCancelChangesOffered`) — never on a draft
+    /// revision (its Cancel revision undoes the same changes), never to the person.
+    private var reviewerCancelChangesOffered: Bool {
+        guard viewerIsReviewer, draft.revisionDraft != true else { return false }
+        return CanonicalBusinessEngine.timesheetReviewerCancelChangesOffered(
+            sheet: reviewerUndoSheet,
+            viewerIsReviewer: true,
+            viewerIsSubject: false
+        )
+    }
+
+    /// The number of changes Cancel changes undoes (`timesheetReviewerSessionRecords`).
+    private var reviewerSessionChangeCount: Int {
+        CanonicalBusinessEngine.timesheetReviewerSessionRecords(reviewerUndoSheet).count
+    }
+
+    /// RULEBOOK 1.90.0 §8: the red "Cancel changes" button (asks first).
+    @ViewBuilder
+    private var cancelReviewerChangesButton: some View {
+        if reviewerCancelChangesOffered {
+            Button(role: .destructive) {
+                confirmCancelReviewerChanges = true
+            } label: {
+                Text(CanonicalBusinessEngine.timesheetReviewerCancelChangesLabel)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .foregroundStyle(.red)
+                    .background(Color.red.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .disabled(isCancellingReviewerChanges || !smartCache.isOnline)
+            .onlineOnly(isOnline: smartCache.isOnline)
+            .accessibilityIdentifier("operativeTimesheetReview.cancelChanges")
+        }
+    }
+
+    /// RULEBOOK 1.90.0 §8: Cancel changes — undo the session's booking and decision changes
+    /// (`FirebaseBackend.cancelTimesheetReviewerChanges`, one transaction per booking).
+    private func cancelReviewerChanges() {
+        guard !isCancellingReviewerChanges,
+              let documentId = draft.versionDocumentId,
+              let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
+        isCancellingReviewerChanges = true
+        Task {
+            do {
+                let result = try await firebaseBackend.cancelTimesheetReviewerChanges(organizationId: orgId, documentId: documentId)
+                await refreshDraftFromCloud()
+                await MainActor.run {
+                    isCancellingReviewerChanges = false
+                    if result.refused.isEmpty { makingChangesFor = nil }
+                    saveErrorMessage = nil
+                    reviewBookingNotice = result.message
+                }
+            } catch {
+                await MainActor.run {
+                    isCancellingReviewerChanges = false
+                    reviewBookingNotice = TimesheetReviewBookingWriteError.from(error).message
+                }
+            }
+        }
     }
 
     /// RULEBOOK 1.76.0 §8: ⚙ / ✕ (no ✓) on the labour lines — A1 after "Make changes" until the first booking change
@@ -6801,15 +7048,99 @@ private struct OperativeTimesheetReviewView: View {
 
     /// RULEBOOK 1.77.0 §8 (owner 23 Nov, points 2, 3): whose turn, and — while the sheet waits for this reviewer (or an
     /// update is due) — what changed since it was signed.
+    /// RULEBOOK 1.90.0 (owner 24 Nov, point 5): one status card (whose turn, any error in red, this state's buttons:
+    /// a draft revision's Send / Cancel, else the "Correct this timesheet" entry), the changes card, then ONE notes card.
     @ViewBuilder
     private var reviewClaritySection: some View {
         let details = reviewerChangeDetails
+        let draftState = reviewerDraftState
+        let showChanges = (revisionDue.due || bookingChange?.waitingForLineManager == true) && !details.rows.isEmpty
         if let step = reviewerNextStep(details: details) {
-            TimesheetNextStepCard(step: step)
+            // RULEBOOK 1.90.0 point 10: whose turn, what changed, every notice and the buttons are ONE card.
+            TimesheetTopCard {
+                TimesheetNextStepCard(
+                    step: step,
+                    errorText: saveErrorMessage,
+                    accessory: reviewStatusAccessory(draftState),
+                    help: draftState.reviewerActs ? draftState.help : nil
+                )
+                if showChanges {
+                    Divider()
+                    TimesheetChangesCard(details: details)
+                }
+                if !reviewNotices.isEmpty {
+                    Divider()
+                    TimesheetNoticesCard(notices: reviewNotices)
+                }
+            }
+        } else {
+            if let saveErrorMessage {
+                Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.red)
+                    .accessibilityIdentifier("operativeTimesheetReview.saveError")
+            }
+            if showChanges { TimesheetChangesCard(details: details) }
+            TimesheetNoticesCard(notices: reviewNotices)
         }
-        if (revisionDue.due || bookingChange?.waitingForLineManager == true), !details.rows.isEmpty {
-            TimesheetChangesCard(details: details)
+        // Earlier versions is its own section below the card.
+        if !earlierVersions.isEmpty {
+            TimesheetNoticesCard(notices: [], footer: AnyView(TimesheetEarlierVersionsList(versions: earlierVersions)))
         }
+    }
+
+    /// The status card's buttons for this state.
+    private func reviewStatusAccessory(_ draftState: RulebookTimesheetRevisionDraftState) -> AnyView? {
+        if draftState.reviewerActs {
+            return AnyView(
+                TimesheetRevisionDraftButtons(
+                    state: draftState,
+                    busy: isSendingDraftRevision,
+                    onSend: sendDraftRevision,
+                    onCancel: { confirmCancelDraftRevision = true }
+                )
+                .onlineOnly(isOnline: smartCache.isOnline)
+            )
+        }
+        // RULEBOOK 1.77.0 §8 (point 1): one "Correct this timesheet" entry wrapping the existing actions — reopen the
+        // review (1.76.0 A1, `makingChangesFor`) or create the next revision (B1, `createRevisionForPerson`).
+        guard makeChangesAction != nil, !makingChanges else { return nil }
+        let correction = reviewerCorrection
+        return AnyView(
+            TimesheetCorrectionEntryView(
+                option: correction,
+                busy: isCreatingRevision,
+                disabled: correction.action == "makeChanges" && payInputsBlockMessage != nil
+            ) {
+                switch correction.action {
+                case "makeChanges": makingChangesFor = draft.managerSignedAt
+                case "createRevision": createRevisionForPerson()
+                default: break
+                }
+            }
+            .onlineOnly(isOnline: smartCache.isOnline)
+            .accessibilityIdentifier("operativeTimesheetReview.correct")
+        )
+    }
+
+    /// RULEBOOK 1.90.0 (owner 24 Nov, point 3): every notice as one row of the notes card.
+    private var reviewNotices: [TimesheetNoticeRow] {
+        var rows: [TimesheetNoticeRow] = []
+        // RULEBOOK 1.47.0 / 1.55.0: on an exported sheet whose bookings changed, the revision note; else the change note.
+        if revisionDue.due {
+            rows.append(TimesheetNoticeRow(id: "due", tone: "amber", text: revisionDue.reviewerMessage ?? CanonicalBusinessEngine.timesheetRevisionDueReviewerMessage))
+        } else if let note = bookingChange?.reviewerMessage {
+            rows.append(TimesheetNoticeRow(id: "change", tone: "amber", text: note))
+        }
+        if reviewerBookingEditsOpen, makeChangesAction != .reopenReview {
+            // RULEBOOK 1.76.0 §8 (B1): the reviewer may change an open revision's bookings before the person signs it.
+            rows.append(TimesheetNoticeRow(id: "revedit", tone: "info", text: CanonicalBusinessEngine.timesheetRevisionReviewerEditNote))
+        }
+        // Point 3: overlapping bookings are one row here, not a coloured note on every line.
+        if payrollSummary.lineItems.contains(where: { $0.isOverlapping }), let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: true) {
+            rows.append(TimesheetNoticeRow(id: "overlap", tone: "amber", text: note))
+        }
+        return rows
     }
 
     private var reviewScrollContent: some View {
@@ -6825,6 +7156,28 @@ private struct OperativeTimesheetReviewView: View {
                 reviewSignOffSection
             }
             .padding(16)
+        }
+        // RULEBOOK 1.90.0: the confirm before Cancel revision (`timesheetRevisionCancelConfirmMessage`).
+        .alert(
+            CanonicalBusinessEngine.timesheetRevisionCancelConfirmMessage(
+                revisionLabel: TimesheetDraftStore.revisionLabel(for: draft),
+                changeCount: reviewerDraftState.bookingEdits,
+                removedCount: CanonicalBusinessEngine.timesheetReviewerSessionRecords(reviewerUndoSheet)
+                    .filter { $0.kind == "booking" && $0.value["deleted"] as? Bool == true }
+                    .count
+            ),
+            isPresented: $confirmCancelDraftRevision
+        ) {
+            Button(reviewerDraftState.cancelLabel, role: .destructive) { cancelDraftRevision() }
+            Button("Keep it", role: .cancel) {}
+        }
+        // RULEBOOK 1.90.0 §8: the confirm before Cancel changes (`timesheetReviewerCancelChangesConfirmMessage`).
+        .alert(
+            CanonicalBusinessEngine.timesheetReviewerCancelChangesConfirmMessage(reviewerSessionChangeCount),
+            isPresented: $confirmCancelReviewerChanges
+        ) {
+            Button(CanonicalBusinessEngine.timesheetReviewerCancelChangesLabel, role: .destructive) { cancelReviewerChanges() }
+            Button("Keep them", role: .cancel) {}
         }
     }
 
@@ -6842,12 +7195,7 @@ private struct OperativeTimesheetReviewView: View {
                 }
             }
             statusLine
-            if let saveErrorMessage {
-                Label(saveErrorMessage, systemImage: "exclamationmark.icloud.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.red)
-                    .accessibilityIdentifier("operativeTimesheetReview.saveError")
-            }
+            // RULEBOOK 1.90.0: a save error is shown in red inside the status card (`reviewClaritySection`).
             if bookingCheckUnavailable {
                 // Review of #234 (B): the bookings or the operatives list could not be read — say so, with Retry.
                 PayInputsFailureBanner(message: SignedTimesheetCheckAvailability.unavailableMessage) {
@@ -7184,9 +7532,9 @@ private struct OperativeTimesheetReviewView: View {
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId
             )
-            if let created = result.documentId {
-                await notificationService.notifyTimesheetRevisionToSign(subject: subject, revisionDocumentId: created, weekStart: week.start)
-            }
+            // RULEBOOK 1.90.0 (owner 24 Nov, point 4): the revision is a draft — the person is told only when the
+            // reviewer sends it (`sendDraftRevision`), never at create.
+            _ = subject
             // Created, or already open (review of #243 L1): show the open revision and listen to it.
             if result.documentId != nil || result.revisionOpen {
                 await refreshDraftFromCloud()
@@ -7202,41 +7550,9 @@ private struct OperativeTimesheetReviewView: View {
 
     @ViewBuilder
     private var reviewSignOffSection: some View {
-        // RULEBOOK 1.47.0 §8: the reviewer's note — back with the person, counter-sign again, or (exported) a warning.
-        // RULEBOOK 1.55.0 §8: on an exported sheet whose bookings changed, the revision note instead.
-        if revisionDue.due {
-            SignedTimesheetChangedBanner(message: revisionDue.reviewerMessage ?? CanonicalBusinessEngine.timesheetRevisionDueReviewerMessage)
-        } else if let note = bookingChange?.reviewerMessage {
-            SignedTimesheetChangedBanner(message: note)
-        }
-        // RULEBOOK 1.77.0 §8 (owner 23 Nov, point 1): one "Correct this timesheet" entry wrapping the existing actions —
-        // reopen the review (1.76.0 A1, `makingChangesFor`) or create the next revision (B1, `createRevisionForPerson`).
-        if makeChangesAction != nil, !makingChanges {
-            let correction = reviewerCorrection
-            TimesheetCorrectionEntryView(
-                option: correction,
-                busy: isCreatingRevision,
-                disabled: correction.action == "makeChanges" && payInputsBlockMessage != nil
-            ) {
-                switch correction.action {
-                case "makeChanges": makingChangesFor = draft.managerSignedAt
-                case "createRevision": createRevisionForPerson()
-                default: break
-                }
-            }
-            .onlineOnly(isOnline: smartCache.isOnline)
-            .accessibilityIdentifier("operativeTimesheetReview.correct")
-        }
-        if reviewerBookingEditsOpen, makeChangesAction != .reopenReview {
-            // RULEBOOK 1.76.0 §8 (B1): the reviewer may change an open revision's bookings before the person signs it.
-            Text(CanonicalBusinessEngine.timesheetRevisionReviewerEditNote)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("operativeTimesheetReview.revisionReviewerEditNote")
-        }
-        if !earlierVersions.isEmpty {
-            TimesheetEarlierVersionsList(versions: earlierVersions)
-        }
+        // RULEBOOK 1.90.0 (owner 24 Nov, point 5): the change / revision notes, the "Correct this timesheet" entry, the
+        // revision edit note and Earlier versions moved to the status card and the notes card at the top
+        // (`reviewClaritySection`).
         if bookingChange?.lateExtrasOnly == true {
             // RULEBOOK 1.54.0 §8: only late extras wait — each ✓ / ✕ saves with the snapshot; no counter-signature.
             EmptyView()
@@ -7258,6 +7574,8 @@ private struct OperativeTimesheetReviewView: View {
             .buttonStyle(.plain)
             .disabled(!bookingCheckReady || !CanonicalBusinessEngine.signedTimesheetActions(bookingChange).lineManagerMayCounterSign)
             .onlineOnly(isOnline: smartCache.isOnline)
+            // RULEBOOK 1.90.0 §8: after a change made while making changes, the session can still be undone.
+            cancelReviewerChangesButton
         } else if bookingChange?.reopened == true {
             EmptyView()
         } else if TimesheetApprovalPolicy.isTimesheetFullyApproved(draft: draft, user: operative) {
@@ -7295,6 +7613,8 @@ private struct OperativeTimesheetReviewView: View {
                             .accessibilityIdentifier("operativeTimesheetReview.stopMakingChanges")
                     }
                 }
+                // RULEBOOK 1.90.0 §8: Cancel changes next to Stop making changes (or after it while the session holds changes).
+                cancelReviewerChangesButton
             }
         } else if viewerIsReviewer,
                   TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: operative),
@@ -7494,10 +7814,16 @@ private struct OperativeTimesheetReviewView: View {
                 }
                 // `overlappingBookingIds`: still paid. The reviewer (line manager or admin) reads
                 // `overlappingBookingNote(reviewing: true)` (RULEBOOK 1.70.0 §8).
+                // RULEBOOK 1.90.0 (owner 24 Nov, point 3): a small chip on the line; the sentence is one row of the notes card.
                 if row.isOverlapping, let note = CanonicalBusinessEngine.overlappingBookingNote(reviewing: true) {
-                    Text(note)
-                        .font(.caption.weight(.semibold))
+                    Text("Overlaps another booking")
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(PPColor.warningAmber)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(PPColor.warningAmber.opacity(0.12))
+                        .clipShape(Capsule())
+                        .accessibilityLabel(note)
                 }
             }
             Spacer()
@@ -7622,7 +7948,7 @@ private struct OperativeTimesheetReviewView: View {
                         draft: draft,
                         collection: plan.collection,
                         bookingId: plan.bookingId,
-                        booking: nil,
+                        booking: booking,
                         write: nil,
                         editedBy: uid
                     )
@@ -7850,6 +8176,8 @@ private struct OperativeTimesheetReviewView: View {
         let snapshot = draft
         let writer = userStore.displayUser
         let subject = operative
+        // RULEBOOK 1.90.0 (Cancel changes): a decision made while Make changes is open is recorded for undo.
+        let makingChangesNow = makingChanges
         return Task {
             // Owner-or-reviewer partial write, plus changed `extraEntryReviews` (`timesheetEntryReviewWriteFields`).
             let message = await TimesheetDraftStore.saveToCloud(
@@ -7860,7 +8188,8 @@ private struct OperativeTimesheetReviewView: View {
                 firebaseBackend: firebaseBackend,
                 organizationId: orgId,
                 writer: writer,
-                subject: subject
+                subject: subject,
+                makingChanges: makingChangesNow
             )
             saveErrorMessage = message
             return message

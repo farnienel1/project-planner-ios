@@ -11791,7 +11791,8 @@ extension FirebaseBackend {
         organizationId: String,
         previousDocumentId: String,
         writerIsSubject: Bool,
-        liveLines: [[String: Any]]
+        liveLines: [[String: Any]],
+        draft: Bool = false
     ) async throws -> (status: String, documentId: String?, revision: Int?) {
         let writerId = Auth.auth().currentUser?.uid ?? ""
         let settings = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings")
@@ -11802,7 +11803,8 @@ extension FirebaseBackend {
             previousRef: previousRef,
             writerId: writerId,
             writerIsSubject: writerIsSubject,
-            liveLines: RulebookJSONBox(object: ["lines": liveLines])
+            liveLines: RulebookJSONBox(object: ["lines": liveLines]),
+            draft: draft
         )
         let parts = answer.split(separator: "|", maxSplits: 2, omittingEmptySubsequences: false).map(String.init)
         let status = parts.first ?? "missing"
@@ -11819,7 +11821,8 @@ extension FirebaseBackend {
         previousRef: DocumentReference,
         writerId: String,
         writerIsSubject: Bool,
-        liveLines: RulebookJSONBox
+        liveLines: RulebookJSONBox,
+        draft: Bool
     ) async throws -> String {
         let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
             let previous: DocumentSnapshot
@@ -11835,7 +11838,8 @@ extension FirebaseBackend {
                 previousData: data,
                 writerUserId: writerId,
                 writerIsSubject: writerIsSubject,
-                liveLines: liveLines.object["lines"] as? [[String: Any]] ?? []
+                liveLines: liveLines.object["lines"] as? [[String: Any]] ?? [],
+                draft: draft
             ) else { return "not-exported||" }
             let targetRef = settings.document(made.documentId)
             let target: DocumentSnapshot
@@ -11852,6 +11856,50 @@ extension FirebaseBackend {
             return "created|\(made.documentId)|\(made.revision)"
         }
         return (answer as? String) ?? "missing||"
+    }
+
+    /// RULEBOOK 1.90.0 §8: Send — end a reviewer's draft revision so the person can sign it. One transaction re-reads the
+    /// revision and deletes `revisionDraft` only while it is still a draft (`timesheetRevisionDraftSendWriteFields`).
+    /// False when it was no longer a draft (sent, cancelled or exported elsewhere).
+    func sendTimesheetRevisionDraft(organizationId: String, documentId: String) async throws -> Bool {
+        let writerId = Auth.auth().currentUser?.uid ?? ""
+        let ref = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings").document(documentId)
+        return try await Self.runTimesheetRevisionDraftWrite(db: db, ref: ref, writerId: writerId, cancel: false)
+    }
+
+    /// RULEBOOK 1.90.0 §8: Cancel revision — delete a reviewer's draft revision, only while it is still a draft (one
+    /// transaction re-reads it). Callers undo its changes first (`cancelTimesheetReviewerChanges`). False when it was no longer a draft.
+    func cancelTimesheetRevisionDraft(organizationId: String, documentId: String) async throws -> Bool {
+        let ref = db.collection("organizations").document(normalizedOrganizationId(organizationId)).collection("settings").document(documentId)
+        return try await Self.runTimesheetRevisionDraftWrite(db: db, ref: ref, writerId: "", cancel: true)
+    }
+
+    nonisolated private static func runTimesheetRevisionDraftWrite(db: Firestore, ref: DocumentReference, writerId: String, cancel: Bool) async throws -> Bool {
+        let answer = try await db.runTransaction { transaction, errorPointer -> Any? in
+            let snap: DocumentSnapshot
+            do {
+                snap = try transaction.getDocument(ref)
+            } catch {
+                errorPointer?.pointee = error as NSError
+                return nil
+            }
+            guard var data = snap.data() else { return false }
+            if data["revision"] == nil, let revision = CanonicalBusinessEngine.parseTimesheetRevisionDocId(snap.documentID)?.revision {
+                data["revision"] = revision
+            }
+            let sheet = FirebaseBackend.firestoreJSON(data) as? [String: Any] ?? [:]
+            if cancel {
+                guard CanonicalBusinessEngine.timesheetRevisionIsDraft(sheet) else { return false }
+                transaction.deleteDocument(ref)
+                return true
+            }
+            guard let removed = CanonicalBusinessEngine.timesheetRevisionDraftSendRemovedFields(sheet), !removed.isEmpty else { return false }
+            var fields: [String: Any] = [:]
+            for key in removed { fields[key] = FieldValue.delete() }
+            transaction.updateData(WriteMetadata.stamped(fields, userId: writerId.isEmpty ? nil : writerId), forDocument: ref)
+            return true
+        }
+        return (answer as? Bool) ?? false
     }
 
     /// Writes the changed timesheet fields only (rulebook §6, §1 "Writes carry metadata").
