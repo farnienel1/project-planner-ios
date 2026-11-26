@@ -1438,6 +1438,22 @@ enum TimesheetDraftStore {
                 ) {
                     return message
                 }
+                // Web #347 (16 Nov scan): a stored late extra the reader skips (blank title, no id, no valid kind, a
+                // second row of an id) is not on this device's draft, so writing the draft's list alone would drop it.
+                // The list written keeps every such row exactly as stored, in its stored slot (one sharing an id with a
+                // late extra the person deleted goes with it). Kept rows are never checked as the person's edit (above).
+                if fields["lateExtras"] != nil, let server, let storedLate = server["lateExtras"] as? [Any], !storedLate.isEmpty {
+                    guard let storedRead = decodeFirestoreMap(server)?.lateExtras else {
+                        return "Couldn't save your timesheet: the timesheet rules did not load. Try again."
+                    }
+                    fields["lateExtras"] = TimesheetLateExtrasSupport.lateExtrasForWrite(
+                        shown: (draft.lateExtras ?? []).map(TimesheetLateExtrasSupport.storedRow),
+                        storedRows: storedLate,
+                        returnedIds: storedRead.map(\.id),
+                        beforeIds: (previousLate ?? []).map(\.id),
+                        nextIds: (draft.lateExtras ?? []).map(\.id)
+                    )
+                }
             } else {
                 // Unchanged: never resent (a sheet whose late extras this device did not change keeps the stored list).
                 fields.removeValue(forKey: "lateExtras")
@@ -8934,7 +8950,9 @@ private struct TimesheetMoneyEntrySheet: View {
             var entry = editingExpense ?? TimesheetExpenseEntry(
                 id: UUID(), title: "", details: "", jobNumber: "", date: date, amount: amount, receiptName: nil
             )
-            entry.title = entryTitle.isEmpty ? "Untitled expense" : entryTitle
+            // Web #347: never a blank or spaces-only title (the reader skips such a row; web `title.trim() || …`).
+            let trimmedTitle = entryTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.title = trimmedTitle.isEmpty ? "Untitled expense" : trimmedTitle
             entry.details = details
             entry.jobNumber = jobNumber
             entry.date = date
@@ -8947,7 +8965,8 @@ private struct TimesheetMoneyEntrySheet: View {
             var entry = editingPriceWork ?? TimesheetPriceWorkEntry(
                 id: UUID(), title: "", details: "", jobNumber: "", agreedManagerName: "", startDate: date, endDate: nil, amount: amount
             )
-            entry.title = entryTitle.isEmpty ? "Untitled price work" : entryTitle
+            let trimmedTitle = entryTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.title = trimmedTitle.isEmpty ? "Untitled price work" : trimmedTitle
             entry.details = details
             entry.jobNumber = jobNumber.trimmingCharacters(in: .whitespacesAndNewlines)
             entry.agreedManagerName = managerName.isEmpty ? "Manager" : managerName

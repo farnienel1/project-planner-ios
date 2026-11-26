@@ -134,6 +134,28 @@ enum WeeklyReportPayInputs {
         return out
     }
 
+    /// Web #347 item 4 `pricedCatalogueOperativeIds`: the catalogue `operatives` rows (people with no account) whose pay
+    /// this report reads, matched as `pricedUserIds` matches users. Row document ids, as stored.
+    static func pricedCatalogueOperativeIds(_ built: Built) -> Set<String> {
+        var owner: [String: Person] = [:]
+        for person in built.people.values.sorted(by: { $0.id < $1.id }) {
+            for id in [person.id] + person.ids {
+                let key = normalizedId(id)
+                if !key.isEmpty, owner[key] == nil { owner[key] = person }
+            }
+        }
+        var out = Set<String>()
+        func note(_ id: Any?) {
+            guard let id = id as? String, let person = owner[normalizedId(id)],
+                  person.user == nil, person.operative != nil else { return }
+            out.insert(person.id)
+        }
+        for row in built.input["bookings"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        for row in built.input["timesheetWeeks"] as? [[String: Any]] ?? [] { note(row["userId"]) }
+        for row in built.input["sheets"] as? [[String: Any]] ?? [] { note(row["personId"]) }
+        return out
+    }
+
     /// `weeklyReportLeaveRows` people: every person with all their ids and their email.
     static func leavePeople(_ people: [String: Person]) -> [[String: Any]] {
         people.values.sorted { $0.id < $1.id }.map { person in

@@ -28,6 +28,9 @@ class OperativeStore: ObservableObject {
     private var cataloguePayOverlayGeneration = 0
     /// True while the overlay's own result is being published (it must not schedule another read).
     private var publishingCataloguePayOverlay = false
+    /// Web #347 item 4: what the last finished catalogue pay overlay read, for the generation it ran on. A report that
+    /// prices a catalogue operative waits until the overlay for the current rows has finished (`cataloguePayStatus`).
+    private var lastCataloguePayOverlay: (generation: Int, planned: Set<String>, failed: Set<String>)?
     
     @Published var managers: [Manager] = [] {
         // RULEBOOK 1.10.0: `canSeeJob` / `jobManagerUserIds` match a job's managers-list ids by this list's emails.
@@ -112,13 +115,45 @@ class OperativeStore: ObservableObject {
         let rows = operatives
         let roster = RulebookRosterSnapshot.users
         Task { @MainActor [weak self] in
-            let overlaid = await firebaseBackend.overlayCatalogueOperativePayIfPrivate(rows, roster: roster)
-            guard let self, generation == self.cataloguePayOverlayGeneration,
-                  Self.payDiffers(rows, overlaid) else { return }
-            self.publishingCataloguePayOverlay = true
-            self.operatives = overlaid
-            self.publishingCataloguePayOverlay = false
+            let result = await firebaseBackend.overlayCatalogueOperativePayWithStatus(rows, roster: roster)
+            guard let self, generation == self.cataloguePayOverlayGeneration else { return }
+            if Self.payDiffers(rows, result.rows) {
+                self.publishingCataloguePayOverlay = true
+                self.operatives = result.rows
+                self.publishingCataloguePayOverlay = false
+            }
+            if result.complete {
+                self.lastCataloguePayOverlay = (generation, result.planned, result.failed)
+            }
         }
+    }
+
+    /// Web #347 item 4 (`payProfilesStatusForCatalogueOperative`): whether the catalogue `operatives` row `operativeId`
+    /// holds its pay. While `privatePay` is off the row holds it (ready). While it is on: loading until the overlay for
+    /// the current rows and roster has finished; failed when that row's own pay-profile read failed; otherwise ready
+    /// (also for a row the viewer's plan does not read — its pay is hidden from them by `reportPayForViewer`).
+    func cataloguePayStatus(for operativeId: String) -> PayOverlayLoad {
+        guard SecuritySwitchContext.privatePay else { return .ready }
+        return Self.cataloguePayStatus(
+            operativeId: operativeId,
+            done: lastCataloguePayOverlay,
+            currentGeneration: cataloguePayOverlayGeneration
+        )
+    }
+
+    /// The decision of `cataloguePayStatus` with `privatePay` on (pure, for tests).
+    static func cataloguePayStatus(
+        operativeId: String,
+        done: (generation: Int, planned: Set<String>, failed: Set<String>)?,
+        currentGeneration: Int
+    ) -> PayOverlayLoad {
+        guard let done, done.generation == currentGeneration else { return .loading }
+        return done.failed.contains(operativeId.lowercased()) ? .failed : .ready
+    }
+
+    /// Reads the catalogue operatives' pay profiles again (the weekly report's Retry).
+    func retryCataloguePayOverlay() {
+        scheduleCataloguePayOverlay()
     }
 
     /// `Operative ==` compares ids only, so the pay fields are compared here.
