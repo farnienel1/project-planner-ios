@@ -498,34 +498,76 @@ extension FirebaseBackend {
     /// Each read stands alone: a refused or missing one keeps that row as stored. While the switch is off nothing is read
     /// and the rows are returned unchanged.
     func overlayCatalogueOperativePayIfPrivate(_ operatives: [Operative], roster users: [AppUser]) async -> [Operative] {
-        guard SecuritySwitchContext.privatePay, !operatives.isEmpty,
-              let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else { return operatives }
+        await overlayCatalogueOperativePayWithStatus(operatives, roster: users).rows
+    }
+
+    /// `overlayCatalogueOperativePayIfPrivate` with what the read covered (web #347 item 4,
+    /// `payProfilesStatusForCatalogueOperative`): `planned` — the catalogue row ids (lower case) whose `payProfiles`
+    /// document this viewer's plan read; `failed` — those whose read failed (refused or no answer; a missing document is
+    /// not a failure). `complete` is false when nothing could be planned (no open organisation), so a report keeps
+    /// waiting. While `privatePay` is off nothing is read and the result is complete with nothing planned.
+    func overlayCatalogueOperativePayWithStatus(
+        _ operatives: [Operative],
+        roster users: [AppUser]
+    ) async -> CataloguePayOverlayResult {
+        guard SecuritySwitchContext.privatePay, !operatives.isEmpty else {
+            return CataloguePayOverlayResult(rows: operatives, planned: [], failed: [], complete: true)
+        }
+        guard let orgId = currentOrganization?.firestoreDocumentId, !orgId.isEmpty else {
+            return CataloguePayOverlayResult(rows: operatives, planned: [], failed: [], complete: false)
+        }
         let roster = users.map(\.payAccessSubject)
         let catalogue = CanonicalBusinessEngine.catalogueOperativePaySubjects(
             operatives: operatives.map(\.catalogueOperativeRow),
             roster: roster
         )
         let catalogueIds = Set(catalogue.compactMap { $0["id"] as? String })
-        guard !catalogueIds.isEmpty else { return operatives }
+        guard !catalogueIds.isEmpty else {
+            return CataloguePayOverlayResult(rows: operatives, planned: [], failed: [], complete: true)
+        }
         let plan = CanonicalBusinessEngine.payProfileReadPlan(viewer: payViewerRow, subjects: roster + catalogue, roster: roster)
         var profiles: [String: [String: Any]] = [:]
+        var planned = Set<String>()
+        var failed = Set<String>()
         let collection = db.collection("organizations").document(orgId).collection("payProfiles")
         switch plan {
         case .all:
+            planned = Set(catalogueIds.map { $0.lowercased() })
             if let snapshot = try? await collection.getDocuments() {
                 for doc in snapshot.documents where catalogueIds.contains(doc.documentID) { profiles[doc.documentID] = doc.data() }
+            } else {
+                failed = planned
             }
         case .documents(let ids):
             for id in ids where catalogueIds.contains(id) {
-                if let snapshot = try? await collection.document(id).getDocument(), snapshot.exists, let data = snapshot.data() {
-                    profiles[id] = data
+                planned.insert(id.lowercased())
+                do {
+                    let snapshot = try await collection.document(id).getDocument()
+                    if snapshot.exists, let data = snapshot.data() { profiles[id] = data }
+                } catch {
+                    failed.insert(id.lowercased())
                 }
             }
         }
-        guard !profiles.isEmpty else { return operatives }
-        return operatives.map { row in
-            guard let profile = profiles[row.documentId] else { return row }
-            return row.payShown(with: profile, privatePay: true)
+        var rows = operatives
+        if !profiles.isEmpty {
+            rows = operatives.map { row -> Operative in
+                guard let profile = profiles[row.documentId] else { return row }
+                return row.payShown(with: profile, privatePay: true)
+            }
         }
+        return CataloguePayOverlayResult(rows: rows, planned: planned, failed: failed, complete: true)
     }
+}
+
+/// What one catalogue operatives' pay overlay read (web #347 item 4). See
+/// `FirebaseBackend.overlayCatalogueOperativePayWithStatus`.
+struct CataloguePayOverlayResult {
+    var rows: [Operative]
+    /// Catalogue row ids (lower case) whose `payProfiles` document the viewer's plan read.
+    var planned: Set<String>
+    /// Planned ids whose read failed (no good copy laid over).
+    var failed: Set<String>
+    /// False when no read could be planned (no open organisation).
+    var complete: Bool
 }

@@ -345,6 +345,91 @@ enum TimesheetLateExtrasSupport {
         return row
     }
 
+    // MARK: - Rows the reader skips (web #347, 16 Nov scan)
+
+    /// A stored id compared without case (`normalizeDocumentId`: trimmed, lower case).
+    nonisolated static func lateExtraKey(_ id: String) -> String {
+        id.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private nonisolated static func trimmedText(_ value: Any?) -> String {
+        (value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    private nonisolated static func exactKind(_ row: [String: Any]) -> String? {
+        guard let kind = row["kind"] as? String, kind == "priceWork" || kind == "expense" else { return nil }
+        return kind
+    }
+
+    /// Web `lateExtraReadIndexes`: the stored `lateExtras` slots the reader (`parseTimesheetLateExtras`) returned — per
+    /// id, without case, in stored order, the first row of that kind and id with a title. `returnedIds` (the ids the
+    /// reader returned) is a safety net: a row whose id was not returned is never counted as read.
+    nonisolated static func lateExtraReadIndexes(storedRows: [[String: Any]?], returnedIds: [String]) -> Set<Int> {
+        let returned = Set(returnedIds.map(lateExtraKey))
+        var readIndexes = Set<Int>()
+        var seen = Set<String>()
+        for row in storedRows {
+            guard let row, let kind = exactKind(row) else { continue }
+            let id = trimmedText(row["id"])
+            guard !id.isEmpty else { continue }
+            let key = lateExtraKey(id)
+            guard !seen.contains(key), returned.contains(key) else { continue }
+            let index = storedRows.firstIndex { other in
+                guard let other else { return false }
+                let otherId = trimmedText(other["id"])
+                return exactKind(other) == kind && !otherId.isEmpty && lateExtraKey(otherId) == key
+                    && !trimmedText(other["title"]).isEmpty
+            }
+            guard let index else { continue }
+            readIndexes.insert(index)
+            seen.insert(key)
+        }
+        return readIndexes
+    }
+
+    /// Web `lateExtrasUnreadAfter`: whether a kept (unread) row goes because the person deleted the late extra of its id
+    /// in this change (`beforeIds` → `nextIds`, without case). Only a row the reader could later show goes (kind exactly
+    /// priceWork / expense, a string id, a non-blank title); any other kept row stays as stored.
+    nonisolated static func lateExtraKeptRowRemoved(_ row: [String: Any], beforeIds: [String], nextIds: [String]) -> Bool {
+        let kept = Set(nextIds.map(lateExtraKey))
+        let deleted = Set(beforeIds.map(lateExtraKey).filter { !$0.isEmpty && !kept.contains($0) })
+        guard exactKind(row) != nil, let id = row["id"] as? String, !trimmedText(id).isEmpty,
+              !trimmedText(row["title"]).isEmpty else { return false }
+        return deleted.contains(lateExtraKey(id))
+    }
+
+    /// Web `draftToFirestoreMap` `lateExtras` (`unreadLateExtraRows`, `lateExtrasUnreadAfter`, `lateExtrasStoredLayout`,
+    /// `lateExtrasForWrite`): the list an owner save writes. `shown` are the person's late extras (`storedRow`);
+    /// `storedRows` the stored sheet's `lateExtras` as read for this save. A stored row the reader skips (blank title, no
+    /// id, no valid kind, a second row of an id) is written back exactly as stored, in its own slot — never dropped; one
+    /// sharing an id with a late extra the person deleted goes with it. Read rows keep their stored slot (matched by id,
+    /// without case); a deleted read row leaves its slot empty; new rows are appended. Entries that are not a record
+    /// are left out (the reader never kept them).
+    nonisolated static func lateExtrasForWrite(
+        shown: [[String: Any]],
+        storedRows: [Any],
+        returnedIds: [String],
+        beforeIds: [String],
+        nextIds: [String]
+    ) -> [[String: Any]] {
+        let rows: [[String: Any]?] = storedRows.map { $0 as? [String: Any] }
+        let readIndexes = lateExtraReadIndexes(storedRows: rows, returnedIds: returnedIds)
+        var shownLeft = shown
+        var out: [[String: Any]] = []
+        for (index, row) in rows.enumerated() {
+            guard let row else { continue }
+            if readIndexes.contains(index) {
+                let key = lateExtraKey(trimmedText(row["id"]))
+                if let at = shownLeft.firstIndex(where: { lateExtraKey(($0["id"] as? String) ?? "") == key }) {
+                    out.append(shownLeft.remove(at: at))
+                }
+            } else if !lateExtraKeptRowRemoved(row, beforeIds: beforeIds, nextIds: nextIds) {
+                out.append(row)
+            }
+        }
+        return out + shownLeft
+    }
+
     /// Reads `lateExtras` from a stored sheet (Firestore values) through `parseTimesheetLateExtras`. Nil when the sheet
     /// has no `lateExtras` array (nothing to keep); an empty list when the script did not answer would lose rows, so the
     /// caller gets nil and keeps none — the caller decides (see `TimesheetDraftStore.fromFirestoreMap`).

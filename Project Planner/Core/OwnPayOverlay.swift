@@ -283,6 +283,27 @@ enum PrivatePayOverlayReadiness {
         return ReportPayGate(status: .ready, message: nil)
     }
 
+    /// Web #347 item 4 (`reportGatePeople` with `pricedCatalogueOperativeIds`): the catalogue operatives a report prices
+    /// are waited for too — loading while any of their pay is still being read, refused naming them when a read failed.
+    /// `status` is `OperativeStore.cataloguePayStatus(for:)` (ready while `privatePay` is off).
+    static func catalogueReportGate(
+        operatives: [(id: String, name: String)],
+        status: (String) -> PayOverlayLoad
+    ) -> ReportPayGate {
+        var failed: [String] = []
+        var loading = false
+        for row in operatives {
+            switch status(row.id) {
+            case .ready: break
+            case .loading: loading = true
+            case .failed: failed.append(row.name)
+            }
+        }
+        if !failed.isEmpty { return ReportPayGate(status: .failed, message: reportPeopleFailedMessage(failed.sorted())) }
+        if loading { return ReportPayGate(status: .loading, message: nil) }
+        return ReportPayGate(status: .ready, message: nil)
+    }
+
     static func reportGate(people: [AppUser]) -> ReportPayGate {
         reportGate(
             people: people,

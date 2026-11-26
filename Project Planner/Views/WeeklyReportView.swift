@@ -199,6 +199,7 @@ struct WeeklyReportView: View {
                                 payGateFailed = false
                                 message = nil
                                 userStore.retryPayProfiles()
+                                operativeStore.retryCataloguePayOverlay()
                             }
                             .font(.footnote.weight(.semibold))
                             .accessibilityIdentifier("weeklyReport.payRetry")
@@ -1212,7 +1213,13 @@ struct WeeklyReportView: View {
         var ids = WeeklyReportPayInputs.pricedUserIds(built)
         ids.formUnion(payeOvertimePeopleIds())
         let people = userStore.organizationUsers.filter { ids.contains($0.id) }
-        return PrivatePayOverlayReadiness.reportGate(people: people)
+        let usersGate = PrivatePayOverlayReadiness.reportGate(people: people)
+        guard usersGate.status == .ready else { return usersGate }
+        // Web #347 item 4: the catalogue operatives it prices (no app account) wait for their own pay profile too.
+        let catalogue = WeeklyReportPayInputs.pricedCatalogueOperativeIds(built).sorted().map { id in
+            (id: id, name: built.people[id]?.name ?? id)
+        }
+        return PrivatePayOverlayReadiness.catalogueReportGate(operatives: catalogue) { operativeStore.cataloguePayStatus(for: $0) }
     }
 
     /// The users whose ids name an overtime booking in the range (the PAYE overtime section reads their employment type).
