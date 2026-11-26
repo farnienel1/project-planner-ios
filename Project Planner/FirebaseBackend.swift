@@ -5769,12 +5769,17 @@ class FirebaseBackend: ObservableObject {
             if let message = CanonicalBusinessEngine.payePaydayValidationError(payePayday) {
                 throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: message])
             }
-            let stored = FirebaseBackend.firestoreJSON(snap.data() ?? [:]) as? [String: Any] ?? [:]
-            paydayFields = CanonicalBusinessEngine.payePaydayWriteFields(
-                stored,
-                day: payePayday,
-                todayKey: OrganizationRulebookContext.dayKey(Date())
-            ) ?? [:]
+            // 26 Nov (owner: the payday did not save): only the stored `invoicing` map goes to the rule — the whole
+            // organisation document could hold a value that is not JSON, and the rule then gave no answer, so nothing
+            // was written. The rule reads only `invoicing` (`payePaydayHistory`, `payePayrunPeriod`).
+            let storedInvoicing = (snap.data()?["invoicing"]).flatMap { FirebaseBackend.firestoreJSON($0) as? [String: Any] } ?? [:]
+            let today = OrganizationRulebookContext.dayKey(Date())
+            if let fields = CanonicalBusinessEngine.payePaydayWriteFields(["invoicing": storedInvoicing], day: payePayday, todayKey: today) {
+                paydayFields = fields
+            } else if CanonicalBusinessEngine.payePayday(["invoicing": storedInvoicing]) != payePayday {
+                // Nil also means "already this payday"; anything else is a rule that did not answer.
+                throw NSError(domain: "FirebaseBackend", code: 500, userInfo: [NSLocalizedDescriptionKey: "The PAYE payday could not be worked out. Nothing was saved — try again."])
+            }
         }
         for (key, value) in paydayFields {
             // A brand-new `invoicing` map is written whole: its PAYE keys go inside it, not as dotted paths beside it.
