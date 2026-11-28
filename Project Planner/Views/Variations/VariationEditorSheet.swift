@@ -230,6 +230,8 @@ struct VariationEditorSheet: View {
 
     @State private var variationId: String
     @State private var voNumber: String
+    /// Owner 26 Nov: the number the person typed for a new variation; nil while the field follows the next number.
+    @State private var typedVoNumber: String?
     @State private var heading: String
     @State private var descriptionText: String
     @State private var descriptionExpanded = false
@@ -337,9 +339,21 @@ struct VariationEditorSheet: View {
         guard let user = userStore.displayUser else { return false }
         return CanonicalBusinessEngine.canSeeVariationCosts(UserStore.staffAccountRole(for: user))
     }
-    /// A variation once created keeps its number on iOS (renumbering is the web tracker's).
+    /// Owner 26 Nov: a new variation's number is editable whether or not the tracker is on; once created it keeps
+    /// its number (renumbering is the tracker's).
     private var voNumberEditable: Bool {
-        existing == nil && persistedVariation == nil && !trackerOn
+        existing == nil && persistedVariation == nil
+    }
+    /// What the number field shows, and exactly what a new variation is saved with: the person's own number, else the
+    /// rulebook's next number worked out now (`nextVoNumber`), so variations that load after the sheet opened move it on.
+    private var shownVoNumber: String {
+        guard voNumberEditable else { return voNumber }
+        return typedVoNumber ?? store.nextVoNumber()
+    }
+    private var voNumberNote: String {
+        guard voNumberEditable else { return "fixed" }
+        if typedVoNumber != nil { return "your number" }
+        return trackerOn ? "next in tracker" : "next number"
     }
     private var canSave: Bool {
         !heading.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
@@ -508,7 +522,11 @@ struct VariationEditorSheet: View {
                     .accessibilityIdentifier("variationEditor.voNumber")
                 Button("Save") {
                     let trimmed = voDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty { voNumber = trimmed }
+                    if !trimmed.isEmpty { typedVoNumber = trimmed }
+                }
+                if typedVoNumber != nil {
+                    Button("Use next number") { typedVoNumber = nil }
+                        .accessibilityIdentifier("variationEditor.useNextNumber")
                 }
                     .accessibilityIdentifier("variationEditor.save2")
                 Button("Cancel", role: .cancel) {}
@@ -525,10 +543,10 @@ struct VariationEditorSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             Button {
                 guard voNumberEditable else { return }
-                voDraft = voNumber
+                voDraft = shownVoNumber
                 showingVOEdit = true
             } label: {
-                Text("\(voNumber) · \(trackerOn ? "from tracker" : (voNumberEditable ? "auto" : "fixed"))")
+                Text("\(shownVoNumber) · \(voNumberNote)")
                     .font(.system(size: 12, weight: .heavy))
                     .foregroundStyle(VariationFormColors.violet)
                     .padding(.horizontal, 12)
@@ -539,7 +557,8 @@ struct VariationEditorSheet: View {
             .accessibilityIdentifier("variationEditor.voNumber2")
             .buttonStyle(.plain)
             .disabled(!voNumberEditable)
-            .accessibilityLabel("VO number \(voNumber)")
+            .accessibilityLabel("VO number \(shownVoNumber)")
+            .accessibilityHint(voNumberEditable ? "Change the VO number" : "")
 
             TextField("Heading", text: $heading)
                 .accessibilityIdentifier("variationEditor.heading")
@@ -2009,10 +2028,18 @@ struct VariationEditorSheet: View {
             isSaving = false
             return
         }
-        if voNumberEditable, store.voNumberIsDuplicate(voNumber, excludingId: variationId) {
-            errorMessage = "This VO number is already used on this job."
-            isSaving = false
-            return
+        // Owner 26 Nov: a new variation saves exactly the number its field shows (typed, or the next number), after
+        // the duplicate check; this now runs with the tracker on too (before, iOS saved the number worked out when
+        // the sheet opened, unchecked).
+        var newVoNumber = voNumber
+        if voNumberEditable {
+            let choice = store.newVariationNumberChoice(shownVoNumber, excludingId: variationId)
+            if let error = choice.error {
+                errorMessage = error
+                isSaving = false
+                return
+            }
+            newVoNumber = choice.voNumber
         }
         // RULEBOOK 1.52.0 §22: lines in the rule's shapes; an untouched old line keeps its stored shape. When the rule
         // cannot work out a line's hours the save is refused (review of #235), never the line dropped.
@@ -2077,7 +2104,7 @@ struct VariationEditorSheet: View {
                 parentId: project.documentId,
                 parentName: parentName,
                 origin: .app,
-                voNumber: voNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                voNumber: newVoNumber,
                 sequence: (store.variations.map(\.sequence).max() ?? 0) + 1,
                 voNumberLocked: false,
                 numberHistory: [],
@@ -2107,6 +2134,7 @@ struct VariationEditorSheet: View {
         do {
             try await firebaseBackend.saveVariation(variation, opened: baseline, organizationId: orgId)
             persistedVariation = variation
+            voNumber = variation.voNumber
             store.upsert(variation)
             if creating {
                 await notificationService.notifyVariationAdded(

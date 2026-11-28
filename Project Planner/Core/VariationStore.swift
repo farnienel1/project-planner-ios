@@ -108,6 +108,18 @@ final class VariationStore: ObservableObject {
         ) ?? ""
     }
 
+    /// Owner 26 Nov: the number a new variation is saved with is exactly what its field shows (pre-filled with
+    /// `nextVoNumber()`, editable whether or not the tracker is on), trimmed — never recomputed at save. Refused when
+    /// blank or held (or ever held) by another variation of the job (`variationNumberTaken`, deleted included).
+    func newVariationNumberChoice(_ typed: String, excludingId: String?) -> (voNumber: String, error: String?) {
+        let voNumber = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        if voNumber.isEmpty { return (voNumber, "Enter a VO number.") }
+        if voNumberIsDuplicate(voNumber, excludingId: excludingId) {
+            return (voNumber, "\(voNumber) is already used on this job. Pick another number.")
+        }
+        return (voNumber, nil)
+    }
+
     /// RULEBOOK 1.22.0 §22 `CanonicalBusinessEngine.variationNumberTaken`: a deleted variation still holds its number
     /// (owner decision), the variation being edited is skipped by id, both without case. True (taken) when the script
     /// did not answer, so a duplicate is never saved on a guess.
