@@ -81,7 +81,7 @@ jobs:
         # Only the package checkouts (Firebase, snapshot-testing) are cached, never DerivedData. The project has no
         # committed Package.resolved, so the key is the project file (which holds the version rules); xcodebuild
         # still resolves on every run and updates a stale checkout, so a wrong cache only costs time.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/spm-source-packages
           key: spm-${{ runner.os }}-${{ hashFiles('**/project.pbxproj') }}
