@@ -133,4 +133,26 @@ final class VariationLogicTests: XCTestCase {
         let existing = [LogicFixtures.variation(id: "1", voNumber: "SW-0007", sequence: 1)]
         XCTAssertEqual(VariationNumbering.nextFree(existing: existing, prefix: "SW-", padding: 4), "SW-0008")
     }
+
+    /// Owner 26 Nov: a new variation saves exactly the number its field shows — the next number or one the person
+    /// typed — with the tracker on or off; blank or a number held (deleted included) is refused.
+    func testNewVariationNumberChoiceSavesWhatTheFieldShows() {
+        let store = VariationStore(parentId: "project-a", parentType: .project)
+        keep(store)
+        var tracker = VariationTracker.disabled(parentId: "project-a", parentType: .project)
+        tracker.enabled = true
+        store.tracker = tracker
+        store.variations = [
+            LogicFixtures.variation(id: "1", voNumber: "VO-001", sequence: 1),
+            LogicFixtures.variation(id: "2", voNumber: "VO-002", sequence: 2),
+            LogicFixtures.variation(id: "4", voNumber: "VO-004", sequence: 3, isDeleted: true),
+        ]
+        XCTAssertEqual(store.nextVoNumber(), "VO-005")
+        XCTAssertEqual(store.newVariationNumberChoice("VO-005", excludingId: "new").voNumber, "VO-005")
+        XCTAssertNil(store.newVariationNumberChoice("VO-005", excludingId: "new").error)
+        XCTAssertEqual(store.newVariationNumberChoice("  VO-003 ", excludingId: "new").voNumber, "VO-003")
+        XCTAssertNil(store.newVariationNumberChoice("VO-003", excludingId: "new").error)
+        XCTAssertNotNil(store.newVariationNumberChoice("vo-004", excludingId: "new").error)
+        XCTAssertNotNil(store.newVariationNumberChoice("   ", excludingId: "new").error)
+    }
 }
