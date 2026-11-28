@@ -12769,6 +12769,39 @@ extension FirebaseBackend {
         }
     }
 
+    /// The same signature write as `saveHealthSafetySignature`, handed to Firestore's own write queue WITHOUT waiting
+    /// for the server (offline, an awaited write never returns). Returns once the write is queued on this device;
+    /// `completion` runs on the main actor when the server confirms (nil) or refuses it. No server read first (the
+    /// organisation is the open one, passed in). Used only when signing is allowed offline (`OfflinePolicy`
+    /// `.signToolboxTalk`). The health & safety document already exists for an issued talk, so the update applies.
+    func queueHealthSafetySignature(
+        _ signature: HSToolboxSignature,
+        project: Project,
+        organizationId: String,
+        completion: @escaping @MainActor (Error?) -> Void
+    ) throws {
+        let orgId = normalizedOrganizationId(organizationId)
+        guard !orgId.isEmpty else {
+            throw NSError(domain: "FirebaseBackend", code: 400, userInfo: [NSLocalizedDescriptionKey: "Organization ID is missing."])
+        }
+        guard let write = CanonicalBusinessEngine.healthSafetySignatureWriteFields(
+            issueId: signature.issueId,
+            userId: signature.userId,
+            signatureId: signature.id,
+            status: signature.status.rawValue,
+            readConfirmed: signature.readConfirmed,
+            signatureImageBase64: signature.signatureImageBase64,
+            signedAt: signature.signedAt,
+            reminderSentAt: signature.reminderSentAt
+        ) else {
+            throw CanonicalWriteUnavailableError(function: "healthSafetySignatureWriteFields")
+        }
+        let update = Self.healthSafetySignatureUpdate(write, userId: currentUser?.uid)
+        hsStateDocumentRef(organizationId: orgId, project: project).updateData(update) { error in
+            Task { @MainActor in completion(error) }
+        }
+    }
+
     /// The `updateData` map for a signature write: the entry at its field path, the array row unioned, metadata.
     /// Instants the script passed through as epoch ms are written as Timestamps.
     nonisolated static func healthSafetySignatureUpdate(_ write: CanonicalHealthSafetySignatureWrite, userId: String?) -> [AnyHashable: Any] {

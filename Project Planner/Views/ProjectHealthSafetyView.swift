@@ -28,6 +28,10 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
     @Published var data: HSProjectSafetyData = .empty
     @Published var isLoading = false
     @Published var errorMessage: String?
+    /// Signatures made on this device while offline that the server does not have yet (`PendingToolboxSignature.key`).
+    @Published var pendingSyncSignatureKeys: Set<String> = []
+    /// Whether the device was online at the last load (decides what a pending signature's loaded copy means).
+    var lastKnownOnline = true
 
     let project: Project
     private var didInitialLoad = false
@@ -48,6 +52,7 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             errorMessage = "Organization is unavailable."
             return
         }
+        lastOrganizationId = orgId
         isLoading = true
         defer { isLoading = false }
         do {
@@ -66,10 +71,40 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
                 loaded.talks += ToolboxTalkLibrary.bundledTalks().filter { !storedIds.contains($0.id) }
             }
             data = loaded
+            applyPendingSignatures(organizationId: orgId)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
+
+    /// Lays this device's offline signatures over the loaded copy (`PendingToolboxSignatureRules.overlay`): one queued
+    /// here is never shown unsigned while offline; once the server copy shows it, the entry is dropped; one the server
+    /// never got is dropped and the person is asked to sign again.
+    private func applyPendingSignatures(organizationId: String) {
+        let store = PendingToolboxSignatureStore.shared
+        let pending = store.entries(organizationId: organizationId, jobId: project.documentId)
+        guard !pending.isEmpty else {
+            pendingSyncSignatureKeys = []
+            return
+        }
+        let overlay = PendingToolboxSignatureRules.overlay(loaded: data.signatures, pending: pending, isOnline: lastKnownOnline)
+        store.remove(keys: overlay.confirmed.union(overlay.lost))
+        data.signatures = overlay.signatures
+        pendingSyncSignatureKeys = overlay.stillPending
+        recalculateIssueStatuses()
+        if !overlay.lost.isEmpty {
+            errorMessage = "A signature you made while offline did not reach the server. Please sign again."
+        }
+    }
+
+    func isPendingSync(_ signature: HSToolboxSignature) -> Bool {
+        guard let orgId = lastOrganizationId else { return false }
+        return pendingSyncSignatureKeys.contains(
+            PendingToolboxSignature.key(organizationId: orgId, jobId: project.documentId, issueId: signature.issueId, userId: signature.userId)
+        )
+    }
+
+    private var lastOrganizationId: String?
 
     /// The id of the last issue `issueTalk` created (`toolbox_talk_issued` names it).
     var lastIssuedIssueId: String?
@@ -182,9 +217,17 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         myIdKeys: Set<String> = [],
         readConfirmed: Bool,
         signatureImageBase64: String,
+        isOnline: Bool = true,
         firebaseBackend: FirebaseBackend,
         userStore: UserStore
     ) async -> Bool {
+        // RULEBOOK §2: signing is online only unless `OFFLINE_ACTIONS` lists `health_safety.sign_toolbox_talk`.
+        // Offline and not allowed: refuse before anything is shown signed (before 26 Nov the awaited write never
+        // returned offline, so the screen kept the talk unsigned).
+        guard isOnline || OfflinePolicy.isEnabled(.signToolboxTalk, isOnline: false) else {
+            errorMessage = Self.offlineSignRefusedMessage
+            return false
+        }
         let keys: Set<String> = myIdKeys.isEmpty ? Set([Self.idKey(userId)]) : myIdKeys
         var signatures = data.signatures
         let now = Date()
@@ -216,6 +259,10 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
             errorMessage = "Your signature was not saved: the organisation is not available. Try again."
             return false
         }
+        if !isOnline {
+            return queueOfflineSignature(signature, signatures: signatures, organizationId: orgId,
+                                         firebaseBackend: firebaseBackend, userStore: userStore)
+        }
         do {
             try await firebaseBackend.saveHealthSafetySignature(signature, project: project, organizationId: orgId)
         } catch {
@@ -225,6 +272,50 @@ private final class ProjectHealthSafetyViewModel: ObservableObject {
         data.signatures = signatures
         recalculateIssueStatuses()
         await persist(firebaseBackend: firebaseBackend, userStore: userStore, fields: ["issues"])
+        return true
+    }
+
+    static let offlineSignRefusedMessage = "Connect to the internet to sign. Your signature was not saved."
+    static let pendingSyncLabel = "Signed — will sync when online"
+
+    /// Offline (only when the rulebook allows it): the signature write goes into Firestore's own queue without waiting,
+    /// is kept on this device until the server has it, and shows signed with "will sync when online". The issue
+    /// statuses are saved once the server confirms the signature.
+    private func queueOfflineSignature(
+        _ signature: HSToolboxSignature,
+        signatures: [HSToolboxSignature],
+        organizationId orgId: String,
+        firebaseBackend: FirebaseBackend,
+        userStore: UserStore
+    ) -> Bool {
+        let entry = PendingToolboxSignature(organizationId: orgId, jobId: project.documentId, signature: signature, queuedAt: Date())
+        // Stored before the write is queued, so a confirmation can never arrive before the entry exists.
+        PendingToolboxSignatureStore.shared.add(entry)
+        do {
+            try firebaseBackend.queueHealthSafetySignature(signature, project: project, organizationId: orgId) { [weak self] error in
+                guard let self else {
+                    // The screen has closed: the next open reconciles the entry with the server copy.
+                    if error == nil { PendingToolboxSignatureStore.shared.remove(keys: [entry.key]) }
+                    return
+                }
+                PendingToolboxSignatureStore.shared.remove(keys: [entry.key])
+                self.pendingSyncSignatureKeys.remove(entry.key)
+                if let error {
+                    self.errorMessage = "Your signature made offline was not saved. \(error.localizedDescription) Please sign again."
+                    Task { await self.load(firebaseBackend: firebaseBackend, userStore: userStore) }
+                } else {
+                    Task { await self.persist(firebaseBackend: firebaseBackend, userStore: userStore, fields: ["issues"]) }
+                }
+            }
+        } catch {
+            PendingToolboxSignatureStore.shared.remove(keys: [entry.key])
+            errorMessage = "Your signature was not saved. \(error.localizedDescription) Try again."
+            return false
+        }
+        lastOrganizationId = orgId
+        pendingSyncSignatureKeys.insert(entry.key)
+        data.signatures = signatures
+        recalculateIssueStatuses()
         return true
     }
 
@@ -615,6 +706,7 @@ struct ProjectHealthSafetyView: View {
     @EnvironmentObject var operativeStore: OperativeStore
     @EnvironmentObject var managerScheduleStore: ManagerScheduleStore
     @EnvironmentObject var notificationService: NotificationService
+    @EnvironmentObject var smartCache: SmartCacheService
     @StateObject private var vm: ProjectHealthSafetyViewModel
 
     /// Every id of the signed-in person, lower case (rulebook `personIdSet`: own id, former and same-email ids, and
@@ -873,6 +965,7 @@ struct ProjectHealthSafetyView: View {
         }
         .task(id: firebaseBackend.currentOrganization?.firestoreDocumentId ?? "") {
             guard !(firebaseBackend.currentOrganization?.firestoreDocumentId ?? "").isEmpty else { return }
+            vm.lastKnownOnline = smartCache.isOnline
             await vm.loadIfNeeded(firebaseBackend: firebaseBackend, userStore: userStore)
             if operativeWeekFilter == nil {
                 operativeWeekFilter = availableOperativeWeeks.first
@@ -887,7 +980,14 @@ struct ProjectHealthSafetyView: View {
                               ) ?? []
                               return org.collection("settings").whereField(FieldPath.documentID(), in: ids.isEmpty ? ["-"] : ids)
                           }) {
+            vm.lastKnownOnline = smartCache.isOnline
             await vm.load(firebaseBackend: firebaseBackend, userStore: userStore)
+        }
+        .onChange(of: smartCache.isOnline) { _, online in
+            vm.lastKnownOnline = online
+            // Back online with signatures made offline: read again so each is confirmed (or reported) from the server.
+            guard online, !vm.pendingSyncSignatureKeys.isEmpty else { return }
+            Task { await vm.load(firebaseBackend: firebaseBackend, userStore: userStore) }
         }
         .alert("Health & Safety", isPresented: Binding<Bool>(
             get: { vm.errorMessage != nil || reminderSuccessMessage != nil },
@@ -982,7 +1082,9 @@ struct ProjectHealthSafetyView: View {
             HSSignTalkView(
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
-                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId })
+                rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId }),
+                offlineBlockedMessage: (smartCache.isOnline || OfflinePolicy.isEnabled(.signToolboxTalk, isOnline: false))
+                    ? nil : ProjectHealthSafetyViewModel.offlineSignRefusedMessage
             ) { base64Signature in
                 Task {
                     await vm.signTalk(
@@ -991,6 +1093,7 @@ struct ProjectHealthSafetyView: View {
                         myIdKeys: myIdKeys,
                         readConfirmed: true,
                         signatureImageBase64: base64Signature,
+                        isOnline: smartCache.isOnline,
                         firebaseBackend: firebaseBackend,
                         userStore: userStore
                     )
@@ -1003,7 +1106,10 @@ struct ProjectHealthSafetyView: View {
                 issue: issue,
                 talk: vm.data.talks.first(where: { $0.id == issue.talkId }),
                 rams: vm.data.ramsDocuments.first(where: { $0.id == issue.ramsDocumentId }),
-                signature: vm.signatures(for: issue.id).first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
+                signature: vm.signatures(for: issue.id).first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) }),
+                isPendingSync: vm.signatures(for: issue.id)
+                    .first(where: { mine.contains(ProjectHealthSafetyViewModel.idKey($0.userId)) })
+                    .map(vm.isPendingSync) ?? false
             )
         }
         .sheet(item: $selectedTalkForPreview) { talk in
@@ -2758,6 +2864,8 @@ private struct HSSignTalkView: View {
     let issue: HSToolboxIssue
     let talk: HSToolboxTalk?
     var rams: HSRamsDocument? = nil
+    /// Set while signing cannot be saved now (offline, RULEBOOK §2): Submit is off and this says why.
+    var offlineBlockedMessage: String? = nil
     let onSubmit: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var readConfirmed = false
@@ -2766,7 +2874,7 @@ private struct HSSignTalkView: View {
     @State private var shareURL: IdentifiableURL?
     @State private var presentedReport: FileReportTarget?
 
-    private var canSubmit: Bool { readConfirmed && signatureImageData != nil }
+    private var canSubmit: Bool { readConfirmed && signatureImageData != nil && offlineBlockedMessage == nil }
 
     /// The uploaded RAMS or talk file being signed against. Library talks are generated, not uploaded.
     private var reportTarget: FileReportTarget? {
@@ -2878,7 +2986,13 @@ private struct HSSignTalkView: View {
 
                     HSSignaturePad(imageData: $signatureImageData)
 
-                    if !canSubmit {
+                    if let offlineBlockedMessage {
+                        Label(offlineBlockedMessage, systemImage: "wifi.slash")
+                            .font(HSFont.meta)
+                            .foregroundStyle(.orange)
+                            .hsNoClip(3)
+                            .accessibilityIdentifier("hsSignTalk.offlineBlocked")
+                    } else if !canSubmit {
                         Text(submitHint)
                             .font(HSFont.meta)
                             .foregroundStyle(HS.slate2)
@@ -2950,6 +3064,8 @@ private struct HSSignedTalkView: View {
     let talk: HSToolboxTalk?
     var rams: HSRamsDocument? = nil
     let signature: HSToolboxSignature?
+    /// Signed on this device while offline; the server does not have it yet.
+    var isPendingSync: Bool = false
     @EnvironmentObject var userStore: UserStore
 
     var body: some View {
@@ -2962,7 +3078,8 @@ private struct HSSignedTalkView: View {
                     Text("W/C \(issue.weekCommencing.formatted(date: .abbreviated, time: .omitted))")
                         .font(.system(size: 12))
                         .foregroundStyle(HS.slate)
-                    HSStatusBadge(text: "Signed", tone: .ok)
+                    HSStatusBadge(text: isPendingSync ? ProjectHealthSafetyViewModel.pendingSyncLabel : "Signed",
+                                  tone: isPendingSync ? .warn : .ok)
                     if let purpose = talk?.purpose, !purpose.isEmpty {
                         Text(purpose)
                             .font(.system(size: 13))

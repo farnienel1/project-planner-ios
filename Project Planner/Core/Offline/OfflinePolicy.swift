@@ -83,6 +83,11 @@ nonisolated enum UnlistedOfflineAction: String, Sendable, CaseIterable {
     case saveDeadlines = "deadlines.save"
     /// The VO tracker's reorder (RULEBOOK §22): not in `OFFLINE_ACTIONS`, so online only.
     case renumberVariations = "variations.renumber"
+    /// Signing a toolbox talk or RAMS (RULEBOOK §1 `healthSafetySignatureWriteFields`): not in `OFFLINE_ACTIONS` today,
+    /// so online only — the sign sheet says "Connect to the internet…" and nothing is shown signed. The offline path
+    /// (Firestore's own write queue + `PendingToolboxSignatureStore`) is ready and turns on when web lists this id as
+    /// `allowedOffline`.
+    case signToolboxTalk = "health_safety.sign_toolbox_talk"
 }
 
 /// A control used while offline whose action is online only (RULEBOOK §2). Final: nothing was queued or written.
