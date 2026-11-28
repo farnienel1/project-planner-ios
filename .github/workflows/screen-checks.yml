@@ -106,7 +106,7 @@ jobs:
           xcodebuild -version
       - name: Restore Swift packages
         # Package checkouts only (never DerivedData); see rulebook.yml.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/spm-source-packages
           key: spm-${{ runner.os }}-${{ hashFiles('**/project.pbxproj') }}
