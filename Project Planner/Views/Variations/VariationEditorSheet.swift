@@ -524,11 +524,11 @@ struct VariationEditorSheet: View {
                     let trimmed = voDraft.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty { typedVoNumber = trimmed }
                 }
+                .accessibilityIdentifier("variationEditor.save2")
                 if typedVoNumber != nil {
                     Button("Use next number") { typedVoNumber = nil }
                         .accessibilityIdentifier("variationEditor.useNextNumber")
                 }
-                    .accessibilityIdentifier("variationEditor.save2")
                 Button("Cancel", role: .cancel) {}
                     .accessibilityIdentifier("variationEditor.cancel3")
             }
