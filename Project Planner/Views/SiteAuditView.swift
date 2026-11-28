@@ -2125,6 +2125,9 @@ struct SiteAuditDetailView: View {
     @State private var pdfURL: URL?
     @State private var showShare = false
     @State private var isPreparingSharePDF = false
+    /// Photos of this audit that the last PDF could not draw (grey boxes); a share builds it again first.
+    @State private var pdfPhotosNotDrawn = 0
+    @State private var pdfPhotosNotice: String?
     @State private var showingEdit = false
     @State private var reportTarget: FileReportTarget?
     @State private var viewerReportTarget: FileReportTarget?
@@ -2227,6 +2230,18 @@ struct SiteAuditDetailView: View {
                 if let pdfURL {
                     ShareSheet(activityItems: [pdfURL])
                 }
+            }
+            .alert(
+                "Some photos are missing",
+                isPresented: Binding(get: { pdfPhotosNotice != nil }, set: { if !$0 { pdfPhotosNotice = nil } })
+            ) {
+                Button("Share anyway") {
+                    pdfPhotosNotice = nil
+                    showShare = true
+                }
+                Button("Cancel", role: .cancel) { pdfPhotosNotice = nil }
+            } message: {
+                Text(pdfPhotosNotice ?? "")
             }
             .sheet(isPresented: $showingEdit) {
                 SiteAuditCreateFlowView(
@@ -2368,26 +2383,45 @@ struct SiteAuditDetailView: View {
     }
 
     private func shareAuditPDF() async {
-        if pdfURL == nil {
+        // A PDF missing photos is built again (the connection may be back) rather than shared as it was.
+        if pdfURL == nil || pdfPhotosNotDrawn > 0 {
             isPreparingSharePDF = true
             await buildPDFPreview()
             isPreparingSharePDF = false
         }
         guard pdfURL != nil else { return }
+        let photos = displayAudit.items.filter { !($0.imageURL ?? "").isEmpty }.count
+        if let notice = SiteAuditPDFBuilder.photosNotDrawnNotice(photos: photos, notDrawn: pdfPhotosNotDrawn) {
+            // Never silent (owner report 26 Nov): say so, then share if the person still wants to.
+            pdfPhotosNotice = notice
+            return
+        }
         showShare = true
     }
 
     private func buildPDFPreview() async {
         let logo = await loadLogo()
         var drafts: [SiteAuditDraftItem] = []
+        // The photos load together (each at most 20 s), not one after another.
+        let loaded = await withTaskGroup(of: (UUID, UIImage?).self) { group -> [UUID: UIImage] in
+            for item in displayAudit.items where !(item.imageURL ?? "").isEmpty {
+                let id = item.id
+                let urlString = item.imageURL
+                group.addTask { (id, await SiteAuditPDFBuilder.loadStoredPhoto(urlString: urlString)) }
+            }
+            var result: [UUID: UIImage] = [:]
+            for await (id, image) in group { if let image { result[id] = image } }
+            return result
+        }
+        var notDrawn = 0
         for item in displayAudit.items {
             var image: UIImage?
-            if let urlString = item.imageURL, let url = CanonicalBusinessEngine.safeExternalURL(urlString),
-               let (data, _) = try? await URLSession.shared.data(from: url),
-               let loaded = UIImage(data: data) {
+            if let raw = loaded[item.id] {
                 image = await Task.detached(priority: .utility) {
-                    SiteAuditMediaProcessor.normalizedForDisplay(loaded)
+                    SiteAuditMediaProcessor.normalizedForDisplay(raw)
                 }.value
+            } else if !(item.imageURL ?? "").isEmpty {
+                notDrawn += 1
             }
             drafts.append(SiteAuditDraftItem(
                 id: item.id,
@@ -2413,7 +2447,10 @@ struct SiteAuditDetailView: View {
             logoImage: logo,
             job: job
         )
-        await MainActor.run { pdfURL = generated }
+        await MainActor.run {
+            pdfURL = generated
+            pdfPhotosNotDrawn = notDrawn
+        }
     }
 
     private func loadLogo() async -> UIImage? {

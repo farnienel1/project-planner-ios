@@ -143,6 +143,34 @@ enum SiteAuditPDFBuilder {
         }
     }
 
+    // MARK: - Photos of a saved audit
+
+    /// The bytes of one stored photo, for the PDF of a saved audit. Same rule as web (owner report 26 Nov, web PDFs
+    /// had every photo blank): only an https download URL (`safeExternalURL`), a 20-second limit, and only a 2xx
+    /// answer counts (a refusal's JSON body is never read as a picture). Nil means the photo keeps its grey box.
+    nonisolated static func loadStoredPhoto(urlString: String?) async -> UIImage? {
+        guard let url = CanonicalBusinessEngine.safeExternalURL(urlString) else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 20
+        guard let (data, response) = try? await URLSession.shared.data(for: request) else { return nil }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+        return UIImage(data: data)
+    }
+
+    /// What the share button says when some photos could not be drawn (nil when every photo is in the PDF). The same
+    /// words as web (`siteAuditPdfPhotosNotice`).
+    nonisolated static func photosNotDrawnNotice(photos: Int, notDrawn: Int) -> String? {
+        guard notDrawn > 0 else { return nil }
+        let what: String
+        if notDrawn == photos {
+            what = photos == 1 ? "The photo" : "All \(photos) photos"
+        } else {
+            what = "\(notDrawn) of \(photos) photos"
+        }
+        let verb = notDrawn == 1 ? "is" : "are"
+        return "The PDF was made, but \(what) could not be loaded and \(verb) shown as grey boxes. Check the connection and try again."
+    }
+
     // MARK: - Drawing the rulebook's ops
 
     /// One drawn op, for tests: the page number, the kind and (for text) the text.
