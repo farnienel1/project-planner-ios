@@ -44,7 +44,7 @@ final class Rulebook1770Tests: XCTestCase {
         XCTAssertEqual(next(personOnly, role: "reviewer")?.text, "Your turn: sign off")
 
         let mine = try XCTUnwrap(next(counterSigned(), role: "person"))
-        XCTAssertEqual(mine.text, "Signed off — next: generate your invoice")
+        XCTAssertEqual(mine.text, "Signed off — next: generate your timesheet")
         XCTAssertTrue(mine.generateInvoice)
         XCTAssertEqual(next(counterSigned(), role: "admin")?.text, "Signed off — ready to export")
 
@@ -53,7 +53,7 @@ final class Rulebook1770Tests: XCTestCase {
                        "Your turn: sign again — a booking changed on Tue 10 Nov")
         XCTAssertEqual(next(counterSigned(), role: "reviewer", change: reopened, changedDay: "Tue 10 Nov", changedCount: 1)?.text,
                        "Waiting for Jo to sign again — a booking changed on Tue 10 Nov")
-        XCTAssertEqual(CanonicalBusinessEngine.timesheetGenerateInvoicePrompt, "Next: generate your invoice")
+        XCTAssertEqual(CanonicalBusinessEngine.timesheetGenerateInvoicePrompt, "Next: generate your timesheet")
     }
 
     private func correction(
@@ -119,6 +119,6 @@ final class Rulebook1770Tests: XCTestCase {
 
     func testCounterSignedNoticeEndsWithTheInvoicePrompt() {
         let plain = CanonicalBusinessEngine.timesheetSignedNoticeText(signedByName: "Sam", changedByReviewer: false)
-        XCTAssertEqual(plain?.message, "Sam signed your timesheet. Next: generate your invoice.")
+        XCTAssertEqual(plain?.message, "Sam signed your timesheet. Next: generate your timesheet.")
     }
 }

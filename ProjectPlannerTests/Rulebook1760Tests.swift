@@ -204,7 +204,7 @@ final class Rulebook1760Tests: XCTestCase {
         XCTAssertNil(changes(inStep))
         XCTAssertEqual(
             CanonicalBusinessEngine.timesheetSignedEntriesChangedPersonMessage,
-            "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+            "Your line manager changed your price work or expenses — Generate Timesheet unlocks after they sign it off again."
         )
     }
 

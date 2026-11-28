@@ -76,7 +76,7 @@ extension CanonicalBusinessEngine {
     nonisolated static var timesheetSignedEntriesChangedPersonMessage: String {
         lateExtrasText(
             "TIMESHEET_SIGNED_ENTRIES_CHANGED_PERSON_MESSAGE",
-            fallback: "Your line manager changed your price work or expenses — Generate Invoice unlocks after they sign it off again."
+            fallback: "Your line manager changed your price work or expenses — Generate Timesheet unlocks after they sign it off again."
         )
     }
 
