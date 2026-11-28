@@ -63,7 +63,7 @@ struct TimesheetNextStepCard: View {
                 Button(action: generateInvoice) {
                     HStack {
                         Spacer()
-                        if generateInvoiceBusy { ProgressView().tint(.white) } else { Text("Generate Invoice").fontWeight(.semibold) }
+                        if generateInvoiceBusy { ProgressView().tint(.white) } else { Text("Generate Timesheet").fontWeight(.semibold) }
                         Spacer()
                     }
                     .padding(.vertical, 12)
