@@ -2528,7 +2528,7 @@ private struct MyTimesheetsHubView: View {
                                 hubCard(
                                     title: week.title,
                                     subtitle: pastSubtitle(for: week),
-                                    detail: "View breakdown, signatures, and generate invoice again.",
+                                    detail: "View breakdown, signatures, and generate the timesheet again.",
                                     symbol: "clock.arrow.circlepath",
                                     tint: .secondary,
                                     family: .system,
@@ -3661,7 +3661,7 @@ private struct MyTimesheetView: View {
                             if isGeneratingInvoice {
                                 ProgressView().tint(.white)
                             } else {
-                                Text("Generate Invoice")
+                                Text("Generate Timesheet")
                                     .fontWeight(.semibold)
                             }
                             Spacer()
@@ -3695,7 +3695,7 @@ private struct MyTimesheetView: View {
                     }
                 } else {
                     // Always visible: grey until fully approved (self-sign if no LM, else manager counter-sign).
-                    Text("Generate Invoice")
+                    Text("Generate Timesheet")
                         .frame(maxWidth: .infinity)
                         .fontWeight(.semibold)
                         .padding(.vertical, 14)
@@ -3706,19 +3706,19 @@ private struct MyTimesheetView: View {
                         if draft.operativeSignedAt == nil {
                             Text(
                                 TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser)
-                                ? "Add any expenses or price work, then sign your timesheet. Your line manager will counter-sign before you can invoice."
-                                : "Add any expenses or price work, then confirm and approve your timesheet to unlock Generate Invoice."
+                                ? "Add any expenses or price work, then sign your timesheet. Your line manager will counter-sign before you can generate it."
+                                : "Add any expenses or price work, then confirm and approve your timesheet to unlock Generate Timesheet."
                             )
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
                         } else if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: currentUser) {
-                            Text("Timesheet pending manager signature — Generate Invoice unlocks after your line manager counter-signs.")
+                            Text("Timesheet pending manager signature — Generate Timesheet unlocks after your line manager counter-signs.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
                         } else {
-                            Text("Re-sign your timesheet to generate an invoice.")
+                            Text("Re-sign your timesheet to generate it.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
@@ -4051,7 +4051,7 @@ private struct MyTimesheetView: View {
                 generatedInvoiceURL = pdfURL
                 showInvoiceSuccess = true
             } else {
-                invoiceErrorMessage = "Failed to generate the invoice PDF."
+                invoiceErrorMessage = "Failed to generate the timesheet PDF."
             }
         }
     }
@@ -4063,7 +4063,7 @@ private struct MyTimesheetView: View {
         if TimesheetApprovalPolicy.requiresLineManagerCounterSign(for: user), draft.managerSignedAt != nil {
             return "You have already signed your timesheet and your line manager has signed it off. If you add price work or expenses, you will need to have your timesheet signed again by yourself and your line manager."
         }
-        return "You have already signed your timesheet. If you add price work or expenses, you will need to sign it again before generating an invoice."
+        return "You have already signed your timesheet. If you add price work or expenses, you will need to sign it again before generating the timesheet."
     }
 
     /// RULEBOOK 1.43.0 §8 `timesheetOwnerCanAddExtras(sheet, { selfSigned: timesheetSelfSigned })`: whether the person
@@ -5067,7 +5067,7 @@ struct OperativeTimesheetsView: View {
                     } else {
                     ForEach(awaitingRows) { row in
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week)
+                            OperativeTimesheetReviewView(operative: live(row.user), settings: settings, week: row.week, sheetUserId: row.sheetUserId)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -5121,7 +5121,7 @@ struct OperativeTimesheetsView: View {
                         let operative = live(row.user)
                         let draft = TimesheetDraftStore.load(userId: row.sheetUserId ?? operative.id, weekStart: row.week.start)
                         NavigationLink {
-                            OperativeTimesheetReviewView(operative: operative, settings: settings, week: row.week)
+                            OperativeTimesheetReviewView(operative: operative, settings: settings, week: row.week, sheetUserId: row.sheetUserId)
                                 .environmentObject(firebaseBackend)
                                 .environmentObject(userStore)
                                 .environmentObject(bookingStore)
@@ -6458,11 +6458,21 @@ private struct OperativeTimesheetReviewView: View {
     let settings: OrganizationInvoicingSettings
     let week: WeekRange
 
-    init(operative: AppUser, settings: OrganizationInvoicingSettings, week: WeekRange) {
+    /// RULEBOOK 1.66.0 §8: the id the listed sheet is stored under when it is not the person's own (a former invite id, a
+    /// second users document on their email). Nil: the person's own id.
+    private let sheetUserIdSeed: String?
+
+    init(operative: AppUser, settings: OrganizationInvoicingSettings, week: WeekRange, sheetUserId: String? = nil) {
         self.operativeSeed = operative
         self.settings = settings
         self.week = week
+        self.sheetUserIdSeed = sheetUserId
     }
+
+    /// The id the sheet's document is filed under (`timesheet_{id}_{start}`): the listed row's stored id, else the
+    /// person's own (`TimesheetSheetTarget.userId`). Load, the live listener and every save use it, so a row Awaiting /
+    /// Signed off lists under another id the person goes by opens that same sheet, never a blank second copy.
+    private var sheetUserId: String { TimesheetSheetTarget.userId(sheetUserId: sheetUserIdSeed, personId: operative.id) }
 
     /// RULEBOOK §8 (review of #240): the reviewed person with their pay laid over now — looked up again by id, never the
     /// copy a list kept from before the roster's pay profiles arrived.
@@ -6975,7 +6985,7 @@ private struct OperativeTimesheetReviewView: View {
                 }
             }
             .onAppear {
-                draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start)
+                draft = TimesheetDraftStore.load(userId: sheetUserId, weekStart: week.start)
                 Task { await refreshDraftFromCloud() }
             }
             .task { await loadDayRateHistory() }
@@ -7029,6 +7039,7 @@ private struct OperativeTimesheetReviewView: View {
             .modifier(OperativeTimesheetReviewSheetsModifier(
                 draft: $draft,
                 operative: operative,
+                sheetUserId: sheetUserId,
                 week: week,
                 payrollLines: payrollSummary.lineItems,
                 policy: firebaseBackend.currentOrganization?.settings.payrollTimePolicy ?? .default,
@@ -7506,7 +7517,7 @@ private struct OperativeTimesheetReviewView: View {
     /// RULEBOOK 1.55.0 §8 `timesheetRevisionDue` of the subject's exported sheet (bookings changed since export).
     private var revisionDue: RulebookTimesheetRevisionDue {
         guard TimesheetApprovalPolicy.isExported(draft) else { return .notDue }
-        return TimesheetDraftStore.revisionDue(for: draft, userId: operative.id, weekStart: week.start, change: bookingChange)
+        return TimesheetDraftStore.revisionDue(for: draft, userId: sheetUserId, weekStart: week.start, change: bookingChange)
     }
 
     /// RULEBOOK 1.55.0 §8 `canCreateTimesheetRevision`: this viewer (an admin or the person's line manager,
@@ -7519,7 +7530,7 @@ private struct OperativeTimesheetReviewView: View {
     /// in the correction help). Nil when not a reviewer, not exported, or the script did not answer.
     private var reviewerRevisionCheck: RulebookTimesheetRevisionCheck? {
         guard viewerIsReviewer, TimesheetApprovalPolicy.isExported(draft), let viewer = userStore.displayUser else { return nil }
-        let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: operative.id, weekStart: week.start)
+        let chain = TimesheetDraftStore.latestVersionChain(for: draft, userId: sheetUserId, weekStart: week.start)
         let reviewerInput: [String: Any] = [
             "writerUserId": viewer.id,
             "subjectUserId": operative.id,
@@ -7965,6 +7976,15 @@ private struct OperativeTimesheetReviewView: View {
                     reviewBookingNotice = TimesheetWeeklyReportOverrideBuilder.rulebookCheckFailedMessage
                     return
                 }
+                // Owner 26 Nov: who may bring the booking back (`canDeleteBooking` from the stores, admins any).
+                let mayDelete: Bool = {
+                    guard let uuid = TimesheetPayrollLineBookingLookup.bookingId(from: row.bookingId ?? row.id) else { return false }
+                    if collection == "managerSiteBookings" {
+                        return managerScheduleStore.managerSiteBookings.first(where: { $0.id == uuid })
+                            .map { managerScheduleStore.canDeleteBooking($0) } ?? false
+                    }
+                    return bookingStore.bookings.first(where: { $0.id == uuid }).map { bookingStore.canDeleteBooking($0) } ?? false
+                }()
                 pendingReviewRemoval = TimesheetReviewRemoval(
                     warning: warning,
                     action: .delete(plan),
@@ -7976,6 +7996,10 @@ private struct OperativeTimesheetReviewView: View {
                         booking: booking,
                         write: nil,
                         editedBy: uid
+                    ),
+                    showsRebookNote: TimesheetReviewDeleteUndo.showsNote(
+                        viewerIsAdmin: userStore.displayUser?.isRosterAdmin == true,
+                        viewerMayDeleteBooking: mayDelete
                     )
                 )
             } catch {
@@ -7989,7 +8013,7 @@ private struct OperativeTimesheetReviewView: View {
     /// and the stored reviewer edits are taken over (the reviewer's unsaved decisions on screen are kept).
     private func readSheetVersionIfMissing() async {
         guard draft.versionDocumentId == nil else { return }
-        let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+        let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: sheetUserId, weekStart: week.start, firebaseBackend: firebaseBackend)
         TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
     }
 
@@ -8196,18 +8220,21 @@ private struct OperativeTimesheetReviewView: View {
         }
         }
         rebuildSnapshotOnSave = false
-        TimesheetDraftStore.save(draft, userId: operative.id, weekStart: week.start, weekEnd: week.end)
+        TimesheetDraftStore.save(draft, userId: sheetUserId, weekStart: week.start, weekEnd: week.end)
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return nil }
         let snapshot = draft
         let writer = userStore.displayUser
         let subject = operative
+        let sheetId = sheetUserId
         // RULEBOOK 1.90.0 (Cancel changes): a decision made while Make changes is open is recorded for undo.
         let makingChangesNow = makingChanges
         return Task {
             // Owner-or-reviewer partial write, plus changed `extraEntryReviews` (`timesheetEntryReviewWriteFields`).
+            // The sheet's own stored id (`sheetUserId`): the save goes to the document the screen loaded, and its stored
+            // `userId` is kept (`TimesheetSheetTarget.userIdWrite`).
             let message = await TimesheetDraftStore.saveToCloud(
                 snapshot,
-                userId: subject.id,
+                userId: sheetId,
                 weekStart: week.start,
                 weekEnd: week.end,
                 firebaseBackend: firebaseBackend,
@@ -8233,7 +8260,7 @@ private struct OperativeTimesheetReviewView: View {
         firebaseBackend.listenTimesheetState(
             key: Self.liveTimesheetKey,
             organizationId: orgId,
-            userId: operative.id,
+            userId: sheetUserId,
             weekStart: week.start,
             // RULEBOOK 1.55.0 §8: the version loaded (a revision once one exists), never also the frozen original.
             documentId: draft.versionDocumentId
@@ -8249,7 +8276,7 @@ private struct OperativeTimesheetReviewView: View {
     private func refreshDraftFromCloud() async {
         guard let orgId = firebaseBackend.currentOrganization?.firestoreDocumentId else { return }
         let read = await TimesheetDraftStore.refreshFromCloudReporting(
-            userId: operative.id,
+            userId: sheetUserId,
             weekStart: week.start,
             firebaseBackend: firebaseBackend,
             organizationId: orgId
@@ -8271,7 +8298,7 @@ private struct OperativeTimesheetReviewView: View {
             await MainActor.run {
                 guard !isEditingReview,
                       organizationIdsMatch(firebaseBackend.currentOrganization?.firestoreDocumentId, orgId) else { return }
-                draft = TimesheetDraftStore.load(userId: operative.id, weekStart: week.start, organizationId: orgId)
+                draft = TimesheetDraftStore.load(userId: sheetUserId, weekStart: week.start, organizationId: orgId)
             }
             return
         }
@@ -8344,6 +8371,8 @@ private struct OperativeTimesheetReviewView: View {
 private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
     @Binding var draft: TimesheetDraft
     let operative: AppUser
+    /// The id the sheet's document is filed under (the review screen's `sheetUserId`).
+    let sheetUserId: String
     let week: WeekRange
     let payrollLines: [TimesheetPayrollLineItem]
     let policy: OrgPayrollTimePolicy
@@ -8424,7 +8453,7 @@ private struct OperativeTimesheetReviewSheetsModifier: ViewModifier {
             let booking = try await firebaseBackend.readTimesheetReviewBooking(collection: collection, documentIds: ids)
             // Review of #276: a copy read before 1.55.0 has no document id, so nothing could be recorded — read it first.
             if draft.versionDocumentId == nil {
-                let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: operative.id, weekStart: week.start, firebaseBackend: firebaseBackend)
+                let read = await TimesheetDraftStore.ensureVersionRead(draft, userId: sheetUserId, weekStart: week.start, firebaseBackend: firebaseBackend)
                 TimesheetReviewerEditRecorder.takeVersion(from: read, into: &draft)
             }
             // An overtime line shows no break controls: the booking keeps its stored break toggle.
@@ -9263,7 +9292,7 @@ private struct InvoiceUTRBlankWarningSheet: View {
                     .frame(maxWidth: .infinity)
             }
             .padding(20)
-            .navigationTitle("Before you invoice")
+            .navigationTitle("Before you generate your timesheet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -9287,13 +9316,13 @@ private struct InvoiceGeneratedSuccessSheet: View {
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 58))
                     .foregroundStyle(.green)
-                Text("Invoice generated successfully")
+                Text("Timesheet generated successfully")
                     .font(.title3.weight(.semibold))
                     .multilineTextAlignment(.center)
                 Button {
                     showShare = true
                 } label: {
-                    Label("Share invoice", systemImage: "square.and.arrow.up")
+                    Label("Share timesheet", systemImage: "square.and.arrow.up")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 14)
                 }
@@ -9302,7 +9331,7 @@ private struct InvoiceGeneratedSuccessSheet: View {
                 .tint(.green)
             }
             .padding(24)
-            .navigationTitle("Invoice")
+            .navigationTitle("Timesheet")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -9362,7 +9391,7 @@ private enum InvoicePDFGenerationSupport {
         // RULEBOOK 1.45.0 §8 `timesheetEvidencePages`: one page per piece of evidence on the invoice's price work and
         // expense rows, after the invoice. If the pages cannot be added the invoice is still given without them.
         guard !made.evidence.isEmpty else { return made.url }
-        let footer = [firebaseBackend.currentOrganization?.name ?? "Organisation", "Invoice", made.userName]
+        let footer = [firebaseBackend.currentOrganization?.name ?? "Organisation", "Timesheet", made.userName]
             .filter { !$0.isEmpty }
             .joined(separator: " · ")
         let appended = await PayeClaimReportPDF.appendTimesheetEvidence(
@@ -10128,13 +10157,13 @@ private enum InvoicePDFBuilder {
         let lineItems: [InvoiceLineItem]
         let totalAmount: Double
         let rateChangeNotes: [String]
-        /// "Invoice" or "Timesheet"
-        var documentTitle: String = "Invoice"
+        /// Owner 26 Nov (CIS): the generated PDF is a "Timesheet", never an "Invoice".
+        var documentTitle: String = "Timesheet"
         /// Optional override for the on-disk PDF filename.
         var preferredFileName: String? = nil
-        var periodMetaLabel: String = "INVOICE PERIOD"
-        var totalLabel: String = "Total invoice amount"
-        var emptyStateMessage: String = "No work entries were found for this invoice period."
+        var periodMetaLabel: String = "TIMESHEET PERIOD"
+        var totalLabel: String = "Total timesheet amount"
+        var emptyStateMessage: String = "No work entries were found for this timesheet period."
         /// RULEBOOK 1.55.0 §8: "TS-20261101-6A9632" (+ "-REV1" on a revision; `timesheetInvoiceNumberForRevision`).
         var invoiceNumber: String = ""
         /// RULEBOOK 1.55.0 §8: "REV 1 · +£44.12 from the previous version" (`TimesheetRevisionCopy.note`), or "".
@@ -10226,7 +10255,7 @@ private enum InvoicePDFBuilder {
         // RULEBOOK 1.55.0 §8: the invoice number on every invoice and timesheet, and on a revision what changed.
         if !context.invoiceNumber.isEmpty || !context.revisionNote.isEmpty {
             if !context.invoiceNumber.isEmpty {
-                drawMeta(label: "INVOICE NO.", value: context.invoiceNumber, x: leftX, y: nextRowY)
+                drawMeta(label: "TIMESHEET NO.", value: context.invoiceNumber, x: leftX, y: nextRowY)
             }
             if !context.revisionNote.isEmpty {
                 drawMeta(label: "REVISION", value: context.revisionNote, x: rightX, y: nextRowY)

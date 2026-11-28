@@ -210,13 +210,36 @@ struct TimesheetReviewRemoval: Identifiable {
     /// RULEBOOK 1.74.0: what the confirmed write records on the sheet in the same batch (`timesheetReviewerBookingEditRecord`,
     /// built from the booking read fresh); nil when nothing can be recorded (the 1.47.0 rule then applies).
     var sheetRecord: TimesheetReviewerEditSheetRecord? = nil
+    /// Owner 26 Nov: a delete by a viewer who may not book it again (not an admin, not a manager of the booking's job)
+    /// adds `TimesheetReviewDeleteUndo.note` (`TimesheetReviewDeleteUndo.showsNote`).
+    var showsRebookNote: Bool = false
 
     /// The confirm's text: what is changed, the rulebook's message, the overtime note, and (for a delete) the undo note.
     var messageText: String {
         var parts = [warning.summary, warning.message]
         if let note = warning.overtimeNote { parts.append(note) }
-        if case .delete = action { parts.append(warning.undoNote) }
+        if case .delete = action {
+            parts.append(warning.undoNote)
+            if showsRebookNote { parts.append(TimesheetReviewDeleteUndo.note) }
+        }
         return parts.filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+}
+
+/// Owner 26 Nov: the line manager's ✕ (delete booking) confirm says who can bring the booking back when the viewer cannot.
+nonisolated enum TimesheetReviewDeleteUndo {
+    /// The text until the rulebook constant `TIMESHEET_REVIEW_DELETE_UNDO_NOTE` (web 1.96.0) is in the packed script.
+    static let fallbackNote = "If you don't manage this job, only an admin or the job's manager can bring this booking back."
+
+    /// `TIMESHEET_REVIEW_DELETE_UNDO_NOTE` from the rulebook, else `fallbackNote`.
+    static var note: String {
+        CanonicalBusinessEngine.constant("TIMESHEET_REVIEW_DELETE_UNDO_NOTE", as: String.self) ?? fallbackNote
+    }
+
+    /// Shown only to a viewer who is not an admin and may not delete (so not re-book) this booking — `canDeleteBooking`
+    /// is the admins and the managers of the booking's job (rulebook §2, the same people as `canWriteBooking`).
+    static func showsNote(viewerIsAdmin: Bool, viewerMayDeleteBooking: Bool) -> Bool {
+        !viewerIsAdmin && !viewerMayDeleteBooking
     }
 }
 

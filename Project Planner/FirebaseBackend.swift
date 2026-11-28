@@ -11960,7 +11960,11 @@ extension FirebaseBackend {
                 data[key] = Timestamp(date: value)
             }
         }
-        putIfChanged("userId", periodFields.userId)
+        // RULEBOOK §16 (`timesheetSubjectFiled`): a stored `userId` is never rewritten (the rules refuse the whole save);
+        // it is added only to a new sheet or one stored without it (`TimesheetSheetTarget.userIdWrite`).
+        if let userIdWrite = TimesheetSheetTarget.userIdWrite(stored: stored, exists: exists, userId: periodFields.userId) {
+            data["userId"] = userIdWrite
+        }
         putIfChanged("weekStartKey", periodFields.weekStartKey)
         putIfChanged("weekEndKey", periodFields.weekEndKey)
         putInstantIfChanged("weekStart", startInstant)

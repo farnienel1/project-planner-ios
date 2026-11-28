@@ -127,7 +127,7 @@ nonisolated struct RulebookTimesheetCorrectionOption: Equatable, Sendable {
 extension CanonicalBusinessEngine {
     /// `TIMESHEET_GENERATE_INVOICE_PROMPT` ("Next: generate your invoice").
     nonisolated static var timesheetGenerateInvoicePrompt: String {
-        constant("TIMESHEET_GENERATE_INVOICE_PROMPT", as: String.self) ?? "Next: generate your invoice"
+        constant("TIMESHEET_GENERATE_INVOICE_PROMPT", as: String.self) ?? "Next: generate your timesheet"
     }
 
     /// RULEBOOK 1.77.0 `timesheetNextStep(input)`. `sheet` is the status payload (signatures, `exportedAt`,
