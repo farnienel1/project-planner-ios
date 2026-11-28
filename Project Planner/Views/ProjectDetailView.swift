@@ -691,6 +691,7 @@ struct ProjectDetailView: View {
         case .healthSafety:
             ProjectHealthSafetyView(project: project)
                 .environmentObject(userStore)
+                .environmentObject(smartCache)
         case .deadlines:
             ProjectDeadlinesView(project: project)
         case .activeUsers:

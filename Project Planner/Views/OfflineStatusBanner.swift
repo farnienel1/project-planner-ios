@@ -11,9 +11,28 @@ struct OfflineStatusBanner: View {
     @ObservedObject private var syncResults = OfflineSyncResultStore.shared
     @State private var showingQueue = false
     @State private var showingNotSynced = false
+    /// How far the banner's top edge sits under the status bar / Dynamic Island. The root ignores the safe area, so
+    /// without this the first row was drawn under the clock and battery (owner report 26 Nov).
+    @State private var statusBarPadding: CGFloat = 0
+
+    /// True when at least one row shows (an empty banner adds no padding and takes no space).
+    private var showsAnyRow: Bool { syncResults.showsBanner || smartCache.showOfflineBanner }
+
+    /// The tint of the top row, so the strip behind the status bar matches it.
+    private var topRowTint: Color {
+        if syncResults.showsBanner { return .red }
+        if smartCache.isSyncing { return .blue }
+        if !smartCache.isOnline || smartCache.pendingSyncCount > 0 { return .orange }
+        return .red
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            if showsAnyRow && statusBarPadding > 0 {
+                topRowTint.opacity(0.12)
+                    .frame(height: statusBarPadding)
+                    .accessibilityHidden(true)
+            }
             // RULEBOOK 1.86.0 "Not synced": with notifications off, the banner at the top on the next open.
             if syncResults.showsBanner {
                 Button {
@@ -38,6 +57,7 @@ struct OfflineStatusBanner: View {
                     }
             }
         }
+        .measuresStatusBarOverlap($statusBarPadding)
         .sheet(isPresented: $showingNotSynced) {
             NotSyncedView()
         }

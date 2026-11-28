@@ -90,6 +90,9 @@ struct HomeView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The navy header clears the status bar only when Home's top edge is under it. With the offline banner above,
+        // Home starts below the status bar and adds no second gap (owner report 26 Nov).
+        .measuresStatusBarOverlap($homeTopInset)
         .background(PPColor.page.ignoresSafeArea())
         // TODO(UI): status bar style — Home is not inside a NavigationStack, so toolbarColorScheme cannot turn the status bar white without changing navigation.
         .sheet(isPresented: $showingWarningsDetail, onDismiss: {
@@ -604,11 +607,7 @@ struct HomeView: View {
         }
         .onAppear {
             loadPersistedAdminOverviewMetricsIfNeeded()
-            let inset = Self.topSafeInset()
-            if inset > 1 {
-                homeTopInset = inset
-            }
-            print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(inset))")
+            print("🔥🔥🔥 DEBUG: HOME_APPEARED inset=\(Int(homeTopInset))")
             NotificationCenter.default.post(name: .plannerHomeDidDraw, object: nil)
             // Do not touch WarningsService.shared here. This onAppear runs inside the
             // first layout commit. Creating the shared service then publishes warning
@@ -688,18 +687,6 @@ struct HomeView: View {
         homeWarningsReady = WarningsService.shared.hasCompletedLiveDetection
     }
 
-
-    /// Status-bar / Dynamic Island height. The root fills the whole window, so Home adds this itself.
-    private static func topSafeInset() -> CGFloat {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        var best: CGFloat = 0
-        for scene in scenes {
-            for window in scene.windows where window.bounds.width > 1 && window.bounds.height > 1 {
-                best = max(best, window.safeAreaInsets.top)
-            }
-        }
-        return best
-    }
 
     private var homeNavyHeader: some View {
         VStack(alignment: .leading, spacing: 0) {
